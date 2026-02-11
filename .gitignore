@@ -126,3 +126,4 @@ WebApplication1/hangfire.db-wal
 
 # ChuckieHelper project (excluded from public repo)
 ChuckieHelper/
+WebApplication1/.config/dotnet-tools.json
