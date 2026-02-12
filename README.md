@@ -218,7 +218,6 @@ ChuckieHelper.WebApi.exe
 ```
 
 ### 方式二：IIS 部署（推荐用于生产环境）<sup>🪟 仅Windows</sup>
-### 方式二：IIS 部署（推荐用于生产环境）<sup>🪟 仅Windows</sup>
 
 #### 步骤 1：安装必要组件
 
