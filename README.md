@@ -14,13 +14,9 @@
 ---
 
 ## 🖥️ 系统支持
-
 本项目支持 Windows 和 Linux 操作系统。
 
-
-
 ## ✨ 功能特性
-
 - 🖥️ **系统控制** - 实时监控 CPU、内存、磁盘、显卡等硬件信息<sup>Windows/Linux</sup>；支持锁定、睡眠、休眠、关机操作 <sup>🪟 Windows</sup>
 - 📊 **进程管理** - 查看和管理系统进程，支持按类型筛选和终止进程 
 - 🎮 **远程控制** - 实时远程桌面控制，支持 H.264 编码，可调节分辨率和画质 <sup>🪟 Windows</sup>
@@ -34,7 +30,6 @@
 ---
 
 ## 📸 界面预览
-
 <details>
 <summary><b>点击展开功能截图</b></summary>
 
@@ -87,16 +82,13 @@ WebSocket 远程终端，支持 PowerShell 和 CMD。
 ## 🚀 快速开始
 
 
-
 ### 环境要求
-
 - 🪟 Windows 10/11 或 Windows Server
 - 🐧 任何可运行 .NET 8 的 Linux 操作系统
 - [.NET 8 SDK/Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
 - （可选，仅Windows）IIS + ASP.NET Core Hosting Bundle<sup>🪟 Windows</sup>
 
 ### 安装步骤
-
 1. **克隆仓库**
 
 ```bash
@@ -138,9 +130,7 @@ dotnet run
 ---
 
 ## ⚙️ 配置说明
-
 ### 基础配置
-
 | 配置项 | 说明 | 示例 |
 |--------|------|------|
 | `Auth:Username` | 登录用户名 | `admin` |
@@ -148,7 +138,6 @@ dotnet run
 | `Auth:JwtSecret` | JWT 签名密钥（必填，≥32位） | `YourSecretKey...` |
 
 ### 可选配置
-
 <details>
 <summary><b>qBittorrent 设置</b></summary>
 
@@ -204,9 +193,7 @@ dotnet run
 ---
 
 ## 🖥️ 部署方式
-
 ### 方式一：自宿主运行（推荐用于开发/测试）<sup>🪟 Windows/🐧 Linux</sup>
-
 ```bash
 # 开发模式
 dotnet run --project WebApplication1/ChuckieHelper.WebApi.csproj
@@ -218,9 +205,7 @@ ChuckieHelper.WebApi.exe
 ```
 
 ### 方式二：IIS 部署（推荐用于生产环境）<sup>🪟 仅Windows</sup>
-
 #### 步骤 1：安装必要组件
-
 1. **启用 IIS**
    - 打开「控制面板」→「程序」→「启用或关闭 Windows 功能」
    - 勾选以下项目：
@@ -234,7 +219,6 @@ ChuckieHelper.WebApi.exe
    - 运行安装程序，安装完成后**重启 IIS**（或重启电脑）
 
 #### 步骤 2：发布应用
-
 ```bash
 dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inetpub\ChuckieHelper
 ```
@@ -242,7 +226,6 @@ dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inet
 > 📁 发布后，将你的 `appsettings.json` 复制到 `C:\inetpub\ChuckieHelper` 目录
 
 #### 步骤 3：创建应用程序池
-
 1. 打开「IIS 管理器」（运行 `inetmgr`）
 2. 右键「应用程序池」→「添加应用程序池」
    - **名称**：`ChuckieHelperPool`
@@ -251,7 +234,6 @@ dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inet
 3. 点击「确定」创建
 
 #### 步骤 4：配置 LocalSystem 身份（重要！）
-
 > ⚠️ **仅在需要远程控制功能时配置**。LocalSystem 具有最高权限，请谨慎使用。
 
 1. 在「应用程序池」中找到 `ChuckieHelperPool`
@@ -263,7 +245,6 @@ dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inet
 
 
 #### 步骤 5：创建网站
-
 1. 在 IIS 管理器中，右键「网站」→「添加网站」
 2. 配置如下：
    - **站点名称**：`ChuckieHelper`
@@ -276,13 +257,11 @@ dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inet
 3. 点击「确定」创建
 
 #### 步骤 6：验证部署
-
 1. 启动网站（右键网站 →「管理网站」→「启动」）
 2. 浏览器访问：`http://localhost:5104/`
 3. 使用 `appsettings.json` 中配置的账号密码登录
 
 #### 常见问题排查
-
 | 问题 | 解决方案 |
 |------|----------|
 | 502.5 错误 | 检查 Hosting Bundle 是否正确安装，尝试重启 IIS |
@@ -295,7 +274,6 @@ dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inet
 ---
 
 ## 🔧 桌面代理 <sup>🪟 仅Windows</sup>
-
 在 IIS/Session 0 环境下，远程控制功能需要桌面代理的支持才能和用户桌面进行交互。
 
 桌面代理进程会被自动创建，创建桌面代理进程时，优先使用**复制已有管理员令牌**的方式，若无则依赖**计划任务**：
@@ -306,7 +284,6 @@ dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inet
 
 
 手动运行桌面代理模式：
-
 ```bash
 dotnet ChuckieHelper.WebApi.dll --desktop-agent
 ```
@@ -316,7 +293,6 @@ dotnet ChuckieHelper.WebApi.dll --desktop-agent
 ---
 
 ## ❓ 常见问题
-
 <details>
 <summary><b>Q: 访问出现 500/502 错误？</b></summary>
 
@@ -346,12 +322,10 @@ dotnet ChuckieHelper.WebApi.dll --desktop-agent
 ---
 
 ## 📝 开源协议
-
 本项目采用 [MIT 协议](LICENSE) 开源。
 
 ---
 
 ## 🙏 致谢
-
 - [ASP.NET Core](https://github.com/dotnet/aspnetcore)
 - [Hangfire](https://github.com/HangfireIO/Hangfire)
