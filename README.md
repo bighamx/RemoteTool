@@ -1,7 +1,3 @@
-# 系统支持
-
-本项目支持 Windows 和 Linux 操作系统。
-
 # ChuckieHelper
 
 <div align="center">
@@ -11,22 +7,29 @@
 [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?style=flat-square&logo=windows)](https://www.microsoft.com/windows)
+[![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux)](https://www.linux.org/)
 
 </div>
 
 ---
 
+## 🖥️ 系统支持
+
+本项目支持 Windows 和 Linux 操作系统。
+
+
+
 ## ✨ 功能特性
 
-- 🖥️ **系统控制** - 实时监控 CPU、内存、磁盘、显卡等硬件信息，支持锁定、睡眠、休眠、关机操作
-- 📊 **进程管理** - 查看和管理系统进程，支持按类型筛选和终止进程
-- 🎮 **远程控制** - 实时远程桌面控制，支持 H.264 编码，可调节分辨率和画质(仅Windows)
-- 💻 **命令终端** - WebSocket 远程终端，支持 PowerShell/CMD
-- 🐳 **容器管理** - Docker 容器的启动、停止、删除和日志查看
-- 📝 **Compose 编辑** - Docker Compose 文件的在线编辑、验证和一键部署
-- 📁 **文件管理** - 远程文件浏览、上传、下载和删除
-- ⏰ **任务调度** - 基于 Hangfire 的定时任务管理（qBittorrent、DDNS 更新等）
-- 🔐 **安全认证** - JWT 认证保护所有敏感操作
+- 🖥️ **系统控制** - 实时监控 CPU、内存、磁盘、显卡等硬件信息<sup>Windows/Linux</sup>；支持锁定、睡眠、休眠、关机操作 <sup>🪟 Windows</sup>
+- 📊 **进程管理** - 查看和管理系统进程，支持按类型筛选和终止进程 
+- 🎮 **远程控制** - 实时远程桌面控制，支持 H.264 编码，可调节分辨率和画质 <sup>🪟 Windows</sup>
+- 💻 **命令终端** - WebSocket 远程终端，支持 PowerShell/CMD <sup>🪟 Windows</sup>，支持Shell <sup>🐧 Linux</sup>
+- 🐳 **容器管理** - Docker 容器的启动、停止、删除和日志查看 
+- 📝 **Compose 编辑** - Docker Compose 文件的在线编辑、验证和一键部署 
+- 📁 **文件管理** - 远程文件浏览、上传、下载和删除 
+- ⏰ **任务调度** - Hangfire 的定时任务管理，自行添加任何任务 (内置qBittorrent管理、DDNS 等任务模板)
+- 🔐 **安全认证** - JWT 认证保护所有敏感操作 
 
 ---
 
@@ -83,11 +86,14 @@ WebSocket 远程终端，支持 PowerShell 和 CMD。
 
 ## 🚀 快速开始
 
+
+
 ### 环境要求
 
-- Windows 10/11 或 Windows Server
+- 🪟 Windows 10/11 或 Windows Server
+- 🐧 任何可运行 .NET 8 的 Linux 操作系统
 - [.NET 8 SDK/Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
-- （可选）IIS + ASP.NET Core Hosting Bundle
+- （可选，仅Windows）IIS + ASP.NET Core Hosting Bundle<sup>🪟 Windows</sup>
 
 ### 安装步骤
 
@@ -199,7 +205,7 @@ dotnet run
 
 ## 🖥️ 部署方式
 
-### 方式一：自宿主运行（开发/测试）
+### 方式一：自宿主运行（推荐用于开发/测试）<sup>🪟 Windows/🐧 Linux</sup>
 
 ```bash
 # 开发模式
@@ -211,7 +217,8 @@ cd publish
 ChuckieHelper.WebApi.exe
 ```
 
-### 方式二：IIS 部署（生产环境）
+### 方式二：IIS 部署（推荐用于生产环境）<sup>🪟 仅Windows</sup>
+### 方式二：IIS 部署（推荐用于生产环境）<sup>🪟 仅Windows</sup>
 
 #### 步骤 1：安装必要组件
 
@@ -288,20 +295,24 @@ dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inet
 
 ---
 
-## 🔧 桌面代理
+## 🔧 桌面代理 <sup>🪟 仅Windows</sup>
 
 在 IIS/Session 0 环境下，远程控制功能需要桌面代理的支持才能和用户桌面进行交互。
-桌面代理进程会被自动创建，创建代理进程时，优先使用**复制已有管理员令牌**的方式，若无则依赖**计划任务**：
+
+桌面代理进程会被自动创建，创建桌面代理进程时，优先使用**复制已有管理员令牌**的方式，若无则依赖**计划任务**：
 
 1. **复制已有管理员令牌**：在当前交互会话中查找已存在的高完整性进程（如用户曾以管理员运行过任务管理器等），复制其令牌并用于启动代理，无需配置密码，即时生效。
 2. **计划任务**：若未找到高完整性令牌，且已配置 `RemoteControl:ElevatedAgent`（管理员用户名与密码），应用启动时会自动创建“登录时以最高权限运行”的计划任务，用户**注销并重新登录**后，桌面代理将以管理员身份自动启动。
 3. 代理通过命名管道与 WebApi 通信，执行键鼠输入等桌面操作。
 
-手工调试：
+
+手动运行桌面代理模式：
 
 ```bash
-ChuckieHelper.WebApi.exe --desktop-agent
+dotnet ChuckieHelper.WebApi.dll --desktop-agent
 ```
+
+> ⚠️ 桌面代理仅支持 Windows，Linux 无需此功能。
 
 ---
 
