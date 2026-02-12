@@ -48,12 +48,18 @@ public class TerminalSession : IDisposable
     private Process? _process;
     private bool _disposed;
     private readonly bool _useUtf8;  // 是否使用 UTF-8 编码
+    /// <summary>未启用 UTF-8 时使用的系统默认编码（仅 Windows，从注册表 ACP 读取）。</summary>
+    private readonly Encoding? _systemEncoding;
 
     public TerminalSession(WebSocket webSocket, TerminalType terminalType)
     {
         _webSocket = webSocket;
         _terminalType = terminalType;
         _useUtf8 = RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || IsSystemUtf8Enabled();
+        if (!_useUtf8 && RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            _systemEncoding = GetSystemDefaultEncoding();
+        else
+            _systemEncoding = null;
     }
 
     /// <summary>
@@ -74,9 +80,41 @@ public class TerminalSession : IDisposable
         }
         catch
         {
-            // 无法读取注册表，默认使用 GBK
+            // 无法读取注册表，保守视为未启用 UTF-8
         }
         return false;
+    }
+
+    /// <summary>
+    /// 获取 Windows 系统默认 ANSI 代码页对应的编码（仅当未启用 UTF-8 时使用）。
+    /// </summary>
+    private static Encoding GetSystemDefaultEncoding()
+    {
+        var codePage = GetSystemCodePage();
+        try
+        {
+            return Encoding.GetEncoding(codePage);
+        }
+        catch
+        {
+            return Encoding.GetEncoding(1252); // 西欧，常见回退
+        }
+    }
+
+    /// <summary>
+    /// 从注册表读取系统当前 ANSI 代码页（ACP）；读取失败时返回 1252。
+    /// </summary>
+    private static int GetSystemCodePage()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Nls\CodePage");
+            var acp = key?.GetValue("ACP") as string;
+            if (acp != null && int.TryParse(acp, out var cp) && cp > 0)
+                return cp;
+        }
+        catch { }
+        return 1252; // 西欧，常见回退
     }
 
     public async Task StartAsync()
@@ -101,9 +139,10 @@ public class TerminalSession : IDisposable
         }
         else if (_terminalType == TerminalType.PowerShell)
         {
-            await _process.StandardInput.WriteLineAsync("[Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(936)");
-            await _process.StandardInput.WriteLineAsync("[Console]::InputEncoding = [System.Text.Encoding]::GetEncoding(936)");
-            await _process.StandardInput.WriteLineAsync("$OutputEncoding = [System.Text.Encoding]::GetEncoding(936)");
+            var codePage = _useUtf8 ? 65001 : (_systemEncoding?.CodePage ?? GetSystemCodePage());
+            await _process.StandardInput.WriteLineAsync($"[Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding({codePage})");
+            await _process.StandardInput.WriteLineAsync($"[Console]::InputEncoding = [System.Text.Encoding]::GetEncoding({codePage})");
+            await _process.StandardInput.WriteLineAsync($"$OutputEncoding = [System.Text.Encoding]::GetEncoding({codePage})");
             await _process.StandardInput.WriteLineAsync("cls");
         }
         else
@@ -111,7 +150,7 @@ public class TerminalSession : IDisposable
             if (_useUtf8)
                 await _process.StandardInput.WriteLineAsync("chcp 65001 > nul");
             else
-                await _process.StandardInput.WriteLineAsync("chcp 936 > nul");
+                await _process.StandardInput.WriteLineAsync($"chcp {_systemEncoding?.CodePage ?? GetSystemCodePage()} > nul");
             await _process.StandardInput.FlushAsync();
             await Task.Delay(100);
             await _process.StandardInput.WriteLineAsync("cls");
@@ -149,12 +188,22 @@ public class TerminalSession : IDisposable
         }
         else if (_terminalType == TerminalType.PowerShell)
         {
-            var gbkEncoding = Encoding.GetEncoding("GBK");
             startInfo.FileName = "powershell.exe";
             startInfo.Arguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass";
-            startInfo.StandardInputEncoding = gbkEncoding;
-            startInfo.StandardOutputEncoding = gbkEncoding;
-            startInfo.StandardErrorEncoding = gbkEncoding;
+            if (_useUtf8)
+            {
+                var utf8NoBom = new UTF8Encoding(false);
+                startInfo.StandardInputEncoding = utf8NoBom;
+                startInfo.StandardOutputEncoding = utf8NoBom;
+                startInfo.StandardErrorEncoding = utf8NoBom;
+            }
+            else
+            {
+                var enc = _systemEncoding!;
+                startInfo.StandardInputEncoding = enc;
+                startInfo.StandardOutputEncoding = enc;
+                startInfo.StandardErrorEncoding = enc;
+            }
         }
         else
         {
@@ -168,10 +217,10 @@ public class TerminalSession : IDisposable
             }
             else
             {
-                var gbkEncoding = Encoding.GetEncoding("GBK");
-                startInfo.StandardInputEncoding = gbkEncoding;
-                startInfo.StandardOutputEncoding = gbkEncoding;
-                startInfo.StandardErrorEncoding = gbkEncoding;
+                var enc = _systemEncoding!;
+                startInfo.StandardInputEncoding = enc;
+                startInfo.StandardOutputEncoding = enc;
+                startInfo.StandardErrorEncoding = enc;
             }
         }
 
@@ -234,17 +283,25 @@ public class TerminalSession : IDisposable
                     }
                     else if (_terminalType == TerminalType.Cmd && !_useUtf8)
                     {
-                        var gbkEncoding = Encoding.GetEncoding("GBK");
-                        var gbkBytes = gbkEncoding.GetBytes(command + "\r\n");
-                        await _process.StandardInput.BaseStream.WriteAsync(gbkBytes);
+                        var enc = _systemEncoding!;
+                        var bytes = enc.GetBytes(command + "\r\n");
+                        await _process.StandardInput.BaseStream.WriteAsync(bytes);
                         await _process.StandardInput.BaseStream.FlushAsync();
                     }
                     else if (_terminalType == TerminalType.PowerShell)
                     {
-                        var gbkEncoding = Encoding.GetEncoding("GBK");
-                        var gbkBytes = gbkEncoding.GetBytes(command + "\r\n");
-                        await _process.StandardInput.BaseStream.WriteAsync(gbkBytes);
-                        await _process.StandardInput.BaseStream.FlushAsync();
+                        if (_useUtf8)
+                        {
+                            await _process.StandardInput.WriteLineAsync(command);
+                            await _process.StandardInput.FlushAsync();
+                        }
+                        else
+                        {
+                            var enc = _systemEncoding!;
+                            var bytes = enc.GetBytes(command + "\r\n");
+                            await _process.StandardInput.BaseStream.WriteAsync(bytes);
+                            await _process.StandardInput.BaseStream.FlushAsync();
+                        }
                     }
                     else
                     {
