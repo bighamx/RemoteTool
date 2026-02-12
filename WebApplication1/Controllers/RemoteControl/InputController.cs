@@ -8,9 +8,12 @@ namespace ChuckieHelper.WebApi.Controllers.RemoteControl;
 [Route("api/[controller]")]
 [Authorize]
 public class InputController : ControllerBase
+    
 {
     private readonly SystemService _systemService;
 
+    private IActionResult ApiError(string message)
+        => BadRequest(new { message });
     public InputController(SystemService systemService)
     {
         _systemService = systemService;
@@ -20,9 +23,7 @@ public class InputController : ControllerBase
     public IActionResult Click([FromBody] ClickRequest request)
     {
         if (request.X < 0 || request.X > 1 || request.Y < 0 || request.Y > 1)
-        {
-            return BadRequest(new { message = "Invalid coordinates" });
-        }
+            return ApiError("Invalid coordinates");
 
         _systemService.SendMouseClick(request.X, request.Y);
         return Ok(new { message = "Click sent" });
@@ -32,9 +33,7 @@ public class InputController : ControllerBase
     public IActionResult RightClick([FromBody] ClickRequest request)
     {
         if (request.X < 0 || request.X > 1 || request.Y < 0 || request.Y > 1)
-        {
-            return BadRequest(new { message = "Invalid coordinates" });
-        }
+            return ApiError("Invalid coordinates");
 
         _systemService.SendMouseRightClick(request.X, request.Y);
         return Ok(new { message = "Right click sent" });
@@ -44,9 +43,7 @@ public class InputController : ControllerBase
     public IActionResult MiddleClick([FromBody] ClickRequest request)
     {
         if (request.X < 0 || request.X > 1 || request.Y < 0 || request.Y > 1)
-        {
-            return BadRequest(new { message = "Invalid coordinates" });
-        }
+            return ApiError("Invalid coordinates");
 
         _systemService.SendMouseMiddleClick(request.X, request.Y);
         return Ok(new { message = "Middle click sent" });
@@ -56,9 +53,7 @@ public class InputController : ControllerBase
     public IActionResult Keyboard([FromBody] KeyboardRequest request)
     {
         if (request.VkCode < 0 || request.VkCode > 255)
-        {
-            return BadRequest(new { message = "Invalid virtual key code" });
-        }
+            return ApiError("Invalid virtual key code");
 
         _systemService.SendKeyboardEvent((byte)request.VkCode, request.IsKeyDown);
         return Ok(new { message = "Keyboard event sent" });
@@ -68,9 +63,7 @@ public class InputController : ControllerBase
     public IActionResult KeyboardMulti([FromBody] KeyboardMultiRequest request)
     {
         if (request.VkCodes == null || request.VkCodes.Length == 0)
-        {
-            return BadRequest(new { message = "No key codes provided" });
-        }
+            return ApiError("No key codes provided");
 
         var vkCodes = request.VkCodes.Select(k => (byte)k).ToArray();
         _systemService.SendKeyboardEvents(vkCodes, request.IsKeyDown);
@@ -81,9 +74,7 @@ public class InputController : ControllerBase
     public IActionResult MouseDown([FromBody] MouseEventRequest request)
     {
         if (request.X < 0 || request.X > 1 || request.Y < 0 || request.Y > 1)
-        {
-            return BadRequest(new { message = "Invalid coordinates" });
-        }
+            return ApiError("Invalid coordinates");
 
         _systemService.SendMouseDown(request.X, request.Y, request.Button);
         return Ok(new { message = "Mouse down sent" });
@@ -93,9 +84,7 @@ public class InputController : ControllerBase
     public IActionResult MouseUp([FromBody] MouseEventRequest request)
     {
         if (request.X < 0 || request.X > 1 || request.Y < 0 || request.Y > 1)
-        {
-            return BadRequest(new { message = "Invalid coordinates" });
-        }
+            return ApiError("Invalid coordinates");
 
         _systemService.SendMouseUp(request.X, request.Y, request.Button);
         return Ok(new { message = "Mouse up sent" });
@@ -105,9 +94,7 @@ public class InputController : ControllerBase
     public IActionResult MouseMove([FromBody] ClickRequest request)
     {
         if (request.X < 0 || request.X > 1 || request.Y < 0 || request.Y > 1)
-        {
-            return BadRequest(new { message = "Invalid coordinates" });
-        }
+            return ApiError("Invalid coordinates");
 
         _systemService.SendMouseMove(request.X, request.Y);
         return Ok(new { message = "Mouse move sent" });
@@ -118,9 +105,7 @@ public class InputController : ControllerBase
     public IActionResult MouseWheel([FromBody] MouseWheelRequest request)
     {
         if (request.X < 0 || request.X > 1 || request.Y < 0 || request.Y > 1)
-        {
-            return BadRequest(new { message = "Invalid coordinates" });
-        }
+            return ApiError("Invalid coordinates");
 
         _systemService.SendMouseWheel(request.X, request.Y, request.Delta);
         return Ok(new { message = "Mouse wheel sent" });

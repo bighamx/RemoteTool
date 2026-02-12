@@ -1,6 +1,218 @@
 // Remote Control - Frontend Application
 
 class RemoteControl {
+    /** 多选模式相关 */
+    multiSelectMode = false;
+    selectedFiles = new Set();
+    /** 切换多选模式 */
+    toggleMultiSelectMode(enable) {
+        this.multiSelectMode = enable !== undefined ? enable : !this.multiSelectMode;
+        this.selectedFiles.clear();
+        this.renderFilesList();
+        this.updateMultiSelectToolbar();
+    }
+    /** 更新多选工具栏按钮 */
+    updateMultiSelectToolbar() {
+        // 直接操作html中的多选操作按钮
+        const multiBtns = document.getElementById('multi-action-btns');
+        if (multiBtns) {
+            multiBtns.style.display = this.multiSelectMode ? 'inline-flex' : 'none';
+            document.getElementById('multi-delete-btn').onclick = () => this.handleMultiDelete();
+            document.getElementById('multi-copy-btn').onclick = () => this.handleMultiCopy();
+            document.getElementById('multi-move-btn').onclick = () => this.handleMultiMove();
+            document.getElementById('multi-cancel-btn').onclick = () => this.toggleMultiSelectMode(false);
+        }
+    }
+    /** 批量删除（只弹一次确认，调用后端批量接口） */
+    async handleMultiDelete() {
+        if (this.selectedFiles.size === 0) return;
+        const count = this.selectedFiles.size;
+        const confirm = await this.showDialog(`确定要删除所选 ${count} 项吗？`, '批量删除', { type: 'confirm' });
+        if (!confirm) return;
+        const items = Array.from(this.selectedFiles).map(path => {
+            const file = this.files.find(f => f.path === path);
+            return { Path: path, IsDirectory: file ? file.isDirectory : false };
+        });
+        try {
+            const res = await fetch('/api/files/delete-batch', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ Items: items })
+            });
+            const data = await res.json();
+            this.showToast(data.message, data.success ? 'success' : 'error');
+        } catch (e) {
+            this.showToast('批量删除失败', 'error');
+        }
+        this.loadFiles(this.currentPath);
+    }
+    /** 批量复制 */
+    handleMultiCopy() {
+        if (this.selectedFiles.size === 0) return;
+        this.clipboardAction = {
+            type: 'copy',
+            paths: Array.from(this.selectedFiles),
+            isDirectoryList: Array.from(this.selectedFiles).map(p => {
+                const file = this.files.find(f => f.path === p);
+                return file ? file.isDirectory : false;
+            })
+        };
+        this.showPasteButton();
+        this.showToast('批量复制已记录，导航到目标目录后粘贴', 'info');
+    }
+    /** 批量移动 */
+    handleMultiMove() {
+        if (this.selectedFiles.size === 0) return;
+        this.clipboardAction = {
+            type: 'move',
+            paths: Array.from(this.selectedFiles),
+            isDirectoryList: Array.from(this.selectedFiles).map(p => {
+                const file = this.files.find(f => f.path === p);
+                return file ? file.isDirectory : false;
+            })
+        };
+        this.showPasteButton();
+        this.showToast('批量移动已记录，导航到目标目录后粘贴', 'info');
+    }
+    /**
+     * 记录复制/移动操作，显示粘贴按钮
+     */
+    setClipboardAction(type, path, isDirectory) {
+        this.clipboardAction = {
+            type,
+            path,
+            isDirectory
+        };
+        this.showPasteButton();
+        this.showToast(`已${type === 'copy' ? '复制' : '剪切'}到剪贴板，导航到目标目录后粘贴`, 'info');
+    }
+
+    /**
+     * 显示粘贴按钮
+     */
+    showPasteButton() {
+        let pasteBtn = document.getElementById('paste-btn');
+        if (!pasteBtn) {
+            pasteBtn = document.createElement('button');
+            pasteBtn.id = 'paste-btn';
+            pasteBtn.className = 'btn-icon';
+            pasteBtn.title = '粘贴到当前目录';
+            pasteBtn.innerHTML = '<span class="menu-icon">📥</span>粘贴';
+            pasteBtn.style.marginLeft = '8px';
+            pasteBtn.addEventListener('click', () => this.handlePasteAction());
+            // 插入到文件工具栏
+            const toolbar = document.querySelector('.files-controls');
+            if (toolbar) toolbar.appendChild(pasteBtn);
+        } else {
+            pasteBtn.style.display = 'inline-block';
+        }
+    }
+
+    /**
+     * 隐藏粘贴按钮
+     */
+    hidePasteButton() {
+        const pasteBtn = document.getElementById('paste-btn');
+        if (pasteBtn) pasteBtn.style.display = 'none';
+    }
+
+    /**
+     * 执行粘贴操作
+     */
+    async handlePasteAction() {
+        if (!this.clipboardAction || !this.currentPath) return;
+        const { type, path, isDirectory, paths, isDirectoryList } = this.clipboardAction;
+        let successCount = 0;
+        if (paths && Array.isArray(paths)) {
+            // 批量操作，调用批量接口
+            const items = paths.map((src, i) => ({ Path: src, IsDirectory: isDirectoryList[i] }));
+            const destPath = this.currentPath.replace(/[/\\]$/, '');
+            let url = '', body = {};
+            if (type === 'copy') {
+                url = '/api/files/copy-batch';
+                body = { Items: items, DestPath: destPath, Overwrite: true };
+            } else if (type === 'move') {
+                url = '/api/files/move-batch';
+                body = { Items: items, DestPath: destPath };
+            }
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${this.token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+                this.showToast(data.message, data.success ? 'success' : 'error');
+            } catch (e) {
+                this.showToast('批量操作失败', 'error');
+            }
+        } else {
+            // 单项操作
+            let destPath = this.currentPath;
+            const name = path.split(/[\\\/]/).pop();
+            destPath = destPath.replace(/[/\\]$/, '');
+            destPath = destPath ? destPath + '/' + name : name;
+            let result = false;
+            if (type === 'copy') {
+                result = await this.copyFileOrDirectory(path, destPath, isDirectory);
+            } else if (type === 'move') {
+                result = await this.moveFileOrDirectory(path, destPath, isDirectory);
+            }
+            if (result) successCount++;
+            this.showToast(`成功${type === 'copy' ? '复制' : '移动'} ${successCount} 项`, successCount > 0 ? 'success' : 'error');
+        }
+        this.clipboardAction = null;
+        this.hidePasteButton();
+        await this.loadFiles(this.currentPath);
+    }
+
+    /**
+     * 调用后端复制接口
+     */
+    // 单文件复制/移动统一用批量接口实现
+    async copyFileOrDirectory(sourcePath, destPath, isDirectory) {
+        try {
+            const items = [{ Path: sourcePath, IsDirectory: isDirectory }];
+            const body = { Items: items, DestPath: destPath.replace(/[/\\]$/, ''), Overwrite: true };
+            const res = await fetch('/api/files/copy-batch', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            return data.success;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async moveFileOrDirectory(sourcePath, destPath, isDirectory) {
+        try {
+            const items = [{ Path: sourcePath, IsDirectory: isDirectory }];
+            const body = { Items: items, DestPath: destPath.replace(/[/\\]$/, '') };
+            const res = await fetch('/api/files/move-batch', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            return data.success;
+        } catch (e) {
+            return false;
+        }
+    }
     constructor() {
         this.token = localStorage.getItem('token');
         this.username = localStorage.getItem('username') || '';
@@ -606,6 +818,10 @@ class RemoteControl {
         const runComposeDownBtn = document.getElementById('run-compose-down-btn');
         if (runComposeDownBtn) {
             runComposeDownBtn.addEventListener('click', () => this.runComposeDown());
+        }
+        const runComposeStopBtn = document.getElementById('run-compose-stop-btn');
+        if (runComposeStopBtn) {
+            runComposeStopBtn.addEventListener('click', () => this.runComposeStop());
         }
         const validateComposeBtn = document.getElementById('validate-compose-btn');
         if (validateComposeBtn) {
@@ -2128,7 +2344,7 @@ class RemoteControl {
 
             if (response.ok) {
                 const info = await response.json();
-                this.renderSystemInfo(info);
+                info.success && this.renderSystemInfo(info.data);
             }
         } catch (error) {
             console.error('Failed to load system info:', error);
@@ -2251,6 +2467,30 @@ class RemoteControl {
 
         // 保存平台信息供其他方法使用
         this.platform = info.platform;
+        // 控制卡平台适配（防止重复注册，先移除再注册）
+        const controlCards = document.querySelectorAll('.control-card');
+        controlCards.forEach(card => {
+            card.removeEventListener('click', card._platformClickHandler, true);
+            card.classList.remove('disabled');
+            delete card._platformClickHandler;
+        });
+        if (info.platform === 'Linux') {
+            // 仅允许 shutdown、reboot，其他禁用
+            const linuxAllowed = ['shutdown', 'reboot'];
+            controlCards.forEach(card => {
+                const action = card.getAttribute('data-action');
+                if (linuxAllowed.indexOf(action) === -1) {
+                    card.classList.add('disabled');
+                    const handler = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this.showToast('该操作仅支持 Windows ', 'warning');
+                    };
+                    card._platformClickHandler = handler;
+                    card.addEventListener('click', handler, true);
+                }
+            });
+        }
 
         // Linux 平台隐藏远程桌面视频流标签页（该功能已禁用）
         const screenshotTabBtn = document.querySelector('.tab[data-tab="screenshot"]');
@@ -2304,7 +2544,8 @@ class RemoteControl {
             });
 
             if (response.ok) {
-                this.processes = await response.json();
+                var data = await response.json();
+                this.processes = data.data;
                 this.renderProcesses();
             }
         } catch (error) {
@@ -3025,6 +3266,17 @@ volumes:
         });
     }
 
+    async runComposeStop() {
+        const filePath = document.getElementById('compose-file-path-input').value.trim();
+        if (!filePath) {
+            this.showDialog('请输入 compose 文件路径', '提示');
+            return;
+        }
+        this.showComposeStreamLog('Compose Stop', '/api/docker/compose/stop/stream', { composePath: filePath }, () => {
+            setTimeout(() => this.loadComposeStatus(), 500);
+        });
+    }
+
     async validateCompose() {
         const filePath = document.getElementById('compose-file-path-input').value.trim();
         const content = document.getElementById('compose-editor-content').value;
@@ -3122,7 +3374,8 @@ volumes:
                     <button type="button" class="btn btn-small btn-secondary compose-card-btn" data-action="compose-edit" title="加载到编辑器">📝 编辑</button>
                     <button type="button" class="btn btn-small btn-secondary compose-card-btn" data-action="compose-pull" title="拉取镜像">⬇️ 拉取</button>
                     <button type="button" class="btn btn-small btn-primary compose-card-btn" data-action="compose-up" title="启动">▶️ 运行</button>
-                    <button type="button" class="btn btn-small btn-warning compose-card-btn" data-action="compose-down" title="停止">⏹️ 停止</button>
+                    <button type="button" class="btn btn-small btn-warning compose-card-btn" data-action="compose-stop" title="停止">⏹️ 停止</button>
+                    <button type="button" class="btn btn-small btn-danger compose-card-btn" data-action="compose-down" title="完全移除">🗑️ 移除</button>
                 </div>
             </div>
         `;
@@ -3140,7 +3393,9 @@ volumes:
                 if (action === 'compose-edit') this.loadComposeFile();
                 else if (action === 'compose-pull') this.runComposePull();
                 else if (action === 'compose-up') this.runComposeUp();
+                else if (action === 'compose-stop') this.runComposeStop();
                 else if (action === 'compose-down') this.runComposeDown();
+
             });
         });
     }
@@ -3182,7 +3437,7 @@ volumes:
 
         container.innerHTML = history.map(path => `
             <div class="history-item">
-                <button class="history-button" onclick="app.loadHistoryCompose('${path.replace(/'/g, "\\'")}')">
+                <button class="history-button" onclick="app.loadHistoryCompose('${path.replace(/'/g, "\\'").replace(/\\/g, '\\\\')}')">
                     📄 ${this.escapeHtml(path)}
                 </button>
             </div>
@@ -3826,6 +4081,17 @@ volumes:
             });
         }
 
+        // 工具栏多选复选框（直接绑定html）
+        const multiBox = document.getElementById('multi-select-toolbar');
+        if (multiBox) {
+            // 避免重复绑定
+            if (!multiBox._binded) {
+                multiBox.addEventListener('change', () => this.toggleMultiSelectMode(multiBox.checked));
+                multiBox._binded = true;
+            }
+            // 状态同步
+            multiBox.checked = this.multiSelectMode;
+        }
         tbody.innerHTML = files.map(file => {
             let sizeCell = '';
             if (file.isDirectory && file.totalBytes != null && file.totalBytes > 0) {
@@ -3846,7 +4112,8 @@ volumes:
             const isVideo = this.isVideoFile(file.name);
             const isCompose = !file.isDirectory && this.isDockerComposeFile(file.name);
             const isDrive = file.isDirectory && file.totalBytes != null && file.totalBytes > 0;
-
+            // 多选复选框
+            const multiBox = this.multiSelectMode ? `<input type="checkbox" class="multi-select-row" data-path="${this.escapeHtml(file.path)}" ${this.selectedFiles.has(file.path) ? 'checked' : ''} />` : '';
             return `
                 <tr class="${rowClass}" 
                     data-path="${this.escapeHtml(file.path)}" 
@@ -3855,7 +4122,7 @@ volumes:
                     data-name="${this.escapeHtml(file.name)}"
                     data-file-size="${file.isDirectory ? '' : (file.size || 0)}"
                     >
-                    <td class="file-name-column">${file.isDirectory ? '📁' : this.getFileIcon(file.name)} ${this.escapeHtml(file.name)}</td>
+                    <td class="file-name-column">${multiBox}${file.isDirectory ? '📁' : this.getFileIcon(file.name)} ${this.escapeHtml(file.name)}</td>
                     <td class="file-type-column">${file.isDirectory ? (file.totalBytes != null && file.totalBytes > 0 ? '磁盘' : '文件夹') : (isCompose ? 'Compose' : (file.name.split('.').pop() || '文件'))}</td>
                     <td class="file-size-column">${sizeCell}</td>
                     <td class="file-date-column">${new Date(file.modified).toLocaleString()}</td>
@@ -3872,6 +4139,21 @@ volumes:
                 </tr>
             `;
         }).join('');
+        // 多选行事件
+        if (this.multiSelectMode) {
+            tbody.querySelectorAll('.multi-select-row').forEach(box => {
+                box.onclick = (e) => {
+                    e.stopPropagation();
+                    const path = box.dataset.path;
+                    if (box.checked) {
+                        this.selectedFiles.add(path);
+                    } else {
+                        this.selectedFiles.delete(path);
+                    }
+                };
+            });
+        }
+        this.updateMultiSelectToolbar();
 
         // 保存当前目录图片列表，供预览上一张/下一张使用
         this.currentDirImageFiles = files
@@ -3886,6 +4168,7 @@ volumes:
         tbody.querySelectorAll('tr.folder-row').forEach(row => {
             row.addEventListener('click', (e) => {
                 if (!e.target.closest('.file-actions')) {
+                    this.selectedFiles = new Set();
                     this.loadFiles(row.dataset.path);
                 }
             });
@@ -4313,7 +4596,7 @@ volumes:
                 editor.dataset.editorMode = 'text';
                 document.getElementById('editor-filename').textContent = (forceEdit ? '强制编辑: ' : 'Edit: ') + path;
 
-                textEl.value = result.content ?? '';
+                textEl.value = result.data ?? '';
                 textEl.style.display = 'block';
                 hexEl.style.display = 'none';
                 hexContent.value = '';
@@ -4560,34 +4843,33 @@ volumes:
         window.location.href = `/api/files/download?path=${encodeURIComponent(path)}&access_token=${this.token}`;
     }
 
-    async deleteFile(path, isDirectory) {
-        const confirmed = await this.showDialog(
-            `确定要删除此${isDirectory ? '文件夹' : '文件'}吗？`,
-            '确认删除',
-            { type: 'confirm' }
-        );
-
-        if (!confirmed) {
-            return;
+    /** 删除单个文件/文件夹，skipConfirm=true 跳过弹窗，统一用批量接口 */
+    async deleteFile(path, isDirectory, skipConfirm = false) {
+        if (!skipConfirm) {
+            const confirmed = await this.showDialog(
+                `确定要删除此${isDirectory ? '文件夹' : '文件'}吗？`,
+                '确认删除',
+                { type: 'confirm' }
+            );
+            if (!confirmed) return false;
         }
-
         try {
-            const url = isDirectory
-                ? `/api/files/delete-directory?path=${encodeURIComponent(path)}`
-                : `/api/files/delete?path=${encodeURIComponent(path)}`;
-
-            const response = await fetch(url, {
+            const items = [{ Path: path, IsDirectory: isDirectory }];
+            const body = { Items: items };
+            const response = await fetch('/api/files/delete-batch', {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${this.token}` }
+                headers: { 'Authorization': `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
             });
-
             const data = await response.json();
-            this.showToast(data.message, response.ok ? 'success' : 'error');
-            if (response.ok) {
+            this.showToast(data.message, data.success ? 'success' : 'error');
+            if (data.success) {
                 this.loadFiles(this.currentPath || null);
             }
+            return data.success;
         } catch (error) {
             this.showToast('删除失败: ' + error.message, 'error');
+            return false;
         }
     }
 
@@ -4854,10 +5136,12 @@ volumes:
             });
 
             const data = await response.json();
-            this.showDialog(data.message || (response.ok ? '创建成功' : '创建失败'), response.ok ? '成功' : '错误');
-            if (response.ok) {
-                this.loadFiles(currentPath || null);
+            if (!data.success) {
+                this.showDialog(data.message || '创建失败', '错误');
+                return;
             }
+            this.showDialog(data.message || '创建成功', '成功');
+            this.loadFiles(currentPath || null);
         } catch (error) {
             this.showDialog('新建文件失败: ' + error.message, '错误');
         }
@@ -4881,10 +5165,12 @@ volumes:
             });
 
             const data = await response.json();
-            this.showDialog(data.message, response.ok ? '成功' : '错误');
-            if (response.ok) {
-                this.loadFiles(currentPath || null);
+            if (!data.success) {
+                this.showDialog(data.message || '创建文件夹失败', '错误');
+                return;
             }
+            this.showDialog(data.message || '创建文件夹成功', '成功');
+            this.loadFiles(currentPath || null);
         } catch (error) {
             this.showDialog('创建文件夹失败: ' + error.message, '错误');
         }
@@ -4911,13 +5197,23 @@ volumes:
         contextMenu.dataset.name = name;
 
         let menuItems = '';
-
+        // 多选提示
+        const multiCount = this.multiSelectMode && this.selectedFiles.size > 1 ? this.selectedFiles.size : 0;
+        const multiLabel = multiCount ? `（对所选${multiCount}项）` : '';
         if (isDirectory) {
-            // 文件夹/磁盘菜单：磁盘不显示删除，重命名用于修改磁盘名称
             menuItems = `
                 <div class="context-menu-item" data-action="open">
                     <span class="menu-icon">📂</span>
                     <span>打开文件夹</span>
+                </div>
+                <div class="context-menu-separator"></div>
+                <div class="context-menu-item" data-action="copy">
+                    <span class="menu-icon">📋</span>
+                    <span>复制${multiLabel}</span>
+                </div>
+                <div class="context-menu-item" data-action="move">
+                    <span class="menu-icon">✂️</span>
+                    <span>剪切${multiLabel}</span>
                 </div>
                 <div class="context-menu-separator"></div>
                 <div class="context-menu-item" data-action="rename">
@@ -4927,16 +5223,15 @@ volumes:
                 ${!isDrive ? `
                 <div class="context-menu-item danger" data-action="delete">
                     <span class="menu-icon">🗑️</span>
-                    <span>删除文件夹</span>
+                    <span>删除文件夹${multiLabel}</span>
                 </div>
                 ` : ''}
             `;
         } else {
-            // 文件菜单
             const canEdit = this.isTextFile(name);
             const isCompose = this.isDockerComposeFile(name);
             const sizeBytes = typeof fileSize === 'number' ? fileSize : parseInt(fileSize, 10) || 0;
-            const canForceEdit = sizeBytes > 0 && sizeBytes < 2 * 1024 * 1024; // 小于 2MB
+            const canForceEdit = sizeBytes > 0 && sizeBytes < 2 * 1024 * 1024;
             menuItems = `
                 ${isCompose ? `<div class="context-menu-item" data-action="compose-manage">
                     <span class="menu-icon">🐳</span>
@@ -4951,6 +5246,14 @@ volumes:
                     <span class="menu-icon">📝</span>
                     <span>强制编辑</span>
                 </div>` : ''}
+                <div class="context-menu-item" data-action="copy">
+                    <span class="menu-icon">📋</span>
+                    <span>复制${multiLabel}</span>
+                </div>
+                <div class="context-menu-item" data-action="move">
+                    <span class="menu-icon">✂️</span>
+                    <span>剪切${multiLabel}</span>
+                </div>
                 <div class="context-menu-item" data-action="download">
                     <span class="menu-icon">💾</span>
                     <span>下载</span>
@@ -4962,7 +5265,7 @@ volumes:
                 </div>
                 <div class="context-menu-item danger" data-action="delete">
                     <span class="menu-icon">🗑️</span>
-                    <span>删除文件</span>
+                    <span>删除文件${multiLabel}</span>
                 </div>
             `;
         }
@@ -4978,8 +5281,30 @@ volumes:
                 const menuIsDirectory = contextMenu.dataset.isDirectory === 'true';
                 const menuIsDrive = contextMenu.dataset.isDrive === 'true';
                 const menuName = contextMenu.dataset.name;
-
+                // 多选时批量操作
+                const multi = this.multiSelectMode && this.selectedFiles.size > 1;
                 switch (action) {
+                    case 'copy':
+                        if (multi) {
+                            this.handleMultiCopy();
+                        } else {
+                            this.setClipboardAction('copy', menuPath, menuIsDirectory);
+                        }
+                        break;
+                    case 'move':
+                        if (multi) {
+                            this.handleMultiMove();
+                        } else {
+                            this.setClipboardAction('move', menuPath, menuIsDirectory);
+                        }
+                        break;
+                    case 'delete':
+                        if (multi) {
+                            this.handleMultiDelete();
+                        } else {
+                            this.deleteFile(menuPath, menuIsDirectory);
+                        }
+                        break;
                     case 'open':
                         this.loadFiles(menuPath);
                         break;
@@ -4998,11 +5323,7 @@ volumes:
                     case 'rename':
                         this.renameFile(menuPath, menuIsDirectory, menuName, menuIsDrive);
                         break;
-                    case 'delete':
-                        this.deleteFile(menuPath, menuIsDirectory);
-                        break;
                 }
-
                 this.hideContextMenu();
             });
         });
@@ -5063,8 +5384,12 @@ volumes:
                     body: JSON.stringify({ path: oldPath, label: newNameTrim })
                 });
                 const data = await response.json();
-                this.showDialog(data.message, response.ok ? '成功' : '错误');
-                if (response.ok) this.loadFiles(this.currentPath);
+                if (!data.success) {
+                    this.showDialog(data.message || '修改磁盘名称失败', '错误');
+                    return;
+                }
+                this.showDialog(data.message || '磁盘名称已修改', '成功');
+                this.loadFiles(this.currentPath);
                 return;
             }
 
@@ -5086,11 +5411,12 @@ volumes:
             });
 
             const data = await response.json();
-            this.showDialog(data.message, response.ok ? '成功' : '错误');
-
-            if (response.ok) {
-                this.loadFiles(this.currentPath);
+            if (!data.success) {
+                this.showDialog(data.message || '重命名失败', '错误');
+                return;
             }
+            this.showDialog(data.message || '重命名成功', '成功');
+            this.loadFiles(this.currentPath);
         } catch (error) {
             this.showDialog((isDrive ? '修改磁盘名称' : '重命名') + '失败: ' + error.message, '错误');
         }

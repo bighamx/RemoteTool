@@ -9,6 +9,7 @@ namespace ChuckieHelper.WebApi.Controllers.RemoteControl;
 [Route("api/[controller]")]
 [Authorize]
 public class DockerController : ControllerBase
+    
 {
     private readonly IDockerService _dockerService;
 
@@ -16,6 +17,9 @@ public class DockerController : ControllerBase
     {
         _dockerService = dockerService;
     }
+
+    private IActionResult ApiError(string message)
+        => BadRequest(new { message });
 
     /// <summary>
     /// 获取容器列表
@@ -28,15 +32,13 @@ public class DockerController : ControllerBase
             var containers = await _dockerService.GetContainersAsync();
             if (containers == null || containers.Count == 0)
             {
-                // 返回成功的空列表，而不是错误
-                // 这可能是正常的（没有容器）或者是 Docker 守护程序问题
                 return Ok(new { data = containers, message = "No containers found or Docker daemon may not be running" });
             }
             return Ok(new { data = containers });
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = $"Failed to get containers: {ex.Message}", error = ex.StackTrace });
+            return ApiError($"Failed to get containers: {ex.Message}");
         }
     }
 
@@ -50,14 +52,12 @@ public class DockerController : ControllerBase
         {
             var result = await _dockerService.StartContainerAsync(containerId);
             if (result)
-            {
                 return Ok(new { message = $"Container {containerId} started" });
-            }
-            return BadRequest(new { message = $"Failed to start container {containerId}" });
+            return ApiError($"Failed to start container {containerId}");
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError(ex.Message);
         }
     }
 
@@ -71,14 +71,12 @@ public class DockerController : ControllerBase
         {
             var result = await _dockerService.StopContainerAsync(containerId);
             if (result)
-            {
                 return Ok(new { message = $"Container {containerId} stopped" });
-            }
-            return BadRequest(new { message = $"Failed to stop container {containerId}" });
+            return ApiError($"Failed to stop container {containerId}");
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError(ex.Message);
         }
     }
 
@@ -92,14 +90,12 @@ public class DockerController : ControllerBase
         {
             var result = await _dockerService.RemoveContainerAsync(containerId, force);
             if (result)
-            {
                 return Ok(new { message = $"Container {containerId} removed" });
-            }
-            return BadRequest(new { message = $"Failed to remove container {containerId}" });
+            return ApiError($"Failed to remove container {containerId}");
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError(ex.Message);
         }
     }
 
@@ -116,7 +112,7 @@ public class DockerController : ControllerBase
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError(ex.Message);
         }
     }
 
@@ -133,7 +129,7 @@ public class DockerController : ControllerBase
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = $"Failed to get container stats: {ex.Message}" });
+            return ApiError($"Failed to get container stats: {ex.Message}");
         }
     }
 
@@ -150,7 +146,7 @@ public class DockerController : ControllerBase
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError(ex.Message);
         }
     }
 
@@ -163,20 +159,16 @@ public class DockerController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(request.ImageTag))
-            {
-                return BadRequest(new { message = "ImageTag is required" });
-            }
+                return ApiError("ImageTag is required");
 
             var result = await _dockerService.PullImageAsync(request.ImageTag);
             if (result)
-            {
                 return Ok(new { message = $"Image {request.ImageTag} pulled successfully" });
-            }
-            return BadRequest(new { message = $"Failed to pull image {request.ImageTag}" });
+            return ApiError($"Failed to pull image {request.ImageTag}");
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError(ex.Message);
         }
     }
 
@@ -189,16 +181,14 @@ public class DockerController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(request.ImageTag))
-            {
-                return BadRequest(new { message = "ImageTag is required" });
-            }
+                return ApiError("ImageTag is required");
 
             var hasUpdate = await _dockerService.CheckImageUpdateAsync(request.ImageTag);
             return Ok(new { hasUpdate, imageTag = request.ImageTag });
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError(ex.Message);
         }
     }
 
@@ -211,20 +201,16 @@ public class DockerController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(request.ComposePath))
-            {
-                return BadRequest(new { message = "ComposePath is required" });
-            }
+                return ApiError("ComposePath is required");
 
             var result = await _dockerService.ComposeUpAsync(request.ComposePath);
             if (result)
-            {
                 return Ok(new { message = "docker-compose up executed successfully" });
-            }
-            return BadRequest(new { message = "Failed to execute docker-compose up" });
+            return ApiError("Failed to execute docker-compose up");
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError(ex.Message);
         }
     }
 
@@ -237,20 +223,56 @@ public class DockerController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(request.ComposePath))
-            {
-                return BadRequest(new { message = "ComposePath is required" });
-            }
+                return ApiError("ComposePath is required");
 
             var (success, output) = await _dockerService.ComposePullAsync(request.ComposePath);
             if (success)
-            {
                 return Ok(new { message = "docker-compose pull 执行成功", logs = output });
-            }
-            return BadRequest(new { message = "docker-compose pull 执行失败", logs = output });
+            return ApiError("docker-compose pull 执行失败");
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 流式执行 docker-compose stop，响应体为实时日志（每行一条，最后一行 [EXIT:码]）
+    /// </summary>
+    [HttpPost("compose/stop/stream")]
+    public async Task ComposeStopStream([FromBody] ComposeRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(request.ComposePath))
+        {
+            Response.StatusCode = 400;
+            await Response.WriteAsync("ComposePath is required", cancellationToken);
+            return;
+        }
+        if (!System.IO.File.Exists(request.ComposePath))
+        {
+            Response.StatusCode = 400;
+            await Response.WriteAsync("Compose 文件不存在", cancellationToken);
+            return;
+        }
+        Response.ContentType = "text/plain; charset=utf-8";
+        Response.Headers.CacheControl = "no-cache";
+        var dir = Path.GetDirectoryName(request.ComposePath) ?? "";
+        try
+        {
+            var exitCode = await _dockerService.ExecuteDockerComposeCommandStreamAsync(
+                "stop", dir,
+                async (line, ct) =>
+                {
+                    await Response.WriteAsync(line + "\n", ct);
+                    await Response.Body.FlushAsync(ct);
+                },
+                cancellationToken);
+            await Response.WriteAsync($"[EXIT:{exitCode}]\n", cancellationToken);
+            await Response.Body.FlushAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            await Response.WriteAsync($"[stderr] {ex.Message}\n[EXIT:-1]\n", cancellationToken);
         }
     }
 
@@ -263,20 +285,16 @@ public class DockerController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(request.ComposePath))
-            {
-                return BadRequest(new { message = "ComposePath is required" });
-            }
+                return ApiError("ComposePath is required");
 
             var result = await _dockerService.ComposeDownAsync(request.ComposePath);
             if (result)
-            {
                 return Ok(new { message = "docker-compose down executed successfully" });
-            }
-            return BadRequest(new { message = "Failed to execute docker-compose down" });
+            return ApiError("Failed to execute docker-compose down");
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError(ex.Message);
         }
     }
 
@@ -413,7 +431,7 @@ public class DockerController : ControllerBase
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError(ex.Message);
         }
     }
 

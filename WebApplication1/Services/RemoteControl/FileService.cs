@@ -7,6 +7,7 @@ using System.Text;
 namespace ChuckieHelper.WebApi.Services.RemoteControl;
 
 public class FileService
+    
 {
     private readonly string _rootPath;
 
@@ -95,6 +96,38 @@ public class FileService
     }
 
     /// <summary>
+    /// 递归复制目录
+    /// </summary>
+    public bool CopyDirectory(string sourcePath, string destPath, bool overwrite = false)
+    {
+        try
+        {
+            var fullSource = ResolvePath(sourcePath);
+            var fullDest = ResolvePath(destPath);
+            if (!Directory.Exists(fullSource))
+                return false;
+            if (!Directory.Exists(fullDest))
+                Directory.CreateDirectory(fullDest);
+            foreach (var file in Directory.GetFiles(fullSource))
+            {
+                var destFile = Path.Combine(fullDest, Path.GetFileName(file));
+                File.Copy(file, destFile, overwrite);
+            }
+            foreach (var dir in Directory.GetDirectories(fullSource))
+            {
+                var destDir = Path.Combine(fullDest, Path.GetFileName(dir));
+                CopyDirectory(dir, destDir, overwrite);
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"CopyDirectory error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
     /// 获取所有驱动器/挂载点列表。Windows 为盘符，Linux 为 /proc/mounts 中的挂载点。
     /// </summary>
     private List<FileInfo> GetDrives()
@@ -156,9 +189,9 @@ public class FileService
         var list = new List<FileInfo>();
         try
         {
-            if (!System.IO.File.Exists("/proc/mounts"))
+            if (!File.Exists("/proc/mounts"))
                 return list;
-            var lines = System.IO.File.ReadAllLines("/proc/mounts");
+            var lines = File.ReadAllLines("/proc/mounts");
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var line in lines)
             {
@@ -236,7 +269,7 @@ public class FileService
         {
             var fullPath = ResolvePath(path);
 
-            if (!System.IO.File.Exists(fullPath))
+            if (!File.Exists(fullPath))
             {
                 return "";
             }
@@ -248,7 +281,7 @@ public class FileService
                 return "[文件过大，无法在线编辑]";
             }
 
-            return await System.IO.File.ReadAllTextAsync(fullPath);
+            return await File.ReadAllTextAsync(fullPath);
         }
         catch (Exception ex)
         {
@@ -265,14 +298,14 @@ public class FileService
         try
         {
             var fullPath = ResolvePath(path);
-            if (!System.IO.File.Exists(fullPath))
+            if (!File.Exists(fullPath))
                 return null;
 
             var fileInfo = new System.IO.FileInfo(fullPath);
             if (fileInfo.Length > 2 * 1024 * 1024) // 2MB 限制
                 return null;
 
-            return System.IO.File.OpenRead(fullPath);
+            return File.OpenRead(fullPath);
         }
         catch (Exception ex)
         {
@@ -289,14 +322,14 @@ public class FileService
         try
         {
             var fullPath = ResolvePath(path);
-            if (System.IO.File.Exists(fullPath))
+            if (File.Exists(fullPath))
             {
                 var fileInfo = new System.IO.FileInfo(fullPath);
                 if ((fileInfo.Attributes & FileAttributes.ReadOnly) != 0)
                     return false;
             }
 
-            await System.IO.File.WriteAllBytesAsync(fullPath, bytes);
+            await File.WriteAllBytesAsync(fullPath, bytes);
             return true;
         }
         catch (Exception ex)
@@ -316,7 +349,7 @@ public class FileService
             var fullPath = ResolvePath(path);
 
             // 检查文件是否可写
-            if (System.IO.File.Exists(fullPath))
+            if (File.Exists(fullPath))
             {
                 var fileInfo = new System.IO.FileInfo(fullPath);
                 if ((fileInfo.Attributes & FileAttributes.ReadOnly) != 0)
@@ -325,7 +358,7 @@ public class FileService
                 }
             }
 
-            await System.IO.File.WriteAllTextAsync(fullPath, content);
+            await File.WriteAllTextAsync(fullPath, content);
             return true;
         }
         catch (Exception ex)
@@ -344,12 +377,12 @@ public class FileService
         {
             var fullPath = ResolvePath(path);
 
-            if (!System.IO.File.Exists(fullPath))
+            if (!File.Exists(fullPath))
             {
                 return false;
             }
 
-            System.IO.File.Delete(fullPath);
+            File.Delete(fullPath);
             return true;
         }
         catch (Exception ex)
@@ -416,14 +449,19 @@ public class FileService
         {
             var fullSource = ResolvePath(sourcePath);
             var fullDest = ResolvePath(destPath);
-
-            if (!System.IO.File.Exists(fullSource))
+            if (File.Exists(fullSource))
+            {
+                File.Copy(fullSource, fullDest, overwrite);
+                return true;
+            }
+            else if (Directory.Exists(fullSource))
+            {
+                return CopyDirectory(fullSource, fullDest, overwrite);
+            }
+            else
             {
                 return false;
             }
-
-            System.IO.File.Copy(fullSource, fullDest, overwrite);
-            return true;
         }
         catch (Exception ex)
         {
@@ -442,12 +480,21 @@ public class FileService
             var fullSource = ResolvePath(sourcePath);
             var fullDest = ResolvePath(destPath);
 
-            if (!System.IO.File.Exists(fullSource))
+            if (!File.Exists(fullSource) && !Directory.Exists(fullSource))
             {
                 return false;
             }
+            var isFile = File.Exists(fullSource);
+            if (isFile)
+            {
+                File.Move(fullSource, fullDest, true);
+                return true;
+            }                          
+            {
+                Directory.Move(fullSource, fullDest);
+                return true;
+            }
 
-            System.IO.File.Move(fullSource, fullDest, true);
             return true;
         }
         catch (Exception ex)
@@ -471,9 +518,9 @@ public class FileService
                 Directory.Move(fullOld, fullNew);
                 return true;
             }
-            if (System.IO.File.Exists(fullOld))
+            if (File.Exists(fullOld))
             {
-                System.IO.File.Move(fullOld, fullNew, true);
+                File.Move(fullOld, fullNew, true);
                 return true;
             }
             return false;
@@ -537,12 +584,12 @@ public class FileService
         {
             var fullPath = ResolvePath(path);
 
-            if (!System.IO.File.Exists(fullPath))
+            if (!File.Exists(fullPath))
             {
                 return Array.Empty<byte>();
             }
 
-            return await System.IO.File.ReadAllBytesAsync(fullPath);
+            return await File.ReadAllBytesAsync(fullPath);
         }
         catch (Exception ex)
         {
@@ -560,7 +607,7 @@ public class FileService
         {
             var fullPath = ResolvePath(path);
 
-            if (!System.IO.File.Exists(fullPath))
+            if (!File.Exists(fullPath))
             {
                 return (null, "", 0);
             }
@@ -587,7 +634,7 @@ public class FileService
         {
             var fullPath = ResolvePath(path);
 
-            if (!System.IO.File.Exists(fullPath))
+            if (!File.Exists(fullPath))
             {
                 return Array.Empty<byte>();
             }
@@ -606,7 +653,7 @@ public class FileService
                 var fileInfo = new System.IO.FileInfo(fullPath);
                 if (fileInfo.Length <= 2 * 1024 * 1024)
                 {
-                    return System.IO.File.ReadAllBytes(fullPath);
+                    return File.ReadAllBytes(fullPath);
                 }
             }
 

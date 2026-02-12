@@ -231,7 +231,7 @@ public class LinuxDockerService : IDockerService, IDisposable
     }
 
     /// <summary>
-    /// 使用 docker-compose 停止容器
+    /// 使用 docker-compose 移除容器
     /// </summary>
     public async Task<bool> ComposeDownAsync(string composePath)
     {
@@ -245,6 +245,25 @@ public class LinuxDockerService : IDockerService, IDisposable
         catch (Exception ex)
         {
             Console.WriteLine($"ComposeDown error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 使用 docker-compose 停止容器
+    /// </summary>
+    public async Task<bool> ComposeStopAsync(string composePath)
+    {
+        try
+        {
+            if (!File.Exists(composePath)) return false;
+            var directory = Path.GetDirectoryName(composePath) ?? "";
+            var result = await ExecuteDockerComposeCommandAsync("stop", directory);
+            return !string.IsNullOrEmpty(result);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"ComposeStop error: {ex.Message}");
             return false;
         }
     }

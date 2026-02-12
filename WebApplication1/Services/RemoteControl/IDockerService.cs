@@ -17,6 +17,7 @@ public interface IDockerService
     Task<bool> CheckImageUpdateAsync(string imageTag);
     Task<bool> ComposeUpAsync(string composePath);
     Task<bool> ComposeDownAsync(string composePath);
+    Task<bool> ComposeStopAsync(string composePath);
     Task<(bool Success, string Output)> ComposePullAsync(string composePath);
     Task<string> ReadComposeFileAsync(string path);
     Task<bool> WriteComposeFileAsync(string path, string content);

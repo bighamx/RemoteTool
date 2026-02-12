@@ -10,10 +10,13 @@ namespace ChuckieHelper.WebApi.Controllers.RemoteControl;
 [Route("api/[controller]")]
 [Authorize]
 public class StreamController : ControllerBase
+
 {
     private readonly SystemService _systemService;
     private const string Boundary = "frame";
 
+    private IActionResult ApiError(string message)
+            => BadRequest(new { message });
     public StreamController(SystemService systemService)
     {
         _systemService = systemService;

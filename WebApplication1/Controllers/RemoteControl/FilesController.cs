@@ -4,6 +4,8 @@ using ChuckieHelper.WebApi.Services.RemoteControl;
 
 namespace ChuckieHelper.WebApi.Controllers.RemoteControl;
 
+
+
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
@@ -16,20 +18,90 @@ public class FilesController : ControllerBase
         _fileService = fileService;
     }
 
+    private IActionResult ApiResult(object data = null, string message = null, bool success = true)
+        => Ok(new { success, message, data });
+
+    private IActionResult ApiError(string message)
+        => BadRequest(new { message });
+
+
+    /// <summary>
+    /// 批量删除文件/文件夹
+    /// </summary>
+    [HttpPost("delete-batch")]
+    public IActionResult DeleteBatch([FromBody] BatchDeleteRequest request)
+    {
+        if (request?.Items == null || request.Items.Count == 0)
+            return ApiResult(null, "No items to delete", false);
+        int success = 0, fail = 0;
+        var results = new List<object>();
+        foreach (var item in request.Items)
+        {
+            bool ok = item.IsDirectory
+                ? _fileService.DeleteDirectory(item.Path, true)
+                : _fileService.DeleteFile(item.Path);
+            if (ok) success++; else fail++;
+            results.Add(new { item.Path, item.IsDirectory, ok });
+        }
+        return ApiResult(new { success, fail, results }, $"已删除 {success} 项，失败 {fail} 项");
+    }
+
+    /// <summary>
+    /// 批量复制文件/文件夹
+    /// </summary>
+    [HttpPost("copy-batch")]
+    public IActionResult CopyBatch([FromBody] BatchCopyRequest request)
+    {
+        if (request?.Items == null || request.Items.Count == 0 || string.IsNullOrEmpty(request.DestPath))
+            return ApiResult(null, "参数不完整", false);
+        int success = 0, fail = 0;
+        var results = new List<object>();
+        foreach (var item in request.Items)
+        {
+            var name = System.IO.Path.GetFileName(item.Path);
+            var dest = System.IO.Path.Combine(request.DestPath, name);
+            bool ok = _fileService.CopyFile(item.Path, dest, request.Overwrite);
+            if (ok) success++; else fail++;
+            results.Add(new { item.Path, dest, item.IsDirectory, ok });
+        }
+        return ApiResult(new { success, fail, results }, $"已复制 {success} 项，失败 {fail} 项");
+    }
+
+    /// <summary>
+    /// 批量移动文件/文件夹
+    /// </summary>
+    [HttpPost("move-batch")]
+    public IActionResult MoveBatch([FromBody] BatchMoveRequest request)
+    {
+        if (request?.Items == null || request.Items.Count == 0 || string.IsNullOrEmpty(request.DestPath))
+            return ApiResult(null, "参数不完整", false);
+        int success = 0, fail = 0;
+        var results = new List<object>();
+        foreach (var item in request.Items)
+        {
+            var name = System.IO.Path.GetFileName(item.Path);
+            var dest = System.IO.Path.Combine(request.DestPath, name);
+            bool ok = _fileService.MoveFile(item.Path, dest);
+            if (ok) success++; else fail++;
+            results.Add(new { item.Path, dest, item.IsDirectory, ok });
+        }
+        return ApiResult(new { success, fail, results }, $"已移动 {success} 项，失败 {fail} 项");
+    }
+
     /// <summary>
     /// 获取文件列表
     /// </summary>
     [HttpGet("list")]
-    public IActionResult GetFiles([FromQuery] string? path = null)
+    public IActionResult GetFiles([FromQuery] string path = null)
     {
         try
         {
             var files = _fileService.GetFiles(path);
-            return Ok(new { data = files });
+            return ApiResult(files, "File list fetched");
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Get files failed: {ex.Message}");
         }
     }
 
@@ -42,22 +114,22 @@ public class FilesController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(path))
-                return BadRequest(new { message = "Path is required" });
+                return ApiResult(null, "Path is required", false);
 
             if (binary)
             {
                 var stream = _fileService.OpenFileReadStream(path);
                 if (stream == null)
-                    return BadRequest(new { message = "文件不存在或超过 2MB 限制" });
+                    return ApiResult(null, "文件不存在或超过 2MB 限制", false);
                 return File(stream, "application/octet-stream");
             }
 
             var content = await _fileService.ReadFileAsync(path);
-            return Ok(new { content });
+            return ApiResult(content, "File read");
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Read file failed: {ex.Message}");
         }
     }
 
@@ -70,16 +142,16 @@ public class FilesController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(request.Path))
-                return BadRequest(new { message = "Path is required" });
+                return ApiResult(null, "Path is required", false);
 
             var result = await _fileService.WriteFileAsync(request.Path, request.Content ?? "");
             if (result)
-                return Ok(new { message = "File written successfully" });
-            return BadRequest(new { message = "Failed to write file" });
+                return ApiResult(null, "File written successfully");
+            return ApiResult(null, "Failed to write file", false);
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Write file failed: {ex.Message}");
         }
     }
 
@@ -92,7 +164,7 @@ public class FilesController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(path))
-                return BadRequest(new { message = "Path is required" });
+                return ApiResult(null, "Path is required", false);
 
             using var ms = new MemoryStream();
             await Request.Body.CopyToAsync(ms);
@@ -100,41 +172,18 @@ public class FilesController : ControllerBase
 
             var result = await _fileService.WriteFileFromBytesAsync(path, bytes);
             if (result)
-                return Ok(new { message = "File written successfully" });
-            return BadRequest(new { message = "Failed to write file" });
+                return ApiResult(null, "File written successfully");
+            return ApiResult(null, "Failed to write file", false);
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Write file (binary) failed: {ex.Message}");
         }
     }
 
     /// <summary>
     /// 删除文件
     /// </summary>
-    [HttpPost("delete")]
-    public IActionResult DeleteFile([FromQuery] string path)
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(path))
-            {
-                return BadRequest(new { message = "Path is required" });
-            }
-
-            var result = _fileService.DeleteFile(path);
-            if (result)
-            {
-                return Ok(new { message = "File deleted successfully" });
-            }
-            return BadRequest(new { message = "Failed to delete file" });
-        }
-        catch (Exception ex)
-        {
-            return BadRequest(new { message = ex.Message });
-        }
-    }
-
     /// <summary>
     /// 删除目录
     /// </summary>
@@ -144,20 +193,16 @@ public class FilesController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(path))
-            {
-                return BadRequest(new { message = "Path is required" });
-            }
+                return ApiResult(null, "Path is required", false);
 
             var result = _fileService.DeleteDirectory(path, recursive);
             if (result)
-            {
-                return Ok(new { message = "Directory deleted successfully" });
-            }
-            return BadRequest(new { message = "Failed to delete directory" });
+                return ApiResult(null, "Directory deleted successfully");
+            return ApiResult(null, "Failed to delete directory", false);
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Create directory failed: {ex.Message}");
         }
     }
 
@@ -170,72 +215,16 @@ public class FilesController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(request.Path))
-            {
-                return BadRequest(new { message = "Path is required" });
-            }
+                return ApiResult(null, "Path is required", false);
 
             var result = _fileService.CreateDirectory(request.Path);
             if (result)
-            {
-                return Ok(new { message = "Directory created successfully" });
-            }
-            return BadRequest(new { message = "Failed to create directory" });
+                return ApiResult(null, "Directory created successfully");
+            return ApiResult(null, "Failed to create directory", false);
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
-        }
-    }
-
-    /// <summary>
-    /// 复制文件
-    /// </summary>
-    [HttpPost("copy")]
-    public IActionResult CopyFile([FromBody] CopyFileRequest request)
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(request.SourcePath) || string.IsNullOrEmpty(request.DestPath))
-            {
-                return BadRequest(new { message = "SourcePath and DestPath are required" });
-            }
-
-            var result = _fileService.CopyFile(request.SourcePath, request.DestPath, request.Overwrite);
-            if (result)
-            {
-                return Ok(new { message = "File copied successfully" });
-            }
-            return BadRequest(new { message = "Failed to copy file" });
-        }
-        catch (Exception ex)
-        {
-            return BadRequest(new { message = ex.Message });
-        }
-    }
-
-    /// <summary>
-    /// 移动文件
-    /// </summary>
-    [HttpPost("move")]
-    public IActionResult MoveFile([FromBody] MoveFileRequest request)
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(request.SourcePath) || string.IsNullOrEmpty(request.DestPath))
-            {
-                return BadRequest(new { message = "SourcePath and DestPath are required" });
-            }
-
-            var result = _fileService.MoveFile(request.SourcePath, request.DestPath);
-            if (result)
-            {
-                return Ok(new { message = "File moved successfully" });
-            }
-            return BadRequest(new { message = "Failed to move file" });
-        }
-        catch (Exception ex)
-        {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Create directory failed: {ex.Message}");
         }
     }
 
@@ -248,22 +237,18 @@ public class FilesController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(path))
-            {
-                return BadRequest(new { message = "Path is required" });
-            }
+                return ApiResult(null, "Path is required", false);
 
             var fileBytes = await _fileService.GetFileDownloadAsync(path);
             if (fileBytes.Length == 0)
-            {
-                return NotFound(new { message = "File not found" });
-            }
+                return ApiResult(null, "File not found", false);
 
-            var fileName = System.IO.Path.GetFileName(path);
+            var fileName = Path.GetFileName(path);
             return File(fileBytes, "application/octet-stream", fileName);
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Download file failed: {ex.Message}");
         }
     }
 
@@ -276,15 +261,11 @@ public class FilesController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(path))
-            {
-                return BadRequest(new { message = "Path is required" });
-            }
+                return ApiResult(null, "Path is required", false);
 
-            var (stream, contentType, fileSize) = _fileService.GetFileStream(path);
+            var (stream, contentType, _) = _fileService.GetFileStream(path);
             if (stream == null)
-            {
-                return NotFound(new { message = "File not found" });
-            }
+                return ApiResult(null, "File not found", false);
 
             // 启用 Range 请求支持，浏览器自动处理 206 Partial Content
             Response.Headers["Accept-Ranges"] = "bytes";
@@ -292,7 +273,7 @@ public class FilesController : ControllerBase
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Stream file failed: {ex.Message}");
         }
     }
 
@@ -309,9 +290,7 @@ public class FilesController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(path))
-            {
-                return BadRequest(new { message = "Path is required" });
-            }
+                return ApiResult(null, "Path is required", false);
 
             // 限制参数范围
             maxWidth = Math.Clamp(maxWidth, 100, 3840);
@@ -320,15 +299,13 @@ public class FilesController : ControllerBase
 
             var imageBytes = _fileService.GetImagePreview(path, maxWidth, maxHeight, quality);
             if (imageBytes.Length == 0)
-            {
-                return NotFound(new { message = "Image not found or not supported" });
-            }
+                return ApiResult(null, "Image not found or not supported", false);
 
             return File(imageBytes, "image/jpeg");
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Preview image failed: {ex.Message}");
         }
     }
 
@@ -341,15 +318,15 @@ public class FilesController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(request.OldPath) || string.IsNullOrEmpty(request.NewPath))
-                return BadRequest(new { message = "OldPath and NewPath are required" });
+                return ApiResult(null, "OldPath and NewPath are required", false);
             var result = _fileService.Rename(request.OldPath, request.NewPath);
             if (result)
-                return Ok(new { message = "重命名成功" });
-            return BadRequest(new { message = "重命名失败" });
+                return ApiResult(null, "重命名成功");
+            return ApiResult(null, "重命名失败", false);
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Rename failed: {ex.Message}");
         }
     }
 
@@ -362,15 +339,15 @@ public class FilesController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(request.Path))
-                return BadRequest(new { message = "Path is required" });
+                return ApiResult(null, "Path is required", false);
             var result = _fileService.SetDriveLabel(request.Path, request.Label ?? "");
             if (result)
-                return Ok(new { message = "磁盘名称已修改" });
-            return BadRequest(new { message = "修改失败或当前系统不支持" });
+                return ApiResult(null, "磁盘名称已修改");
+            return ApiResult(null, "修改失败或当前系统不支持", false);
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Set drive label failed: {ex.Message}");
         }
     }
 
@@ -383,22 +360,20 @@ public class FilesController : ControllerBase
         try
         {
             if (string.IsNullOrEmpty(path))
-            {
-                return BadRequest(new { message = "Path is required" });
-            }
+                return ApiResult(null, "Path is required", false);
 
             var files = Request.Form.Files;
             if (files.Count == 0)
-            {
-                return BadRequest(new { message = "No file uploaded" });
-            }
+                return ApiResult(null, "No file uploaded", false);
 
             var file = files[0];
-            var relativePath = Request.Form["relativePath"].FirstOrDefault() ?? file.FileName ?? "";
+            var relativePath = Request.Form["relativePath"].FirstOrDefault();
+            if (string.IsNullOrEmpty(relativePath))
+                relativePath = file.FileName;
             if (string.IsNullOrWhiteSpace(relativePath))
-            {
-                return BadRequest(new { message = "Invalid file name" });
-            }
+                return ApiResult(null, "Invalid file name", false);
+            if (string.IsNullOrWhiteSpace(relativePath))
+                return ApiResult(null, "Invalid file name", false);
 
             var basePath = path.Replace('/', Path.DirectorySeparatorChar).TrimEnd(Path.DirectorySeparatorChar);
             // Windows 盘符根路径需保留尾部反斜杠，否则 Path.Combine("D:", "x") 会得到 "D:x"
@@ -419,15 +394,13 @@ public class FilesController : ControllerBase
             var result = await _fileService.WriteFileFromBytesAsync(fullPath, fileBytes);
 
             if (result)
-            {
-                return Ok(new { message = "File uploaded successfully", fileName = Path.GetFileName(fullPath) });
-            }
+                return ApiResult(new { fileName = Path.GetFileName(fullPath) }, "File uploaded successfully");
 
-            return BadRequest(new { message = "Failed to upload file" });
+            return ApiResult(null, "Failed to upload file", false);
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return ApiError($"Upload file failed: {ex.Message}");
         }
     }
 }
@@ -435,7 +408,7 @@ public class FilesController : ControllerBase
 public class WriteFileRequest
 {
     public string Path { get; set; } = "";
-    public string? Content { get; set; }
+    public string Content { get; set; }
 }
 
 public class CreateDirectoryRequest
@@ -465,5 +438,27 @@ public class RenameRequest
 public class SetDriveLabelRequest
 {
     public string Path { get; set; } = "";
-    public string? Label { get; set; }
+    public string Label { get; set; }
+}
+
+
+public class BatchDeleteRequest
+{
+    public List<BatchItem> Items { get; set; } = new();
+}
+public class BatchCopyRequest
+{
+    public List<BatchItem> Items { get; set; } = new();
+    public string DestPath { get; set; } = "";
+    public bool Overwrite { get; set; } = false;
+}
+public class BatchMoveRequest
+{
+    public List<BatchItem> Items { get; set; } = new();
+    public string DestPath { get; set; } = "";
+}
+public class BatchItem
+{
+    public string Path { get; set; } = "";
+    public bool IsDirectory { get; set; }
 }

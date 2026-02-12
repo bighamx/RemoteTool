@@ -5,7 +5,11 @@ using System.Text.Json;
 namespace ChuckieHelper.WebApi.Services.RemoteControl;
 
 public class DockerService : IDockerService
+    
 {
+
+
+
     /// <summary>
     /// 获取 Docker 容器列表
     /// </summary>
@@ -503,6 +507,29 @@ public class DockerService : IDockerService
         }
     }
 
+
+    /// <summary>
+    /// 使用 docker-compose 停止容器（仅停止，不移除）
+    /// </summary>
+    public async Task<bool> ComposeStopAsync(string composePath)
+    {
+        try
+        {
+            if (!File.Exists(composePath))
+            {
+                return false;
+            }
+            var directory = Path.GetDirectoryName(composePath) ?? "";
+            var result = await ExecuteDockerComposeCommandAsync("stop", directory);
+            return !string.IsNullOrEmpty(result);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"ComposeStop error: {ex.Message}");
+            return false;
+        }
+    }
+    
     /// <summary>
     /// 使用 docker-compose 拉取镜像
     /// </summary>

@@ -2,6 +2,8 @@
 <html lang="zh-CN">
 
 <head>
+    <script src="js/mp4box.all.min.js"></script>
+    <script src="js/app.js"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Remote Control - 远程控制面板</title>
@@ -9,9 +11,6 @@
 </head>
 
 <body>
-    <!-- Login Page Removed (Using Global Login) -->
-
-    <!-- Dashboard Page -->
     <div id="dashboard-page" class="page active">
         <header class="header">
             <div class="header-left">
@@ -52,6 +51,11 @@
                         <div class="control-icon">💤</div>
                         <h3>休眠</h3>
                         <p>使计算机进入休眠状态</p>
+                    </div>
+                    <div class="control-card danger" data-action="reboot">
+                        <div class="control-icon">🔄</div>
+                        <h3>重启</h3>
+                        <p>5秒后重启计算机</p>
                     </div>
                     <div class="control-card danger" data-action="shutdown">
                         <div class="control-icon">⚡</div>
@@ -400,7 +404,8 @@
                             <button id="save-compose-btn" class="btn btn-success">💾 保存文件</button>
                             <button id="run-compose-pull-btn" class="btn btn-secondary">⬇️ 拉取 (pull)</button>
                             <button id="run-compose-up-btn" class="btn btn-primary">▶️ 运行 (up)</button>
-                            <button id="run-compose-down-btn" class="btn btn-warning">⏹️ 停止 (down)</button>
+                            <button id="run-compose-stop-btn" class="btn btn-warning">⏹️ 停止 (stop)</button>
+                            <button id="run-compose-down-btn" class="btn btn-danger">🗑️ 移除 (down)</button>
                             <button id="validate-compose-btn" class="btn btn-secondary">✓ 验证</button>
                         </div>
                     </div>
@@ -498,6 +503,7 @@
                                     </svg></span></button>
                         </div>
                         <div class="files-controls">
+
                             <button id="home-btn" class="btn-icon" title="主目录">🏠</button>
                             <button id="back-btn" class="btn-icon" title="返回上级">⬅️</button>
                             <button id="refresh-files-btn" class="btn-icon btn-refresh" title="刷新"><span
@@ -532,6 +538,19 @@
                             <div class="bookmark-dropdown-wrapper">
                                 <button id="bookmark-list-btn" class="btn-icon" title="收藏夹">📑</button>
                                 <div id="bookmark-dropdown" class="bookmark-dropdown" style="display:none;"></div>
+                            </div>
+                            <button class="btn-icon"
+                                style="margin-left:12px;display:inline-flex;align-items:center;gap:4px;" title="多选模式">
+                                <label style="display:inline-flex;align-items:center;gap:4px;">
+                                    <input id="multi-select-toolbar" type="checkbox" tabindex="-1">
+                                </label>
+                            </button>
+                            <div id="multi-action-btns" class="multi-action-btns"
+                                style="display:none;margin-left:8px;gap:4px;">
+                                <button id="multi-delete-btn" class="btn-icon danger" title="批量删除">🗑️ 删除</button>
+                                <button id="multi-copy-btn" class="btn-icon" title="批量复制">📋 复制</button>
+                                <button id="multi-move-btn" class="btn-icon" title="批量移动">✂️ 移动</button>
+                                <button id="multi-cancel-btn" class="btn-icon" title="取消多选">❌ 取消</button>
                             </div>
                         </div>
                     </div>
@@ -732,8 +751,7 @@
         </div>
     </div>
 
-    <script src="js/mp4box.all.min.js"></script>
-    <script src="js/app.js"></script>
+
 </body>
 
 </html>

@@ -13,7 +13,8 @@ namespace ChuckieHelper.WebApi.Services.RemoteControl;
 /// 系统操作服务：提供截图、鼠标键盘控制、锁屏、关机等功能。
 /// 自动检测 Session 0 环境（IIS），通过桌面代理委派需要桌面访问的操作。
 /// </summary>
-public class SystemService
+public class SystemService : ISystemControlService
+   
 {
     [DllImport("user32.dll")]
     private static extern bool SetProcessDPIAware();
@@ -159,6 +160,27 @@ public class SystemService
         });
     }
 
+     /// <summary>
+    /// 重启
+    /// </summary>
+    public void Reboot()
+    {
+        if (IsSession0)
+        {
+            InteractiveProcessLauncher.LaunchInInteractiveSession(
+                "shutdown /r /t 5 /c \"Remote Control: System will reboot in 5 seconds\"");
+            return;
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "shutdown",
+            Arguments = "/r /t 5 /c \"Remote Control: System will reboot in 5 seconds\"",
+            CreateNoWindow = true,
+            UseShellExecute = false
+        });
+    }
+
     /// <summary>
     /// 睡眠（挂起到内存）
     /// </summary>
@@ -206,8 +228,7 @@ public class SystemService
     /// </summary>
     public async Task<List<ProcessInfo>> GetProcessListAsync()
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-            return await GetProcessListLinuxAsync();
+
 
         var now = DateTime.UtcNow;
 
@@ -290,128 +311,7 @@ public class SystemService
     /// <summary>
     /// Linux 进程列表：从 /proc 读取 PID、名称、内存、启动时间等。
     /// </summary>
-    private static async Task<List<ProcessInfo>> GetProcessListLinuxAsync()
-    {
-        var list = new List<ProcessInfo>();
-        try
-        {
-            var procDir = new DirectoryInfo("/proc");
-            if (!procDir.Exists) return list;
 
-            foreach (var dir in procDir.GetDirectories())
-            {
-                if (!int.TryParse(dir.Name, out var pid)) continue;
-                try
-                {
-                    var (name, cmdline, exePath) = GetLinuxProcessNameAndPath(pid);
-                    var (memoryMb, startTime, cpuPercent) = GetLinuxProcessStats(pid);
-                    list.Add(new ProcessInfo
-                    {
-                        Id = pid,
-                        Name = name,
-                        MemoryMB = memoryMb,
-                        Threads = 0,
-                        StartTime = startTime,
-                        HasWindow = false,
-                        WindowTitle = "",
-                        Description = string.IsNullOrEmpty(cmdline) ? "" : cmdline.Length > 80 ? cmdline[..80] + "…" : cmdline,
-                        FilePath = exePath ?? "",
-                        CpuPercent = cpuPercent
-                    });
-                }
-                catch { /* 忽略无权限或已退出的进程 */ }
-            }
-
-            list = list.OrderByDescending(p => p.MemoryMB).ToList();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"GetProcessListLinux error: {ex.Message}");
-        }
-
-        return await Task.FromResult(list);
-    }
-
-    private static (string name, string cmdline, string? exePath) GetLinuxProcessNameAndPath(int pid)
-    {
-        var name = "";
-        var cmdline = "";
-        string? exePath = null;
-        try
-        {
-            var commPath = $"/proc/{pid}/comm";
-            if (File.Exists(commPath))
-                name = File.ReadAllText(commPath).Trim().TrimEnd('\n');
-            var cmdPath = $"/proc/{pid}/cmdline";
-            if (File.Exists(cmdPath))
-            {
-                var raw = File.ReadAllBytes(cmdPath);
-                cmdline = raw.Length == 0 ? "" : System.Text.Encoding.UTF8.GetString(raw).Replace('\0', ' ').Trim();
-                if (string.IsNullOrEmpty(name) && cmdline.Length > 0)
-                    name = cmdline.Split(' ')[0].Split('/').LastOrDefault() ?? "";
-            }
-            var exeLink = $"/proc/{pid}/exe";
-            if (File.Exists(exeLink))
-            {
-                try
-                {
-                    exePath = System.IO.File.ResolveLinkTarget(exeLink, false)?.FullName;
-                }
-                catch { }
-            }
-        }
-        catch { }
-        if (string.IsNullOrEmpty(name))
-            name = pid.ToString();
-        return (name, cmdline, exePath);
-    }
-
-    private static (double memoryMb, string startTime, double cpuPercent) GetLinuxProcessStats(int pid)
-    {
-        double memoryMb = 0;
-        string startTime = "-";
-        double cpuPercent = 0;
-        try
-        {
-            var statPath = $"/proc/{pid}/stat";
-            if (!File.Exists(statPath)) return (0, "-", 0);
-            var stat = File.ReadAllText(statPath);
-            // format: pid (comm) state ppid ... starttime(20th) vsize rss(22nd) ...
-            var closeParen = stat.IndexOf(')');
-            if (closeParen < 0) return (0, "-", 0);
-            var afterComm = stat[(closeParen + 1)..].TrimStart().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (afterComm.Length > 21)
-            {
-                if (long.TryParse(afterComm[21], out var rss))
-                    memoryMb = Math.Round(rss * 4096.0 / 1024.0 / 1024.0, 1); // page size 4KB
-                if (long.TryParse(afterComm[19], out var startTicks))
-                {
-                    try
-                    {
-                        var boot = GetLinuxBootTime();
-                        var startSec = boot + startTicks / 100.0;
-                        var startDate = DateTimeOffset.FromUnixTimeSeconds((long)startSec);
-                        startTime = startDate.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss");
-                    }
-                    catch { }
-                }
-            }
-        }
-        catch { }
-        return (memoryMb, startTime, cpuPercent);
-    }
-
-    private static long GetLinuxBootTime()
-    {
-        try
-        {
-            var line = File.ReadAllText("/proc/uptime").Trim().Split(' ')[0];
-            var uptimeSec = double.Parse(line, System.Globalization.CultureInfo.InvariantCulture);
-            return (long)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - uptimeSec);
-        }
-        catch { }
-        return 0;
-    }
 
     /// <summary>
     /// 获取窗口映射（带缓存）
@@ -1230,8 +1130,7 @@ public class SystemService
     /// </summary>
     public SystemInfo GetSystemInfo()
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-            return GetSystemInfoLinux();
+
 
         var info = new SystemInfo
         {
@@ -1391,315 +1290,6 @@ public class SystemService
         return info;
     }
 
-    /// <summary>
-    /// Linux 系统信息：从 /proc、/sys 及常用命令获取 CPU/内存/磁盘/网络/GPU。
-    /// </summary>
-    private static SystemInfo GetSystemInfoLinux()
-    {
-        var info = new SystemInfo
-        {
-            Platform = "Linux",
-            MachineName = Environment.MachineName,
-            UserName = Environment.UserName,
-            OSVersion = GetLinuxOsVersion(),
-            ProcessorCount = Environment.ProcessorCount,
-            Is64Bit = Environment.Is64BitOperatingSystem,
-            SystemDirectory = "",
-            UpTime = GetLinuxUptime()
-        };
-
-        GetLinuxCpuInfo(info);
-        GetLinuxMemoryInfo(info);
-        GetLinuxGpuInfo(info);
-        GetLinuxDriveInfo(info);
-        GetLinuxNetworkInfo(info);
-        GetLinuxCpuTemperature(info);
-
-        return info;
-    }
-
-    private static string GetLinuxOsVersion()
-    {
-        try
-        {
-            if (File.Exists("/proc/version"))
-                return File.ReadAllText("/proc/version").Trim().Replace("\n", " ");
-        }
-        catch { }
-        return Environment.OSVersion.ToString();
-    }
-
-    private static string GetLinuxUptime()
-    {
-        try
-        {
-            var line = File.ReadAllText("/proc/uptime").Trim();
-            var seconds = double.Parse(line.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0], System.Globalization.CultureInfo.InvariantCulture);
-            var ts = TimeSpan.FromSeconds(seconds);
-            return $"{(int)ts.TotalDays}.{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
-        }
-        catch { }
-        return "-";
-    }
-
-    private static void GetLinuxCpuInfo(SystemInfo info)
-    {
-        try
-        {
-            var cpuinfo = File.Exists("/proc/cpuinfo") ? File.ReadAllText("/proc/cpuinfo") : "";
-            var lines = cpuinfo.Split('\n');
-            foreach (var line in lines)
-            {
-                if (line.StartsWith("model name", StringComparison.OrdinalIgnoreCase))
-                {
-                    var colon = line.IndexOf(':');
-                    if (colon >= 0)
-                        info.CpuName = line[(colon + 1)..].Trim();
-                    break;
-                }
-            }
-            foreach (var line in lines)
-            {
-                if (line.StartsWith("cpu cores", StringComparison.OrdinalIgnoreCase))
-                {
-                    var colon = line.IndexOf(':');
-                    if (colon >= 0 && int.TryParse(line[(colon + 1)..].Trim(), out var cores))
-                        info.CpuCores = cores;
-                    break;
-                }
-            }
-            foreach (var line in lines)
-            {
-                if (line.StartsWith("cpu MHz", StringComparison.OrdinalIgnoreCase))
-                {
-                    var colon = line.IndexOf(':');
-                    if (colon >= 0 && double.TryParse(line[(colon + 1)..].Trim(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var mhz))
-                        info.CpuMaxClockSpeedMHz = (int)Math.Round(mhz);
-                    break;
-                }
-            }
-            if (info.CpuCores <= 0)
-                info.CpuCores = info.ProcessorCount;
-            info.CpuLogicalProcessors = info.ProcessorCount;
-        }
-        catch (Exception ex) { Console.WriteLine($"GetLinuxCpuInfo: {ex.Message}"); }
-
-        try
-        {
-            var stat = File.Exists("/proc/stat") ? File.ReadAllText("/proc/stat") : "";
-            var firstLine = stat.Split('\n').FirstOrDefault(l => l.StartsWith("cpu ", StringComparison.Ordinal));
-            if (firstLine != null)
-            {
-                var parts = firstLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length >= 8 && long.TryParse(parts[1], out var user) && long.TryParse(parts[2], out var nice) &&
-                    long.TryParse(parts[3], out var sys) && long.TryParse(parts[4], out var idle) &&
-                    long.TryParse(parts[5], out var iowait) && long.TryParse(parts[6], out var irq) &&
-                    long.TryParse(parts[7], out var softirq))
-                {
-                    var total = user + nice + sys + idle + iowait + irq + softirq;
-                    var used = total - idle;
-                    if (total > 0)
-                        info.CpuUsagePercent = (int)Math.Round(used * 100.0 / total);
-                }
-            }
-        }
-        catch (Exception ex) { Console.WriteLine($"GetLinuxCpuUsage: {ex.Message}"); }
-    }
-
-    private static void GetLinuxMemoryInfo(SystemInfo info)
-    {
-        try
-        {
-            var meminfo = File.Exists("/proc/meminfo") ? File.ReadAllText("/proc/meminfo") : "";
-            long totalKb = 0, availableKb = 0;
-            foreach (var line in meminfo.Split('\n'))
-            {
-                var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length < 2) continue;
-                if (line.StartsWith("MemTotal:"))
-                    long.TryParse(parts[1], out totalKb);
-                else if (line.StartsWith("MemAvailable:"))
-                    long.TryParse(parts[1], out availableKb);
-                else if (line.StartsWith("MemFree:") && availableKb == 0)
-                    long.TryParse(parts[1], out availableKb);
-            }
-            if (totalKb > 0)
-            {
-                info.TotalMemoryMB = totalKb / 1024;
-                info.AvailableMemoryMB = availableKb > 0 ? availableKb / 1024 : totalKb / 1024;
-                info.UsedMemoryMB = info.TotalMemoryMB - info.AvailableMemoryMB;
-                info.MemoryUsagePercent = (int)Math.Round(info.UsedMemoryMB * 100.0 / info.TotalMemoryMB);
-            }
-        }
-        catch (Exception ex) { Console.WriteLine($"GetLinuxMemoryInfo: {ex.Message}"); }
-    }
-
-    private static void GetLinuxGpuInfo(SystemInfo info)
-    {
-        var gpus = new List<GpuInfo>();
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "lspci",
-                Arguments = "-v -nn",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            using var proc = Process.Start(psi);
-            if (proc != null)
-            {
-                var output = proc.StandardOutput.ReadToEnd();
-                proc.WaitForExit(3000);
-                foreach (var line in output.Split('\n'))
-                {
-                    if (line.Contains("VGA", StringComparison.OrdinalIgnoreCase) || line.Contains("3D", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var name = line.Trim();
-                        if (name.Length > 0 && !gpus.Any(g => g.Name == name))
-                            gpus.Add(new GpuInfo { Name = name, MemoryMB = 0 });
-                    }
-                }
-            }
-        }
-        catch { }
-        if (gpus.Count == 0)
-        {
-            try
-            {
-                var drm = new DirectoryInfo("/sys/class/drm");
-                if (drm.Exists)
-                {
-                    foreach (var card in drm.GetDirectories().Where(d => d.Name.StartsWith("card", StringComparison.Ordinal)))
-                    {
-                        var nameFile = Path.Combine(card.FullName, "device", "product_name");
-                        var name = File.Exists(nameFile) ? File.ReadAllText(nameFile).Trim() : card.Name;
-                        if (!string.IsNullOrEmpty(name) && !gpus.Any(g => g.Name == name))
-                            gpus.Add(new GpuInfo { Name = name, MemoryMB = 0 });
-                    }
-                }
-            }
-            catch { }
-        }
-        info.Gpus = gpus;
-        TryGetNvidiaGpuStats(info.Gpus);
-    }
-
-    private static void GetLinuxDriveInfo(SystemInfo info)
-    {
-        var drives = new List<DriveInfoDto>();
-        try
-        {
-            var mounts = File.Exists("/proc/mounts") ? File.ReadAllLines("/proc/mounts") : Array.Empty<string>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var line in mounts)
-            {
-                var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length < 4) continue;
-                var mountPoint = parts[1];
-                var fstype = parts[2];
-                if (mountPoint.StartsWith("/sys") || mountPoint.StartsWith("/proc") || mountPoint.StartsWith("/dev"))
-                    continue;
-                if (seen.Contains(mountPoint)) continue;
-                seen.Add(mountPoint);
-                try
-                {
-                    var (totalGb, freeGb) = GetLinuxDiskSpace(mountPoint);
-                    if (totalGb <= 0) continue;
-                    var usedGb = Math.Round(totalGb - freeGb, 1);
-                    drives.Add(new DriveInfoDto
-                    {
-                        Name = mountPoint,
-                        TotalGB = totalGb,
-                        UsedGB = usedGb,
-                        FreeGB = Math.Round(freeGb, 1),
-                        UsagePercent = totalGb > 0 ? (int)Math.Round(usedGb / totalGb * 100) : 0,
-                        DriveFormat = fstype
-                    });
-                }
-                catch { }
-            }
-            info.Drives = drives;
-        }
-        catch (Exception ex) { Console.WriteLine($"GetLinuxDriveInfo: {ex.Message}"); }
-    }
-
-    private static (double totalGb, double freeGb) GetLinuxDiskSpace(string path)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "df",
-                Arguments = $"-B1 --output=size,avail \"{path}\"",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            using var proc = Process.Start(psi);
-            if (proc != null)
-            {
-                var output = proc.StandardOutput.ReadToEnd().Trim();
-                proc.WaitForExit(2000);
-                var lines = output.Split('\n');
-                if (lines.Length >= 2)
-                {
-                    var parts = lines[1].Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length >= 2 && long.TryParse(parts[0], out var total) && long.TryParse(parts[1], out var avail))
-                        return (total / 1024.0 / 1024.0 / 1024.0, avail / 1024.0 / 1024.0 / 1024.0);
-                }
-            }
-        }
-        catch { }
-        return (0, 0);
-    }
-
-    private static void GetLinuxNetworkInfo(SystemInfo info)
-    {
-        var list = new List<NetworkAdapterInfo>();
-        try
-        {
-            var net = new DirectoryInfo("/sys/class/net");
-            if (!net.Exists) return;
-            foreach (var dir in net.GetDirectories())
-            {
-                if (dir.Name == "lo") continue;
-                var addrPath = Path.Combine(dir.FullName, "address");
-                var addr = File.Exists(addrPath) ? File.ReadAllText(addrPath).Trim() : "";
-                var speedPath = Path.Combine(dir.FullName, "speed");
-                var speedMbps = 0L;
-                if (File.Exists(speedPath) && int.TryParse(File.ReadAllText(speedPath).Trim(), out var sp))
-                    speedMbps = sp;
-                list.Add(new NetworkAdapterInfo { Name = dir.Name, SpeedMbps = speedMbps, MacAddress = addr });
-            }
-            info.NetworkAdapters = list;
-        }
-        catch (Exception ex) { Console.WriteLine($"GetLinuxNetworkInfo: {ex.Message}"); }
-    }
-
-    private static void GetLinuxCpuTemperature(SystemInfo info)
-    {
-        try
-        {
-            var thermal = new DirectoryInfo("/sys/class/thermal");
-            if (!thermal.Exists) return;
-            foreach (var zone in thermal.GetDirectories().Where(d => d.Name.StartsWith("thermal_zone")))
-            {
-                var tempPath = Path.Combine(zone.FullName, "temp");
-                if (!File.Exists(tempPath)) continue;
-                var raw = File.ReadAllText(tempPath).Trim();
-                if (int.TryParse(raw, out var millideg) && millideg > 0 && millideg < 150000)
-                {
-                    info.CpuTemperature = Math.Round(millideg / 1000.0, 1);
-                    break;
-                }
-            }
-        }
-        catch { }
-    }
 
     /// <summary>
     /// 尝试通过 nvidia-smi 获取 NVIDIA GPU 温度和占用率

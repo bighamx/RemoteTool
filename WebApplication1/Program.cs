@@ -1,18 +1,16 @@
-
-using ChuckieHelper.WebApi.Models;
-using Hangfire;
-using Hangfire.Storage.SQLite;
 using ChuckieHelper.WebApi.Jobs;
-using Hangfire.Console; // 添加 Logs 支持
+using ChuckieHelper.WebApi.Services;
 using ChuckieHelper.WebApi.Services.RemoteControl;
-using ChuckieHelper.WebApi.Services; // Add global services namespace
+using Hangfire;
+using Hangfire.Console; 
+using Hangfire.Storage.SQLite;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 
 
-namespace WebApplication1
+namespace ChuckieHelper.WebApi
 {
     public class Program
     {
@@ -27,13 +25,13 @@ namespace WebApplication1
                 Console.WriteLine($"[DesktopAgent] 进程 ID: {Environment.ProcessId}");
                 Console.WriteLine($"[DesktopAgent] 用户: {Environment.UserName}");
 
-                using var cts = new CancellationTokenSource();
-                Console.CancelKeyPress += (_, e) =>
+
+                var cts = new CancellationTokenSource();
+                Console.CancelKeyPress += (sender, e) =>
                 {
                     e.Cancel = true;
                     cts.Cancel();
                 };
-
                 try
                 {
                     await DesktopAgent.RunServerAsync(cts.Token);
@@ -42,13 +40,17 @@ namespace WebApplication1
                 {
                     Console.WriteLine("[DesktopAgent] 代理已停止");
                 }
+                finally
+                {
+                    cts.Dispose();
+                }
                 return;
             }
 
             var builder = WebApplication.CreateBuilder(args);
 
             // 上传文件大小限制（默认 500MB，可在 appsettings 中通过 FileUpload:MaxSizeMB 覆盖）
-            var maxUploadMb = builder.Configuration.GetValue<int>("FileUpload:MaxSizeMB", 500);
+            var maxUploadMb = builder.Configuration.GetValue("FileUpload:MaxSizeMB", 500);
             var maxUploadBytes = (long)maxUploadMb * 1024 * 1024;
 
             builder.WebHost.ConfigureKestrel(options =>
@@ -64,19 +66,21 @@ namespace WebApplication1
             builder.Services.AddControllersWithViews().AddRazorRuntimeCompilation();
 
             // 注册编码提供程序以支持 GBK (需 NuGet 安装 System.Text.Encoding.CodePages)
-            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
             // Remote Control Services
             builder.Services.AddSingleton<AuthService>();
             builder.Services.AddSingleton<SystemService>();
             builder.Services.AddSingleton<TerminalService>();
-            // Docker Service Registration based on OS
+            // 系统控制服务注入（平台区分）
             if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
             {
+                builder.Services.AddSingleton<ISystemControlService, SystemService>();
                 builder.Services.AddSingleton<IDockerService, DockerService>();
             }
             else
             {
+                builder.Services.AddSingleton<ISystemControlService, LinuxSystemService>();
                 builder.Services.AddSingleton<IDockerService, LinuxDockerService>();
             }
             builder.Services.AddSingleton<FileService>();
@@ -117,7 +121,6 @@ namespace WebApplication1
                             }
                         }
 
-                        var path = context.HttpContext.Request.Path;
                         if (!string.IsNullOrEmpty(accessToken))
                         {
                             context.Token = accessToken;
@@ -142,7 +145,7 @@ namespace WebApplication1
 
             // Hangfire Client
             builder.Services.AddHangfire(configuration => configuration
-                .SetDataCompatibilityLevel(Hangfire.CompatibilityLevel.Version_180)
+                .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
                 .UseSimpleAssemblyNameTypeSerializer()
                 .UseRecommendedSerializerSettings()
                 .UseConsole() // 添加 Hangfire.Console 支持

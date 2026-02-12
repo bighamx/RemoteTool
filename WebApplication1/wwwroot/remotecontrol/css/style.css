@@ -31,8 +31,8 @@
     --text-muted: #6e7781;
     --accent-primary: #0969da;
     --accent-success: #4ccd71;
-    --accent-warning: #9a6700;
-    --accent-danger: #cf222e;
+    --accent-warning: #f1b836;
+    --accent-danger: #e9414d;
     --border-color: #d0d7de;
     --shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
 
@@ -432,7 +432,7 @@ body {
 /* Controls Grid */
 .controls-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 20px;
 }
 
@@ -1673,7 +1673,7 @@ body {
 }
 
 .btn-icon {
-    width: 40px;
+    width: auto;
     height: 40px;
     min-width: 40px;
     padding: 0;
@@ -1687,6 +1687,8 @@ body {
     align-items: center;
     justify-content: center;
     transition: var(--transition);
+    padding: 0 5px;
+    display: inline-block;
 }
 
 .btn-icon:hover {
@@ -2559,7 +2561,7 @@ button.file-toolbar-disabled {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.75);
+    background: rgb(0 0 0 / 18%);
     display: none;
     align-items: center;
     justify-content: center;
@@ -2595,7 +2597,7 @@ button.file-toolbar-disabled {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 20px;
+    padding: 10px 20px;
     background: var(--bg-tertiary);
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
@@ -2722,6 +2724,10 @@ button.file-toolbar-disabled {
     background: var(--accent-warning) !important;
 }
 
+.btn-danger {
+    background: var(--accent-danger) !important;
+}
+
 .btn-warning:hover {
     opacity: 0.8;
 }
@@ -2801,7 +2807,7 @@ button.file-toolbar-disabled {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 20px;
+    padding: 10px 20px;
     background: var(--bg-tertiary);
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
@@ -3631,4 +3637,14 @@ button.file-toolbar-disabled {
     color: var(--accent-success);
     background: rgba(63, 185, 80, 0.1);
     border-color: rgba(63, 185, 80, 0.2);
+}
+#multi-select-toolbar{
+    width: 24px;
+    height: 24px;
+    vertical-align: top;
+}
+input.multi-select-row{
+    width: 24px;
+    height: 24px;
+    vertical-align: top;
 }
