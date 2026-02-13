@@ -1,7 +1,9 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using ChuckieHelper.WebApi.Models.RemoteControl;
 
 namespace ChuckieHelper.WebApi.Services.RemoteControl;
+
 
 public interface ISystemControlService
 {

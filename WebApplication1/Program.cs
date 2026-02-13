@@ -1,6 +1,7 @@
 using ChuckieHelper.WebApi.Jobs;
 using ChuckieHelper.WebApi.Services;
 using ChuckieHelper.WebApi.Services.RemoteControl;
+using ChuckieHelper.WebApi.Extensions;
 using Hangfire;
 using Hangfire.Console; 
 using Hangfire.Storage.SQLite;
@@ -68,94 +69,15 @@ namespace ChuckieHelper.WebApi
             // 注册编码提供程序以支持 GBK (需 NuGet 安装 System.Text.Encoding.CodePages)
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
+
             // Remote Control Services
-            builder.Services.AddSingleton<AuthService>();
-            builder.Services.AddSingleton<SystemService>();
-            builder.Services.AddSingleton<TerminalService>();
-            // 系统控制服务注入（平台区分）
-            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
-            {
-                builder.Services.AddSingleton<ISystemControlService, SystemService>();
-                builder.Services.AddSingleton<IDockerService, DockerService>();
-            }
-            else
-            {
-                builder.Services.AddSingleton<ISystemControlService, LinuxSystemService>();
-                builder.Services.AddSingleton<IDockerService, LinuxDockerService>();
-            }
-            builder.Services.AddSingleton<FileService>();
+            builder.Services.AddRemoteControlServices();
 
             // Configure JWT Authentication
-            var jwtSecret = builder.Configuration["Auth:JwtSecret"] ?? "DefaultSecretKey123456789012345678901234";
-            var key = Encoding.UTF8.GetBytes(jwtSecret);
+            builder.Services.AddJwtAuthentication(builder.Configuration);
 
-            builder.Services.AddAuthentication(options =>
-            {
-                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-            })
-            .AddJwtBearer(options =>
-            {
-                options.TokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuer = false,
-                    ValidateAudience = false,
-                    ValidateLifetime = true,
-                    ValidateIssuerSigningKey = true,
-                    IssuerSigningKey = new SymmetricSecurityKey(key)
-                };
-
-                // Allow token from query string for WebSocket and Stream endpoints
-                options.Events = new JwtBearerEvents
-                {
-                    OnMessageReceived = context =>
-                    {
-                        var accessToken = context.Request.Query["access_token"];
-
-                        // Also check for cookie
-                        if (string.IsNullOrEmpty(accessToken))
-                        {
-                            if (context.Request.Cookies.TryGetValue("access_token", out var cookieToken))
-                            {
-                                accessToken = cookieToken;
-                            }
-                        }
-
-                        if (!string.IsNullOrEmpty(accessToken))
-                        {
-                            context.Token = accessToken;
-                        }
-                        return Task.CompletedTask;
-                    },
-                    OnChallenge = context =>
-                    {
-                        // Check if it's a browser request (not an API call) or Hangfire Dashboard
-                        if (!context.Response.HasStarted && (context.Request.Path.StartsWithSegments("/api") == false || context.Request.Path.StartsWithSegments("/hangfire")))
-                        {
-                            context.HandleResponse(); // Suppress the default 401 response
-                            context.Response.Redirect("/Account/Login?ReturnUrl=" + System.Net.WebUtility.UrlEncode(context.Request.Path + context.Request.QueryString));
-                        }
-                        return Task.CompletedTask;
-                    }
-                };
-            });
-
-
-
-
-            // Hangfire Client
-            builder.Services.AddHangfire(configuration => configuration
-                .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
-                .UseSimpleAssemblyNameTypeSerializer()
-                .UseRecommendedSerializerSettings()
-                .UseConsole() // 添加 Hangfire.Console 支持
-                .UseSQLiteStorage("hangfire.db"));
-
-            // Hangfire Server
-            builder.Services.AddHangfireServer();
-            builder.Services.AddExampleTask();
-            builder.Services.AddQBittorrentTask();
-            builder.Services.AddDdnsTask();
+            // Hangfire Services (Client, Server, Tasks)
+            builder.Services.AddHangfireServices(builder.Configuration);
 
             // 配置转发头，使在 Cloudflare 等反向代理后能正确识别 HTTPS 与原始 Host
             builder.Services.Configure<ForwardedHeadersOptions>(options =>

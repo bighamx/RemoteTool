@@ -1,6 +1,34 @@
+
 using System.Collections.Generic;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace ChuckieHelper.WebApi.Models.RemoteControl;
+
+public class PullImageRequest
+{
+    public string ImageTag { get; set; } = "";
+}
+
+public class CheckImageUpdateRequest
+{
+    public string ImageTag { get; set; } = "";
+}
+
+public class ComposeRequest
+{
+    public string ComposePath { get; set; } = "";
+}
+
+public class WriteComposeRequest
+{
+    public string Path { get; set; } = "";
+    public string Content { get; set; } = "";
+}
+
+public class ValidateComposeRequest
+{
+    public string? Path { get; set; }
+    public string Content { get; set; } = "";
+}
 
 /// <summary>
 /// Docker 容器基本信息

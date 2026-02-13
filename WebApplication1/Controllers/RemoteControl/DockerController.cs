@@ -2,6 +2,7 @@ using System.IO;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ChuckieHelper.WebApi.Services.RemoteControl;
+using ChuckieHelper.WebApi.Models.RemoteControl;
 
 namespace ChuckieHelper.WebApi.Controllers.RemoteControl;
 
@@ -566,29 +567,4 @@ public class DockerController : ControllerBase
     }
 }
 
-public class PullImageRequest
-{
-    public string ImageTag { get; set; } = "";
-}
 
-public class CheckImageUpdateRequest
-{
-    public string ImageTag { get; set; } = "";
-}
-
-public class ComposeRequest
-{
-    public string ComposePath { get; set; } = "";
-}
-
-public class WriteComposeRequest
-{
-    public string Path { get; set; } = "";
-    public string Content { get; set; } = "";
-}
-
-public class ValidateComposeRequest
-{
-    public string? Path { get; set; }
-    public string Content { get; set; } = "";
-}

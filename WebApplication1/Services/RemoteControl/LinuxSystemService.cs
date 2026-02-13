@@ -1,3 +1,4 @@
+using ChuckieHelper.WebApi.Models.RemoteControl;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 

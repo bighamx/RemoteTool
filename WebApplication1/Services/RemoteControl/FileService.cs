@@ -3,6 +3,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
+using ChuckieHelper.WebApi.Models.RemoteControl;
 
 namespace ChuckieHelper.WebApi.Services.RemoteControl;
 
@@ -22,7 +23,11 @@ public class FileService
     /// <summary>
     /// 获取文件列表
     /// </summary>
-    public List<FileInfo> GetFiles(string? path = null)
+    /// <summary>
+    /// 获取文件列表
+    /// </summary>
+    public List<RemoteFileInfo> GetFiles(string? path = null)
+
     {
         try
         {
@@ -36,10 +41,11 @@ public class FileService
 
             if (!Directory.Exists(fullPath))
             {
-                return new List<FileInfo>();
+                return new List<RemoteFileInfo>();
             }
 
-            var files = new List<FileInfo>();
+            var files = new List<RemoteFileInfo>();
+
             var directory = new DirectoryInfo(fullPath);
 
             // 获取子目录
@@ -47,7 +53,7 @@ public class FileService
             {
                 try
                 {
-                    files.Add(new FileInfo
+                    files.Add(new RemoteFileInfo
                     {
                         Name = dir.Name,
                         IsDirectory = true,
@@ -69,7 +75,7 @@ public class FileService
             {
                 try
                 {
-                    files.Add(new FileInfo
+                    files.Add(new RemoteFileInfo
                     {
                         Name = file.Name,
                         IsDirectory = false,
@@ -91,7 +97,7 @@ public class FileService
         catch (Exception ex)
         {
             Console.WriteLine($"GetFiles error: {ex.Message}");
-            return new List<FileInfo>();
+            return new List<RemoteFileInfo>();
         }
     }
 
@@ -130,12 +136,13 @@ public class FileService
     /// <summary>
     /// 获取所有驱动器/挂载点列表。Windows 为盘符，Linux 为 /proc/mounts 中的挂载点。
     /// </summary>
-    private List<FileInfo> GetDrives()
+    private List<RemoteFileInfo> GetDrives()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             return GetLinuxMounts();
 
-        var drives = new List<FileInfo>();
+        var drives = new List<RemoteFileInfo>();
+
         try
         {
             foreach (var drive in DriveInfo.GetDrives())
@@ -144,7 +151,7 @@ public class FileService
                 {
                     if (drive.IsReady)
                     {
-                        drives.Add(new FileInfo
+                        drives.Add(new RemoteFileInfo
                         {
                             Name = $"{drive.Name} ({drive.VolumeLabel})",
                             IsDirectory = true,
@@ -159,7 +166,7 @@ public class FileService
                     }
                     else
                     {
-                        drives.Add(new FileInfo
+                        drives.Add(new RemoteFileInfo
                         {
                             Name = $"{drive.Name} (未就绪)",
                             IsDirectory = true,
@@ -184,9 +191,10 @@ public class FileService
     /// <summary>
     /// Linux：从 /proc/mounts 获取挂载点列表，作为“根”级文件列表的入口。
     /// </summary>
-    private static List<FileInfo> GetLinuxMounts()
+    private static List<RemoteFileInfo> GetLinuxMounts()
     {
-        var list = new List<FileInfo>();
+        var list = new List<RemoteFileInfo>();
+
         try
         {
             if (!File.Exists("/proc/mounts"))
@@ -208,7 +216,8 @@ public class FileService
                     (total, free) = GetLinuxMountSpace(mountPoint);
                 }
                 catch { }
-                list.Add(new FileInfo
+                list.Add(new RemoteFileInfo
+
                 {
                     Name = string.IsNullOrEmpty(mountPoint) || mountPoint == "/" ? "/" : mountPoint,
                     Path = mountPoint,
@@ -781,20 +790,4 @@ public class FileService
     }
 }
 
-/// <summary>
-/// 文件信息
-/// </summary>
-public class FileInfo
-{
-    public string Name { get; set; } = "";
-    public string Path { get; set; } = "";
-    public bool IsDirectory { get; set; }
-    public long Size { get; set; }
-    public DateTime Modified { get; set; }
-    public bool CanRead { get; set; }
-    public bool CanWrite { get; set; }
-    /// <summary>磁盘总字节数（仅根路径驱动器列表时有值）</summary>
-    public long? TotalBytes { get; set; }
-    /// <summary>磁盘可用字节数（仅根路径驱动器列表时有值）</summary>
-    public long? FreeBytes { get; set; }
-}
+
