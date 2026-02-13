@@ -1,20 +1,4 @@
 :root {
-    --bg-primary: #0d1117;
-    --bg-secondary: #161b22;
-    --bg-tertiary: #21262d;
-    --bg-card: #1c2128;
-    --text-primary: #e6edf3;
-    --text-secondary: #8b949e;
-    --text-muted: #6e7681;
-    --accent-primary: #58a6ff;
-    --accent-success: #3fb950;
-    --accent-warning: #d29922;
-    --accent-danger: #f85149;
-    --border-color: #30363d;
-    --border-radius: 12px;
-    --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-    --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-
     /* Terminal Colors */
     --terminal-bg: #0c0c0c;
     --terminal-input-bg: #1a1a1a;
@@ -22,47 +6,20 @@
 }
 
 [data-theme="light"] {
-    --bg-primary: #f6f8fa;
-    --bg-secondary: #ffffff;
-    --bg-tertiary: #dfdfdf;
-    --bg-card: #ffffff;
-    --text-primary: #24292f;
-    --text-secondary: #57606a;
-    --text-muted: #6e7781;
-    --accent-primary: #0969da;
-    --accent-success: #4ccd71;
-    --accent-warning: #f1b836;
-    --accent-danger: #e9414d;
-    --border-color: #d0d7de;
-    --shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-
     /* Terminal Colors (Light) */
     --terminal-bg: #ffffff;
     --terminal-input-bg: #f6f8fa;
     --terminal-text: #24292f;
 }
 
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
 
-body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    min-height: 100vh;
-    line-height: 1.6;
-}
 
-/* Page transitions */
-.page {
+#remote-page.page {
     display: none;
-    min-height: 100vh;
+    min-height: calc(100vh - 60px);
 }
 
-.page.active {
+#remote-page.page.active {
     display: block;
     animation: fadeIn 0.3s ease;
 }
@@ -295,10 +252,107 @@ body {
     flex-shrink: 0;
 }
 
-.header-left h1 {
+/* Navigation Dropdown Menu */
+.nav-dropdown-container {
+    position: relative;
+    display: inline-block;
+}
+
+.nav-dropdown-trigger {
     font-size: 16px;
     font-weight: 600;
     white-space: nowrap;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: background-color 0.2s;
+    user-select: none;
+    margin: 0;
+    color: var(--text-primary);
+}
+
+.nav-dropdown-trigger:hover {
+    background-color: var(--bg-tertiary);
+}
+
+.nav-dropdown-arrow {
+    font-size: 10px;
+    transition: transform 0.2s;
+    opacity: 0.7;
+    margin-left: 4px;
+    display: inline-block;
+}
+
+.nav-dropdown-container:hover .nav-dropdown-arrow {
+    transform: rotate(180deg);
+}
+
+.nav-dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: var(--shadow);
+    min-width: 200px;
+    z-index: 1000;
+    padding: 4px;
+    animation: fadeIn 0.2s ease-out;
+    flex-direction: column;
+}
+
+/* Bridge the gap between trigger and menu */
+.nav-dropdown-menu::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: 0;
+    width: 100%;
+    height: 6px;
+}
+
+.nav-dropdown-container:hover .nav-dropdown-menu {
+    display: flex;
+}
+
+.nav-dropdown-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    color: var(--text-primary);
+    text-decoration: none;
+    font-size: 14px;
+    border-radius: 4px;
+    transition: var(--transition);
+    gap: 12px;
+}
+
+.nav-dropdown-item:hover {
+    background-color: var(--bg-tertiary);
+}
+
+.nav-dropdown-item.active {
+    font-weight: 600;
+    color: var(--accent-primary);
+    background-color: rgba(9, 105, 218, 0.1);
+}
+
+.nav-icon {
+    font-size: 16px;
+    width: 20px;
+    text-align: center;
+    line-height: 1;
+}
+
+/* Ensure badge style works within trigger */
+.nav-dropdown-trigger .badge {
+    margin-left: 8px;
 }
 
 .badge {
@@ -358,9 +412,7 @@ body {
     height: 36px;
 }
 
-#theme-toggle {
-    width: 36px;
-}
+
 
 /* Tabs - 整合到 header 中 */
 .tabs {
@@ -3638,12 +3690,14 @@ button.file-toolbar-disabled {
     background: rgba(63, 185, 80, 0.1);
     border-color: rgba(63, 185, 80, 0.2);
 }
-#multi-select-toolbar{
+
+#multi-select-toolbar {
     width: 24px;
     height: 24px;
     vertical-align: top;
 }
-input.multi-select-row{
+
+input.multi-select-row {
     width: 24px;
     height: 24px;
     vertical-align: top;

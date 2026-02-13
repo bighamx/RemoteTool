@@ -209,8 +209,10 @@ namespace ChuckieHelper.WebApi
             });
 
             // Hangfire Dashboard
-            app.UseHangfireDashboard("/hangfire", new DashboardOptions
+            app.UseHangfireDashboard("/hangfire-inner", new DashboardOptions
             {
+                DashboardTitle = "Hangfire 任务",
+                AppPath = null, // Set to null to hide the "Back to Site" link
                 Authorization = new[] { new ChuckieHelper.WebApi.Filters.HangfireAuthorizationFilter() }
             });
 

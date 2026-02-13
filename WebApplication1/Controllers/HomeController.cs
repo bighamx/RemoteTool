@@ -16,7 +16,21 @@ namespace WebApplication1.Controllers
             _logger = logger;
         }
 
+
         public IActionResult Index()
+        {
+            return View();
+        }
+
+        public IActionResult Wrapper(string url, string title = "Remote Tool")
+        {
+            ViewBag.TargetUrl = url;
+            ViewBag.Title = title;
+            return View();
+        }
+
+        [Route("/hangfire")]
+        public IActionResult Hangfire()
         {
             return View();
         }

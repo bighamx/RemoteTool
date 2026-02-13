@@ -1,46 +1,43 @@
 ﻿@{
-    ViewData["Title"] = "ChuckieHelper Dashboard";
+    ViewData["Title"] = "Dashboard";
+    Layout = "_Layout";
+}
+@section Styles {
+    <link href="~/css/index.css" rel="stylesheet" />
+}
+@section Scripts {
+    <script src="~/js/index.js"></script>
 }
 
-<div class="container mt-5">
-    <div class="text-center mb-5">
-        <h1 class="display-4">ChuckieHelper Dashboard</h1>
-        <p class="lead">System Management & Automation</p>
+<div class="dashboard-container">
+    <div class="dashboard-header">
+        <h1 class="dashboard-heading">ChuckieHelper Dashboard</h1>
+        <p class="dashboard-subheading">System Management & Automation</p>
     </div>
 
-    <div class="row justify-content-center">
+    <div class="dashboard-grid">
         <!-- Hangfire Card -->
-        <div class="col-md-5 mb-4">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center p-5">
-                    <div class="display-1 mb-4">⏱️</div>
-                    <h2 class="card-title">Hangfire 任务管理</h2>
-                    <p class="card-text text-muted">后台任务 & 自动化仪表盘</p>
-                    <a href="/hangfire" class="btn btn-primary btn-lg mt-3 w-100 stretched-link" target="_blank">打开仪表盘</a>
+        <div class="dashboard-card-wrapper">
+            <div class="dashboard-card hover-effect">
+                <div class="dashboard-card-body">
+                    <div class="dashboard-icon">⏱️</div>
+                    <h2 class="dashboard-title">Hangfire 任务管理</h2>
+                    <p class="dashboard-text">后台任务 & 自动化仪表盘</p>
+                    <a href="/hangfire" class="dashboard-btn btn-primary-custom" target="_blank">打开仪表盘</a>
                 </div>
             </div>
         </div>
 
         <!-- Remote Control Card -->
-        <div class="col-md-5 mb-4">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center p-5">
-                    <div class="display-1 mb-4">🖥️</div>
-                    <h2 class="card-title">远程管理</h2>
-                    <p class="card-text text-muted">远程桌面控制 & 系统管理</p>
-                    <a href="/remotecontrol/index.html" class="btn btn-success btn-lg mt-3 w-100 stretched-link" target="_blank">打开控制面板</a>
+        <div class="dashboard-card-wrapper">
+            <div class="dashboard-card hover-effect">
+                <div class="dashboard-card-body">
+                    <div class="dashboard-icon">🖥️</div>
+                    <h2 class="dashboard-title">远程管理</h2>
+                    <p class="dashboard-text">远程桌面控制 & 系统管理</p>
+                    <a href="/remotecontrol/index.html" class="dashboard-btn btn-success-custom" target="_blank">打开控制面板</a>
                 </div>
             </div>
         </div>
     </div>
 </div>
-
-<style>
-    .hover-card {
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
-    }
-    .hover-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 .5rem 1rem rgba(0,0,0,.15)!important;
-    }
-</style>

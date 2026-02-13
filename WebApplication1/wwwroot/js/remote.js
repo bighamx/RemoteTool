@@ -1,9 +1,241 @@
 // Remote Control - Frontend Application
 
 class RemoteControl {
+    constructor() {
+        this.token = localStorage.getItem('token');
+        this.username = localStorage.getItem('username') || '';
+        this.websocket = null;
+        /** 远程控制键鼠 WebSocket，在开始/停止远程时建立/断开 */
+        this.inputSocket = null;
+        this.autoRefreshInterval = null;
+        this.sysInfoRefreshInterval = null;
+        this.processes = [];
+        this.processSearchTerm = '';
+        this.processFilter = 'all'; // 'all' | 'windowed' | 'background'
+        this.processSortColumn = null;  // 'name' | 'pid' | 'cpu' | 'memory' | null
+        this.processSortAsc = true;
+        /** 容器列表排序：'name' | 'image' | 'state' | 'cpu' | 'memory' | 'ports' | null */
+        this.containerSortColumn = null;
+        this.containerSortAsc = true;
+        /** 容器列表数据（用于排序与重绘） */
+        this.containers = [];
+        this.containerStats = [];
+        this.currentPath = null;
+        this.platform = null;
+        /** 当前目录文件列表（用于排序与重绘） */
+        this.files = [];
+        /** 文件列表排序：'name' | 'type' | 'size' | 'date' | null */
+        this.fileSortColumn = null;
+        this.fileSortAsc = true;
+        /** 名称列四种模式：0=文件夹在前+升序 1=文件夹在前+降序 2=混合+升序 3=混合+降序 */
+        this.fileSortNameMode = 0;
+        /** 当前目录下的图片文件列表，用于预览上一张/下一张 */
+        this.currentDirImageFiles = [];
+        this.previewImageIndex = -1;
+        /** 当前目录下的视频文件列表，用于预览上一个/下一个 */
+        this.currentDirVideoFiles = [];
+        this.previewVideoIndex = -1;
+        /** Compose 文件选择器当前路径 */
+        this.pickerCurrentPath = null;
+        // previewObjectUrl 不再需要，视频和图片均通过 URL 直接加载
+        this.streamActive = false;
+        this.currentStreamMode = 'none'; // 'none', 'h264', 'mjpeg'
+        /** 实时流统计：FPS、缓冲延迟(ms)、接收速率(kbps)，由各拉流路径更新 */
+        this.streamStats = { fps: 0, bufferDelayMs: 0, bitrateKbps: 0 };
+        this.streamStatsFrameCount = 0;
+        this.streamStatsFrameCountStart = 0;
+        this.streamStatsBytes = 0;
+        this.streamStatsBytesStart = 0;
+        this.streamStatsInterval = null;
+        this.qualitySettings = {
+            resolution: '1280x720',
+            bitrate: '3M',
+            maxrate: '5M',
+            crf: '18'
+        };
+        // Theme
+        this.theme = 'dark';
+        this.themeIcons = {
+            dark: '☀️',
+            light: '🌙'
+        };
+        // 鼠标拖动状态
+        this.isDragging = false;
+        this.dragButton = 0;
+        this.lastMoveTime = 0;
+        this.moveThrottleMs = 16; // 约60fps的节流
+        // 全屏状态
+        this.isFullscreen = false;
+        // 可编辑的文本文件扩展名列表
+        this.editableExtensions = [
+            // 代码文件
+            'txt', 'js', 'ts', 'jsx', 'tsx', 'json', 'xml', 'html', 'htm', 'css', 'scss', 'sass', 'less',
+            'py', 'java', 'c', 'cpp', 'h', 'hpp', 'cs', 'go', 'rs', 'php', 'rb', 'swift', 'kt', 'scala',
+            'sh', 'bash', 'ps1', 'bat', 'cmd', 'vbs',
+            // 配置文件
+            'yaml', 'yml', 'toml', 'ini', 'conf', 'config', 'env',
+            // 文档文件
+            'md', 'markdown', 'rst', 'tex', 'log',
+            // Web 相关
+            'svg', 'vue', 'aspx', 'cshtml', 'razor',
+            // 数据文件
+            'csv', 'tsv', 'sql',
+            // 其他
+            'gitignore', 'gitattributes', 'editorconfig', 'dockerfile'
+        ];
+        this.commandHistory = [];
+        this.historyIndex = -1;
+        /** 上传队列：{ file, relativePath, progress, status, li } */
+        this.uploadQueue = [];
+        this.multiSelectMode = false;
+        this.selectedFiles = new Set();
+        this.init();
+    }
+
+    init() {
+        this.bindEvents();
+        this.checkAuth();
+        this.initTheme();
+        this.initDialog();
+    }
+
+    initDialog() {
+        const dialog = document.getElementById('custom-dialog');
+        const closeBtn = document.getElementById('dialog-close-btn');
+        const okBtn = document.getElementById('dialog-ok-btn');
+        const cancelBtn = document.getElementById('dialog-cancel-btn');
+
+        // 关闭按钮
+        closeBtn.addEventListener('click', () => this.hideDialog());
+
+        // 确定和取消按钮会在 showDialog 中动态设置
+    }
+
+    initTheme() {
+        // Check for saved theme
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme) {
+            this.theme = savedTheme;
+        } else {
+            // Check system preference
+            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+                this.theme = 'light';
+            }
+        }
+
+        this.applyTheme();
+    }
+
+    toggleTheme() {
+        this.theme = this.theme === 'dark' ? 'light' : 'dark';
+        localStorage.setItem('theme', this.theme);
+        this.applyTheme();
+    }
+
+    applyTheme() {
+        document.documentElement.setAttribute('data-theme', this.theme);
+        const toggleBtn = document.getElementById('theme-toggle');
+        if (toggleBtn) {
+            toggleBtn.textContent = this.themeIcons[this.theme];
+            toggleBtn.title = this.theme === 'dark' ? '切换到浅色模式' : '切换到深色模式';
+        }
+    }
+
+    showDialog(message, title = '提示', options = {}) {
+        const dialog = document.getElementById('custom-dialog');
+        const dialogContainer = dialog?.querySelector('.dialog-container');
+        const titleEl = document.getElementById('dialog-title');
+        const messageEl = document.getElementById('dialog-message');
+        const inputWrap = document.getElementById('dialog-input-wrap');
+        const inputEl = document.getElementById('dialog-input');
+        const logsEl = document.getElementById('dialog-logs');
+        const okBtn = document.getElementById('dialog-ok-btn');
+        const cancelBtn = document.getElementById('dialog-cancel-btn');
+
+        // 设置标题和消息
+        titleEl.textContent = title;
+        messageEl.textContent = message;
+        messageEl.style.display = 'block';
+
+        // 输入框：prompt 类型时显示
+        const isPrompt = options.type === 'prompt';
+        if (inputWrap && inputEl) {
+            if (isPrompt) {
+                inputWrap.style.display = 'block';
+                inputEl.value = options.defaultValue ?? '';
+                inputEl.placeholder = options.placeholder ?? '';
+                inputEl.focus();
+            } else {
+                inputWrap.style.display = 'none';
+            }
+        }
+
+        // 处理日志显示
+        if (options.logs) {
+            logsEl.textContent = options.logs;
+            logsEl.style.display = 'block';
+            if (dialogContainer) {
+                dialogContainer.classList.add('dialog-wide');
+            }
+        } else {
+            logsEl.style.display = 'none';
+            if (dialogContainer) {
+                dialogContainer.classList.remove('dialog-wide');
+            }
+        }
+
+        // 返回 Promise 以支持 confirm / prompt 类型
+        return new Promise((resolve) => {
+            if (options.type === 'confirm' || isPrompt) {
+                cancelBtn.style.display = 'inline-flex';
+
+                const onKey = (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        okBtn.click();
+                    } else if (e.key === 'Escape') {
+                        cancelBtn.click();
+                    }
+                };
+                if (isPrompt && inputEl) {
+                    inputEl.addEventListener('keydown', onKey);
+                }
+
+                okBtn.onclick = () => {
+                    if (isPrompt && inputEl) inputEl.removeEventListener('keydown', onKey);
+                    this.hideDialog();
+                    if (isPrompt && inputEl) {
+                        resolve(inputEl.value.trim());
+                    } else {
+                        resolve(true);
+                    }
+                };
+
+                cancelBtn.onclick = () => {
+                    if (isPrompt && inputEl) inputEl.removeEventListener('keydown', onKey);
+                    this.hideDialog();
+                    resolve(isPrompt ? null : false);
+                };
+            } else {
+                cancelBtn.style.display = 'none';
+
+                okBtn.onclick = () => {
+                    this.hideDialog();
+                    resolve(true);
+                };
+            }
+
+            dialog.style.display = 'flex';
+        });
+    }
+
+    hideDialog() {
+        const dialog = document.getElementById('custom-dialog');
+        dialog.style.display = 'none';
+    }
+
     /** 多选模式相关 */
-    multiSelectMode = false;
-    selectedFiles = new Set();
+
     /** 切换多选模式 */
     toggleMultiSelectMode(enable) {
         this.multiSelectMode = enable !== undefined ? enable : !this.multiSelectMode;
@@ -212,236 +444,6 @@ class RemoteControl {
         } catch (e) {
             return false;
         }
-    }
-    constructor() {
-        this.token = localStorage.getItem('token');
-        this.username = localStorage.getItem('username') || '';
-        this.websocket = null;
-        /** 远程控制键鼠 WebSocket，在开始/停止远程时建立/断开 */
-        this.inputSocket = null;
-        this.autoRefreshInterval = null;
-        this.sysInfoRefreshInterval = null;
-        this.processes = [];
-        this.processSearchTerm = '';
-        this.processFilter = 'all'; // 'all' | 'windowed' | 'background'
-        this.processSortColumn = null;  // 'name' | 'pid' | 'cpu' | 'memory' | null
-        this.processSortAsc = true;
-        /** 容器列表排序：'name' | 'image' | 'state' | 'cpu' | 'memory' | 'ports' | null */
-        this.containerSortColumn = null;
-        this.containerSortAsc = true;
-        /** 容器列表数据（用于排序与重绘） */
-        this.containers = [];
-        this.containerStats = [];
-        this.currentPath = null;
-        this.platform = null;
-        /** 当前目录文件列表（用于排序与重绘） */
-        this.files = [];
-        /** 文件列表排序：'name' | 'type' | 'size' | 'date' | null */
-        this.fileSortColumn = null;
-        this.fileSortAsc = true;
-        /** 名称列四种模式：0=文件夹在前+升序 1=文件夹在前+降序 2=混合+升序 3=混合+降序 */
-        this.fileSortNameMode = 0;
-        /** 当前目录下的图片文件列表，用于预览上一张/下一张 */
-        this.currentDirImageFiles = [];
-        this.previewImageIndex = -1;
-        /** 当前目录下的视频文件列表，用于预览上一个/下一个 */
-        this.currentDirVideoFiles = [];
-        this.previewVideoIndex = -1;
-        /** Compose 文件选择器当前路径 */
-        this.pickerCurrentPath = null;
-        // previewObjectUrl 不再需要，视频和图片均通过 URL 直接加载
-        this.streamActive = false;
-        this.currentStreamMode = 'none'; // 'none', 'h264', 'mjpeg'
-        /** 实时流统计：FPS、缓冲延迟(ms)、接收速率(kbps)，由各拉流路径更新 */
-        this.streamStats = { fps: 0, bufferDelayMs: 0, bitrateKbps: 0 };
-        this.streamStatsFrameCount = 0;
-        this.streamStatsFrameCountStart = 0;
-        this.streamStatsBytes = 0;
-        this.streamStatsBytesStart = 0;
-        this.streamStatsInterval = null;
-        this.qualitySettings = {
-            resolution: '1280x720',
-            bitrate: '3M',
-            maxrate: '5M',
-            crf: '18'
-        };
-        // Theme
-        this.theme = 'dark';
-        this.themeIcons = {
-            dark: '☀️',
-            light: '🌙'
-        };
-        // 鼠标拖动状态
-        this.isDragging = false;
-        this.dragButton = 0;
-        this.lastMoveTime = 0;
-        this.moveThrottleMs = 16; // 约60fps的节流
-        // 全屏状态
-        this.isFullscreen = false;
-        // 可编辑的文本文件扩展名列表
-        this.editableExtensions = [
-            // 代码文件
-            'txt', 'js', 'ts', 'jsx', 'tsx', 'json', 'xml', 'html', 'htm', 'css', 'scss', 'sass', 'less',
-            'py', 'java', 'c', 'cpp', 'h', 'hpp', 'cs', 'go', 'rs', 'php', 'rb', 'swift', 'kt', 'scala',
-            'sh', 'bash', 'ps1', 'bat', 'cmd', 'vbs',
-            // 配置文件
-            'yaml', 'yml', 'toml', 'ini', 'conf', 'config', 'env',
-            // 文档文件
-            'md', 'markdown', 'rst', 'tex', 'log',
-            // Web 相关
-            'svg', 'vue', 'aspx', 'cshtml', 'razor',
-            // 数据文件
-            'csv', 'tsv', 'sql',
-            // 其他
-            'gitignore', 'gitattributes', 'editorconfig', 'dockerfile'
-        ];
-        this.commandHistory = [];
-        this.historyIndex = -1;
-        /** 上传队列：{ file, relativePath, progress, status, li } */
-        this.uploadQueue = [];
-        this.init();
-    }
-
-    init() {
-        this.bindEvents();
-        this.checkAuth();
-        this.initTheme();
-        this.initDialog();
-    }
-
-    initDialog() {
-        const dialog = document.getElementById('custom-dialog');
-        const closeBtn = document.getElementById('dialog-close-btn');
-        const okBtn = document.getElementById('dialog-ok-btn');
-        const cancelBtn = document.getElementById('dialog-cancel-btn');
-
-        // 关闭按钮
-        closeBtn.addEventListener('click', () => this.hideDialog());
-
-        // 确定和取消按钮会在 showDialog 中动态设置
-    }
-
-    initTheme() {
-        // Check for saved theme
-        const savedTheme = localStorage.getItem('theme');
-        if (savedTheme) {
-            this.theme = savedTheme;
-        } else {
-            // Check system preference
-            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-                this.theme = 'light';
-            }
-        }
-
-        this.applyTheme();
-    }
-
-    toggleTheme() {
-        this.theme = this.theme === 'dark' ? 'light' : 'dark';
-        localStorage.setItem('theme', this.theme);
-        this.applyTheme();
-    }
-
-    applyTheme() {
-        document.documentElement.setAttribute('data-theme', this.theme);
-        const toggleBtn = document.getElementById('theme-toggle');
-        if (toggleBtn) {
-            toggleBtn.textContent = this.themeIcons[this.theme];
-            toggleBtn.title = this.theme === 'dark' ? '切换到浅色模式' : '切换到深色模式';
-        }
-    }
-
-    showDialog(message, title = '提示', options = {}) {
-        const dialog = document.getElementById('custom-dialog');
-        const dialogContainer = dialog?.querySelector('.dialog-container');
-        const titleEl = document.getElementById('dialog-title');
-        const messageEl = document.getElementById('dialog-message');
-        const inputWrap = document.getElementById('dialog-input-wrap');
-        const inputEl = document.getElementById('dialog-input');
-        const logsEl = document.getElementById('dialog-logs');
-        const okBtn = document.getElementById('dialog-ok-btn');
-        const cancelBtn = document.getElementById('dialog-cancel-btn');
-
-        // 设置标题和消息
-        titleEl.textContent = title;
-        messageEl.textContent = message;
-        messageEl.style.display = 'block';
-
-        // 输入框：prompt 类型时显示
-        const isPrompt = options.type === 'prompt';
-        if (inputWrap && inputEl) {
-            if (isPrompt) {
-                inputWrap.style.display = 'block';
-                inputEl.value = options.defaultValue ?? '';
-                inputEl.placeholder = options.placeholder ?? '';
-                inputEl.focus();
-            } else {
-                inputWrap.style.display = 'none';
-            }
-        }
-
-        // 处理日志显示
-        if (options.logs) {
-            logsEl.textContent = options.logs;
-            logsEl.style.display = 'block';
-            if (dialogContainer) {
-                dialogContainer.classList.add('dialog-wide');
-            }
-        } else {
-            logsEl.style.display = 'none';
-            if (dialogContainer) {
-                dialogContainer.classList.remove('dialog-wide');
-            }
-        }
-
-        // 返回 Promise 以支持 confirm / prompt 类型
-        return new Promise((resolve) => {
-            if (options.type === 'confirm' || isPrompt) {
-                cancelBtn.style.display = 'inline-flex';
-
-                const onKey = (e) => {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        okBtn.click();
-                    } else if (e.key === 'Escape') {
-                        cancelBtn.click();
-                    }
-                };
-                if (isPrompt && inputEl) {
-                    inputEl.addEventListener('keydown', onKey);
-                }
-
-                okBtn.onclick = () => {
-                    if (isPrompt && inputEl) inputEl.removeEventListener('keydown', onKey);
-                    this.hideDialog();
-                    if (isPrompt && inputEl) {
-                        resolve(inputEl.value.trim());
-                    } else {
-                        resolve(true);
-                    }
-                };
-
-                cancelBtn.onclick = () => {
-                    if (isPrompt && inputEl) inputEl.removeEventListener('keydown', onKey);
-                    this.hideDialog();
-                    resolve(isPrompt ? null : false);
-                };
-            } else {
-                cancelBtn.style.display = 'none';
-
-                okBtn.onclick = () => {
-                    this.hideDialog();
-                    resolve(true);
-                };
-            }
-
-            dialog.style.display = 'flex';
-        });
-    }
-
-    hideDialog() {
-        const dialog = document.getElementById('custom-dialog');
-        dialog.style.display = 'none';
     }
 
     /**
@@ -1039,6 +1041,52 @@ class RemoteControl {
                 this.hideContextMenu();
             }
         });
+
+        // 文件管理器“在当前目录运行控制台”按钮功能
+        const openTerminalBtn = document.getElementById('open-terminal-here-btn');
+        if (openTerminalBtn) {
+            openTerminalBtn.addEventListener('click', async function () {
+                // 切换到命令终端tab
+                document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+                document.querySelector('.tab[data-tab="terminal"]').classList.add('active');
+                document.querySelectorAll('.tab-content').forEach(tabContent => tabContent.classList.remove('active'));
+                document.getElementById('terminal-tab').classList.add('active');
+
+                // 自动连接终端（如果有连接按钮）
+                const terminalToggleBtn = document.getElementById('terminal-toggle-btn');
+                if (terminalToggleBtn && terminalToggleBtn.innerText.includes('连接')) {
+                    terminalToggleBtn.click();
+                    // 等待连接完成（简单延迟，实际可根据状态优化）
+                    await new Promise(resolve => setTimeout(resolve, 400));
+                }
+
+                // 获取当前文件管理器目录
+                let currentPath = '';
+                const breadcrumbInput = document.getElementById('breadcrumb-input');
+                if (breadcrumbInput && breadcrumbInput.style.display !== 'none') {
+                    currentPath = breadcrumbInput.value;
+                } else {
+                    // 从面包屑获取
+                    const items = document.querySelectorAll('#breadcrumb-items .breadcrumb-item');
+                    if (items.length > 1) {
+                        currentPath = Array.from(items).slice(1).map(btn => btn.innerText).join('/');
+                    } else {
+                        currentPath = '/';
+                    }
+                }
+
+                // 切换终端当前目录（自动发送cd命令）
+                const terminalInput = document.getElementById('terminal-input');
+                if (terminalInput && currentPath) {
+                    terminalInput.value = `cd "${currentPath}"`;
+                    // 触发输入事件
+                    terminalInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    // 触发回车发送
+                    terminalInput.focus();
+                    terminalInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+                }
+            });
+        }
     }
 
     checkAuth() {
@@ -1118,7 +1166,7 @@ class RemoteControl {
     }
 
     showDashboard() {
-        document.getElementById('dashboard-page').classList.add('active');
+        document.getElementById('remote-page').classList.add('active');
         // 显示用户名
         if (this.username) {
             document.getElementById('user-info').textContent = `欢迎, ${this.username}`;
@@ -1556,9 +1604,11 @@ class RemoteControl {
     /** 建立远程键鼠 WebSocket，仅在 streamActive 时有效 */
     connectInputSocket() {
         this.disconnectInputSocket();
-        if (!this.token) return;
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const url = `${protocol}//${location.host}/ws/input?access_token=${encodeURIComponent(this.token)}`;
+        let url = `${protocol}//${location.host}/ws/input`;
+        if (this.token) {
+            url += `?access_token=${encodeURIComponent(this.token)}`;
+        }
         try {
             const ws = new WebSocket(url);
             ws.onopen = () => console.log('Input WS connected');
@@ -5430,49 +5480,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // 文件管理器“在当前目录运行控制台”按钮功能
     app.loadSystemInfo();
 
-    const openTerminalBtn = document.getElementById('open-terminal-here-btn');
-    if (openTerminalBtn) {
-        openTerminalBtn.addEventListener('click', async function () {
-            // 切换到命令终端tab
-            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-            document.querySelector('.tab[data-tab="terminal"]').classList.add('active');
-            document.querySelectorAll('.tab-content').forEach(tabContent => tabContent.classList.remove('active'));
-            document.getElementById('terminal-tab').classList.add('active');
 
-            // 自动连接终端（如果有连接按钮）
-            const terminalToggleBtn = document.getElementById('terminal-toggle-btn');
-            if (terminalToggleBtn && terminalToggleBtn.innerText.includes('连接')) {
-                terminalToggleBtn.click();
-                // 等待连接完成（简单延迟，实际可根据状态优化）
-                await new Promise(resolve => setTimeout(resolve, 400));
-            }
-
-            // 获取当前文件管理器目录
-            let currentPath = '';
-            const breadcrumbInput = document.getElementById('breadcrumb-input');
-            if (breadcrumbInput && breadcrumbInput.style.display !== 'none') {
-                currentPath = breadcrumbInput.value;
-            } else {
-                // 从面包屑获取
-                const items = document.querySelectorAll('#breadcrumb-items .breadcrumb-item');
-                if (items.length > 1) {
-                    currentPath = Array.from(items).slice(1).map(btn => btn.innerText).join('/');
-                } else {
-                    currentPath = '/';
-                }
-            }
-
-            // 切换终端当前目录（自动发送cd命令）
-            const terminalInput = document.getElementById('terminal-input');
-            if (terminalInput && currentPath) {
-                terminalInput.value = `cd "${currentPath}"`;
-                // 触发输入事件
-                terminalInput.dispatchEvent(new Event('input', { bubbles: true }));
-                // 触发回车发送
-                terminalInput.focus();
-                terminalInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-            }
-        });
-    }
 });
 

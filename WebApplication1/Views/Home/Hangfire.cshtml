@@ -1,0 +1,46 @@
+@{
+    Layout = "_Layout";
+    ViewBag.Title = "Hangfire";
+    ViewBag.TargetUrl = "/hangfire-inner";
+}
+
+<iframe src="@ViewBag.TargetUrl" class="wrapper-iframe" style="width: 100%; height: 100%; border: none;"></iframe>
+
+@section Scripts {
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+             // Inject Custom CSS/JS into Iframe
+            const iframe = document.querySelector('iframe');
+            if (iframe) {
+                iframe.onload = function() {
+                    try {
+                        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                        
+                        // Inject CSS
+                        fetch('/css/hangfire.css')
+                            .then(response => response.text())
+                            .then(css => {
+                                const style = iframeDoc.createElement('style');
+                                style.textContent = css;
+                                iframeDoc.head.appendChild(style);
+                            })
+                            .catch(err => console.error('Failed to load theme CSS:', err));
+
+                        // Inject JS
+                        fetch('/js/hangfire.js')
+                            .then(response => response.text())
+                            .then(js => {
+                                const script = iframeDoc.createElement('script');
+                                script.textContent = js;
+                                iframeDoc.body.appendChild(script);
+                            })
+                            .catch(err => console.error('Failed to load custom JS:', err));
+
+                    } catch (e) {
+                         // Cross-origin ignored
+                    }
+                };
+            }
+        });
+    </script>
+}
