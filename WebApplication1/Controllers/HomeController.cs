@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using System.Reflection;
 using WebApplication1.Models;
 
 namespace WebApplication1.Controllers
@@ -19,6 +20,9 @@ namespace WebApplication1.Controllers
 
         public IActionResult Index()
         {
+            var assembly = System.Reflection.Assembly.GetEntryAssembly();
+            ViewBag.Version = assembly?.GetName().Version?.ToString() ?? "Unknown";
+            ViewBag.BuildInfo = assembly?.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "Unknown";
             return View();
         }
 

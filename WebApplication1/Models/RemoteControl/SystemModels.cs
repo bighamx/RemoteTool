@@ -48,6 +48,12 @@ public class SystemInfo
     /// <summary>运行平台，如 Windows / Linux，供前端区分功能</summary>
     public string Platform { get; set; } = "";
 
+    /// <summary>程序版本</summary>
+    public string Version { get; set; } = "";
+
+    /// <summary>详细版本信息（构建时间等）</summary>
+    public string InformationalVersion { get; set; } = "";
+
     // 基本信息
     public string MachineName { get; set; } = "";
     public string UserName { get; set; } = "";

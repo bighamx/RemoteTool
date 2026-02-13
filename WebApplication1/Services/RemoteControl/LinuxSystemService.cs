@@ -2,6 +2,8 @@ using ChuckieHelper.WebApi.Models.RemoteControl;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
+using System.Reflection;
+
 namespace ChuckieHelper.WebApi.Services.RemoteControl;
 
 /// <summary>
@@ -143,6 +145,12 @@ public class LinuxSystemService : ISystemControlService
         GetLinuxDriveInfo(info);
         GetLinuxNetworkInfo(info);
         GetLinuxCpuTemperature(info);
+
+        // 获取版本信息
+        var assembly = Assembly.GetEntryAssembly();
+        var assemblyName = assembly?.GetName();
+        info.Version = assemblyName?.Version?.ToString() ?? "";
+        info.InformationalVersion = assembly?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "";
 
         return info;
     }

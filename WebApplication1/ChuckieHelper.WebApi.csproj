@@ -9,6 +9,9 @@
     <PreserveCompilationContext>true</PreserveCompilationContext>
     <!-- 发布时只保留英文、中文卫星程序集，去掉其他语言文件夹以减小体积 -->
     <SatelliteResourceLanguages>en;zh</SatelliteResourceLanguages>
+    <Version>1.2.0</Version>
+    <InformationalVersion>$([System.DateTime]::Now.ToString("yy.M.d.HHmm"))</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

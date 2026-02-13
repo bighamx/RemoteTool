@@ -8,6 +8,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
+using System.Reflection;
+
 namespace ChuckieHelper.WebApi.Services.RemoteControl;
 
 /// <summary>
@@ -1287,6 +1289,15 @@ public class SystemService : ISystemControlService
         {
             Console.WriteLine($"GetNetworkInfo error: {ex.Message}");
         }
+
+        try
+        {
+            var assembly = Assembly.GetEntryAssembly();
+            var assemblyName = assembly?.GetName();
+            info.Version = assemblyName?.Version?.ToString() ?? "";
+            info.InformationalVersion = assembly?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "";
+        }
+        catch { }
 
         return info;
     }

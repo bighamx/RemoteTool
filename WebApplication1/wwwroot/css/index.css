@@ -165,6 +165,21 @@
     right: 0;
     bottom: 0;
     left: 0;
+
     z-index: 1;
     content: "";
+}
+
+/* Version Footer */
+.version-footer {
+    text-align: center;
+    padding: 20px 0;
+    margin-top: 40px;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    border-top: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.version-footer span {
+    margin: 0 5px;
 }
