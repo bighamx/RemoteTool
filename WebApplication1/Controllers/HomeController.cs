@@ -24,6 +24,12 @@ namespace WebApplication1.Controllers
 
         public IActionResult Wrapper(string url, string title = "Remote Tool")
         {
+            // 防止开放重定向：仅允许相对路径或同站 URL
+            if (!string.IsNullOrEmpty(url) && (url.Contains("://") || url.StartsWith("//")))
+            {
+                return BadRequest("不允许嵌入外部 URL");
+            }
+
             ViewBag.TargetUrl = url;
             ViewBag.Title = title;
             return View();

@@ -203,7 +203,7 @@ public class FilesController : ControllerBase
         }
         catch (Exception ex)
         {
-            return ApiError($"Create directory failed: {ex.Message}");
+            return ApiError($"Delete directory failed: {ex.Message}");
         }
     }
 
@@ -233,19 +233,19 @@ public class FilesController : ControllerBase
     /// 下载文件
     /// </summary>
     [HttpGet("download")]
-    public async Task<IActionResult> DownloadFile([FromQuery] string path)
+    public IActionResult DownloadFile([FromQuery] string path)
     {
         try
         {
             if (string.IsNullOrEmpty(path))
                 return ApiResult(null, "Path is required", false);
 
-            var fileBytes = await _fileService.GetFileDownloadAsync(path);
-            if (fileBytes.Length == 0)
+            var (stream, contentType, _) = _fileService.GetFileStream(path);
+            if (stream == null)
                 return ApiResult(null, "File not found", false);
 
             var fileName = Path.GetFileName(path);
-            return File(fileBytes, "application/octet-stream", fileName);
+            return File(stream, "application/octet-stream", fileName);
         }
         catch (Exception ex)
         {
@@ -373,8 +373,6 @@ public class FilesController : ControllerBase
                 relativePath = file.FileName;
             if (string.IsNullOrWhiteSpace(relativePath))
                 return ApiResult(null, "Invalid file name", false);
-            if (string.IsNullOrWhiteSpace(relativePath))
-                return ApiResult(null, "Invalid file name", false);
 
             var basePath = path.Replace('/', Path.DirectorySeparatorChar).TrimEnd(Path.DirectorySeparatorChar);
             // Windows 盘符根路径需保留尾部反斜杠，否则 Path.Combine("D:", "x") 会得到 "D:x"
@@ -383,16 +381,19 @@ public class FilesController : ControllerBase
             var fullPath = Path.Combine(basePath, relativePath.Replace('/', Path.DirectorySeparatorChar));
             fullPath = Path.GetFullPath(fullPath);
 
+            // 防止路径穿越：确保最终路径在目标目录之下
+            var resolvedBase = Path.GetFullPath(basePath);
+            if (!fullPath.StartsWith(resolvedBase, StringComparison.OrdinalIgnoreCase))
+                return ApiResult(null, "Invalid file path", false);
+
             var dirPath = Path.GetDirectoryName(fullPath);
             if (!string.IsNullOrEmpty(dirPath) && !Directory.Exists(dirPath))
             {
                 _fileService.CreateDirectory(dirPath);
             }
 
-            using var stream = new MemoryStream();
-            await file.CopyToAsync(stream);
-            var fileBytes = stream.ToArray();
-            var result = await _fileService.WriteFileFromBytesAsync(fullPath, fileBytes);
+            using var fileStream = file.OpenReadStream();
+            var result = await _fileService.WriteFileFromStreamAsync(fullPath, fileStream);
 
             if (result)
                 return ApiResult(new { fileName = Path.GetFileName(fullPath) }, "File uploaded successfully");

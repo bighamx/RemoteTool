@@ -349,6 +349,31 @@ public class FileService
     }
 
     /// <summary>
+    /// 从流写入文件（用于上传，避免将整个文件加载到内存）
+    /// </summary>
+    public async Task<bool> WriteFileFromStreamAsync(string fullPath, Stream inputStream)
+    {
+        try
+        {
+            if (File.Exists(fullPath))
+            {
+                var fileInfo = new System.IO.FileInfo(fullPath);
+                if ((fileInfo.Attributes & FileAttributes.ReadOnly) != 0)
+                    return false;
+            }
+
+            using var fileStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
+            await inputStream.CopyToAsync(fileStream);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"WriteFileFromStream error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
     /// 写入文件内容
     /// </summary>
     public async Task<bool> WriteFileAsync(string path, string content)

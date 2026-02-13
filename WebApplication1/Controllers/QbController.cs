@@ -1,5 +1,6 @@
 ﻿using ChuckieHelper.Lib;
 using ChuckieHelper.Lib.Tool;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using ChuckieHelper.WebApi.Models;
@@ -8,6 +9,7 @@ using Newtonsoft.Json;
 
 namespace ChuckieHelper.WebApi.Controllers
 {
+    [Authorize]
     public class QbController : Controller
     {
         private readonly IOptionsMonitor<QbSettings> _qbSettingsMonitor;

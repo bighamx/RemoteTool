@@ -107,7 +107,7 @@ namespace ChuckieHelper.WebApi.Jobs
             }
         }
 
-        private string GetGlobalIPv6Address()
+        private string? GetGlobalIPv6Address()
         {
             foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces())
             {

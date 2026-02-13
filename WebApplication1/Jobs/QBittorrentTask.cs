@@ -14,10 +14,12 @@ namespace ChuckieHelper.WebApi.Jobs
     public class QBittorrentTask
     {
         private readonly IOptionsMonitor<QbSettings> _qbSettingsMonitor;
+        private readonly Services.RemoteControl.FileService _fileService;
 
-        public QBittorrentTask(IOptionsMonitor<QbSettings> options)
+        public QBittorrentTask(IOptionsMonitor<QbSettings> options, Services.RemoteControl.FileService fileService)
         {
             _qbSettingsMonitor = options;
+            _fileService = fileService;
         }
 
         private QbSettings _qbSettings => _qbSettingsMonitor.CurrentValue;
@@ -28,7 +30,7 @@ namespace ChuckieHelper.WebApi.Jobs
             var defaultQbHomeUrl = _qbSettings.DefaultHomeUrl;
             qbUrl = string.IsNullOrWhiteSpace(qbUrl) ? defaultQbHomeUrl : qbUrl;
 
-            context.WriteLine($"Target URL: {qbUrl}");
+            context.WriteLine($"Target URL: {MaskUrl(qbUrl)}");
 
             var (apiUrl, user, pass) = qbUrl.ParseApiUrl();
             var qb = new QBittorrent(apiUrl, user, pass);
@@ -59,8 +61,8 @@ namespace ChuckieHelper.WebApi.Jobs
             qbUrl = string.IsNullOrWhiteSpace(qbUrl) ? defaultQbDockerUrl : qbUrl;
             qbUrl2 = string.IsNullOrWhiteSpace(qbUrl2) ? defaultQbHomeUrl : qbUrl2;
 
-            context.WriteLine($"Source: {qbUrl}");
-            context.WriteLine($"Dest: {qbUrl2}");
+            context.WriteLine($"Source: {MaskUrl(qbUrl)}");
+            context.WriteLine($"Dest: {MaskUrl(qbUrl2)}");
 
             var (apiUrl, user, pass) = qbUrl.ParseApiUrl();
             var qb = new QBittorrent(apiUrl, user, pass);
@@ -93,22 +95,21 @@ namespace ChuckieHelper.WebApi.Jobs
             var defaultQbHomeUrl = _qbSettings.DefaultHomeUrl;
             qbUrl = string.IsNullOrWhiteSpace(qbUrl) ? defaultQbHomeUrl : qbUrl;
 
-            context.WriteLine($"Target URL: {qbUrl}");
+            context.WriteLine($"Target URL: {MaskUrl(qbUrl)}");
 
             var (apiUrl, user, pass) = qbUrl.ParseApiUrl();
             var qb = new QBittorrent(apiUrl, user, pass);
 
 
-            var fileService = new Services.RemoteControl.FileService();
             Task<bool> deleteFileFunc(string path)
             {
-                bool fileDeleted = fileService.DeleteFile(path);
+                bool fileDeleted = _fileService.DeleteFile(path);
 
                 var dir = Path.GetDirectoryName(path);
                 bool dirDeleted = false;
                 if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
                 {
-                    dirDeleted = fileService.DeleteDirectory(dir);
+                    dirDeleted = _fileService.DeleteDirectory(dir);
                 }
                 return Task.FromResult(fileDeleted || dirDeleted);
             }
@@ -117,6 +118,21 @@ namespace ChuckieHelper.WebApi.Jobs
             context.SetTextColor(ConsoleTextColor.Green);
             context.WriteLine($"[QBittorrentTask] CleanUnwantedFiles for {qbUrl}: Done");
             context.ResetTextColor();
+        }
+
+        /// <summary>
+        /// 脱敏 URL 中的用户名和密码（http://user:pass@host → http://***:***@host）
+        /// </summary>
+        private static string MaskUrl(string url)
+        {
+            try
+            {
+                var uri = new Uri(url);
+                if (!string.IsNullOrEmpty(uri.UserInfo))
+                    return url.Replace(uri.UserInfo, "***:***");
+            }
+            catch { }
+            return url;
         }
     }
 

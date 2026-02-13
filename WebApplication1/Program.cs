@@ -164,6 +164,15 @@ namespace ChuckieHelper.WebApi
                     return;
                 }
 
+                
+                var token = context.Request.Query["access_token"].ToString();
+                var authService = context.RequestServices.GetRequiredService<AuthService>();
+                if (string.IsNullOrEmpty(token) || !authService.ValidateToken(token))
+                {
+                    context.Response.StatusCode = 401;
+                    return;
+                }
+                
                 // 从查询参数获取终端类型；Linux 仅支持 shell，Windows 支持 shell/cmd/powershell
                 var typeParam = context.Request.Query["type"].ToString().ToLower();
                 var terminalType = typeParam switch

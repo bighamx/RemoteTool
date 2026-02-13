@@ -34,20 +34,28 @@ namespace ChuckieHelper.WebApi.Jobs
         {
             if (string.IsNullOrWhiteSpace(param.TargetPath))
                 return;
+
+            cancellationToken.ThrowIfCancellationRequested();
+
             try
-              {
+            {
                 context?.WriteLine($"开始处理: {param.TargetPath}");
                 var result = Util.SmartUnzipAll(param.TargetPath);
                 context?.WriteLine($"完成，共解压 {result.Count} 个文件");
             }
+            catch (OperationCanceledException)
+            {
+                context?.WriteLine("任务已取消");
+                throw;
+            }
             catch (Exception ex)
             {
-                context?.WriteLine($"处理失败: {ex.Message},{ex.StackTrace}");
+                context?.WriteLine($"处理失败: {ex.Message}");
             }
         }
     }
 
-    public static class ServiceCollectionExtensions
+    public static class ExampleTaskExtensions
     {
 
         public static IServiceCollection AddExampleTask(this IServiceCollection services)

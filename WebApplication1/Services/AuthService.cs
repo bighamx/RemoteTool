@@ -75,7 +75,7 @@ public class AuthService
         }
     }
 
-    public ClaimsPrincipal GetPrincipalFromToken(string token)
+    public ClaimsPrincipal? GetPrincipalFromToken(string token)
     {
         try
         {

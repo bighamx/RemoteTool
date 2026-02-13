@@ -35,7 +35,8 @@ namespace ChuckieHelper.WebApi.Extensions
 
         public static IServiceCollection AddJwtAuthentication(this IServiceCollection services, IConfiguration configuration)
         {
-            var jwtSecret = configuration["Auth:JwtSecret"] ?? "DefaultSecretKey123456789012345678901234";
+            var jwtSecret = configuration["Auth:JwtSecret"] 
+                ?? throw new InvalidOperationException("Auth:JwtSecret 配置项缺失，请在 appsettings.json 中配置");
             var key = Encoding.UTF8.GetBytes(jwtSecret);
 
             services.AddAuthentication(options =>
@@ -47,8 +48,10 @@ namespace ChuckieHelper.WebApi.Extensions
             {
                 options.TokenValidationParameters = new TokenValidationParameters
                 {
-                    ValidateIssuer = false,
-                    ValidateAudience = false,
+                    ValidateIssuer = true,
+                    ValidIssuer = "RemoteControl",
+                    ValidateAudience = true,
+                    ValidAudience = "RemoteControl",
                     ValidateLifetime = true,
                     ValidateIssuerSigningKey = true,
                     IssuerSigningKey = new SymmetricSecurityKey(key)

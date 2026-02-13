@@ -238,44 +238,32 @@ public class DockerController : ControllerBase
     }
 
     /// <summary>
-    /// 流式执行 docker-compose stop，响应体为实时日志（每行一条，最后一行 [EXIT:码]）
+    /// 流式执行 docker-compose stop
     /// </summary>
     [HttpPost("compose/stop/stream")]
-    public async Task ComposeStopStream([FromBody] ComposeRequest request, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrEmpty(request.ComposePath))
-        {
-            Response.StatusCode = 400;
-            await Response.WriteAsync("ComposePath is required", cancellationToken);
-            return;
-        }
-        if (!System.IO.File.Exists(request.ComposePath))
-        {
-            Response.StatusCode = 400;
-            await Response.WriteAsync("Compose 文件不存在", cancellationToken);
-            return;
-        }
-        Response.ContentType = "text/plain; charset=utf-8";
-        Response.Headers.CacheControl = "no-cache";
-        var dir = Path.GetDirectoryName(request.ComposePath) ?? "";
-        try
-        {
-            var exitCode = await _dockerService.ExecuteDockerComposeCommandStreamAsync(
-                "stop", dir,
-                async (line, ct) =>
-                {
-                    await Response.WriteAsync(line + "\n", ct);
-                    await Response.Body.FlushAsync(ct);
-                },
-                cancellationToken);
-            await Response.WriteAsync($"[EXIT:{exitCode}]\n", cancellationToken);
-            await Response.Body.FlushAsync(cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            await Response.WriteAsync($"[stderr] {ex.Message}\n[EXIT:-1]\n", cancellationToken);
-        }
-    }
+    public Task ComposeStopStream([FromBody] ComposeRequest request, CancellationToken cancellationToken)
+        => ExecuteComposeStreamAsync("stop", request, cancellationToken);
+
+    /// <summary>
+    /// 流式执行 docker-compose pull
+    /// </summary>
+    [HttpPost("compose/pull/stream")]
+    public Task ComposePullStream([FromBody] ComposeRequest request, CancellationToken cancellationToken)
+        => ExecuteComposeStreamAsync("pull", request, cancellationToken);
+
+    /// <summary>
+    /// 流式执行 docker-compose up -d
+    /// </summary>
+    [HttpPost("compose/up/stream")]
+    public Task ComposeUpStream([FromBody] ComposeRequest request, CancellationToken cancellationToken)
+        => ExecuteComposeStreamAsync("up -d", request, cancellationToken);
+
+    /// <summary>
+    /// 流式执行 docker-compose down
+    /// </summary>
+    [HttpPost("compose/down/stream")]
+    public Task ComposeDownStream([FromBody] ComposeRequest request, CancellationToken cancellationToken)
+        => ExecuteComposeStreamAsync("down", request, cancellationToken);
 
     /// <summary>
     /// 使用 docker-compose 停止
@@ -300,10 +288,9 @@ public class DockerController : ControllerBase
     }
 
     /// <summary>
-    /// 流式执行 docker-compose pull，响应体为实时日志（每行一条，最后一行 [EXIT:码]）
+    /// 通用的流式 docker-compose 命令执行器
     /// </summary>
-    [HttpPost("compose/pull/stream")]
-    public async Task ComposePullStream([FromBody] ComposeRequest request, CancellationToken cancellationToken)
+    private async Task ExecuteComposeStreamAsync(string command, ComposeRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(request.ComposePath))
         {
@@ -323,87 +310,7 @@ public class DockerController : ControllerBase
         try
         {
             var exitCode = await _dockerService.ExecuteDockerComposeCommandStreamAsync(
-                "pull", dir,
-                async (line, ct) =>
-                {
-                    await Response.WriteAsync(line + "\n", ct);
-                    await Response.Body.FlushAsync(ct);
-                },
-                cancellationToken);
-            await Response.WriteAsync($"[EXIT:{exitCode}]\n", cancellationToken);
-            await Response.Body.FlushAsync(cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            await Response.WriteAsync($"[stderr] {ex.Message}\n[EXIT:-1]\n", cancellationToken);
-        }
-    }
-
-    /// <summary>
-    /// 流式执行 docker-compose up -d，响应体为实时日志（每行一条，最后一行 [EXIT:码]）
-    /// </summary>
-    [HttpPost("compose/up/stream")]
-    public async Task ComposeUpStream([FromBody] ComposeRequest request, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrEmpty(request.ComposePath))
-        {
-            Response.StatusCode = 400;
-            await Response.WriteAsync("ComposePath is required", cancellationToken);
-            return;
-        }
-        if (!System.IO.File.Exists(request.ComposePath))
-        {
-            Response.StatusCode = 400;
-            await Response.WriteAsync("Compose 文件不存在", cancellationToken);
-            return;
-        }
-        Response.ContentType = "text/plain; charset=utf-8";
-        Response.Headers.CacheControl = "no-cache";
-        var dir = Path.GetDirectoryName(request.ComposePath) ?? "";
-        try
-        {
-            var exitCode = await _dockerService.ExecuteDockerComposeCommandStreamAsync(
-                "up -d", dir,
-                async (line, ct) =>
-                {
-                    await Response.WriteAsync(line + "\n", ct);
-                    await Response.Body.FlushAsync(ct);
-                },
-                cancellationToken);
-            await Response.WriteAsync($"[EXIT:{exitCode}]\n", cancellationToken);
-            await Response.Body.FlushAsync(cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            await Response.WriteAsync($"[stderr] {ex.Message}\n[EXIT:-1]\n", cancellationToken);
-        }
-    }
-
-    /// <summary>
-    /// 流式执行 docker-compose down，响应体为实时日志（每行一条，最后一行 [EXIT:码]）
-    /// </summary>
-    [HttpPost("compose/down/stream")]
-    public async Task ComposeDownStream([FromBody] ComposeRequest request, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrEmpty(request.ComposePath))
-        {
-            Response.StatusCode = 400;
-            await Response.WriteAsync("ComposePath is required", cancellationToken);
-            return;
-        }
-        if (!System.IO.File.Exists(request.ComposePath))
-        {
-            Response.StatusCode = 400;
-            await Response.WriteAsync("Compose 文件不存在", cancellationToken);
-            return;
-        }
-        Response.ContentType = "text/plain; charset=utf-8";
-        Response.Headers.CacheControl = "no-cache";
-        var dir = Path.GetDirectoryName(request.ComposePath) ?? "";
-        try
-        {
-            var exitCode = await _dockerService.ExecuteDockerComposeCommandStreamAsync(
-                "down", dir,
+                command, dir,
                 async (line, ct) =>
                 {
                     await Response.WriteAsync(line + "\n", ct);
@@ -511,7 +418,7 @@ public class DockerController : ControllerBase
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message, details = ex.StackTrace });
+            return BadRequest(new { message = ex.Message });
         }
     }
 
@@ -555,12 +462,18 @@ public class DockerController : ControllerBase
     [HttpGet("diagnostic")]
     public async Task<IActionResult> Diagnostic()
     {
+        var infoTask = _dockerService.GetSystemInfoAsync();
+        var containersTask = _dockerService.GetContainersAsync();
+        var imagesTask = _dockerService.GetImagesAsync();
+
+        await Task.WhenAll(infoTask, containersTask, imagesTask);
+
         var diagnostics = new
         {
             timestamp = DateTime.UtcNow,
-            dockerVersion = await _dockerService.GetSystemInfoAsync(),
-            containerCount = (await _dockerService.GetContainersAsync()).Count,
-            imageCount = (await _dockerService.GetImagesAsync()).Count
+            dockerVersion = await infoTask,
+            containerCount = (await containersTask).Count,
+            imageCount = (await imagesTask).Count
         };
 
         return Ok(diagnostics);
