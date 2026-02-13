@@ -4,11 +4,14 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using ChuckieHelper.WebApi.Models.RemoteControl;
+using System.IO.Compression;
+using SharpCompress.Archives;
+using SharpCompress.Common;
+using SharpCompress.Readers;
 
 namespace ChuckieHelper.WebApi.Services.RemoteControl;
 
 public class FileService
-    
 {
     private readonly string _rootPath;
 
@@ -728,6 +731,78 @@ public class FileService
         {
             Console.WriteLine($"GetImagePreview error: {ex.Message}");
             return Array.Empty<byte>();
+        }
+    }
+
+    /// <summary>
+    /// 压缩文件/文件夹到 Zip
+    /// </summary>
+    public bool Compress(List<string> sourcePaths, string destZipPath)
+    {
+        try
+        {
+            var fullDest = ResolvePath(destZipPath);
+            // Ensure destination directory exists
+            var destDir = Path.GetDirectoryName(fullDest);
+            if (!Directory.Exists(destDir)) Directory.CreateDirectory(destDir);
+            
+            // Create zip
+            using var archive = ZipFile.Open(fullDest, ZipArchiveMode.Create);
+            
+            foreach (var path in sourcePaths)
+            {
+                var fullSource = ResolvePath(path);
+                if (File.Exists(fullSource))
+                {
+                    archive.CreateEntryFromFile(fullSource, Path.GetFileName(fullSource));
+                }
+                else if (Directory.Exists(fullSource))
+                {
+                    var dirName = Path.GetFileName(fullSource);
+                    var files = Directory.GetFiles(fullSource, "*", SearchOption.AllDirectories);
+                    foreach (var file in files)
+                    {
+                        var relativePath = Path.GetRelativePath(fullSource, file);
+                        archive.CreateEntryFromFile(file, Path.Combine(dirName, relativePath));
+                    }
+                }
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Compress error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 解压文件 (支持 Zip, Rar, 7z, Tar, GZip 等)
+    /// </summary>
+    public bool Decompress(string archivePath, string destPath)
+    {
+        try
+        {
+            var fullArchive = ResolvePath(archivePath);
+            var fullDest = ResolvePath(destPath);
+            
+            if (!File.Exists(fullArchive)) return false;
+            if (!Directory.Exists(fullDest)) Directory.CreateDirectory(fullDest);
+
+            using var archive = ArchiveFactory.OpenArchive(fullArchive);
+            foreach (var entry in archive.Entries)
+            {
+                if (!entry.IsDirectory)
+                {
+                    entry.WriteToDirectory(fullDest);
+                }
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Decompress error: {ex.Message}");
+            return false;
         }
     }
 

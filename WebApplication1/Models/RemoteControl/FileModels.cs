@@ -79,3 +79,15 @@ public class BatchItem
     public string Path { get; set; } = "";
     public bool IsDirectory { get; set; }
 }
+
+public class CompressRequest
+{
+    public List<string> Items { get; set; } = new();
+    public string DestZipPath { get; set; } = "";
+}
+
+public class DecompressRequest
+{
+    public string ArchivePath { get; set; } = "";
+    public string DestPath { get; set; } = "";
+}

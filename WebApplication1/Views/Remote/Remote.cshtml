@@ -1,5 +1,5 @@
 @{
-    ViewData["Title"] = "Remote Management";
+    ViewData["Title"] = "远程管理";
     Layout = "_Layout";
 }
 @section Styles {
@@ -21,725 +21,739 @@
         <button class="tab" data-tab="compose">Compose</button>
         <button class="tab" data-tab="files">文件管理</button>
     </nav>
-}   
+}
 
-    <div id="remote-page" class="page active">              
-        <main class="content">
-            <!-- Controls Tab -->
-            <div id="controls-tab" class="tab-content active">
-                <div class="controls-grid">
-                    <div class="control-card" data-action="lock">
-                        <div class="control-icon">🔒</div>
-                        <h3>锁定计算机</h3>
-                        <p>锁定工作站</p>
-                    </div>
-                    <div class="control-card warning" data-action="sleep">
-                        <div class="control-icon">😴</div>
-                        <h3>睡眠</h3>
-                        <p>使计算机进入睡眠状态</p>
-                    </div>
-                    <div class="control-card warning" data-action="hibernate">
-                        <div class="control-icon">💤</div>
-                        <h3>休眠</h3>
-                        <p>使计算机进入休眠状态</p>
-                    </div>
-                    <div class="control-card danger" data-action="reboot">
-                        <div class="control-icon">🔄</div>
-                        <h3>重启</h3>
-                        <p>5秒后重启计算机</p>
-                    </div>
-                    <div class="control-card danger" data-action="shutdown">
-                        <div class="control-icon">⚡</div>
-                        <h3>关机</h3>
-                        <p>5秒后关闭计算机</p>
+<!-- SVG Icon Symbols -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none;">
+    <symbol id="icon-refresh" viewBox="0 0 24 24">
+        <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
+    </symbol>
+    <symbol id="icon-terminal" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2" fill="currentColor" />
+        <polyline points="7 8 11 12 7 16" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+        <line x1="13" y1="16" x2="17" y2="16" stroke="#fff" stroke-width="2" stroke-linecap="round" />
+    </symbol>
+    <symbol id="icon-check-toggle" viewBox="0 0 24 24">
+        <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" fill="none" stroke-width="2" />
+        <polyline class="toggle-check" points="7 12 10.5 15.5 17 9" stroke="currentColor" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+    </symbol>
+    <symbol id="icon-chevron-left" viewBox="0 0 24 24">
+        <polyline points="15 18 9 12 15 6" />
+    </symbol>
+    <symbol id="icon-chevron-right" viewBox="0 0 24 24">
+        <polyline points="9 18 15 12 9 6" />
+    </symbol>
+</svg>
+
+<div id="remote-page" class="page active">
+    <main class="content">
+        <!-- Controls Tab -->
+        <div id="controls-tab" class="tab-content active">
+            <div class="controls-grid">
+                <div class="control-card" data-action="lock">
+                    <div class="control-icon">🔒</div>
+                    <h3>锁定计算机</h3>
+                    <p>锁定工作站</p>
+                </div>
+                <div class="control-card warning" data-action="sleep">
+                    <div class="control-icon">😴</div>
+                    <h3>睡眠</h3>
+                    <p>使计算机进入睡眠状态</p>
+                </div>
+                <div class="control-card warning" data-action="hibernate">
+                    <div class="control-icon">💤</div>
+                    <h3>休眠</h3>
+                    <p>使计算机进入休眠状态</p>
+                </div>
+                <div class="control-card danger" data-action="reboot">
+                    <div class="control-icon">🔄</div>
+                    <h3>重启</h3>
+                    <p>5秒后重启计算机</p>
+                </div>
+                <div class="control-card danger" data-action="shutdown">
+                    <div class="control-icon">⚡</div>
+                    <h3>关机</h3>
+                    <p>5秒后关闭计算机</p>
+                </div>
+            </div>
+            <div id="action-result" class="action-result"></div>
+
+            <!-- System Information Section -->
+            <div class="info-container">
+                <div class="info-header">
+                    <h2>系统信息</h2>
+                    <div class="info-header-actions">
+                        <label class="auto-refresh-toggle">
+                            <input type="checkbox" id="sysinfo-auto-refresh" checked>
+                            <span>自动刷新</span>
+                        </label>
+                        <button id="refresh-info-btn" class="btn btn-secondary btn-sm btn-refresh" title="刷新">
+                            <span class="refresh-icon">
+                                <svg aria-hidden="true"><use href="#icon-refresh" /></svg>
+                            </span>
+                        </button>
                     </div>
                 </div>
-                <div id="action-result" class="action-result"></div>
 
-                <!-- System Information Section -->
-                <div class="info-container">
-                    <div class="info-header">
-                        <h2>系统信息</h2>
-                        <div class="info-header-actions">
-                            <label class="auto-refresh-toggle">
-                                <input type="checkbox" id="sysinfo-auto-refresh" checked>
-                                <span>自动刷新</span>
-                            </label>
-                            <button id="refresh-info-btn" class="btn btn-secondary btn-sm btn-refresh" title="刷新"><span
-                                    class="refresh-icon"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"
-                                        aria-hidden="true">
-                                        <path
-                                            d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-                                    </svg></span></button>
+                <!-- 动态监控：CPU + 内存 并排 -->
+                <div class="sysinfo-row">
+                    <div class="sysinfo-section sysinfo-flex">
+                        <h3 class="sysinfo-section-title">🔲 处理器</h3>
+                        <div class="sysinfo-compact-info">
+                            <span id="info-cpu-name-compact">-</span>
+                            <span class="sysinfo-sep">|</span>
+                            <span id="info-cpu-cores-compact">-</span>
+                            <span class="sysinfo-sep">|</span>
+                            <span id="info-cpu-clock-compact">-</span>
+                            <span class="sysinfo-sep">|</span>
+                            <span id="info-cpu-temp-compact">-</span>
+                        </div>
+                        <div class="sysinfo-bar-container">
+                            <label>占用</label>
+                            <div class="sysinfo-bar">
+                                <div id="info-cpu-bar" class="sysinfo-bar-fill" style="width: 0%"></div>
+                            </div>
+                            <span id="info-cpu-usage" class="sysinfo-bar-label">0%</span>
                         </div>
                     </div>
-
-                    <!-- 动态监控：CPU + 内存 并排 -->
-                    <div class="sysinfo-row">
-                        <div class="sysinfo-section sysinfo-flex">
-                            <h3 class="sysinfo-section-title">🔲 处理器</h3>
-                            <div class="sysinfo-compact-info">
-                                <span id="info-cpu-name-compact">-</span>
-                                <span class="sysinfo-sep">|</span>
-                                <span id="info-cpu-cores-compact">-</span>
-                                <span class="sysinfo-sep">|</span>
-                                <span id="info-cpu-clock-compact">-</span>
-                                <span class="sysinfo-sep">|</span>
-                                <span id="info-cpu-temp-compact">-</span>
+                    <div class="sysinfo-section sysinfo-flex">
+                        <h3 class="sysinfo-section-title">💾 内存</h3>
+                        <div class="sysinfo-bar-container">
+                            <label id="info-mem-detail">- / -</label>
+                            <div class="sysinfo-bar">
+                                <div id="info-mem-bar" class="sysinfo-bar-fill" style="width: 0%"></div>
                             </div>
-                            <div class="sysinfo-bar-container">
-                                <label>占用</label>
-                                <div class="sysinfo-bar">
-                                    <div id="info-cpu-bar" class="sysinfo-bar-fill" style="width: 0%"></div>
-                                </div>
-                                <span id="info-cpu-usage" class="sysinfo-bar-label">0%</span>
-                            </div>
-                        </div>
-                        <div class="sysinfo-section sysinfo-flex">
-                            <h3 class="sysinfo-section-title">💾 内存</h3>
-                            <div class="sysinfo-bar-container">
-                                <label id="info-mem-detail">- / -</label>
-                                <div class="sysinfo-bar">
-                                    <div id="info-mem-bar" class="sysinfo-bar-fill" style="width: 0%"></div>
-                                </div>
-                                <span id="info-mem-usage" class="sysinfo-bar-label">0%</span>
-                            </div>
+                            <span id="info-mem-usage" class="sysinfo-bar-label">0%</span>
                         </div>
                     </div>
+                </div>
 
-                    <!-- 动态监控：GPU + 磁盘 并排 -->
-                    <div class="sysinfo-row">
-                        <div class="sysinfo-section sysinfo-flex">
-                            <h3 class="sysinfo-section-title">🎮 显卡</h3>
-                            <div id="info-gpu-list"><span class="text-muted">-</span></div>
-                        </div>
-                        <div class="sysinfo-section sysinfo-flex">
-                            <h3 class="sysinfo-section-title">💿 磁盘</h3>
-                            <div id="info-drive-list"><span class="text-muted">-</span></div>
-                        </div>
+                <!-- 动态监控：GPU + 磁盘 并排 -->
+                <div class="sysinfo-row">
+                    <div class="sysinfo-section sysinfo-flex">
+                        <h3 class="sysinfo-section-title">🎮 显卡</h3>
+                        <div id="info-gpu-list"><span class="text-muted">-</span></div>
                     </div>
+                    <div class="sysinfo-section sysinfo-flex">
+                        <h3 class="sysinfo-section-title">💿 磁盘</h3>
+                        <div id="info-drive-list"><span class="text-muted">-</span></div>
+                    </div>
+                </div>
 
-                    <!-- 网络 + 基本信息 并排 -->
-                    <div class="sysinfo-row">
-                        <div class="sysinfo-section sysinfo-flex">
-                            <h3 class="sysinfo-section-title">🌐 网络</h3>
-                            <div id="info-network-list"><span class="text-muted">-</span></div>
-                        </div>
-                        <div class="sysinfo-section sysinfo-flex">
-                            <h3 class="sysinfo-section-title">🖥️ 基本信息</h3>
-                            <div class="sysinfo-basic-grid">
-                                <div class="sysinfo-basic-item"><span class="sysinfo-label">计算机名</span><span
-                                        id="info-machine">-</span></div>
-                                <div class="sysinfo-basic-item"><span class="sysinfo-label">用户名</span><span
-                                        id="info-user">-</span></div>
-                                <div class="sysinfo-basic-item"><span class="sysinfo-label">操作系统</span><span
-                                        id="info-os">-</span></div>
-                                <div class="sysinfo-basic-item"><span class="sysinfo-label">架构</span><span
-                                        id="info-arch">-</span></div>
-                                <div class="sysinfo-basic-item"><span class="sysinfo-label">运行时间</span><span
-                                        id="info-uptime">-</span></div>
+                <!-- 网络 + 基本信息 并排 -->
+                <div class="sysinfo-row">
+                    <div class="sysinfo-section sysinfo-flex">
+                        <h3 class="sysinfo-section-title">🌐 网络</h3>
+                        <div id="info-network-list"><span class="text-muted">-</span></div>
+                    </div>
+                    <div class="sysinfo-section sysinfo-flex">
+                        <h3 class="sysinfo-section-title">🖥️ 基本信息</h3>
+                        <div class="sysinfo-basic-grid">
+                            <div class="sysinfo-basic-item">
+                                <span class="sysinfo-label">计算机名</span><span id="info-machine">-</span>
+                            </div>
+                            <div class="sysinfo-basic-item">
+                                <span class="sysinfo-label">用户名</span><span id="info-user">-</span>
+                            </div>
+                            <div class="sysinfo-basic-item">
+                                <span class="sysinfo-label">操作系统</span><span id="info-os">-</span>
+                            </div>
+                            <div class="sysinfo-basic-item">
+                                <span class="sysinfo-label">架构</span><span id="info-arch">-</span>
+                            </div>
+                            <div class="sysinfo-basic-item">
+                                <span class="sysinfo-label">运行时间</span><span id="info-uptime">-</span>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
+        </div>
 
-            <!-- Processes Tab -->
-            <div id="processes-tab" class="tab-content">
-                <div class="processes-header">
-                    <h2>📊 进程管理器</h2>
-                    <div class="processes-controls">
-                        <input type="text" id="process-search" class="search-input" placeholder="搜索进程名、窗口标题、描述...">
-                        <select id="process-filter" class="process-filter-select">
-                            <option value="all">全部进程</option>
-                            <option value="windowed">有窗口 (应用)</option>
-                            <option value="background">后台进程</option>
-                        </select>
-                        <button id="refresh-processes-btn" class="btn btn-secondary btn-refresh" title="刷新"><span
-                                class="refresh-icon"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"
-                                    aria-hidden="true">
-                                    <path
-                                        d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-                                </svg></span></button>
+        <!-- Processes Tab -->
+        <div id="processes-tab" class="tab-content">
+            <div class="processes-header">
+                <h2>📊 进程管理器</h2>
+                <div class="processes-controls">
+                    <input type="text" id="process-search" class="search-input" placeholder="搜索进程名、窗口标题、描述...">
+                    <select id="process-filter" class="process-filter-select">
+                        <option value="all">全部进程</option>
+                        <option value="windowed">有窗口 (应用)</option>
+                        <option value="background">后台进程</option>
+                    </select>
+                    <button id="refresh-processes-btn" class="btn btn-secondary btn-refresh" title="刷新">
+                        <span class="refresh-icon">
+                            <svg aria-hidden="true"><use href="#icon-refresh" /></svg>
+                        </span>
+                    </button>
+                </div>
+            </div>
+            <div class="processes-table-container">
+                <table class="processes-table">
+                    <thead>
+                        <tr>
+                            <th class="th-type sortable" data-sort="type">类型 <span class="sort-arrow"></span></th>
+                            <th class="th-name sortable" data-sort="name">名称 <span class="sort-arrow"></span></th>
+                            <th class="th-title">窗口标题</th>
+                            <th class="th-pid sortable" data-sort="pid">PID <span class="sort-arrow"></span></th>
+                            <th class="th-cpu sortable" data-sort="cpu">CPU <span class="sort-arrow"></span></th>
+                            <th class="th-memory sortable" data-sort="memory">
+                                内存 <span class="sort-arrow"></span>
+                            </th>
+                            <th class="th-action">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="processes-list"></tbody>
+                </table>
+            </div>
+            <div class="processes-info">
+                <span id="process-count">共 0 个进程</span>
+            </div>
+        </div>
+
+        <!-- Screenshot Tab -->
+        <div id="screenshot-tab" class="tab-content">
+            <div class="screenshot-controls">
+                <button id="stream-toggle-btn" class="btn btn-primary btn-sm">▶ 开始</button>
+                <button id="fullscreen-btn" class="btn btn-secondary btn-sm" title="全屏 (F11/Esc退出)">⛶</button>
+
+                <label for="quality-preset">预设</label>
+                <select id="quality-preset" class="quality-select">
+                    <option value="ultra">超高清</option>
+                    <option value="high" selected>高清</option>
+                    <option value="medium">标清</option>
+                    <option value="low">流畅</option>
+                    <option value="custom">自定义</option>
+                </select>
+                <label for="resolution-select">分辨率</label>
+                <select id="resolution-select" class="quality-select">
+                    <option value="1920x1080">1920x1080</option>
+                    <option value="1280x720" selected>1280x720</option>
+                    <option value="854x480">854x480</option>
+                    <option value="640x360">640x360</option>
+                </select>
+                <label for="bitrate-select">码率</label>
+                <select id="bitrate-select" class="quality-select">
+                    <option value="10M">10M</option>
+                    <option value="8M">8M</option>
+                    <option value="5M">5M</option>
+                    <option value="3M" selected>3M</option>
+                    <option value="2M">2M</option>
+                    <option value="1M">1M</option>
+                    <option value="500k">500k</option>
+                </select>
+                <label for="crf-value">质量</label>
+                <input type="range" id="crf-value" min="18" max="32" value="18" class="crf-slider">
+                <span id="crf-display" class="crf-value">18</span>
+                <span id="stream-mode-indicator" class="mode-indicator">未连接</span>
+                <span id="stream-stats" class="stream-stats" title="实时视频速率、缓冲延迟" aria-hidden="true"></span>
+            </div>
+            <div class="screenshot-container" id="screenshot-container" tabindex="0" title="点击此处后按键将发送到远程">
+                <canvas id="stream-canvas"
+                        style="cursor: crosshair; display: none; width: 100%; height: 100%; object-fit: contain;"></canvas>
+                <video id="stream-video" alt="Remote Screen" style="cursor: crosshair; display: none;" autoplay
+                       muted playsinline></video>
+                <img id="stream-img" alt="Remote Screen (MJPEG Legacy)" style="cursor: crosshair; display: none;">
+                <div id="stream-placeholder" class="placeholder-text">点击"开始控制"以连接远程桌面</div>
+                <div id="fullscreen-exit-hint" class="fullscreen-exit-hint">按 Esc 或 F11 退出全屏</div>
+            </div>
+        </div>
+
+        <!-- Terminal Tab -->
+        <div id="terminal-tab" class="tab-content">
+            <div class="terminal-container">
+                <div id="terminal-output" class="terminal-output"></div>
+                <div class="terminal-input-container">
+                    <span class="prompt">></span>
+                    <input type="text" id="terminal-input" class="terminal-input" placeholder="输入命令...">
+                </div>
+            </div>
+            <div class="terminal-status">
+                <select id="terminal-type" class="terminal-select" style="display: none;">
+                    <option value="shell">Shell</option>
+                    <option value="powershell">PowerShell</option>
+                    <option value="cmd">CMD</option>
+                </select>
+
+                <button id="terminal-toggle-btn" class="btn btn-primary">连接终端</button>
+                <button id="clear-btn" class="btn btn-secondary">清屏</button>
+                <span id="ws-status">未连接</span>
+            </div>
+        </div>
+
+        <!-- Docker Tab - 容器管理 -->
+        <div id="docker-tab" class="tab-content">
+            <div class="docker-container">
+                <div class="docker-section">
+                    <div class="docker-section-header">
+                        <h2>🐳 Docker 容器管理</h2>
+                        <div class="docker-controls">
+                            <input type="text" id="container-search" class="search-input" placeholder="搜索容器...">
+                            <button id="refresh-containers-btn" class="btn btn-secondary btn-refresh"
+                                    title="刷新容器列表">
+                                <span class="refresh-icon"><svg aria-hidden="true"><use href="#icon-refresh" /></svg></span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="containers-table-container">
+                        <table class="containers-table">
+                            <thead>
+                                <tr>
+                                    <th class="sortable" data-sort="name">容器名称 <span class="sort-arrow"></span></th>
+                                    <th class="sortable" data-sort="image">镜像 <span class="sort-arrow"></span></th>
+                                    <th class="sortable" data-sort="state">状态 <span class="sort-arrow"></span></th>
+                                    <th class="stats-column sortable" data-sort="cpu">
+                                        CPU <span class="sort-arrow"></span>
+                                    </th>
+                                    <th class="stats-column sortable" data-sort="memory">
+                                        内存 <span class="sort-arrow"></span>
+                                    </th>
+                                    <th class="ports-column sortable" data-sort="ports">
+                                        端口 <span class="sort-arrow"></span>
+                                    </th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="containers-list"></tbody>
+                        </table>
                     </div>
                 </div>
-                <div class="processes-table-container">
-                    <table class="processes-table">
+
+                <div class="docker-info-section">
+                    <div class="docker-info-header">
+                        <h3>容器统计</h3>
+                        <button id="refresh-docker-info-btn" class="btn btn-secondary btn-refresh"
+                                title="刷新信息">
+                            <span class="refresh-icon"><svg aria-hidden="true"><use href="#icon-refresh" /></svg></span>
+                        </button>
+                    </div>
+                    <div id="docker-info" class="docker-info-grid">
+                        <div class="info-item">
+                            <label>总容器数</label>
+                            <span id="docker-containers-total">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>运行中</label>
+                            <span id="docker-containers-running">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>暂停</label>
+                            <span id="docker-containers-paused">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>已停止</label>
+                            <span id="docker-containers-stopped">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Images Tab - 镜像管理 -->
+        <div id="images-tab" class="tab-content">
+            <div class="docker-container">
+                <div class="docker-section">
+                    <div class="docker-section-header images-section-header">
+                        <h2>📦 Docker 镜像管理</h2>
+                        <div class="images-controls">
+
+                            <input type="text" id="pull-image-input" class="search-input"
+                                   placeholder="输入镜像标签 (e.g., nginx:latest)">
+                            <button id="pull-image-btn" class="btn btn-primary">拉取镜像</button>
+                            <button id="refresh-images-btn" class="btn btn-secondary btn-refresh"
+                                    title="刷新镜像列表">
+                                <span class="refresh-icon"><svg aria-hidden="true"><use href="#icon-refresh" /></svg></span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="images-table-container">
+                        <table class="images-table">
+                            <thead>
+                                <tr>
+                                    <th>仓库</th>
+                                    <th>标签</th>
+                                    <th>大小</th>
+                                    <th>创建时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="images-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="docker-info-section">
+                    <h3>镜像统计</h3>
+                    <div id="docker-info-images" class="docker-info-grid">
+                        <div class="info-item">
+                            <label>总镜像数</label>
+                            <span id="docker-images-total">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>Docker 版本</label>
+                            <span id="docker-version">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Compose Tab - Docker Compose管理 -->
+        <div id="compose-tab" class="tab-content">
+            <div class="compose-container">
+                <div class="compose-editor-section">
+                    <h2>📝 Docker Compose 编辑器</h2>
+                    <div class="compose-editor-controls">
+                        <input type="text" id="compose-file-path-input" class="search-input"
+                               placeholder="输入 compose 文件路径 (e.g., /path/to/docker-compose.yml)">
+                        <button id="load-compose-btn" class="btn btn-secondary">📂 加载文件</button>
+                        <button id="browse-compose-btn" class="btn btn-secondary" title="从文件树选择">🌲 浏览...</button>
+                        <button id="new-compose-btn" class="btn btn-secondary">📄 新建文件</button>
+                    </div>
+                    <div class="compose-editor-container">
+                        <textarea id="compose-editor-content" class="compose-editor-textarea"
+                                  placeholder="在此编辑 docker-compose.yml 内容..."></textarea>
+                    </div>
+                    <div class="compose-editor-actions">
+                        <button id="save-compose-btn" class="btn btn-success">💾 保存文件</button>
+                        <button id="run-compose-pull-btn" class="btn btn-secondary">⬇️ 拉取 (pull)</button>
+                        <button id="run-compose-up-btn" class="btn btn-primary">▶️ 运行 (up)</button>
+                        <button id="run-compose-stop-btn" class="btn btn-warning">⏹️ 停止 (stop)</button>
+                        <button id="run-compose-down-btn" class="btn btn-danger">🗑️ 移除 (down)</button>
+                        <button id="validate-compose-btn" class="btn btn-secondary">✓ 验证</button>
+                    </div>
+                </div>
+
+                <div class="compose-status-section">
+                    <div class="compose-status-header">
+                        <h2>🔍 运行状态</h2>
+                        <div class="compose-status-controls">
+                            <button id="refresh-compose-status-btn" class="btn btn-secondary btn-refresh"
+                                    title="刷新状态">
+                                <span class="refresh-icon"><svg aria-hidden="true"><use href="#icon-refresh" /></svg></span>
+                            </button>
+                            <button id="show-compose-logs-btn" class="btn btn-secondary">📋 查看日志</button>
+                        </div>
+                    </div>
+                    <div class="compose-status-list">
+                        <div id="compose-status-container" class="compose-status-info">
+                            <p>加载中...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="compose-history-section">
+                    <h2>📚 最近的 Compose 文件</h2>
+                    <div id="compose-history-list" class="compose-history-list">
+                        <p>暂无历史记录</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Files Tab -->
+        <div id="files-tab" class="tab-content">
+            <div class="files-container">
+
+
+                <div class="files-toolbar">
+                    <div class="files-header">
+                        <h2>📁 文件管理器</h2>
+                    </div>
+                    <div id="files-breadcrumb" class="files-breadcrumb">
+                        <div id="breadcrumb-items" class="breadcrumb-items">
+                            <button class="breadcrumb-item breadcrumb-home"
+                                    onclick="app.navigateToBreadcrumb('')">
+                                /
+                            </button>
+                        </div>
+                        <div id="breadcrumb-blank" class="breadcrumb-blank"></div>
+                        <input type="text" id="breadcrumb-input" class="breadcrumb-input" style="display:none;"
+                               placeholder="输入路径后回车跳转...">
+                        <button type="button" id="breadcrumb-refresh-btn" class="breadcrumb-refresh-btn btn-refresh"
+                                title="刷新当前目录">
+                            <span class="refresh-icon"><svg aria-hidden="true"><use href="#icon-refresh" /></svg></span>
+                        </button>
+                    </div>
+                    <div class="files-controls">
+
+                        <button id="home-btn" class="btn-icon" title="主目录">🏠</button>
+                        <button id="back-btn" class="btn-icon" title="返回上级">⬅️</button>
+                        <button id="refresh-files-btn" class="btn-icon btn-refresh" title="刷新">
+                            <span class="refresh-icon">
+                                <svg aria-hidden="true"><use href="#icon-refresh" /></svg>
+                            </span>
+                        </button>
+                        <button id="open-terminal-here-btn" class="btn-icon" title="在当前目录运行控制台">
+                            <span class="terminal-icon">
+                                <svg width="25" height="25" aria-hidden="true"><use href="#icon-terminal" /></svg>
+                            </span>
+                        </button>
+                        <div class="create-dropdown-wrapper">
+                            <button type="button" id="create-folder-btn" class="btn-icon"
+                                    title="新建文件、文件夹">
+                                ➕
+                            </button>
+                            <div id="create-dropdown" class="create-dropdown" style="display:none;">
+                                <div class="create-dropdown-item" data-action="file">📄 新建文件</div>
+                                <div class="create-dropdown-item" data-action="folder">📁 新建文件夹</div>
+                            </div>
+                        </div>
+                        <button type="button" id="upload-btn" class="btn-icon" title="上传文件">📤</button>
+                        <span class="files-controls-separator"></span>
+                        <button id="bookmark-add-btn" class="btn-icon" title="收藏当前路径">⭐</button>
+                        <div class="bookmark-dropdown-wrapper">
+                            <button id="bookmark-list-btn" class="btn-icon" title="收藏夹">📑</button>
+                            <div id="bookmark-dropdown" class="bookmark-dropdown" style="display:none;"></div>
+                        </div>
+                        <button id="multi-select-toggle-btn" class="btn-icon"
+                                style="margin-left:12px;" title="多选模式">
+                            <span class="multi-toggle-icon">
+                                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" fill="none" stroke-width="2" />
+                                    <polyline class="toggle-check" points="7 12 10.5 15.5 17 9" stroke="currentColor" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                            </span>
+                        </button>
+                        <div id="multi-action-btns" class="multi-action-btns"
+                             style="display:none;margin-left:8px;gap:4px;">
+                            <button id="multi-delete-btn" class="btn-icon danger" title="批量删除">🗑️ 删除</button>
+                            <button id="multi-compress-btn" class="btn-icon" title="批量压缩">🗜️ 压缩</button>
+                            <button id="multi-copy-btn" class="btn-icon" title="批量复制">📋 复制</button>
+                            <button id="multi-move-btn" class="btn-icon" title="批量移动">✂️ 移动</button>
+                            <button id="multi-cancel-btn" class="btn-icon" title="取消多选">❌ 取消</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="files-table-container">
+                    <table class="files-table">
                         <thead>
                             <tr>
-                                <th class="th-type sortable" data-sort="type">类型 <span class="sort-arrow"></span></th>
-                                <th class="th-name sortable" data-sort="name">名称 <span class="sort-arrow"></span></th>
-                                <th class="th-title">窗口标题</th>
-                                <th class="th-pid sortable" data-sort="pid">PID <span class="sort-arrow"></span></th>
-                                <th class="th-cpu sortable" data-sort="cpu">CPU <span class="sort-arrow"></span></th>
-                                <th class="th-memory sortable" data-sort="memory">内存 <span class="sort-arrow"></span>
+                                <th class="file-name-column sortable" data-sort="name">
+                                    名称 <span class="sort-arrow"></span>
                                 </th>
-                                <th class="th-action">操作</th>
+                                <th class="file-type-column sortable" data-sort="type">
+                                    类型 <span class="sort-arrow"></span>
+                                </th>
+                                <th class="file-size-column sortable" data-sort="size">
+                                    大小 <span class="sort-arrow"></span>
+                                </th>
+                                <th class="file-date-column sortable" data-sort="date">
+                                    修改时间 <span class="sort-arrow"></span>
+                                </th>
+                                <th class="file-actions-column">操作</th>
                             </tr>
                         </thead>
-                        <tbody id="processes-list"></tbody>
+                        <tbody id="files-list"></tbody>
                     </table>
                 </div>
-                <div class="processes-info">
-                    <span id="process-count">共 0 个进程</span>
-                </div>
+
             </div>
+        </div>
+    </main>
+</div>
 
-            <!-- Screenshot Tab -->
-            <div id="screenshot-tab" class="tab-content">
-                <div class="screenshot-controls">
-                    <button id="stream-toggle-btn" class="btn btn-primary btn-sm">▶ 开始</button>
-                    <button id="fullscreen-btn" class="btn btn-secondary btn-sm" title="全屏 (F11/Esc退出)">⛶</button>
-
-                    <label for="quality-preset">预设</label>
-                    <select id="quality-preset" class="quality-select">
-                        <option value="ultra">超高清</option>
-                        <option value="high" selected>高清</option>
-                        <option value="medium">标清</option>
-                        <option value="low">流畅</option>
-                        <option value="custom">自定义</option>
-                    </select>
-                    <label for="resolution-select">分辨率</label>
-                    <select id="resolution-select" class="quality-select">
-                        <option value="1920x1080">1920x1080</option>
-                        <option value="1280x720" selected>1280x720</option>
-                        <option value="854x480">854x480</option>
-                        <option value="640x360">640x360</option>
-                    </select>
-                    <label for="bitrate-select">码率</label>
-                    <select id="bitrate-select" class="quality-select">
-                        <option value="10M">10M</option>
-                        <option value="8M">8M</option>
-                        <option value="5M">5M</option>
-                        <option value="3M" selected>3M</option>
-                        <option value="2M">2M</option>
-                        <option value="1M">1M</option>
-                        <option value="500k">500k</option>
-                    </select>
-                    <label for="crf-value">质量</label>
-                    <input type="range" id="crf-value" min="18" max="32" value="18" class="crf-slider">
-                    <span id="crf-display" class="crf-value">18</span>
-                    <span id="stream-mode-indicator" class="mode-indicator">未连接</span>
-                    <span id="stream-stats" class="stream-stats" title="实时视频速率、缓冲延迟" aria-hidden="true"></span>
-                </div>
-                <div class="screenshot-container" id="screenshot-container" tabindex="0" title="点击此处后按键将发送到远程">
-                    <canvas id="stream-canvas"
-                        style="cursor: crosshair; display: none; width: 100%; height: 100%; object-fit: contain;"></canvas>
-                    <video id="stream-video" alt="Remote Screen" style="cursor: crosshair; display: none;" autoplay
-                        muted playsinline></video>
-                    <img id="stream-img" alt="Remote Screen (MJPEG Legacy)" style="cursor: crosshair; display: none;">
-                    <div id="stream-placeholder" class="placeholder-text">点击"开始控制"以连接远程桌面</div>
-                    <div id="fullscreen-exit-hint" class="fullscreen-exit-hint">按 Esc 或 F11 退出全屏</div>
-                </div>
-            </div>
-
-            <!-- Terminal Tab -->
-            <div id="terminal-tab" class="tab-content">
-                <div class="terminal-container">
-                    <div id="terminal-output" class="terminal-output"></div>
-                    <div class="terminal-input-container">
-                        <span class="prompt">></span>
-                        <input type="text" id="terminal-input" class="terminal-input" placeholder="输入命令...">
-                    </div>
-                </div>
-                <div class="terminal-status">
-                    <select id="terminal-type" class="terminal-select" style="display: none;">
-                        <option value="shell">Shell</option>
-                        <option value="powershell">PowerShell</option>
-                        <option value="cmd">CMD</option>
-                    </select>
-
-                    <button id="terminal-toggle-btn" class="btn btn-primary">连接终端</button>
-                    <button id="clear-btn" class="btn btn-secondary">清屏</button>
-                    <span id="ws-status">未连接</span>
-                </div>
-            </div>
-
-            <!-- Docker Tab - 容器管理 -->
-            <div id="docker-tab" class="tab-content">
-                <div class="docker-container">
-                    <div class="docker-section">
-                        <div class="docker-section-header">
-                            <h2>🐳 Docker 容器管理</h2>
-                            <div class="docker-controls">
-                                <input type="text" id="container-search" class="search-input" placeholder="搜索容器...">
-                                <button id="refresh-containers-btn" class="btn btn-secondary btn-refresh"
-                                    title="刷新容器列表"><span class="refresh-icon"><svg viewBox="0 0 24 24"
-                                            xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                            <path
-                                                d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-                                        </svg></span></button>
-                            </div>
-                        </div>
-                        <div class="containers-table-container">
-                            <table class="containers-table">
-                                <thead>
-                                    <tr>
-                                        <th class="sortable" data-sort="name">容器名称 <span class="sort-arrow"></span></th>
-                                        <th class="sortable" data-sort="image">镜像 <span class="sort-arrow"></span></th>
-                                        <th class="sortable" data-sort="state">状态 <span class="sort-arrow"></span></th>
-                                        <th class="stats-column sortable" data-sort="cpu">CPU <span
-                                                class="sort-arrow"></span></th>
-                                        <th class="stats-column sortable" data-sort="memory">内存 <span
-                                                class="sort-arrow"></span></th>
-                                        <th class="ports-column sortable" data-sort="ports">端口 <span
-                                                class="sort-arrow"></span></th>
-                                        <th>操作</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="containers-list"></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div class="docker-info-section">
-                        <div class="docker-info-header">
-                            <h3>容器统计</h3>
-                            <button id="refresh-docker-info-btn" class="btn btn-secondary btn-refresh"
-                                title="刷新信息"><span class="refresh-icon"><svg viewBox="0 0 24 24"
-                                        xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                        <path
-                                            d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-                                    </svg></span></button>
-                        </div>
-                        <div id="docker-info" class="docker-info-grid">
-                            <div class="info-item">
-                                <label>总容器数</label>
-                                <span id="docker-containers-total">-</span>
-                            </div>
-                            <div class="info-item">
-                                <label>运行中</label>
-                                <span id="docker-containers-running">-</span>
-                            </div>
-                            <div class="info-item">
-                                <label>暂停</label>
-                                <span id="docker-containers-paused">-</span>
-                            </div>
-                            <div class="info-item">
-                                <label>已停止</label>
-                                <span id="docker-containers-stopped">-</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Images Tab - 镜像管理 -->
-            <div id="images-tab" class="tab-content">
-                <div class="docker-container">
-                    <div class="docker-section">
-                        <div class="docker-section-header images-section-header">
-                            <h2>📦 Docker 镜像管理</h2>
-                            <div class="images-controls">
-
-                                <input type="text" id="pull-image-input" class="search-input"
-                                    placeholder="输入镜像标签 (e.g., nginx:latest)">
-                                <button id="pull-image-btn" class="btn btn-primary">拉取镜像</button>
-                                <button id="refresh-images-btn" class="btn btn-secondary btn-refresh"
-                                    title="刷新镜像列表"><span class="refresh-icon"><svg viewBox="0 0 24 24"
-                                            xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                            <path
-                                                d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-                                        </svg></span></button>
-                            </div>
-                        </div>
-                        <div class="images-table-container">
-                            <table class="images-table">
-                                <thead>
-                                    <tr>
-                                        <th>仓库</th>
-                                        <th>标签</th>
-                                        <th>大小</th>
-                                        <th>创建时间</th>
-                                        <th>操作</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="images-list"></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div class="docker-info-section">
-                        <h3>镜像统计</h3>
-                        <div id="docker-info-images" class="docker-info-grid">
-                            <div class="info-item">
-                                <label>总镜像数</label>
-                                <span id="docker-images-total">-</span>
-                            </div>
-                            <div class="info-item">
-                                <label>Docker 版本</label>
-                                <span id="docker-version">-</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Compose Tab - Docker Compose管理 -->
-            <div id="compose-tab" class="tab-content">
-                <div class="compose-container">
-                    <div class="compose-editor-section">
-                        <h2>📝 Docker Compose 编辑器</h2>
-                        <div class="compose-editor-controls">
-                            <input type="text" id="compose-file-path-input" class="search-input"
-                                placeholder="输入 compose 文件路径 (e.g., /path/to/docker-compose.yml)">
-                            <button id="load-compose-btn" class="btn btn-secondary">📂 加载文件</button>
-                            <button id="browse-compose-btn" class="btn btn-secondary" title="从文件树选择">🌲 浏览...</button>
-                            <button id="new-compose-btn" class="btn btn-secondary">📄 新建文件</button>
-                        </div>
-                        <div class="compose-editor-container">
-                            <textarea id="compose-editor-content" class="compose-editor-textarea"
-                                placeholder="在此编辑 docker-compose.yml 内容..."></textarea>
-                        </div>
-                        <div class="compose-editor-actions">
-                            <button id="save-compose-btn" class="btn btn-success">💾 保存文件</button>
-                            <button id="run-compose-pull-btn" class="btn btn-secondary">⬇️ 拉取 (pull)</button>
-                            <button id="run-compose-up-btn" class="btn btn-primary">▶️ 运行 (up)</button>
-                            <button id="run-compose-stop-btn" class="btn btn-warning">⏹️ 停止 (stop)</button>
-                            <button id="run-compose-down-btn" class="btn btn-danger">🗑️ 移除 (down)</button>
-                            <button id="validate-compose-btn" class="btn btn-secondary">✓ 验证</button>
-                        </div>
-                    </div>
-
-                    <div class="compose-status-section">
-                        <div class="compose-status-header">
-                            <h2>🔍 运行状态</h2>
-                            <div class="compose-status-controls">
-                                <button id="refresh-compose-status-btn" class="btn btn-secondary btn-refresh"
-                                    title="刷新状态"><span class="refresh-icon"><svg viewBox="0 0 24 24"
-                                            xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                            <path
-                                                d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-                                        </svg></span></button>
-                                <button id="show-compose-logs-btn" class="btn btn-secondary">📋 查看日志</button>
-                            </div>
-                        </div>
-                        <div class="compose-status-list">
-                            <div id="compose-status-container" class="compose-status-info">
-                                <p>加载中...</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="compose-history-section">
-                        <h2>📚 最近的 Compose 文件</h2>
-                        <div id="compose-history-list" class="compose-history-list">
-                            <p>暂无历史记录</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Compose 文件选择对话框 -->
-            <div id="compose-file-picker-dialog" class="compose-picker-dialog" style="display: none;">
-                <div class="compose-picker-container">
-                    <div class="compose-picker-header">
-                        <h3>选择 Docker Compose 文件</h3>
-                        <button type="button" id="compose-picker-close-btn" class="btn btn-secondary">✕</button>
-                    </div>
-                    <div id="picker-breadcrumb" class="picker-breadcrumb"></div>
-                    <div class="picker-toolbar">
-                        <button type="button" id="picker-home-btn" class="btn btn-secondary btn-sm">🏠 根</button>
-                        <button type="button" id="picker-back-btn" class="btn btn-secondary btn-sm">⬅️ 上级</button>
-                        <button type="button" id="picker-refresh-btn" class="btn btn-secondary btn-sm btn-refresh"
-                            title="刷新"><span class="refresh-icon"><svg viewBox="0 0 24 24"
-                                    xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                    <path
-                                        d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-                                </svg></span></button>
-                    </div>
-                    <div class="picker-list-container">
-                        <table class="picker-files-table">
-                            <thead>
-                                <tr>
-                                    <th class="picker-name-col">名称</th>
-                                    <th class="picker-type-col">类型</th>
-                                    <th class="picker-date-col">修改时间</th>
-                                    <th class="picker-action-col">操作</th>
-                                </tr>
-                            </thead>
-                            <tbody id="picker-files-list"></tbody>
-                        </table>
-                        <div id="picker-loading" class="picker-loading" style="display: none;">加载中...</div>
-                        <div id="picker-empty" class="picker-empty" style="display: none;">暂无文件</div>
-                    </div>
-                    <div class="compose-picker-footer">
-                        <button type="button" id="compose-picker-cancel-btn" class="btn btn-secondary">取消</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Files Tab -->
-            <div id="files-tab" class="tab-content">
-                <div class="files-container">
-
-
-                    <div class="files-toolbar">
-                        <div class="files-header">
-                            <h2>📁 文件管理器</h2>
-                        </div>
-                        <div id="files-breadcrumb" class="files-breadcrumb">
-                            <div id="breadcrumb-items" class="breadcrumb-items">
-                                <button class="breadcrumb-item breadcrumb-home"
-                                    onclick="app.navigateToBreadcrumb('')">/</button>
-                            </div>
-                            <div id="breadcrumb-blank" class="breadcrumb-blank"></div>
-                            <input type="text" id="breadcrumb-input" class="breadcrumb-input" style="display:none;"
-                                placeholder="输入路径后回车跳转...">
-                            <button type="button" id="breadcrumb-refresh-btn" class="breadcrumb-refresh-btn btn-refresh"
-                                title="刷新当前目录"><span class="refresh-icon"><svg viewBox="0 0 24 24"
-                                        xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                        <path
-                                            d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-                                    </svg></span></button>
-                        </div>
-                        <div class="files-controls">
-
-                            <button id="home-btn" class="btn-icon" title="主目录">🏠</button>
-                            <button id="back-btn" class="btn-icon" title="返回上级">⬅️</button>
-                            <button id="refresh-files-btn" class="btn-icon btn-refresh" title="刷新"><span
-                                    class="refresh-icon"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"
-                                        aria-hidden="true">
-                                        <path
-                                            d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-                                    </svg></span></button>
-                            <button id="open-terminal-here-btn" class="btn-icon" title="在当前目录运行控制台">
-                                <span class="terminal-icon">
-                                    <svg viewBox="0 0 24 24" width="20" height="20" xmlns="http://www.w3.org/2000/svg"
-                                        aria-hidden="true">
-                                        <rect x="3" y="4" width="18" height="16" rx="2" fill="currentColor" />
-                                        <polyline points="7 8 11 12 7 16" stroke="#fff" stroke-width="2" fill="none"
-                                            stroke-linecap="round" stroke-linejoin="round" />
-                                        <line x1="13" y1="16" x2="17" y2="16" stroke="#fff" stroke-width="2"
-                                            stroke-linecap="round" />
-                                    </svg>
-                                </span>
-                            </button>
-                            <div class="create-dropdown-wrapper">
-                                <button type="button" id="create-folder-btn" class="btn-icon"
-                                    title="新建文件、文件夹">➕</button>
-                                <div id="create-dropdown" class="create-dropdown" style="display:none;">
-                                    <div class="create-dropdown-item" data-action="file">📄 新建文件</div>
-                                    <div class="create-dropdown-item" data-action="folder">📁 新建文件夹</div>
-                                </div>
-                            </div>
-                            <button type="button" id="upload-btn" class="btn-icon" title="上传文件">📤</button>
-                            <span class="files-controls-separator"></span>
-                            <button id="bookmark-add-btn" class="btn-icon" title="收藏当前路径">⭐</button>
-                            <div class="bookmark-dropdown-wrapper">
-                                <button id="bookmark-list-btn" class="btn-icon" title="收藏夹">📑</button>
-                                <div id="bookmark-dropdown" class="bookmark-dropdown" style="display:none;"></div>
-                            </div>
-                            <button class="btn-icon"
-                                style="margin-left:12px;display:inline-flex;align-items:center;gap:4px;" title="多选模式">
-                                <label style="display:inline-flex;align-items:center;gap:4px;">
-                                    <input id="multi-select-toolbar" type="checkbox" tabindex="-1">
-                                </label>
-                            </button>
-                            <div id="multi-action-btns" class="multi-action-btns"
-                                style="display:none;margin-left:8px;gap:4px;">
-                                <button id="multi-delete-btn" class="btn-icon danger" title="批量删除">🗑️ 删除</button>
-                                <button id="multi-copy-btn" class="btn-icon" title="批量复制">📋 复制</button>
-                                <button id="multi-move-btn" class="btn-icon" title="批量移动">✂️ 移动</button>
-                                <button id="multi-cancel-btn" class="btn-icon" title="取消多选">❌ 取消</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="files-table-container">
-                        <table class="files-table">
-                            <thead>
-                                <tr>
-                                    <th class="file-name-column sortable" data-sort="name">名称 <span
-                                            class="sort-arrow"></span></th>
-                                    <th class="file-type-column sortable" data-sort="type">类型 <span
-                                            class="sort-arrow"></span></th>
-                                    <th class="file-size-column sortable" data-sort="size">大小 <span
-                                            class="sort-arrow"></span></th>
-                                    <th class="file-date-column sortable" data-sort="date">修改时间 <span
-                                            class="sort-arrow"></span></th>
-                                    <th class="file-actions-column">操作</th>
-                                </tr>
-                            </thead>
-                            <tbody id="files-list"></tbody>
-                        </table>
-                    </div>
-
-                </div>
-            </div>
-
-            <!-- 上传文件面板 -->
-            <div id="upload-panel" class="upload-panel" style="display: none;">
-                <div class="upload-panel-container">
-                    <div class="upload-panel-header">
-                        <h3>📤 上传文件</h3>
-                        <button type="button" id="upload-panel-close" class="btn btn-secondary btn-sm">✕</button>
-                    </div>
-                    <div class="upload-panel-dropzone" id="upload-dropzone">
-                        <div class="upload-panel-dropzone-content">
-                            <p>将文件或文件夹拖放到此处</p>
-                            <p class="upload-panel-hint">或点击下方按钮选择</p>
-                            <div class="upload-panel-buttons">
-                                <label for="upload-file-input" class="btn btn-secondary btn-sm">📄 选择文件</label>
-                                <label for="upload-dir-input" class="btn btn-secondary btn-sm">📁 选择文件夹</label>
-                                <input type="file" id="upload-file-input" multiple style="display: none;">
-                                <input type="file" id="upload-dir-input" webkitdirectory multiple
-                                    style="display: none;">
-                            </div>
-                        </div>
-                    </div>
-                    <div class="upload-panel-list-container" id="upload-list-container" style="display: none;">
-                        <div class="upload-panel-list-header">
-                            <span>已选择 <span id="upload-file-count">0</span> 项</span>
-                            <button type="button" id="upload-clear-btn" class="btn btn-secondary btn-sm">清空</button>
-                        </div>
-                        <ul class="upload-panel-list" id="upload-file-list"></ul>
-                    </div>
-                    <div class="upload-panel-footer">
-                        <button type="button" id="upload-start-btn" class="btn btn-primary" disabled>开始上传</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- File Editor Modal -->
-            <div id="file-editor" class="file-editor" style="display: none;">
-                <div class="file-editor-container">
-                    <div class="editor-header">
-                        <h3 id="editor-filename">编辑文件</h3>
-                        <div class="editor-buttons">
-                            <div id="editor-mode-toggle" class="editor-mode-toggle" style="display: none;">
-                                <button type="button" class="btn btn-small btn-secondary editor-mode-btn active"
-                                    data-mode="text">文本</button>
-                                <button type="button" class="btn btn-small btn-secondary editor-mode-btn"
-                                    data-mode="hex">十六进制</button>
-                            </div>
-                            <button id="editor-save-btn" class="btn btn-success">💾 保存</button>
-                            <button id="editor-close-btn" class="btn btn-secondary" title="关闭">×</button>
-                        </div>
-                    </div>
-                    <textarea id="file-content-editor" class="file-editor-textarea" placeholder="文件内容..."></textarea>
-                    <div id="file-hex-editor" class="file-hex-editor" style="display: none;">
-                        <div class="hex-editor-header">
-                            <div class="hex-editor-header-offset">Offset</div>
-                            <div class="hex-editor-header-hex">HEX</div>
-                            <div class="hex-editor-header-ascii">ASCII</div>
-                        </div>
-                        <div class="hex-editor-panels">
-                            <div class="hex-editor-col hex-editor-col-offset">
-                                <pre id="file-hex-offset" class="hex-editor-offset" aria-label="行偏移"></pre>
-                            </div>
-                            <div class="hex-editor-col hex-editor-col-hex">
-                                <textarea id="file-hex-content" class="hex-editor-hex"
-                                    placeholder="仅允许 0-9、a-f、A-F 与空格/换行" spellcheck="false" aria-label="十六进制"
-                                    title="仅允许十六进制字符(0-9,a-f,A-F)和空格、换行"></textarea>
-                            </div>
-                            <div class="hex-editor-col hex-editor-col-ascii">
-                                <pre id="file-hex-ascii" class="hex-editor-ascii" aria-label="ASCII"></pre>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- File Preview Modal -->
-            <div id="file-preview" class="file-preview" style="display: none;">
-                <div class="preview-container">
-                    <div class="preview-header">
-                        <h3 id="preview-filename">预览</h3>
-                        <button id="preview-close-btn" class="btn btn-secondary">✕</button>
-                    </div>
-                    <div class="preview-content">
-                        <!-- Image preview -->
-                        <div id="image-preview" class="preview-item" style="display: none;">
-                            <button type="button" id="preview-prev-btn" class="preview-nav-btn preview-prev-btn"
-                                title="上一张">
-                                <svg class="preview-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="15 18 9 12 15 6" />
-                                </svg>
-                            </button>
-                            <img id="preview-image" src="" alt="Image preview" class="preview-image">
-                            <button type="button" id="preview-next-btn" class="preview-nav-btn preview-next-btn"
-                                title="下一张">
-                                <svg class="preview-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="9 18 15 12 9 6" />
-                                </svg>
-                            </button>
-                        </div>
-                        <!-- Video preview -->
-                        <div id="video-preview" class="preview-item preview-item-video" style="display: none;">
-                            <button type="button" id="preview-video-prev-btn" class="preview-nav-btn preview-prev-btn"
-                                title="上一个">
-                                <svg class="preview-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="15 18 9 12 15 6" />
-                                </svg>
-                            </button>
-                            <video id="preview-video" class="preview-video" controls preload="auto">
-                                您的浏览器不支持视频播放
-                            </video>
-                            <button type="button" id="preview-video-next-btn" class="preview-nav-btn preview-next-btn"
-                                title="下一个">
-                                <svg class="preview-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="9 18 15 12 9 6" />
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="preview-footer">
-                        <span id="preview-counter" class="preview-counter" style="display: none;"></span>
-                        <div class="preview-footer-actions">
-                            <button id="preview-download-btn" class="btn btn-success">💾 下载</button>
-                            <button id="preview-close-footer-btn" class="btn btn-secondary">关闭</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-
-        </main>
+<!-- 通用文件选择对话框 -->
+<div id="file-picker-dialog" class="compose-picker-dialog" style="display: none;">
+    <div class="compose-picker-container">
+        <div class="compose-picker-header">
+            <h3 id="picker-dialog-title">选择文件</h3>
+            <button type="button" id="picker-close-btn" class="btn btn-secondary">✕</button>
+        </div>
+        <div id="picker-breadcrumb" class="picker-breadcrumb"></div>
+        <div class="picker-toolbar">
+            <button type="button" id="picker-home-btn" class="btn btn-secondary btn-sm">🏠 根</button>
+            <button type="button" id="picker-back-btn" class="btn btn-secondary btn-sm">⬅️ 上级</button>
+            <button type="button" id="picker-refresh-btn" class="btn btn-secondary btn-sm btn-refresh"
+                    title="刷新">
+                <span class="refresh-icon"><svg aria-hidden="true"><use href="#icon-refresh" /></svg></span>
+            </button>
+        </div>
+        <div class="picker-list-container">
+            <table class="picker-files-table">
+                <thead>
+                    <tr>
+                        <th class="picker-name-col">名称</th>
+                        <th class="picker-type-col">类型</th>
+                        <th class="picker-date-col">修改时间</th>
+                        <th class="picker-action-col">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="picker-files-list"></tbody>
+            </table>
+            <div id="picker-loading" class="picker-loading" style="display: none;">加载中...</div>
+            <div id="picker-empty" class="picker-empty" style="display: none;">暂无文件</div>
+        </div>
+        <div class="compose-picker-footer">
+            <!-- 用于文件夹选择模式的确认按钮 -->
+            <button type="button" id="picker-confirm-btn" class="btn btn-primary">确定选择</button>
+            <button type="button" id="picker-cancel-btn" class="btn btn-secondary" style="margin-left:10px;">取消</button>
+        </div>
     </div>
+</div>
 
-    <!-- Toast 容器 -->
-    <div id="toast-container" class="toast-container"></div>
-
-    <!-- Custom Dialog -->
-    <div id="custom-dialog" class="custom-dialog" style="display: none;">
-        <div class="dialog-container">
-            <div class="dialog-header">
-                <h3 id="dialog-title">提示</h3>
-                <button class="dialog-close" id="dialog-close-btn">&times;</button>
-            </div>
-            <div class="dialog-body">
-                <p id="dialog-message"></p>
-                <div id="dialog-input-wrap" class="dialog-input-wrap" style="display: none;">
-                    <input type="text" id="dialog-input" class="dialog-input" placeholder="" autocomplete="off" />
+<!-- 上传文件面板 -->
+<div id="upload-panel" class="upload-panel" style="display: none;">
+    <div class="upload-panel-container">
+        <div class="upload-panel-header">
+            <h3>📤 上传文件</h3>
+            <button type="button" id="upload-panel-close" class="btn btn-secondary btn-sm">✕</button>
+        </div>
+        <div class="upload-panel-dropzone" id="upload-dropzone">
+            <div class="upload-panel-dropzone-content">
+                <p>将文件或文件夹拖放到此处</p>
+                <p class="upload-panel-hint">或点击下方按钮选择</p>
+                <div class="upload-panel-buttons">
+                    <label for="upload-file-input" class="btn btn-secondary btn-sm">📄 选择文件</label>
+                    <label for="upload-dir-input" class="btn btn-secondary btn-sm">📁 选择文件夹</label>
+                    <input type="file" id="upload-file-input" multiple style="display: none;">
+                    <input type="file" id="upload-dir-input" webkitdirectory multiple
+                           style="display: none;">
                 </div>
-                <pre id="dialog-logs" class="dialog-logs" style="display: none;"></pre>
             </div>
-            <div class="dialog-footer">
-                <button id="dialog-ok-btn" class="btn btn-primary">确定</button>
-                <button id="dialog-cancel-btn" class="btn btn-secondary" style="display: none;">取消</button>
+        </div>
+        <div class="upload-panel-list-container" id="upload-list-container" style="display: none;">
+            <div class="upload-panel-list-header">
+                <span>已选择 <span id="upload-file-count">0</span> 项</span>
+                <button type="button" id="upload-clear-btn" class="btn btn-secondary btn-sm">清空</button>
+            </div>
+            <ul class="upload-panel-list" id="upload-file-list"></ul>
+        </div>
+        <div class="upload-panel-footer">
+            <button type="button" id="upload-start-btn" class="btn btn-primary" disabled>开始上传</button>
+        </div>
+    </div>
+</div>
+
+<!-- File Editor Modal -->
+<div id="file-editor" class="file-editor" style="display: none;">
+    <div class="file-editor-container">
+        <div class="editor-header">
+            <h3 id="editor-filename">编辑文件</h3>
+            <div class="editor-buttons">
+                <div id="editor-mode-toggle" class="editor-mode-toggle" style="display: none;">
+                    <button type="button" class="btn btn-small btn-secondary editor-mode-btn active"
+                            data-mode="text">
+                        文本
+                    </button>
+                    <button type="button" class="btn btn-small btn-secondary editor-mode-btn"
+                            data-mode="hex">
+                        十六进制
+                    </button>
+                </div>
+                <button id="editor-save-btn" class="btn btn-success">💾 保存</button>
+                <button id="editor-close-btn" class="btn btn-secondary" title="关闭">×</button>
+            </div>
+        </div>
+        <textarea id="file-content-editor" class="file-editor-textarea" placeholder="文件内容..."></textarea>
+        <div id="file-hex-editor" class="file-hex-editor" style="display: none;">
+            <div class="hex-editor-header">
+                <div class="hex-editor-header-offset">Offset</div>
+                <div class="hex-editor-header-hex">HEX</div>
+                <div class="hex-editor-header-ascii">ASCII</div>
+            </div>
+            <div class="hex-editor-panels">
+                <div class="hex-editor-col hex-editor-col-offset">
+                    <pre id="file-hex-offset" class="hex-editor-offset" aria-label="行偏移"></pre>
+                </div>
+                <div class="hex-editor-col hex-editor-col-hex">
+                    <textarea id="file-hex-content" class="hex-editor-hex"
+                              placeholder="仅允许 0-9、a-f、A-F 与空格/换行" spellcheck="false" aria-label="十六进制"
+                              title="仅允许十六进制字符(0-9,a-f,A-F)和空格、换行"></textarea>
+                </div>
+                <div class="hex-editor-col hex-editor-col-ascii">
+                    <pre id="file-hex-ascii" class="hex-editor-ascii" aria-label="ASCII"></pre>
+                </div>
             </div>
         </div>
     </div>
+</div>
 
-    <!-- Compose 执行实时日志弹窗 -->
-    <div id="compose-log-dialog" class="custom-dialog compose-log-dialog" style="display: none;">
-        <div class="dialog-container dialog-wide">
-            <div class="dialog-header">
-                <h3 id="compose-log-title">Compose 执行日志</h3>
-                <button class="dialog-close" id="compose-log-close-btn">&times;</button>
+<!-- File Preview Modal -->
+<div id="file-preview" class="file-preview" style="display: none;">
+    <div class="preview-container">
+        <div class="preview-header">
+            <h3 id="preview-filename">预览</h3>
+            <button id="preview-close-btn" class="btn btn-secondary">✕</button>
+        </div>
+        <div class="preview-content">
+            <!-- Image preview -->
+            <div id="image-preview" class="preview-item" style="display: none;">
+                <button type="button" id="preview-prev-btn" class="preview-nav-btn preview-prev-btn"
+                        title="上一张">
+                    <svg class="preview-nav-icon" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-left" /></svg>
+                </button>
+                <img id="preview-image" src="" alt="Image preview" class="preview-image">
+                <button type="button" id="preview-next-btn" class="preview-nav-btn preview-next-btn"
+                        title="下一张">
+                    <svg class="preview-nav-icon" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-right" /></svg>
+                </button>
             </div>
-            <div class="dialog-body">
-                <pre id="compose-log-content" class="compose-log-content"></pre>
+            <!-- Video preview -->
+            <div id="video-preview" class="preview-item preview-item-video" style="display: none;">
+                <button type="button" id="preview-video-prev-btn" class="preview-nav-btn preview-prev-btn"
+                        title="上一个">
+                    <svg class="preview-nav-icon" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-left" /></svg>
+                </button>
+                <video id="preview-video" class="preview-video" controls preload="auto">
+                    您的浏览器不支持视频播放
+                </video>
+                <button type="button" id="preview-video-next-btn" class="preview-nav-btn preview-next-btn"
+                        title="下一个">
+                    <svg class="preview-nav-icon" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-right" /></svg>
+                </button>
             </div>
-            <div class="dialog-footer">
-                <button id="compose-log-close-btn-footer" class="btn btn-primary" disabled>关闭</button>
+        </div>
+        <div class="preview-footer">
+            <span id="preview-counter" class="preview-counter" style="display: none;"></span>
+            <div class="preview-footer-actions">
+                <button id="preview-download-btn" class="btn btn-success">💾 下载</button>
+                <button id="preview-close-footer-btn" class="btn btn-secondary">关闭</button>
             </div>
         </div>
     </div>
+</div>
+
+
+<!-- Toast 容器 -->
+<div id="toast-container" class="toast-container"></div>
+
+<!-- Custom Dialog -->
+<div id="custom-dialog" class="custom-dialog" style="display: none;">
+    <div class="dialog-container">
+        <div class="dialog-header">
+            <h3 id="dialog-title">提示</h3>
+            <button class="dialog-close" id="dialog-close-btn">&times;</button>
+        </div>
+        <div class="dialog-body">
+            <p id="dialog-message"></p>
+            <div id="dialog-input-wrap" class="dialog-input-wrap" style="display: none;">
+                <input type="text" id="dialog-input" class="dialog-input" placeholder="" autocomplete="off" />
+            </div>
+            <pre id="dialog-logs" class="dialog-logs" style="display: none;"></pre>
+        </div>
+        <div class="dialog-footer">
+            <button id="dialog-ok-btn" class="btn btn-primary">确定</button>
+            <button id="dialog-cancel-btn" class="btn btn-secondary" style="display: none;">取消</button>
+        </div>
+    </div>
+</div>
+
+<!-- Compose 执行实时日志弹窗 -->
+<div id="compose-log-dialog" class="custom-dialog compose-log-dialog" style="display: none;">
+    <div class="dialog-container dialog-wide">
+        <div class="dialog-header">
+            <h3 id="compose-log-title">Compose 执行日志</h3>
+            <button class="dialog-close" id="compose-log-close-btn">&times;</button>
+        </div>
+        <div class="dialog-body">
+            <pre id="compose-log-content" class="compose-log-content"></pre>
+        </div>
+        <div class="dialog-footer">
+            <button id="compose-log-close-btn-footer" class="btn btn-primary" disabled>关闭</button>
+        </div>
+    </div>
+</div>
 
 

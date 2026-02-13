@@ -53,12 +53,7 @@ class RemoteControl {
             maxrate: '5M',
             crf: '18'
         };
-        // Theme
-        this.theme = 'dark';
-        this.themeIcons = {
-            dark: '☀️',
-            light: '🌙'
-        };
+
         // 鼠标拖动状态
         this.isDragging = false;
         this.dragButton = 0;
@@ -95,8 +90,9 @@ class RemoteControl {
     init() {
         this.bindEvents();
         this.checkAuth();
-        this.initTheme();
+
         this.initDialog();
+        this.initFilePicker();
     }
 
     initDialog() {
@@ -111,35 +107,7 @@ class RemoteControl {
         // 确定和取消按钮会在 showDialog 中动态设置
     }
 
-    initTheme() {
-        // Check for saved theme
-        const savedTheme = localStorage.getItem('theme');
-        if (savedTheme) {
-            this.theme = savedTheme;
-        } else {
-            // Check system preference
-            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-                this.theme = 'light';
-            }
-        }
 
-        this.applyTheme();
-    }
-
-    toggleTheme() {
-        this.theme = this.theme === 'dark' ? 'light' : 'dark';
-        localStorage.setItem('theme', this.theme);
-        this.applyTheme();
-    }
-
-    applyTheme() {
-        document.documentElement.setAttribute('data-theme', this.theme);
-        const toggleBtn = document.getElementById('theme-toggle');
-        if (toggleBtn) {
-            toggleBtn.textContent = this.themeIcons[this.theme];
-            toggleBtn.title = this.theme === 'dark' ? '切换到浅色模式' : '切换到深色模式';
-        }
-    }
 
     showDialog(message, title = '提示', options = {}) {
         const dialog = document.getElementById('custom-dialog');
@@ -250,6 +218,7 @@ class RemoteControl {
         if (multiBtns) {
             multiBtns.style.display = this.multiSelectMode ? 'inline-flex' : 'none';
             document.getElementById('multi-delete-btn').onclick = () => this.handleMultiDelete();
+            document.getElementById('multi-compress-btn').onclick = () => this.handleCompress(Array.from(this.selectedFiles));
             document.getElementById('multi-copy-btn').onclick = () => this.handleMultiCopy();
             document.getElementById('multi-move-btn').onclick = () => this.handleMultiMove();
             document.getElementById('multi-cancel-btn').onclick = () => this.toggleMultiSelectMode(false);
@@ -576,8 +545,7 @@ class RemoteControl {
             }
         });
 
-        // Theme Toggle
-        document.getElementById('theme-toggle')?.addEventListener('click', () => this.toggleTheme());
+
 
         // Tabs
         document.querySelectorAll('.tab').forEach(tab => {
@@ -3605,27 +3573,106 @@ volumes:
         this.loadComposeFile();
     }
 
-    // ============ Compose 文件选择对话框（树形/列表） ============
+    // ============ 通用文件选择对话框（树形/列表） ============
 
-    /** 打开 Compose 文件选择对话框，复用文件列表 API */
-    openComposeFilePicker() {
-        const dialog = document.getElementById('compose-file-picker-dialog');
+    initFilePicker() {
+        // 绑定关闭按钮
+        const closeBtn = document.getElementById('picker-close-btn');
+        if (closeBtn) closeBtn.addEventListener('click', () => this.closeFilePicker());
+
+        const cancelBtn = document.getElementById('picker-cancel-btn');
+        if (cancelBtn) cancelBtn.addEventListener('click', () => this.closeFilePicker());
+
+        // 绑定刷新按钮
+        const refreshBtn = document.getElementById('picker-refresh-btn');
+        if (refreshBtn) refreshBtn.addEventListener('click', () => this.loadPickerFiles(this.pickerCurrentPath));
+
+        // 绑定导航按钮
+        const homeBtn = document.getElementById('picker-home-btn');
+        if (homeBtn) homeBtn.addEventListener('click', () => this.pickerNavigateHome());
+
+        const backBtn = document.getElementById('picker-back-btn');
+        if (backBtn) backBtn.addEventListener('click', () => this.pickerNavigateBack());
+
+        // 绑定确认按钮 (文件夹模式)
+        const confirmBtn = document.getElementById('picker-confirm-btn');
+        if (confirmBtn) {
+            confirmBtn.addEventListener('click', () => {
+                if (this.pickerOptions && this.pickerOptions.onSelect && this.pickerOptions.selectMode === 'folder') {
+                    this.pickerOptions.onSelect(this.pickerCurrentPath);
+                    this.closeFilePicker();
+                }
+            });
+        }
+    }
+
+    /**
+     * 打开通用文件选择器
+     * @param options { title, initialPath, selectMode: 'file'|'folder', onSelect: (path) => void }
+     */
+    openFilePicker(options = {}) {
+        const dialog = document.getElementById('file-picker-dialog');
         if (!dialog) return;
-        const currentComposePath = document.getElementById('compose-file-path-input')?.value?.trim();
-        if (currentComposePath) {
-            const normalized = currentComposePath.replace(/\\/g, '/');
-            const lastSlash = normalized.lastIndexOf('/');
-            this.pickerCurrentPath = lastSlash > 0 ? normalized.substring(0, lastSlash) : null;
+
+        this.pickerOptions = {
+            title: options.title || '选择文件',
+            initialPath: options.initialPath || null,
+            selectMode: options.selectMode || 'file', // 'file' or 'folder'
+            onSelect: options.onSelect || null
+        };
+
+        // 更新标题
+        const titleEl = document.getElementById('picker-dialog-title');
+        if (titleEl) titleEl.textContent = this.pickerOptions.title;
+
+        // 设置初始路径
+        if (this.pickerOptions.initialPath) {
+            const normalized = this.pickerOptions.initialPath.replace(/\\/g, '/');
+            // 如果是文件路径，取父目录 (除非是 folder 模式且初始值就是目录)
+            // 简单起见，如果 selectMode=file，则 initialPath 视为文件，取父目录
+            // 如果 selectMode=folder，initialPath 视为目录
+            if (this.pickerOptions.selectMode === 'file' && !normalized.endsWith('/')) {
+                const lastSlash = normalized.lastIndexOf('/');
+                this.pickerCurrentPath = lastSlash > 0 ? normalized.substring(0, lastSlash) : null;
+            } else {
+                this.pickerCurrentPath = normalized;
+            }
         } else {
             this.pickerCurrentPath = null;
         }
+
+        // 显示/隐藏 文件夹选择确认区
+        const footerActions = document.getElementById('picker-footer-actions');
+        if (footerActions) {
+            footerActions.style.display = this.pickerOptions.selectMode === 'folder' ? 'flex' : 'none';
+        }
+
         dialog.style.display = 'flex';
         this.loadPickerFiles(this.pickerCurrentPath);
     }
 
-    closeComposeFilePicker() {
-        const dialog = document.getElementById('compose-file-picker-dialog');
+    closeFilePicker() {
+        const dialog = document.getElementById('file-picker-dialog');
         if (dialog) dialog.style.display = 'none';
+        this.pickerOptions = null;
+    }
+
+    /** 打开 Compose 文件选择对话框，复用文件列表 API (兼容旧接口) */
+    openComposeFilePicker() {
+        const currentComposePath = document.getElementById('compose-file-path-input')?.value?.trim();
+        this.openFilePicker({
+            title: '选择 Docker Compose 文件',
+            initialPath: currentComposePath,
+            selectMode: 'file',
+            onSelect: (path) => {
+                document.getElementById('compose-file-path-input').value = path;
+                this.loadComposeFile();
+            }
+        });
+    }
+
+    closeComposeFilePicker() {
+        this.closeFilePicker();
     }
 
     async loadPickerFiles(path = null) {
@@ -3638,6 +3685,8 @@ volumes:
         emptyEl.style.display = 'none';
         loadingEl.style.display = 'block';
         this.setRefreshState('picker-refresh-btn', true);
+
+
 
         try {
             const url = path ? `/api/files/list?path=${encodeURIComponent(path)}` : '/api/files/list';
@@ -3675,19 +3724,26 @@ volumes:
 
         const rows = files.map(file => {
             const isDir = file.isDirectory;
-            const isCompose = !isDir && this.isDockerComposeFile(file.name);
             const icon = isDir ? '📁' : this.getFileIcon(file.name);
-            const typeText = isDir ? '文件夹' : (isCompose ? 'Compose' : '文件');
             const dateStr = file.modified ? new Date(file.modified).toLocaleString() : '-';
+
+            const isCompose = !isDir && this.isDockerComposeFile(file.name);
+            let typeText = isDir ? '文件夹' : '文件';
+            if (isCompose) typeText = 'Compose';
+
+            let actionBtn = '';
+            if (this.pickerOptions && this.pickerOptions.selectMode === 'file' && !isDir) {
+                actionBtn = `<button type="button" class="btn btn-small btn-primary picker-select-btn">选择</button>`;
+            } else if (this.pickerOptions && this.pickerOptions.selectMode === 'folder' && isDir) {
+                actionBtn = `<button type="button" class="btn btn-small btn-secondary picker-enter-btn">进入</button>`;
+            }
 
             return `
                 <tr class="picker-row ${isDir ? 'picker-row-folder' : ''}" data-path="${this.escapeHtml(file.path)}" data-name="${this.escapeHtml(file.name)}" data-is-dir="${isDir}">
                     <td class="picker-name-col">${icon} ${this.escapeHtml(file.name)}</td>
                     <td class="picker-type-col">${typeText}</td>
                     <td class="picker-date-col">${dateStr}</td>
-                    <td class="picker-action-col">
-                        ${isCompose ? '<button type="button" class="btn btn-small btn-primary picker-select-btn">选择</button>' : ''}
-                    </td>
+                    <td class="picker-action-col">${actionBtn}</td>
                 </tr>
             `;
         }).join('');
@@ -3700,7 +3756,7 @@ volumes:
 
             if (isDir) {
                 row.addEventListener('click', (e) => {
-                    if (!e.target.closest('.picker-select-btn')) {
+                    if (!e.target.closest('.picker-select-btn') && !e.target.closest('.picker-enter-btn')) {
                         this.loadPickerFiles(path);
                     }
                 });
@@ -3710,13 +3766,24 @@ volumes:
             if (selectBtn) {
                 selectBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    document.getElementById('compose-file-path-input').value = path;
-                    this.closeComposeFilePicker();
-                    this.loadComposeFile();
+                    if (this.pickerOptions && this.pickerOptions.onSelect) {
+                        this.pickerOptions.onSelect(path);
+                        this.closeFilePicker();
+                    }
+                });
+            }
+
+            // 文件夹模式下的"进入"按钮其实和点击行一样，只是为了视觉明确
+            const enterBtn = row.querySelector('.picker-enter-btn');
+            if (enterBtn) {
+                enterBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.loadPickerFiles(path);
                 });
             }
         });
     }
+
 
     updatePickerBreadcrumb(path) {
         const container = document.getElementById('picker-breadcrumb');
@@ -4132,15 +4199,18 @@ volumes:
         }
 
         // 工具栏多选复选框（直接绑定html）
-        const multiBox = document.getElementById('multi-select-toolbar');
+        const multiBox = document.getElementById('multi-select-toggle-btn');
         if (multiBox) {
             // 避免重复绑定
             if (!multiBox._binded) {
-                multiBox.addEventListener('change', () => this.toggleMultiSelectMode(multiBox.checked));
+                multiBox.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    this.toggleMultiSelectMode(!this.multiSelectMode);
+                });
                 multiBox._binded = true;
             }
-            // 状态同步
-            multiBox.checked = this.multiSelectMode;
+            // 状态同步：通过 CSS class 切换图标
+            multiBox.classList.toggle('multi-toggle-active', this.multiSelectMode);
         }
         tbody.innerHTML = files.map(file => {
             let sizeCell = '';
@@ -4215,9 +4285,23 @@ volumes:
             .map(f => ({ path: f.path, name: f.name }));
 
         // 添加事件监听器
-        tbody.querySelectorAll('tr.folder-row').forEach(row => {
+        tbody.querySelectorAll('tr.file-row').forEach(row => {
             row.addEventListener('click', (e) => {
-                if (!e.target.closest('.file-actions')) {
+                if (e.target.closest('.file-actions')) return;
+                if (this.multiSelectMode) {
+                    // 多选模式：点击行切换选中状态
+                    if (e.target.classList.contains('multi-select-row')) return; // checkbox 自身处理
+                    const path = row.dataset.path;
+                    const checkbox = row.querySelector('.multi-select-row');
+                    if (this.selectedFiles.has(path)) {
+                        this.selectedFiles.delete(path);
+                        if (checkbox) checkbox.checked = false;
+                    } else {
+                        this.selectedFiles.add(path);
+                        if (checkbox) checkbox.checked = true;
+                    }
+                } else if (row.classList.contains('folder-row')) {
+                    // 非多选模式：文件夹才可点击导航
                     this.selectedFiles = new Set();
                     this.loadFiles(row.dataset.path);
                 }
@@ -4367,6 +4451,15 @@ volumes:
             'mp4', 'webm', 'ogg', 'ogv', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'm4v', '3gp'
         ];
         return videoExtensions.includes(ext);
+    }
+
+    isArchiveFile(filename) {
+        if (!filename) return false;
+        const ext = filename.split('.').pop().toLowerCase();
+        const archiveExtensions = [
+            'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'
+        ];
+        return archiveExtensions.includes(ext);
     }
 
     getMimeTypeByExtension(filename) {
@@ -5228,6 +5321,94 @@ volumes:
 
     // ============ Context Menu Methods ============
 
+    handleCompress(paths) {
+        if (!paths || paths.length === 0) return;
+
+        // Default zip name
+        let defaultName = 'archive.zip';
+        if (paths.length === 1) {
+            const name = paths[0].split(/[\\/]/).pop();
+            defaultName = name + '.zip';
+        }
+
+        this.openFilePicker({
+            title: '选择压缩包保存位置',
+            selectMode: 'folder',
+            initialPath: this.currentPath,
+            onSelect: async (destFolder) => {
+                const zipName = await this.showDialog('请输入压缩包名称:', '压缩文件', {
+                    type: 'prompt',
+                    defaultValue: defaultName
+                });
+
+                if (!zipName) return;
+
+                let destPath = destFolder;
+                // 确保路径分隔符处理正确
+                destPath = destPath.replace(/\\/g, '/');
+                if (!destPath.endsWith('/')) destPath += '/';
+                destPath += zipName;
+
+                try {
+                    const response = await fetch('/api/files/compress', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${this.token}`
+                        },
+                        body: JSON.stringify({
+                            items: paths,
+                            destZipPath: destPath
+                        })
+                    });
+
+                    const result = await response.json();
+                    if (response.ok && result.success) {
+                        this.showToast('压缩成功', 'success');
+                        this.loadFiles(this.currentPath);
+                    } else {
+                        this.showDialog(result.message || '压缩失败', '错误');
+                    }
+                } catch (err) {
+                    this.showDialog('请求失败: ' + err.message, '错误');
+                }
+            }
+        });
+    }
+
+    handleDecompress(archivePath) {
+        this.openFilePicker({
+            title: '选择解压路径',
+            selectMode: 'folder',
+            initialPath: this.currentPath,
+            onSelect: async (destPath) => {
+                try {
+                    const response = await fetch('/api/files/decompress', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${this.token}`
+                        },
+                        body: JSON.stringify({
+                            archivePath: archivePath,
+                            destPath: destPath
+                        })
+                    });
+
+                    const result = await response.json();
+                    if (response.ok && result.success) {
+                        this.showToast('解压成功', 'success');
+                        this.loadFiles(this.currentPath);
+                    } else {
+                        this.showDialog(result.message || '解压失败', '错误');
+                    }
+                } catch (err) {
+                    this.showDialog('请求失败: ' + err.message, '错误');
+                }
+            }
+        });
+    }
+
     showContextMenu(event, path, isDirectory, name, fileSize = 0, isDrive = false) {
         event.preventDefault();
         event.stopPropagation();
@@ -5257,6 +5438,11 @@ volumes:
                     <span>打开文件夹</span>
                 </div>
                 <div class="context-menu-separator"></div>
+                <div class="context-menu-item" data-action="compress">
+                    <span class="menu-icon">🗜️</span>
+                    <span>压缩${multiLabel}</span>
+                </div>
+                <div class="context-menu-separator"></div>
                 <div class="context-menu-item" data-action="copy">
                     <span class="menu-icon">📋</span>
                     <span>复制${multiLabel}</span>
@@ -5280,6 +5466,7 @@ volumes:
         } else {
             const canEdit = this.isTextFile(name);
             const isCompose = this.isDockerComposeFile(name);
+            const isArchive = this.isArchiveFile(name);
             const sizeBytes = typeof fileSize === 'number' ? fileSize : parseInt(fileSize, 10) || 0;
             const canForceEdit = sizeBytes > 0 && sizeBytes < 2 * 1024 * 1024;
             menuItems = `
@@ -5288,6 +5475,15 @@ volumes:
                     <span>Compose 管理</span>
                 </div>
                 <div class="context-menu-separator"></div>` : ''}
+                ${isArchive ? `<div class="context-menu-item" data-action="decompress">
+                    <span class="menu-icon">📦</span>
+                    <span>解压到...</span>
+                </div>` : ''}
+                <div class="context-menu-item" data-action="compress">
+                    <span class="menu-icon">🗜️</span>
+                    <span>压缩${multiLabel}</span>
+                </div>
+                <div class="context-menu-separator"></div>
                 ${canEdit ? `<div class="context-menu-item" data-action="edit">
                     <span class="menu-icon">📝</span>
                     <span>编辑</span>
@@ -5372,6 +5568,16 @@ volumes:
                         break;
                     case 'rename':
                         this.renameFile(menuPath, menuIsDirectory, menuName, menuIsDrive);
+                        break;
+                    case 'compress':
+                        if (multi) {
+                            this.handleCompress(Array.from(this.selectedFiles));
+                        } else {
+                            this.handleCompress([menuPath]);
+                        }
+                        break;
+                    case 'decompress':
+                        this.handleDecompress(menuPath);
                         break;
                 }
                 this.hideContextMenu();

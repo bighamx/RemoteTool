@@ -1728,25 +1728,73 @@
     width: auto;
     height: 40px;
     min-width: 40px;
-    padding: 0;
+    padding: 0 5px;
     border-radius: 8px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
     font-size: 18px;
     cursor: pointer;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     transition: var(--transition);
-    padding: 0 5px;
-    display: inline-block;
+}
+
+/* 多选开关 SVG 图标 */
+.multi-toggle-icon {
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.multi-toggle-icon svg {
+    width: 100%;
+    height: 100%;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    transition: var(--transition);
+}
+
+.multi-toggle-icon .toggle-check {
+    opacity: 0;
+    transform: scale(0);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    transform-origin: center;
+}
+
+.btn-icon.multi-toggle-active {
+    color: var(--accent-primary);
+    border-color: var(--accent-primary);
+    background: rgba(88, 166, 255, 0.1);
+}
+
+.btn-icon.multi-toggle-active .toggle-check {
+    opacity: 1;
+    transform: scale(1);
 }
 
 .btn-icon:hover {
     background: var(--border-color);
     color: var(--accent-primary);
     transform: translateY(-2px);
+}
+
+/* 终端 SVG 图标 */
+.terminal-icon {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.terminal-icon svg {
+    width: 100%;
+    height: 100%;
 }
 
 .file-upload-label {
@@ -1830,7 +1878,7 @@ button.file-toolbar-disabled {
     border: none;
     color: var(--accent-primary);
     cursor: pointer;
-    padding: 4px 4px;
+    padding: 4px 0px;
     border-radius: 4px;
     transition: var(--transition);
     font-size: 14px;
@@ -1844,7 +1892,10 @@ button.file-toolbar-disabled {
 
 .breadcrumb-separator {
     color: var(--text-secondary);
-    margin: 0px;
+    margin: 0 2px;
+    display: inline-flex;
+    align-items: center;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
 }
 
 .breadcrumb-refresh-btn {
@@ -2859,7 +2910,7 @@ button.file-toolbar-disabled {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 20px;
+    padding: 2px 20px;
     background: var(--bg-tertiary);
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
@@ -2899,9 +2950,10 @@ button.file-toolbar-disabled {
 .picker-toolbar {
     display: flex;
     gap: 8px;
-    padding: 10px 20px;
+    padding: 10px 10px;
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
+    padding-top: 0;
 }
 
 .picker-list-container {
@@ -3701,4 +3753,46 @@ input.multi-select-row {
     width: 24px;
     height: 24px;
     vertical-align: top;
+}
+
+/* File Picker Breadcrumb Alignment */
+.picker-breadcrumb {
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    height: 42px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 10px;
+    overflow-x: auto;
+    white-space: nowrap;
+    margin: 10px;
+}
+
+.picker-breadcrumb .breadcrumb-item {
+    background: none;
+    border: none;
+    color: var(--accent-primary);
+    cursor: pointer;
+    padding: 4px 0px;
+    border-radius: 4px;
+    transition: var(--transition);
+    font-size: 14px;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+}
+
+.picker-breadcrumb .breadcrumb-item:hover {
+    background: var(--bg-secondary);
+}
+
+.picker-breadcrumb .breadcrumb-separator {
+    color: var(--text-secondary);
+    margin: 0 2px;
+    display: inline-flex;
+    align-items: center;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    /* Ensure consistent rendering */
 }

@@ -405,5 +405,49 @@ public class FilesController : ControllerBase
             return ApiError($"Upload file failed: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// 压缩文件/文件夹
+    /// </summary>
+    [HttpPost("compress")]
+    public IActionResult Compress([FromBody] CompressRequest request)
+    {
+        try
+        {
+            if (request?.Items == null || request.Items.Count == 0 || string.IsNullOrEmpty(request.DestZipPath))
+                return ApiResult(null, "参数不完整", false);
+
+            var result = _fileService.Compress(request.Items, request.DestZipPath);
+            if (result)
+                return ApiResult(null, "压缩成功");
+            return ApiResult(null, "压缩失败", false);
+        }
+        catch (Exception ex)
+        {
+            return ApiError($"Compress failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 解压文件
+    /// </summary>
+    [HttpPost("decompress")]
+    public IActionResult Decompress([FromBody] DecompressRequest request)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(request.ArchivePath) || string.IsNullOrEmpty(request.DestPath))
+                return ApiResult(null, "参数不完整", false);
+
+            var result = _fileService.Decompress(request.ArchivePath, request.DestPath);
+            if (result)
+                return ApiResult(null, "解压成功");
+            return ApiResult(null, "解压失败", false);
+        }
+        catch (Exception ex)
+        {
+            return ApiError($"Decompress failed: {ex.Message}");
+        }
+    }
 }
 
