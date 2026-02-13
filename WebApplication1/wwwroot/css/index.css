@@ -44,6 +44,8 @@
     width: 100%;
     max-width: 450px;
     /* Equivalent to col-md-5 roughly */
+    text-decoration: none;
+    color: inherit;
 }
 
 /* Card Styling */
