@@ -63,8 +63,6 @@ public class FileService
                         Path = dir.FullName,
                         Size = 0,
                         Modified = dir.LastWriteTime,
-                        CanRead = true,
-                        CanWrite = (dir.Attributes & FileAttributes.ReadOnly) == 0
                     });
                 }
                 catch
@@ -84,9 +82,7 @@ public class FileService
                         IsDirectory = false,
                         Path = file.FullName,
                         Size = file.Length,
-                        Modified = file.LastWriteTime,
-                        CanRead = true,
-                        CanWrite = (file.Attributes & FileAttributes.ReadOnly) == 0
+                        Modified = file.LastWriteTime                      
                     });
                 }
                 catch
@@ -161,8 +157,6 @@ public class FileService
                             Path = drive.RootDirectory.FullName,
                             Size = 0,
                             Modified = DateTime.Now,
-                            CanRead = true,
-                            CanWrite = !drive.DriveType.Equals(DriveType.CDRom),
                             TotalBytes = drive.TotalSize,
                             FreeBytes = drive.AvailableFreeSpace
                         });
@@ -175,9 +169,7 @@ public class FileService
                             IsDirectory = true,
                             Path = drive.RootDirectory.FullName,
                             Size = 0,
-                            Modified = DateTime.Now,
-                            CanRead = false,
-                            CanWrite = false
+                            Modified = DateTime.Now
                         });
                     }
                 }
@@ -227,8 +219,6 @@ public class FileService
                     IsDirectory = true,
                     Size = 0,
                     Modified = DateTime.Now,
-                    CanRead = true,
-                    CanWrite = true,
                     TotalBytes = total > 0 ? total : null,
                     FreeBytes = free > 0 ? free : null
                 });

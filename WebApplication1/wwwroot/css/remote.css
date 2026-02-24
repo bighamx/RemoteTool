@@ -443,6 +443,7 @@
     position: relative;
     transition: var(--transition);
     white-space: nowrap;
+    min-height: 30px;
 }
 
 .tab:hover {
@@ -1828,7 +1829,7 @@ button.file-toolbar-disabled {
 
 .files-breadcrumb {
     padding: 0 10px;
-    height: 42px;
+    /* height: 42px; */
     background: var(--bg-tertiary);
     border-radius: 8px;
     display: flex;
@@ -1845,8 +1846,9 @@ button.file-toolbar-disabled {
     align-items: center;
     gap: 2px;
     flex-shrink: 0;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     overflow: hidden;
+    flex-shrink: 1;
 }
 
 .breadcrumb-blank {
@@ -1854,6 +1856,7 @@ button.file-toolbar-disabled {
     min-width: 40px;
     height: 100%;
     display: flex;
+    min-height: 40px;
 }
 
 .breadcrumb-input {
@@ -3325,6 +3328,13 @@ button.file-toolbar-disabled {
     .header {
         flex-direction: column;
         gap: 12px;
+        height: auto;
+    }
+    .tabs{
+        flex-wrap: wrap;
+    }
+    .files-controls{
+        flex-direction:column;
     }
 
     .content {
@@ -3344,7 +3354,7 @@ button.file-toolbar-disabled {
     }
 
     .files-controls {
-        flex-direction: column;
+        flex-direction: row;
     }
 
     .search-input {
@@ -3370,6 +3380,9 @@ button.file-toolbar-disabled {
     .files-table .file-name-column {
         min-width: 180px;
         width: 45%;
+    }
+    .files-table .file-date-column{
+        display: none;
     }
 
     /* 移动端编辑器弹出框 */
@@ -3414,6 +3427,15 @@ button.file-toolbar-disabled {
         width: 90vw;
         height: auto;
         max-height: 70vh;
+    }
+    .breadcrumb-items{
+        flex-wrap: wrap;
+        height: unset;
+        flex-shrink: 1;
+    }
+    .files-breadcrumb{
+        flex-wrap: wrap;
+        height: unset;
     }
 }
 
