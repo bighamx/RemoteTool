@@ -25,7 +25,7 @@ class RemoteControl {
         /** 当前目录文件列表（用于排序与重绘） */
         this.files = [];
         /** 文件列表排序：'name' | 'type' | 'size' | 'date' | null */
-        this.fileSortColumn = null;
+        this.fileSortColumn = 'type';
         this.fileSortAsc = true;
         /** 名称列四种模式：0=文件夹在前+升序 1=文件夹在前+降序 2=混合+升序 3=混合+降序 */
         this.fileSortNameMode = 0;

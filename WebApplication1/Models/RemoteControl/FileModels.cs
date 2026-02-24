@@ -1,6 +1,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace ChuckieHelper.WebApi.Models.RemoteControl;
 
@@ -14,11 +15,15 @@ public class RemoteFileInfo
     public bool IsDirectory { get; set; }
     public long Size { get; set; }
     public DateTime Modified { get; set; }
-    public bool CanRead { get; set; }
-    public bool CanWrite { get; set; }
+
+
+
     /// <summary>磁盘总字节数（仅根路径驱动器列表时有值）</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? TotalBytes { get; set; }
+
     /// <summary>磁盘可用字节数（仅根路径驱动器列表时有值）</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? FreeBytes { get; set; }
 }
 
