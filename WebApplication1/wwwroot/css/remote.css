@@ -2688,7 +2688,7 @@ button.file-toolbar-disabled {
     overflow: hidden;
     width: 90%;
     max-width: 600px;
-    max-height: 80vh;
+    max-height: 90vh;
     display: flex;
     flex-direction: column;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
@@ -2739,7 +2739,7 @@ button.file-toolbar-disabled {
 }
 
 .dialog-body {
-    padding: 20px;
+    padding: 10px;
     flex: 1;
     overflow-y: auto;
     color: var(--text-primary);
@@ -3330,11 +3330,13 @@ button.file-toolbar-disabled {
         gap: 12px;
         height: auto;
     }
-    .tabs{
+
+    .tabs {
         flex-wrap: wrap;
     }
-    .files-controls{
-        flex-direction:column;
+
+    .files-controls {
+        flex-direction: column;
     }
 
     .content {
@@ -3381,7 +3383,8 @@ button.file-toolbar-disabled {
         min-width: 180px;
         width: 45%;
     }
-    .files-table .file-date-column{
+
+    .files-table .file-date-column {
         display: none;
     }
 
@@ -3428,12 +3431,14 @@ button.file-toolbar-disabled {
         height: auto;
         max-height: 70vh;
     }
-    .breadcrumb-items{
+
+    .breadcrumb-items {
         flex-wrap: wrap;
         height: unset;
         flex-shrink: 1;
     }
-    .files-breadcrumb{
+
+    .files-breadcrumb {
         flex-wrap: wrap;
         height: unset;
     }

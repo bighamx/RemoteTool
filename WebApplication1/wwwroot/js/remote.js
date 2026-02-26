@@ -592,6 +592,14 @@ class RemoteControl {
         // Screenshot / Remote Control - 切换按钮
         document.getElementById('stream-toggle-btn').addEventListener('click', () => this.toggleStream());
 
+        // 快捷键按钮
+        document.querySelectorAll('.remote-shortcut-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const shortcut = e.target.dataset.shortcut;
+                this.sendShortcut(shortcut);
+            });
+        });
+
         // 全屏按钮事件
         const fullscreenBtn = document.getElementById('fullscreen-btn');
         if (fullscreenBtn) {
@@ -1609,6 +1617,50 @@ class RemoteControl {
         }
     }
 
+    /**
+     * 发送常用快捷键组合
+     */
+    sendShortcut(shortcut) {
+        if (!this.streamActive || !this.inputSocket || this.inputSocket.readyState !== WebSocket.OPEN) {
+            this.showToast('请先连接远程控制', 'warning');
+            return;
+        }
+
+        switch (shortcut) {
+            case 'win':
+                // Send Win key (Left Windows)
+                this.sendInput('keyboard', { vkCode: 0x5B, isKeyDown: true });
+                this.sendInput('keyboard', { vkCode: 0x5B, isKeyDown: false });
+                break;
+            case 'ctrl-t-shift-t-esc':
+                // Ctrl (0xA2), Shift (0xA0), Esc (0x1B)
+                this.sendInput('keyboard', { vkCode: 0xA2, isKeyDown: true });
+                this.sendInput('keyboard', { vkCode: 0xA0, isKeyDown: true });
+                this.sendInput('keyboard', { vkCode: 0x1B, isKeyDown: true });
+
+                this.sendInput('keyboard', { vkCode: 0x1B, isKeyDown: false });
+                this.sendInput('keyboard', { vkCode: 0xA0, isKeyDown: false });
+                this.sendInput('keyboard', { vkCode: 0xA2, isKeyDown: false });
+                break;
+            case 'ctrl-t-alt-t-del':
+                // Ctrl (0xA2), Alt (0xA4), Delete (0x2E)
+                this.sendInput('keyboard', { vkCode: 0xA2, isKeyDown: true });
+                this.sendInput('keyboard', { vkCode: 0xA4, isKeyDown: true });
+                this.sendInput('keyboard', { vkCode: 0x2E, isKeyDown: true });
+
+                this.sendInput('keyboard', { vkCode: 0x2E, isKeyDown: false });
+                this.sendInput('keyboard', { vkCode: 0xA4, isKeyDown: false });
+                this.sendInput('keyboard', { vkCode: 0xA2, isKeyDown: false });
+                break;
+        }
+
+        // Return focus to the stream container so following typing works seamlessly
+        const container = document.getElementById('screenshot-container');
+        if (container) {
+            container.focus();
+        }
+    }
+
     // MSE-based low-latency streaming for Chrome
     // WebCodecs low-latency streaming: fetch fMP4 -> mp4box.js demux -> VideoDecoder -> Canvas
     async startWebCodecsStream(canvas, params) {
@@ -2217,7 +2269,7 @@ class RemoteControl {
 
             // 特殊键
             'PrintScreen': 0x2C, 'ScrollLock': 0x91, 'Pause': 0x13,
-            'NumLock': 0x90,
+            'NumLock': 0x90, 'MetaLeft': 0x5B, 'MetaRight': 0x5C, 'ContextMenu': 0x5D,
 
             // 数字键盘
             'Numpad0': 0x60, 'Numpad1': 0x61, 'Numpad2': 0x62, 'Numpad3': 0x63, 'Numpad4': 0x64,

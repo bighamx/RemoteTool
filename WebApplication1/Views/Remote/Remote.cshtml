@@ -211,11 +211,17 @@
             </div>
         </div>
 
-        <!-- Screenshot Tab -->
+        <!-- Remote Control RDP Tab -->
         <div id="screenshot-tab" class="tab-content">
             <div class="screenshot-controls">
                 <button id="stream-toggle-btn" class="btn btn-primary btn-sm">▶ 开始</button>
                 <button id="fullscreen-btn" class="btn btn-secondary btn-sm" title="全屏 (F11/Esc退出)">⛶</button>
+                
+                <div class="shortcut-keys" style="display: inline-flex; gap: 4px; margin-left: 8px; margin-right: 8px;">
+                    <button class="btn btn-secondary btn-sm remote-shortcut-btn" data-shortcut="win" title="发送 Win 键">Win</button>
+                    <button class="btn btn-secondary btn-sm remote-shortcut-btn" data-shortcut="ctrl-t-shift-t-esc" title="发送 Ctrl+Shift+Esc">Ctrl+Shift+Esc</button>
+                    <button class="btn btn-secondary btn-sm remote-shortcut-btn" data-shortcut="ctrl-t-alt-t-del" title="发送 Ctrl+Alt+Delete">Ctrl+Alt+Del</button>
+                </div>
 
                 <label for="quality-preset">预设</label>
                 <select id="quality-preset" class="quality-select">
