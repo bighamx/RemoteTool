@@ -1634,30 +1634,15 @@ class RemoteControl {
                 break;
             case 'ctrl-t-shift-t-esc':
                 // Ctrl (0xA2), Shift (0xA0), Esc (0x1B)
-                this.sendInput('keyboard', { vkCode: 0xA2, isKeyDown: true });
-                this.sendInput('keyboard', { vkCode: 0xA0, isKeyDown: true });
-                this.sendInput('keyboard', { vkCode: 0x1B, isKeyDown: true });
-
-                this.sendInput('keyboard', { vkCode: 0x1B, isKeyDown: false });
-                this.sendInput('keyboard', { vkCode: 0xA0, isKeyDown: false });
-                this.sendInput('keyboard', { vkCode: 0xA2, isKeyDown: false });
+                this.sendInput('keyboard-multi', { vkCodes: [0xA2, 0xA0, 0x1B], isKeyDown: true });
+                setTimeout(() => {
+                    this.sendInput('keyboard-multi', { vkCodes: [0x1B, 0xA0, 0xA2], isKeyDown: false });
+                }, 50);
                 break;
-            case 'ctrl-t-alt-t-del':
-                // Ctrl (0xA2), Alt (0xA4), Delete (0x2E)
-                this.sendInput('keyboard', { vkCode: 0xA2, isKeyDown: true });
-                this.sendInput('keyboard', { vkCode: 0xA4, isKeyDown: true });
-                this.sendInput('keyboard', { vkCode: 0x2E, isKeyDown: true });
-
-                this.sendInput('keyboard', { vkCode: 0x2E, isKeyDown: false });
-                this.sendInput('keyboard', { vkCode: 0xA4, isKeyDown: false });
-                this.sendInput('keyboard', { vkCode: 0xA2, isKeyDown: false });
+            case 'f11':
+                this.sendInput('keyboard', { vkCode: 0x70, isKeyDown: true });
+                this.sendInput('keyboard', { vkCode: 0x70, isKeyDown: false });
                 break;
-        }
-
-        // Return focus to the stream container so following typing works seamlessly
-        const container = document.getElementById('screenshot-container');
-        if (container) {
-            container.focus();
         }
     }
 

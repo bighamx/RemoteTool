@@ -87,6 +87,15 @@ public static class InputWebSocketHandler
                 if (vk >= 0 && vk <= 255)
                     svc.SendKeyboardEvent((byte)vk, root.TryGetProperty("isKeyDown", out var k) && k.GetBoolean());
                 break;
+            case "keyboard-multi":
+                if (root.TryGetProperty("vkCodes", out var codesEl) && codesEl.ValueKind == JsonValueKind.Array)
+                {
+                    var count = codesEl.GetArrayLength();
+                    var arr = new byte[count];
+                    for (int i = 0; i < count; i++) arr[i] = (byte)codesEl[i].GetInt32();
+                    svc.SendKeyboardEvents(arr, root.TryGetProperty("isKeyDown", out var k2) && k2.GetBoolean());
+                }
+                break;
             default:
                 Console.WriteLine($"[InputWS] Unknown type: {type}");
                 break;
