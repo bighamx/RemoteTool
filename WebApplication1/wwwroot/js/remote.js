@@ -1640,8 +1640,8 @@ class RemoteControl {
                 }, 50);
                 break;
             case 'f11':
-                this.sendInput('keyboard', { vkCode: 0x70, isKeyDown: true });
-                this.sendInput('keyboard', { vkCode: 0x70, isKeyDown: false });
+                this.sendInput('keyboard', { vkCode: 0x7A, isKeyDown: true });
+                this.sendInput('keyboard', { vkCode: 0x7A, isKeyDown: false });
                 break;
         }
     }
