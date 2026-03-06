@@ -3275,7 +3275,7 @@ volumes:
         }
     }
 
-    async runComposeUp() {
+    async runComposeUp(fromCard = false) {
         const filePath = document.getElementById('compose-file-path-input').value.trim();
         const content = document.getElementById('compose-editor-content').value;
 
@@ -3285,18 +3285,20 @@ volumes:
         }
 
         try {
-            const saveResponse = await fetch('/api/docker/compose/write', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ path: filePath, content })
-            });
+            if (!fromCard) {
+                const saveResponse = await fetch('/api/docker/compose/write', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${this.token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ path: filePath, content })
+                });
 
-            if (!saveResponse.ok) {
-                this.showDialog('保存文件失败', '错误');
-                return;
+                if (!saveResponse.ok) {
+                    this.showDialog('保存文件失败', '错误');
+                    return;
+                }
             }
 
             this.addComposeToHistory(filePath);
@@ -3447,7 +3449,7 @@ volumes:
                 if (input) input.value = path;
                 if (action === 'compose-edit') this.loadComposeFile();
                 else if (action === 'compose-pull') this.runComposePull();
-                else if (action === 'compose-up') this.runComposeUp();
+                else if (action === 'compose-up') this.runComposeUp(true);
                 else if (action === 'compose-stop') this.runComposeStop();
                 else if (action === 'compose-down') this.runComposeDown();
 
