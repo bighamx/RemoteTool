@@ -103,6 +103,7 @@ namespace ChuckieHelper.WebApi.Extensions
             services.AddExampleTask();
             services.AddQBittorrentTask();
             services.AddDdnsTask();
+            services.AddEmbyTask();
 
             return services;
         }

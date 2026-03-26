@@ -27,12 +27,8 @@ namespace ChuckieHelper.Lib
                 }
 
                 string safeName = SanitizeFileName(torrent.name);
-                if (torrent.name.Contains("ATID"))
-                {
-
-                }
                 //处理单个文件被下载到媒体库根文件夹的情况
-                var libDir = new[] { "TV", "Movie", "JAV", "Bagumi", "H-Anima" };
+                var libDir = new[] { "TV", "Movie", "JAV", "Bangumi", "H-Anima" };
                 if (torrent.NoDir && libDir.Contains(GetDirName(torrent.save_path)))
                 {
                     var dstPath = Path.Combine(torrent.save_path, safeName.Split('.').First());

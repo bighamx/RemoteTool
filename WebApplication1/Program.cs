@@ -149,6 +149,7 @@ namespace ChuckieHelper.WebApi
                 app.UseHangfireExampleTask();
                 app.UseHangfireQBittorrentTask();
                 app.UseHangfireDdnsTask();
+                app.UseHangfireEmbyTask();
             }
 
             app.MapControllerRoute(
