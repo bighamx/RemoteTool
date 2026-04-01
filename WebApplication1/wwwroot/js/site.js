@@ -30,7 +30,7 @@
         logoutBtn.addEventListener('click', () => {
             localStorage.removeItem('token');
             localStorage.removeItem('username');
-            window.location.href = '/login.html';
+            window.location.href = '/Account/Logout';
         });
     }
 });

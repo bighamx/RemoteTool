@@ -4,6 +4,7 @@ class RemoteControl {
     constructor() {
         this.token = localStorage.getItem('token');
         this.username = localStorage.getItem('username') || '';
+        this.installFetchAuthShim();
         this.websocket = null;
         /** 远程控制键鼠 WebSocket，在开始/停止远程时建立/断开 */
         this.inputSocket = null;
@@ -534,13 +535,13 @@ class RemoteControl {
 
         // 其他标签页登出时（如主站点击 Logout）localStorage 被清除，本页同步登出
         window.addEventListener('storage', (e) => {
-            if ((e.key === 'token' || e.key === 'username') && e.newValue === null && this.token) {
+            if (e.key === 'username' && e.newValue === null) {
                 this.syncLogoutFromStorage();
             }
         });
         // 从其他标签页切回时检查 token 是否已被清除
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible' && this.token && !localStorage.getItem('token')) {
+            if (document.visibilityState === 'visible' && this.username && !localStorage.getItem('username')) {
                 this.syncLogoutFromStorage();
             }
         });
@@ -1065,37 +1066,62 @@ class RemoteControl {
         }
     }
 
+    installFetchAuthShim() {
+        if (window.__remoteControlFetchShimInstalled) return;
+
+        const originalFetch = window.fetch.bind(window);
+        const getToken = () => this.token || localStorage.getItem('token');
+
+        window.fetch = (input, init = {}) => {
+            const nextInit = { ...init };
+            if (!nextInit.credentials) {
+                nextInit.credentials = 'same-origin';
+            }
+
+            const headers = new Headers(nextInit.headers || {});
+            const token = getToken();
+            const existingAuth = headers.get('Authorization');
+
+            if (!token && existingAuth && /^Bearer\s+(null|undefined)?$/i.test(existingAuth.trim())) {
+                headers.delete('Authorization');
+            }
+
+            nextInit.headers = headers;
+            return originalFetch(input, nextInit);
+        };
+
+        window.__remoteControlFetchShimInstalled = true;
+    }
+
     checkAuth() {
-        if (this.token) {
-            // 立即显示仪表板
-            this.showDashboard();
-            // 后台验证 token
-            fetch(`/api/auth/validate?token=${this.token}`)
-                .then(res => res.json())
-                .then(data => {
-                    if (!data.valid) {
-                        this.logout();
-                    }
-                })
-                .catch(() => {
-                    // 网络错误，保留 token 和仪表板
-                });
-        } else {
-            // 尝试通过 Cookie 验证 (调用 /api/auth/me)
-            fetch('/api/auth/me')
-                .then(res => {
-                    if (res.ok) return res.json();
-                    throw new Error('Unauthorized');
-                })
-                .then(data => {
-                    this.username = data.username;
-                    this.showDashboard();
-                })
-                .catch(() => {
-                    // 没有 token 且 Cookie 无效，跳转到全局登录页面
+        // 优先使用同源 Cookie 认证；保留旧 localStorage token 仅作兼容回退
+        fetch('/api/auth/me')
+            .then(res => {
+                if (res.ok) return res.json();
+                throw new Error('Unauthorized');
+            })
+            .then(data => {
+                this.username = data.username;
+                this.showDashboard();
+            })
+            .catch(() => {
+                if (!this.token) {
                     window.location.href = '/Account/Login';
-                });
-        }
+                    return;
+                }
+
+                this.showDashboard();
+                fetch(`/api/auth/validate?token=${this.token}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (!data.valid) {
+                            this.logout();
+                        }
+                    })
+                    .catch(() => {
+                        // 网络错误，保留兼容模式
+                    });
+            });
     }
 
 
@@ -1132,8 +1158,6 @@ class RemoteControl {
 
     /** 因其他标签页登出导致 localStorage 被清除时，同步本页状态并跳转登录（不写 localStorage，避免循环） */
     syncLogoutFromStorage() {
-        debugger
-
         this.token = null;
         this.username = '';
         this.disconnectTerminal();
@@ -1371,7 +1395,6 @@ class RemoteControl {
         console.log('Starting stream with quality settings:', this.qualitySettings);
 
         const params = new URLSearchParams({
-            access_token: this.token,
             resolution: this.qualitySettings.resolution,
             bitrate: this.qualitySettings.bitrate,
             maxrate: this.qualitySettings.maxrate,
@@ -1484,7 +1507,7 @@ class RemoteControl {
         const video = document.getElementById('stream-video');
         const placeholder = document.getElementById('stream-placeholder');
 
-        img.src = `/api/stream/legacy?t=${Date.now()}&access_token=${this.token}`;
+        img.src = `/api/stream/legacy?t=${Date.now()}`;
         video.style.display = 'none';
         img.style.display = 'block';
         placeholder.style.display = 'none';
@@ -1581,10 +1604,7 @@ class RemoteControl {
     connectInputSocket() {
         this.disconnectInputSocket();
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        let url = `${protocol}//${location.host}/ws/input`;
-        if (this.token) {
-            url += `?access_token=${encodeURIComponent(this.token)}`;
-        }
+        const url = `${protocol}//${location.host}/ws/input`;
         try {
             const ws = new WebSocket(url);
             ws.onopen = () => console.log('Input WS connected');
@@ -2285,7 +2305,7 @@ class RemoteControl {
 
         const terminalType = (document.getElementById('terminal-type')?.value) || 'shell';
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/terminal?access_token=${this.token}&type=${terminalType}`;
+        const wsUrl = `${protocol}//${window.location.host}/ws/terminal?type=${encodeURIComponent(terminalType)}`;
 
         this.websocket = new WebSocket(wsUrl);
         const statusEl = document.getElementById('ws-status');
@@ -4564,7 +4584,6 @@ volumes:
         videoPreview.style.display = 'none';
 
         const encodedPath = encodeURIComponent(path);
-        const token = encodeURIComponent(this.token);
 
         if (isImage) {
             const list = this.currentDirImageFiles || [];
@@ -4587,7 +4606,7 @@ volumes:
             }
 
             // 图片：使用压缩预览接口，限制最大分辨率和体积
-            const previewUrl = `/api/files/preview-image?path=${encodedPath}&maxWidth=1920&maxHeight=1080&quality=80&access_token=${token}`;
+            const previewUrl = `/api/files/preview-image?path=${encodedPath}&maxWidth=1920&maxHeight=1080&quality=80`;
             previewImage.src = previewUrl;
             imagePreview.style.display = 'flex';
         } else if (isVideo) {
@@ -4612,7 +4631,7 @@ volumes:
             }
 
             // 视频：使用流式播放接口，支持 Range 请求和拖动
-            const streamUrl = `/api/files/stream?path=${encodedPath}&access_token=${token}`;
+            const streamUrl = `/api/files/stream?path=${encodedPath}`;
             previewVideo.src = streamUrl;
             previewVideo.load();
             videoPreview.style.display = 'flex';
@@ -4670,8 +4689,7 @@ volumes:
         if (!item || !previewImage) return;
 
         const encodedPath = encodeURIComponent(item.path);
-        const token = encodeURIComponent(this.token);
-        const previewUrl = `/api/files/preview-image?path=${encodedPath}&maxWidth=1920&maxHeight=1080&quality=80&access_token=${token}`;
+        const previewUrl = `/api/files/preview-image?path=${encodedPath}&maxWidth=1920&maxHeight=1080&quality=80`;
 
         if (previewFilename) previewFilename.textContent = `预览: ${item.name}`;
         previewImage.src = previewUrl;
@@ -4704,8 +4722,7 @@ volumes:
         if (!item || !previewVideo) return;
 
         const encodedPath = encodeURIComponent(item.path);
-        const token = encodeURIComponent(this.token);
-        const streamUrl = `/api/files/stream?path=${encodedPath}&access_token=${token}`;
+        const streamUrl = `/api/files/stream?path=${encodedPath}`;
 
         if (previewFilename) previewFilename.textContent = `预览: ${item.name}`;
         previewVideo.src = streamUrl;
@@ -5022,7 +5039,7 @@ volumes:
     }
 
     downloadFile(path) {
-        window.location.href = `/api/files/download?path=${encodeURIComponent(path)}&access_token=${this.token}`;
+        window.location.href = `/api/files/download?path=${encodeURIComponent(path)}`;
     }
 
     /** 删除单个文件/文件夹，skipConfirm=true 跳过弹窗，统一用批量接口 */
@@ -5727,4 +5744,3 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 });
-

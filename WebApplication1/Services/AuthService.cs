@@ -59,8 +59,10 @@ public class AuthService
 
             _tokenHandler.ValidateToken(token, new TokenValidationParameters
             {
-                ValidateIssuer = false,
-                ValidateAudience = false,
+                ValidateIssuer = true,
+                ValidIssuer = "RemoteControl",
+                ValidateAudience = true,
+                ValidAudience = "RemoteControl",
                 ValidateLifetime = true,
                 ValidateIssuerSigningKey = true,
                 IssuerSigningKey = new SymmetricSecurityKey(key),
@@ -83,8 +85,10 @@ public class AuthService
 
             var principal = _tokenHandler.ValidateToken(token, new TokenValidationParameters
             {
-                ValidateIssuer = false,
-                ValidateAudience = false,
+                ValidateIssuer = true,
+                ValidIssuer = "RemoteControl",
+                ValidateAudience = true,
+                ValidAudience = "RemoteControl",
                 ValidateLifetime = true,
                 ValidateIssuerSigningKey = true,
                 IssuerSigningKey = new SymmetricSecurityKey(key),

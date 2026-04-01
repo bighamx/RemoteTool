@@ -121,18 +121,14 @@
                 const data = await response.json();
 
                 if (response.ok) {
-                    // Set Cookie for MVC access
-                    // Note: In a real app, use HttpOnly cookies set by the server. 
-                    // Here we adhere to the plan of setting it client-side or relying on the server response if it set one (currently it doesn't).
-                    // Since the server doesn't set the cookie in the Login endpoint, we must do it here or modify the endpoint.
-                    // The plan said "Implement Login logic (AJAX Post + Cookie setting)".
-                    document.cookie = `access_token=${data.token}; path=/; max-age=86400; samesite=strict`;
-                    
-                    // Also set localStorage for RemoteControl app compatibility
-                    localStorage.setItem('token', data.token);
+                    localStorage.removeItem('token');
                     localStorage.setItem('username', data.username);
 
-                    window.location.href = '/';
+                    const returnUrl = new URLSearchParams(window.location.search).get('ReturnUrl');
+                    const safeReturnUrl = returnUrl && returnUrl.startsWith('/') && !returnUrl.startsWith('//')
+                        ? returnUrl
+                        : '/';
+                    window.location.href = safeReturnUrl;
                 } else {
                     errorDiv.textContent = data.message || 'Login failed';
                 }

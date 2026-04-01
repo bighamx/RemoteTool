@@ -166,7 +166,8 @@ namespace ChuckieHelper.WebApi
                 }
 
                 
-                var token = context.Request.Query["access_token"].ToString();
+                var token = context.Request.Cookies["access_token"]
+                    ?? context.Request.Query["access_token"].ToString();
                 var authService = context.RequestServices.GetRequiredService<AuthService>();
                 if (string.IsNullOrEmpty(token) || !authService.ValidateToken(token))
                 {
@@ -197,7 +198,8 @@ namespace ChuckieHelper.WebApi
                     return;
                 }
 
-                var token = context.Request.Query["access_token"].ToString();
+                var token = context.Request.Cookies["access_token"]
+                    ?? context.Request.Query["access_token"].ToString();
                 var authService = context.RequestServices.GetRequiredService<AuthService>();
                 if (string.IsNullOrEmpty(token) || !authService.ValidateToken(token))
                 {

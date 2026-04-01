@@ -26,6 +26,14 @@ public class AuthController : ControllerBase
         if (_authService.ValidateCredentials(request.Username, request.Password))
         {
             var token = _authService.GenerateToken(request.Username);
+            Response.Cookies.Append("access_token", token, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = Request.IsHttps,
+                SameSite = SameSiteMode.Strict,
+                Path = "/",
+                Expires = DateTimeOffset.UtcNow.AddHours(24)
+            });
             return Ok(new { token, username = request.Username });
         }
 

@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebSocket / SignalR 测试页</title>
+  <style>
+    :root {
+      --bg: #f3f7fb;
+      --panel: rgba(255, 255, 255, 0.94);
+      --border: #d7e2ee;
+      --text: #1f2937;
+      --muted: #667085;
+      --accent: #0f766e;
+      --accent-strong: #115e59;
+      --warn: #b45309;
+      --danger: #b91c1c;
+      --success: #15803d;
+      --shadow: 0 22px 55px rgba(15, 23, 42, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(20, 184, 166, 0.18), transparent 35%),
+        radial-gradient(circle at top right, rgba(59, 130, 246, 0.18), transparent 30%),
+        linear-gradient(180deg, #f8fbff 0%, var(--bg) 100%);
+    }
+
+    .wrap {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 32px 20px 40px;
+    }
+
+    .hero {
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 1.1;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+      gap: 18px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      overflow: hidden;
+    }
+
+    .section {
+      padding: 20px;
+    }
+
+    .section + .section {
+      border-top: 1px solid var(--border);
+    }
+
+    .label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .row > * {
+      flex: 1;
+      min-width: 140px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    input,
+    select,
+    textarea,
+    button {
+      font: inherit;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      background: #fff;
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: rgba(15, 118, 110, 0.65);
+      box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+    }
+
+    textarea {
+      min-height: 108px;
+      resize: vertical;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 11px 16px;
+      cursor: pointer;
+      transition: transform 0.16s ease, opacity 0.16s ease, background 0.16s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+      transform: none;
+    }
+
+    .primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .primary:hover {
+      background: var(--accent-strong);
+    }
+
+    .secondary {
+      background: #e6f4f2;
+      color: #0f4c47;
+    }
+
+    .danger {
+      background: #fee2e2;
+      color: var(--danger);
+    }
+
+    .ghost {
+      background: #eef4fb;
+      color: #1d4ed8;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: #f8fafc;
+      border: 1px dashed var(--border);
+      font-size: 14px;
+    }
+
+    .status-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #94a3b8;
+      box-shadow: 0 0 0 5px rgba(148, 163, 184, 0.16);
+      transition: background 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .status-dot.connected {
+      background: var(--success);
+      box-shadow: 0 0 0 5px rgba(21, 128, 61, 0.16);
+    }
+
+    .status-dot.connecting {
+      background: var(--warn);
+      box-shadow: 0 0 0 5px rgba(180, 83, 9, 0.16);
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .hint {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .checkbox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .checkbox input {
+      width: auto;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .panel-soft {
+      padding: 14px;
+      border-radius: 14px;
+      background: #fbfdff;
+      border: 1px solid var(--border);
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .log {
+      height: 560px;
+      overflow: auto;
+      padding: 14px;
+      border-radius: 14px;
+      background: #0f172a;
+      color: #dbeafe;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .log-line {
+      margin-bottom: 8px;
+    }
+
+    .log-time {
+      color: #7dd3fc;
+    }
+
+    .log-type-open {
+      color: #86efac;
+    }
+
+    .log-type-send {
+      color: #fcd34d;
+    }
+
+    .log-type-message {
+      color: #c4b5fd;
+    }
+
+    .log-type-close,
+    .log-type-error {
+      color: #fca5a5;
+    }
+
+    @media (max-width: 960px) {
+      .grid,
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+
+      .log {
+        height: 380px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <h1>WebSocket / SignalR 测试页</h1>
+      <p class="subtitle">既可以测试普通 WebSocket，也可以不依赖 SignalR JS 库，直接通过 WebSocket + Hub Protocol 与 SignalR 服务通信。</p>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <div class="section">
+          <div class="row">
+            <div style="flex: 1 1 240px;">
+              <label class="label" for="protocolMode">协议模式</label>
+              <select id="protocolMode">
+                <option value="websocket">普通 WebSocket</option>
+                <option value="signalr">SignalR 原生协议</option>
+              </select>
+            </div>
+            <div style="flex: 1 1 240px;">
+              <label class="label" for="messageType">发送格式</label>
+              <select id="messageType">
+                <option value="text">文本</option>
+                <option value="json">JSON</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div id="transportSection" class="section">
+          <label class="label" for="wsUrl">WebSocket 地址</label>
+          <input id="wsUrl" type="text" placeholder="例如：wss://echo.websocket.events">
+          <p class="hint">普通模式直接连这里。SignalR 模式下如果已协商，也会从这里建立 WebSocket 连接。</p>
+
+          <div id="signalrConfig" class="panel-soft hidden" style="margin-top: 14px;">
+            <div class="two-col">
+              <div>
+                <label class="label" for="signalrHubUrl">SignalR Hub 地址</label>
+                <input id="signalrHubUrl" type="text" placeholder="例如：https://localhost:5001/chatHub">
+              </div>
+              <div>
+                <label class="label" for="signalrProtocol">Hub 协议</label>
+                <select id="signalrProtocol">
+                  <option value="json">json</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="two-col" style="margin-top: 12px;">
+              <div>
+                <label class="label" for="negotiateVersion">Negotiate Version</label>
+                <input id="negotiateVersion" type="number" min="0" value="1">
+              </div>
+              <div>
+                <label class="label" for="heartbeatSeconds">心跳间隔（秒）</label>
+                <input id="heartbeatSeconds" type="number" min="0" value="15">
+              </div>
+            </div>
+
+            <div class="button-row" style="margin-top: 12px;">
+              <button id="negotiateBtn" class="secondary">先协商 Negotiate</button>
+              <button id="handshakeBtn" class="ghost" disabled>仅发送握手</button>
+              <button id="signalrPingBtn" class="ghost" disabled>发送 SignalR Ping</button>
+            </div>
+            <p class="hint">多数 ASP.NET Core SignalR 服务需要先请求 <code>/negotiate</code>，再使用返回的连接信息建立 WebSocket。若服务支持直连，也可以跳过协商直接连接后握手。</p>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="button-row">
+            <button id="connectBtn" class="primary">连接</button>
+            <button id="disconnectBtn" class="danger" disabled>断开</button>
+            <button id="clearLogBtn" class="secondary">清空日志</button>
+            <button id="loadExampleBtn" class="ghost">填入示例</button>
+          </div>
+
+          <div class="status" style="margin-top: 14px;">
+            <span id="statusDot" class="status-dot"></span>
+            <strong id="statusText">未连接</strong>
+            <span id="statusExtra" class="meta">等待输入地址</span>
+          </div>
+
+          <div class="row" style="margin-top: 12px;">
+            <span id="handshakeState" class="pill">SignalR 握手：未开始</span>
+            <span id="negotiateState" class="pill">Negotiate：未执行</span>
+          </div>
+        </div>
+
+        <div class="section">
+          <label class="label" for="messageInput">发送内容</label>
+          <textarea id="messageInput" placeholder="普通 WebSocket：发送文本或 JSON。SignalR 模式：可直接填写 Hub 消息对象，或使用下方 Invocation 帮助区。"></textarea>
+          <div class="row" style="margin-top: 12px;">
+            <label class="checkbox">
+              <input id="sendOnCtrlEnter" type="checkbox" checked>
+              Ctrl + Enter 快速发送
+            </label>
+            <label class="checkbox">
+              <input id="autoHandshake" type="checkbox" checked>
+              SignalR 连接后自动握手
+            </label>
+            <label class="checkbox">
+              <input id="autoHeartbeat" type="checkbox" checked>
+              SignalR 自动心跳
+            </label>
+          </div>
+          <div class="button-row" style="margin-top: 12px;">
+            <button id="sendBtn" class="primary" disabled>发送消息</button>
+            <button id="pingBtn" class="secondary" disabled>发送普通 Ping 文本</button>
+            <button id="formatJsonBtn" class="ghost">格式化 JSON</button>
+          </div>
+        </div>
+
+        <div id="signalrInvokeSection" class="section hidden">
+          <label class="label">SignalR Invocation 帮助区</label>
+          <div class="two-col">
+            <div>
+              <label class="label" for="targetName">Target / 方法名</label>
+              <input id="targetName" type="text" placeholder="例如：SendMessage">
+            </div>
+            <div>
+              <label class="label" for="invocationId">Invocation ID</label>
+              <input id="invocationId" type="text" placeholder="留空自动生成">
+            </div>
+          </div>
+          <div style="margin-top: 12px;">
+            <label class="label" for="argumentsInput">Arguments JSON 数组</label>
+            <textarea id="argumentsInput" placeholder='例如：["alice","hello"]'></textarea>
+          </div>
+          <div class="button-row" style="margin-top: 12px;">
+            <button id="sendInvocationBtn" class="primary" disabled>发送 Invocation</button>
+            <button id="sendRawHubBtn" class="ghost" disabled>按 Hub 消息发送</button>
+          </div>
+          <p class="hint">Invocation 会自动包装为 SignalR Hub 消息并追加帧分隔符。收到的数据也会按 SignalR 帧进行拆包、解析和日志展示。</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section">
+          <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap;">
+            <div>
+              <div class="label" style="margin-bottom:4px;">收发日志</div>
+              <div class="meta">包含连接、协商、握手、SignalR 拆包、发送、接收、关闭和异常事件</div>
+            </div>
+          </div>
+          <div id="log" class="log" aria-live="polite" style="margin-top: 14px;"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const RECORD_SEPARATOR = String.fromCharCode(0x1e);
+
+    const protocolModeSelect = document.getElementById("protocolMode");
+    const messageTypeSelect = document.getElementById("messageType");
+    const wsUrlInput = document.getElementById("wsUrl");
+    const signalrHubUrlInput = document.getElementById("signalrHubUrl");
+    const signalrProtocolSelect = document.getElementById("signalrProtocol");
+    const negotiateVersionInput = document.getElementById("negotiateVersion");
+    const heartbeatSecondsInput = document.getElementById("heartbeatSeconds");
+    const messageInput = document.getElementById("messageInput");
+    const argumentsInput = document.getElementById("argumentsInput");
+    const targetNameInput = document.getElementById("targetName");
+    const invocationIdInput = document.getElementById("invocationId");
+    const connectBtn = document.getElementById("connectBtn");
+    const disconnectBtn = document.getElementById("disconnectBtn");
+    const clearLogBtn = document.getElementById("clearLogBtn");
+    const loadExampleBtn = document.getElementById("loadExampleBtn");
+    const negotiateBtn = document.getElementById("negotiateBtn");
+    const handshakeBtn = document.getElementById("handshakeBtn");
+    const sendBtn = document.getElementById("sendBtn");
+    const pingBtn = document.getElementById("pingBtn");
+    const formatJsonBtn = document.getElementById("formatJsonBtn");
+    const signalrPingBtn = document.getElementById("signalrPingBtn");
+    const sendInvocationBtn = document.getElementById("sendInvocationBtn");
+    const sendRawHubBtn = document.getElementById("sendRawHubBtn");
+    const sendOnCtrlEnterCheckbox = document.getElementById("sendOnCtrlEnter");
+    const autoHandshakeCheckbox = document.getElementById("autoHandshake");
+    const autoHeartbeatCheckbox = document.getElementById("autoHeartbeat");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const statusExtra = document.getElementById("statusExtra");
+    const handshakeState = document.getElementById("handshakeState");
+    const negotiateState = document.getElementById("negotiateState");
+    const logContainer = document.getElementById("log");
+    const signalrConfig = document.getElementById("signalrConfig");
+    const signalrInvokeSection = document.getElementById("signalrInvokeSection");
+
+    let socket = null;
+    let signalrHandshakeCompleted = false;
+    let signalrReceiveBuffer = "";
+    let heartbeatTimer = null;
+    let negotiateResult = null;
+    let invocationCounter = 1;
+
+    function nowTime() {
+      return new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    }
+
+    function isSignalRMode() {
+      return protocolModeSelect.value === "signalr";
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    function appendLog(type, message) {
+      const line = document.createElement("div");
+      line.className = `log-line log-type-${type}`;
+      line.innerHTML = `<span class="log-time">[${nowTime()}]</span> ${message}`;
+      logContainer.appendChild(line);
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    function setStatus(mode, text, extra) {
+      statusDot.className = "status-dot";
+      if (mode) {
+        statusDot.classList.add(mode);
+      }
+      statusText.textContent = text;
+      statusExtra.textContent = extra || "";
+    }
+
+    function setHandshakeStatus(text) {
+      handshakeState.textContent = `SignalR 握手：${text}`;
+    }
+
+    function setNegotiateStatus(text) {
+      negotiateState.textContent = `Negotiate：${text}`;
+    }
+
+    function updateModeUI() {
+      const signalr = isSignalRMode();
+      signalrConfig.classList.toggle("hidden", !signalr);
+      signalrInvokeSection.classList.toggle("hidden", !signalr);
+      signalrPingBtn.disabled = !signalr || !socket || socket.readyState !== WebSocket.OPEN;
+      handshakeBtn.disabled = !signalr || !socket || socket.readyState !== WebSocket.OPEN || signalrHandshakeCompleted;
+
+      if (signalr) {
+        wsUrlInput.placeholder = "例如：wss://localhost:5001/chatHub?id=...";
+        messageInput.placeholder = "可填写完整 Hub 消息 JSON，例如 {\"type\":1,\"target\":\"Send\",\"arguments\":[\"hi\"]}";
+      } else {
+        wsUrlInput.placeholder = "例如：wss://echo.websocket.events";
+        messageInput.placeholder = "输入要发送的内容。如果选择 JSON 模式，会先校验格式再发送。";
+      }
+    }
+
+    function updateActionState() {
+      const isOpen = socket && socket.readyState === WebSocket.OPEN;
+      const isConnecting = socket && socket.readyState === WebSocket.CONNECTING;
+
+      connectBtn.disabled = isOpen || isConnecting;
+      disconnectBtn.disabled = !socket || socket.readyState === WebSocket.CLOSED;
+      sendBtn.disabled = !isOpen;
+      pingBtn.disabled = !isOpen;
+      handshakeBtn.disabled = !isSignalRMode() || !isOpen || signalrHandshakeCompleted;
+      signalrPingBtn.disabled = !isSignalRMode() || !isOpen;
+      sendInvocationBtn.disabled = !isSignalRMode() || !isOpen || !signalrHandshakeCompleted;
+      sendRawHubBtn.disabled = !isSignalRMode() || !isOpen || !signalrHandshakeCompleted;
+    }
+
+    function resetSignalRState() {
+      signalrHandshakeCompleted = false;
+      signalrReceiveBuffer = "";
+      stopHeartbeat();
+      setHandshakeStatus("未开始");
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    }
+
+    function startHeartbeat() {
+      stopHeartbeat();
+      const seconds = Number(heartbeatSecondsInput.value);
+      if (!isSignalRMode() || !autoHeartbeatCheckbox.checked || !signalrHandshakeCompleted || !(seconds > 0)) {
+        return;
+      }
+
+      heartbeatTimer = setInterval(() => {
+        if (!socket || socket.readyState !== WebSocket.OPEN || !signalrHandshakeCompleted) {
+          stopHeartbeat();
+          return;
+        }
+        sendSignalRFrame({ type: 6 }, "自动发送 SignalR Ping");
+      }, seconds * 1000);
+      appendLog("open", `已启动 SignalR 心跳，间隔 ${seconds} 秒。`);
+    }
+
+    function validateWebSocketUrl(rawUrl) {
+      const parsed = new URL(rawUrl);
+      if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+        throw new Error("协议必须是 ws 或 wss");
+      }
+      return parsed.toString();
+    }
+
+    function validateHttpUrl(rawUrl) {
+      const parsed = new URL(rawUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("协议必须是 http 或 https");
+      }
+      return parsed;
+    }
+
+    function withQueryValue(url, key, value) {
+      const next = new URL(url.toString());
+      next.searchParams.set(key, value);
+      return next.toString();
+    }
+
+    function hubHttpToWebSocket(hubUrl) {
+      const parsed = validateHttpUrl(hubUrl);
+      parsed.protocol = parsed.protocol === "https:" ? "wss:" : "ws:";
+      return parsed.toString();
+    }
+
+    function deriveNegotiateUrl(hubUrl) {
+      const parsed = validateHttpUrl(hubUrl);
+      const path = parsed.pathname.endsWith("/") ? parsed.pathname.slice(0, -1) : parsed.pathname;
+      parsed.pathname = `${path}/negotiate`;
+      parsed.search = "";
+      parsed.searchParams.set("negotiateVersion", String(Number(negotiateVersionInput.value) || 1));
+      return parsed.toString();
+    }
+
+    function prettyJson(value) {
+      return JSON.stringify(value, null, 2);
+    }
+
+    function stripRecordSeparator(value) {
+      return String(value).replaceAll(RECORD_SEPARATOR, "");
+    }
+
+    function encodeSignalRFrame(message) {
+      return `${JSON.stringify(message)}${RECORD_SEPARATOR}`;
+    }
+
+    function splitSignalRFrames(chunk) {
+      signalrReceiveBuffer += chunk;
+      const frames = signalrReceiveBuffer.split(RECORD_SEPARATOR);
+      signalrReceiveBuffer = frames.pop();
+      return frames.filter((item) => item.length > 0);
+    }
+
+    function describeHubMessageType(type) {
+      const map = {
+        1: "Invocation",
+        2: "StreamItem",
+        3: "Completion",
+        4: "StreamInvocation",
+        5: "CancelInvocation",
+        6: "Ping",
+        7: "Close",
+        8: "Ack",
+        9: "Sequence"
+      };
+      return map[type] || `Unknown(${type})`;
+    }
+
+    function parseHubMessage(frame) {
+      try {
+        return JSON.parse(frame);
+      } catch (error) {
+        appendLog("error", `SignalR 帧 JSON 解析失败：${escapeHtml(error.message)}<br>${escapeHtml(frame)}`);
+        return null;
+      }
+    }
+
+    function handleHubMessage(message) {
+      const typeName = describeHubMessageType(message.type);
+      appendLog("message", `SignalR ${typeName}：<br>${escapeHtml(prettyJson(message))}`);
+
+      if (message.type === 6) {
+        appendLog("open", "收到 SignalR Ping。");
+      }
+
+      if (message.type === 7) {
+        const errorText = message.error ? `，错误：${message.error}` : "";
+        appendLog("close", `SignalR Close${escapeHtml(errorText)}`);
+      }
+    }
+
+    function handleSignalRRawData(rawData) {
+      const text = typeof rawData === "string" ? rawData : "";
+      const frames = splitSignalRFrames(text);
+
+      if (!frames.length && signalrReceiveBuffer.length) {
+        appendLog("open", `收到 SignalR 半包，当前缓存 ${signalrReceiveBuffer.length} 字节。`);
+        return;
+      }
+
+      frames.forEach((frame, index) => {
+        const cleanFrame = stripRecordSeparator(frame);
+        appendLog("message", `SignalR 第 ${index + 1} 帧原文：<br>${escapeHtml(cleanFrame)}`);
+
+        const parsed = parseHubMessage(cleanFrame);
+        if (!parsed) {
+          return;
+        }
+
+        if (!signalrHandshakeCompleted && (Object.prototype.hasOwnProperty.call(parsed, "error") || parsed.type === undefined)) {
+          if (parsed.error) {
+            setHandshakeStatus(`失败 - ${parsed.error}`);
+            appendLog("error", `SignalR 握手失败：${escapeHtml(parsed.error)}`);
+          } else {
+            signalrHandshakeCompleted = true;
+            setHandshakeStatus("成功");
+            appendLog("open", "SignalR 握手成功。");
+            startHeartbeat();
+          }
+          updateActionState();
+          return;
+        }
+
+        handleHubMessage(parsed);
+      });
+    }
+
+    async function negotiateSignalR() {
+      const hubUrl = signalrHubUrlInput.value.trim();
+      if (!hubUrl) {
+        appendLog("error", "请先输入 SignalR Hub 地址。");
+        setNegotiateStatus("失败 - 缺少 Hub 地址");
+        return null;
+      }
+
+      try {
+        const negotiateUrl = deriveNegotiateUrl(hubUrl);
+        appendLog("open", `开始 SignalR Negotiate：${escapeHtml(negotiateUrl)}`);
+        setNegotiateStatus("进行中");
+
+        const response = await fetch(negotiateUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: "{}"
+        });
+
+        const text = await response.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (error) {
+          throw new Error(`Negotiate 返回不是 JSON：${error.message}`);
+        }
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} ${response.statusText}: ${text}`);
+        }
+
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        negotiateResult = data;
+        let negotiatedUrl = data.url
+          ? data.url
+          : withQueryValue(
+              hubHttpToWebSocket(hubUrl),
+              "id",
+              data.connectionToken || data.connectionId || ""
+            );
+
+        if (data.accessToken) {
+          negotiatedUrl = withQueryValue(negotiatedUrl, "access_token", data.accessToken);
+        }
+
+        wsUrlInput.value = negotiatedUrl;
+        setNegotiateStatus("成功");
+        appendLog("open", `Negotiate 成功：<br>${escapeHtml(prettyJson(data))}`);
+        appendLog("open", `已生成 WebSocket 地址：${escapeHtml(negotiatedUrl)}`);
+        return data;
+      } catch (error) {
+        negotiateResult = null;
+        setNegotiateStatus(`失败 - ${error.message}`);
+        appendLog("error", `Negotiate 失败：${escapeHtml(error.message)}`);
+        return null;
+      }
+    }
+
+    function getWebSocketUrlForConnect() {
+      if (isSignalRMode()) {
+        const raw = wsUrlInput.value.trim();
+        if (raw) {
+          return validateWebSocketUrl(raw);
+        }
+
+        const hubUrl = signalrHubUrlInput.value.trim();
+        if (!hubUrl) {
+          throw new Error("请先填写 WebSocket 地址或 SignalR Hub 地址");
+        }
+        return hubHttpToWebSocket(hubUrl);
+      }
+
+      return validateWebSocketUrl(wsUrlInput.value.trim());
+    }
+
+    function connect() {
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        appendLog("error", "当前已有连接或正在连接，请先断开。");
+        return;
+      }
+
+      let url;
+      try {
+        url = getWebSocketUrlForConnect();
+      } catch (error) {
+        appendLog("error", escapeHtml(error.message));
+        setStatus("", "未连接", "地址格式不正确");
+        return;
+      }
+
+      resetSignalRState();
+      setStatus("connecting", "连接中", url);
+      appendLog("open", `尝试连接：${escapeHtml(url)}`);
+
+      socket = new WebSocket(url);
+      updateActionState();
+
+      socket.addEventListener("open", () => {
+        setStatus("connected", "已连接", `已连接到 ${url}`);
+        appendLog("open", `连接成功：${escapeHtml(url)}`);
+        updateActionState();
+
+        if (isSignalRMode() && autoHandshakeCheckbox.checked) {
+          sendHandshake();
+        }
+      });
+
+      socket.addEventListener("message", (event) => {
+        if (typeof event.data !== "string") {
+          appendLog("message", "收到二进制数据，当前页面仅实现文本帧版 SignalR / WebSocket 调试。");
+          return;
+        }
+
+        if (isSignalRMode()) {
+          handleSignalRRawData(event.data);
+          return;
+        }
+
+        appendLog("message", `收到消息：${escapeHtml(event.data)}`);
+      });
+
+      socket.addEventListener("error", () => {
+        appendLog("error", "连接发生错误，请检查服务地址、证书、CORS、代理或服务端状态。");
+      });
+
+      socket.addEventListener("close", (event) => {
+        const reason = event.reason ? `，原因：${event.reason}` : "";
+        appendLog("close", `连接关闭：code=${event.code}${escapeHtml(reason)}`);
+        setStatus("", "已断开", `关闭码 ${event.code}`);
+        stopHeartbeat();
+        socket = null;
+        updateActionState();
+      });
+    }
+
+    function disconnect() {
+      if (!socket) {
+        return;
+      }
+      appendLog("close", "手动断开连接。");
+      socket.close(1000, "Client disconnect");
+    }
+
+    function sendPlainMessage(payloadOverride) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        appendLog("error", "连接尚未建立，无法发送消息。");
+        return;
+      }
+
+      try {
+        const payload = payloadOverride ?? buildPlainPayload();
+        socket.send(payload);
+        appendLog("send", `发送消息：${escapeHtml(payload)}`);
+      } catch (error) {
+        appendLog("error", `发送失败：${escapeHtml(error.message)}`);
+      }
+    }
+
+    function buildPlainPayload() {
+      const raw = messageInput.value;
+      if (messageTypeSelect.value === "json") {
+        return JSON.stringify(JSON.parse(raw));
+      }
+      return raw;
+    }
+
+    function sendSignalRFrame(message, description) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        appendLog("error", "连接尚未建立，无法发送 SignalR 数据。");
+        return;
+      }
+
+      const frame = encodeSignalRFrame(message);
+      socket.send(frame);
+      appendLog("send", `${description}：<br>${escapeHtml(prettyJson(message))}`);
+    }
+
+    function sendHandshake() {
+      if (!isSignalRMode()) {
+        return;
+      }
+      const handshakeMessage = {
+        protocol: signalrProtocolSelect.value,
+        version: 1
+      };
+      setHandshakeStatus("已发送，等待服务端响应");
+      sendSignalRFrame(handshakeMessage, "发送 SignalR 握手");
+      updateActionState();
+    }
+
+    function buildHubMessageFromEditor() {
+      const raw = messageInput.value.trim();
+      if (!raw) {
+        throw new Error("请先输入 Hub 消息 JSON");
+      }
+
+      if (messageTypeSelect.value === "json") {
+        return JSON.parse(raw);
+      }
+
+      return {
+        type: 1,
+        target: raw,
+        arguments: []
+      };
+    }
+
+    function nextInvocationId() {
+      const id = String(invocationCounter);
+      invocationCounter += 1;
+      return id;
+    }
+
+    function sendInvocation() {
+      if (!signalrHandshakeCompleted) {
+        appendLog("error", "SignalR 握手尚未完成，不能发送 Invocation。");
+        return;
+      }
+
+      try {
+        const target = targetNameInput.value.trim();
+        if (!target) {
+          throw new Error("请填写 Target / 方法名");
+        }
+
+        const argsRaw = argumentsInput.value.trim() || "[]";
+        const args = JSON.parse(argsRaw);
+        if (!Array.isArray(args)) {
+          throw new Error("Arguments 必须是 JSON 数组");
+        }
+
+        const invocationId = invocationIdInput.value.trim() || nextInvocationId();
+        if (!invocationIdInput.value.trim()) {
+          invocationIdInput.value = invocationId;
+        }
+
+        const message = {
+          type: 1,
+          invocationId,
+          target,
+          arguments: args
+        };
+
+        sendSignalRFrame(message, "发送 SignalR Invocation");
+      } catch (error) {
+        appendLog("error", `Invocation 构造失败：${escapeHtml(error.message)}`);
+      }
+    }
+
+    function sendRawHubMessage() {
+      if (!signalrHandshakeCompleted) {
+        appendLog("error", "SignalR 握手尚未完成，不能发送 Hub 消息。");
+        return;
+      }
+
+      try {
+        const message = buildHubMessageFromEditor();
+        sendSignalRFrame(message, "发送 SignalR Hub 消息");
+      } catch (error) {
+        appendLog("error", `Hub 消息发送失败：${escapeHtml(error.message)}`);
+      }
+    }
+
+    function sendMessage() {
+      if (isSignalRMode()) {
+        sendRawHubMessage();
+        return;
+      }
+      sendPlainMessage();
+    }
+
+    protocolModeSelect.addEventListener("change", () => {
+      updateModeUI();
+      updateActionState();
+    });
+
+    connectBtn.addEventListener("click", connect);
+    disconnectBtn.addEventListener("click", disconnect);
+    clearLogBtn.addEventListener("click", () => {
+      logContainer.innerHTML = "";
+      appendLog("open", "日志已清空。");
+    });
+
+    loadExampleBtn.addEventListener("click", () => {
+      if (isSignalRMode()) {
+        signalrHubUrlInput.value = "https://localhost:5001/chatHub";
+        wsUrlInput.value = "wss://localhost:5001/chatHub";
+        targetNameInput.value = "SendMessage";
+        argumentsInput.value = prettyJson(["alice", "hello from raw signalr websocket"]);
+        messageInput.value = prettyJson({
+          type: 1,
+          invocationId: "1",
+          target: "SendMessage",
+          arguments: ["alice", "hello from raw signalr websocket"]
+        });
+        messageTypeSelect.value = "json";
+        appendLog("open", "已填入 SignalR 示例。通常请先点击 Negotiate，再连接。");
+      } else {
+        wsUrlInput.value = "wss://echo.websocket.events";
+        messageInput.value = prettyJson({
+          action: "hello",
+          message: "WebSocket test from browser",
+          time: new Date().toISOString()
+        });
+        messageTypeSelect.value = "json";
+        appendLog("open", "已填入普通 WebSocket 示例。");
+      }
+    });
+
+    negotiateBtn.addEventListener("click", negotiateSignalR);
+    handshakeBtn.addEventListener("click", sendHandshake);
+    signalrPingBtn.addEventListener("click", () => sendSignalRFrame({ type: 6 }, "手动发送 SignalR Ping"));
+    sendBtn.addEventListener("click", sendMessage);
+    pingBtn.addEventListener("click", () => sendPlainMessage("ping"));
+    sendInvocationBtn.addEventListener("click", sendInvocation);
+    sendRawHubBtn.addEventListener("click", sendRawHubMessage);
+
+    formatJsonBtn.addEventListener("click", () => {
+      try {
+        const parsed = JSON.parse(stripRecordSeparator(messageInput.value));
+        messageInput.value = prettyJson(parsed);
+        appendLog("send", "JSON 已格式化。");
+      } catch (error) {
+        appendLog("error", `JSON 格式化失败：${escapeHtml(error.message)}`);
+      }
+    });
+
+    messageInput.addEventListener("keydown", (event) => {
+      if (sendOnCtrlEnterCheckbox.checked && event.ctrlKey && event.key === "Enter") {
+        event.preventDefault();
+        sendMessage();
+      }
+    });
+
+    window.addEventListener("beforeunload", () => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close(1000, "Page unload");
+      }
+    });
+
+    setNegotiateStatus("未执行");
+    setHandshakeStatus("未开始");
+    updateModeUI();
+    updateActionState();
+    appendLog("open", "页面已就绪。可切换普通 WebSocket 或 SignalR 原生协议模式开始测试。");
+  </script>
+</body>
+</html>

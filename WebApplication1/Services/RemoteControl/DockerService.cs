@@ -1098,7 +1098,7 @@ public class DockerService : IDockerService
             var errorTask = process.StandardError.ReadToEndAsync();
             var waitTask = process.WaitForExitAsync();
 
-            var completedTask = await Task.WhenAny(waitTask, Task.Delay(timeoutSeconds * 30 * 1000));
+            var completedTask = await Task.WhenAny(waitTask, Task.Delay(timeoutSeconds * 1000));
             if (completedTask != waitTask)
             {
                 try { process.Kill(); } catch { }
