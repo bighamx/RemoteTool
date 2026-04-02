@@ -92,6 +92,7 @@ namespace ChuckieHelper.WebApi.Extensions
 
         public static IServiceCollection AddHangfireServices(this IServiceCollection services, IConfiguration configuration)
         {
+            GlobalJobFilters.Filters.Add(new AutomaticRetryAttribute { Attempts = 0 , OnAttemptsExceeded = AttemptsExceededAction.Delete });
             services.AddHangfire(config => config
                 .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
                 .UseSimpleAssemblyNameTypeSerializer()
