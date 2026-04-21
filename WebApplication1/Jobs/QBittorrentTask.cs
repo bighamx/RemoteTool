@@ -146,25 +146,36 @@ namespace ChuckieHelper.WebApi.Jobs
             return services;
         }
 
-        public static IHost UseHangfireQBittorrentTask(this IHost app)
+        public static IHost UseHangfireQBittorrentMoveTask(this IHost app)
         {
-            // Example recurring job for Maintenance (e.g., every hour)
-            RecurringJob.AddOrUpdate<QBittorrentTask>(
-                "qb-maintenance",
-                x => x.Maintence(null, null),
-                Cron.Hourly,
-                new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
+           
 
             // Example recurring job for Move (e.g., every day at 2am)
             RecurringJob.AddOrUpdate<QBittorrentTask>(
-                "qb-move",
+                "qb-docker-move",
                 x => x.Move(null, null, null),
                 Cron.Hourly,
                 new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
 
+
+
+            return app;
+        }
+
+        public static IHost UseHangfireQBittorrentMaintenceTask(this IHost app)
+        {
+            // Example recurring job for Maintenance (e.g., every hour)
+            RecurringJob.AddOrUpdate<QBittorrentTask>(
+                "qb-location-maintenance",
+                x => x.Maintence(null, null),
+                Cron.Hourly,
+                new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
+
+     
+
             // Recurring job for CleanUnwantedFiles (e.g., daily at 3am)
             RecurringJob.AddOrUpdate<QBittorrentTask>(
-                "qb-clean-unwanted",
+                "qb-torrent-clean-unwanted",
                 x => x.CleanUnwantedFiles(null, null),
                 Cron.Daily,
                 new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });

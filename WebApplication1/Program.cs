@@ -142,15 +142,17 @@ namespace ChuckieHelper.WebApi
             var instanceName = (app.Configuration["InstanceName"] ?? "Home").Trim();
             if (string.Equals(instanceName, "Office", StringComparison.OrdinalIgnoreCase))
             {
-                app.UseHangfireDdnsTask();
+              
             }
             else
             {
-                app.UseHangfireExampleTask();
-                app.UseHangfireQBittorrentTask();
-                app.UseHangfireDdnsTask();
-                app.UseHangfireEmbyTask();
+                app.UseHangfireQBittorrentMoveTask();
+             
             }
+            app.UseHangfireExampleTask();
+            app.UseHangfireDdnsTask();
+            app.UseHangfireQBittorrentMaintenceTask();
+            app.UseHangfireEmbyTask();
 
             app.MapControllerRoute(
                 name: "default",
