@@ -78,7 +78,8 @@ namespace ChuckieHelper.WebApi.Jobs
                     name = _settings.RecordName,
                     content = ipv6,
                     ttl = _settings.Ttl,
-                    proxied = _settings.Proxied
+                    proxied = _settings.Proxied,
+                    comment = $"Updated at {DateTime.Now:MM/dd HH:mm:ss}"
                 };
 
                 var updateUrl = $"https://api.cloudflare.com/client/v4/zones/{_settings.ZoneId}/dns_records/{recordId}";
