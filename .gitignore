@@ -111,6 +111,7 @@ SessionBundle/
 
 # Visual Studio Code
 .vscode/
+*.lscache
 
 # Other
 *.log
