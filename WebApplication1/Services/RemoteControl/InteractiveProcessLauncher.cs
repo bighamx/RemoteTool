@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.ComponentModel;
+using System.Security.Principal;
 using System.Runtime.InteropServices;
 
 namespace ChuckieHelper.WebApi.Services.RemoteControl;
@@ -9,6 +11,28 @@ namespace ChuckieHelper.WebApi.Services.RemoteControl;
 /// </summary>
 public static class InteractiveProcessLauncher
 {
+    private static void Log(string message)
+        => AgentStartupLogger.Log("InteractiveProcessLauncher", message);
+
+    private static void LogException(string message, Exception ex)
+        => AgentStartupLogger.LogException("InteractiveProcessLauncher", message, ex);
+
+    private static string FormatWin32Error(int errorCode)
+    {
+        if (errorCode == 0)
+            return "0 (无错误信息)";
+
+        try
+        {
+            var message = new Win32Exception(errorCode).Message;
+            return $"{errorCode} ({message})";
+        }
+        catch
+        {
+            return errorCode.ToString();
+        }
+    }
+
     #region Win32 API 声明
 
     [DllImport("kernel32.dll")]
@@ -71,11 +95,22 @@ public static class InteractiveProcessLauncher
     [DllImport("advapi32.dll")]
     private static extern IntPtr GetSidSubAuthorityCount(IntPtr pSid);
 
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ConvertSidToStringSid(IntPtr pSid, out IntPtr ptrSid);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr LocalFree(IntPtr hMem);
+
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
     private const uint TOKEN_QUERY = 0x0008;
     private const uint TOKEN_DUPLICATE = 0x0002;
+    private const int TokenUser = 1;
     private const int TokenIntegrityLevel = 25;
     private const uint SECURITY_MANDATORY_HIGH_RID = 0x3000;
+    private const string SidLocalSystem = "S-1-5-18";
+    private const string SidLocalService = "S-1-5-19";
+    private const string SidNetworkService = "S-1-5-20";
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SID_AND_ATTRIBUTES
@@ -88,6 +123,12 @@ public static class InteractiveProcessLauncher
     private struct TOKEN_MANDATORY_LABEL
     {
         public SID_AND_ATTRIBUTES Label;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TOKEN_USER
+    {
+        public SID_AND_ATTRIBUTES User;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -138,9 +179,68 @@ public static class InteractiveProcessLauncher
     /// 在指定会话中查找高完整性进程并复制其主令牌，用于以“管理员身份”创建子进程。调用方须 CloseHandle 返回的令牌。
     /// 若该会话中没有任何以管理员运行的进程（如未打开过任务管理器），则返回 IntPtr.Zero。
     /// </summary>
-    private static IntPtr TryGetElevatedTokenForSession(uint targetSessionId)
+    private static bool IsServiceAccountSid(string sid)
+        => string.Equals(sid, SidLocalSystem, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(sid, SidLocalService, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(sid, SidNetworkService, StringComparison.OrdinalIgnoreCase);
+
+    private static string? ResolveAccountNameFromSid(string sid)
+    {
+        try
+        {
+            var securityIdentifier = new SecurityIdentifier(sid);
+            var account = securityIdentifier.Translate(typeof(NTAccount));
+            return account.Value;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? GetTokenUserSidString(IntPtr tokenHandle)
+    {
+        IntPtr buffer = IntPtr.Zero;
+        IntPtr sidStringPtr = IntPtr.Zero;
+        try
+        {
+            if (!GetTokenInformation(tokenHandle, TokenUser, IntPtr.Zero, 0, out var needed) || needed == 0)
+                return null;
+
+            buffer = Marshal.AllocHGlobal((int)needed);
+            if (!GetTokenInformation(tokenHandle, TokenUser, buffer, needed, out _))
+                return null;
+
+            var tokenUser = Marshal.PtrToStructure<TOKEN_USER>(buffer);
+            if (tokenUser.User.Sid == IntPtr.Zero)
+                return null;
+
+            if (!ConvertSidToStringSid(tokenUser.User.Sid, out sidStringPtr) || sidStringPtr == IntPtr.Zero)
+                return null;
+
+            return Marshal.PtrToStringUni(sidStringPtr);
+        }
+        finally
+        {
+            if (sidStringPtr != IntPtr.Zero)
+                LocalFree(sidStringPtr);
+            if (buffer != IntPtr.Zero)
+                Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private static string DescribeTokenUser(IntPtr tokenHandle)
+    {
+        var sid = GetTokenUserSidString(tokenHandle) ?? "<unknown-sid>";
+        var account = ResolveAccountNameFromSid(sid) ?? "<unknown-account>";
+        return $"{account} ({sid})";
+    }
+
+    private static IntPtr TryGetElevatedTokenForSession(uint targetSessionId, string? expectedUserSid)
     {
         const uint TOKEN_QUERY_DUPLICATE = TOKEN_QUERY | TOKEN_DUPLICATE;
+        Log($"开始查找会话 {targetSessionId} 的高完整性令牌，期望用户 SID={expectedUserSid ?? "<unknown>"}");
+
         foreach (var proc in Process.GetProcesses())
         {
             IntPtr hProcess = IntPtr.Zero;
@@ -156,6 +256,19 @@ public static class InteractiveProcessLauncher
 
                 if (!OpenProcessToken(hProcess, TOKEN_QUERY_DUPLICATE, out hToken) || hToken == IntPtr.Zero)
                     continue;
+
+                var candidateSid = GetTokenUserSidString(hToken);
+                if (string.IsNullOrWhiteSpace(candidateSid))
+                    continue;
+
+                if (IsServiceAccountSid(candidateSid))
+                    continue;
+
+                if (!string.IsNullOrWhiteSpace(expectedUserSid)
+                    && !string.Equals(candidateSid, expectedUserSid, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
 
                 uint len = 0;
                 GetTokenInformation(hToken, TokenIntegrityLevel, IntPtr.Zero, 0, out _);
@@ -182,6 +295,8 @@ public static class InteractiveProcessLauncher
                     if (!DuplicateTokenEx(hToken, TOKEN_ALL_ACCESS, IntPtr.Zero, SecurityImpersonation, TokenPrimary, out IntPtr dupToken))
                         continue;
 
+                    Log($"命中高完整性令牌: 进程 PID={proc.Id}, Name={proc.ProcessName}, User={DescribeTokenUser(hToken)}");
+
                     return dupToken;
                 }
                 finally
@@ -196,6 +311,8 @@ public static class InteractiveProcessLauncher
                 proc.Dispose();
             }
         }
+
+        Log("未找到符合条件的高完整性令牌");
 
         return IntPtr.Zero;
     }
@@ -219,7 +336,7 @@ public static class InteractiveProcessLauncher
                 if (ProcessIdToSessionId(GetCurrentProcessId(), out uint sessionId))
                 {
                     _isSession0 = sessionId == 0;
-                    Console.WriteLine($"[InteractiveProcessLauncher] 当前会话 ID: {sessionId}, 是否 Session 0: {_isSession0}");
+                    Log($"当前会话 ID: {sessionId}, 是否 Session 0: {_isSession0}");
                 }
                 else
                 {
@@ -228,6 +345,89 @@ public static class InteractiveProcessLauncher
                 return _isSession0.Value;
             }
         }
+    }
+
+    private static bool TryGetUserTokenForSession(uint sessionId, out IntPtr token, out int errorCode)
+    {
+        token = IntPtr.Zero;
+        errorCode = 0;
+
+        if (WTSQueryUserToken(sessionId, out token) && token != IntPtr.Zero)
+            return true;
+
+        errorCode = Marshal.GetLastWin32Error();
+        if (token != IntPtr.Zero)
+            CloseHandle(token);
+        token = IntPtr.Zero;
+        return false;
+    }
+
+    private static List<uint> BuildCandidateSessionIds(uint preferredSessionId)
+    {
+        var result = new List<uint>();
+        var seen = new HashSet<uint>();
+
+        void AddSession(uint sid)
+        {
+            if (sid == 0 || sid == 0xFFFFFFFF)
+                return;
+            if (seen.Add(sid))
+                result.Add(sid);
+        }
+
+        AddSession(preferredSessionId);
+
+        foreach (var proc in Process.GetProcesses())
+        {
+            try
+            {
+                if (ProcessIdToSessionId((uint)proc.Id, out var sid))
+                    AddSession(sid);
+            }
+            catch
+            {
+                // 忽略单个进程访问失败
+            }
+            finally
+            {
+                proc.Dispose();
+            }
+        }
+
+        return result;
+    }
+
+    private static bool TryResolveInteractiveUserToken(
+        uint preferredSessionId,
+        out IntPtr token,
+        out uint resolvedSessionId,
+        out string detail)
+    {
+        token = IntPtr.Zero;
+        resolvedSessionId = 0;
+
+        var candidates = BuildCandidateSessionIds(preferredSessionId);
+        if (candidates.Count == 0)
+        {
+            detail = "未发现任何候选交互会话（非 Session 0）";
+            return false;
+        }
+
+        var attempts = new List<string>();
+        foreach (var sid in candidates)
+        {
+            if (TryGetUserTokenForSession(sid, out token, out var errorCode))
+            {
+                resolvedSessionId = sid;
+                detail = $"成功获取会话 {sid} 的用户令牌";
+                return true;
+            }
+
+            attempts.Add($"{sid}:{FormatWin32Error(errorCode)}");
+        }
+
+        detail = $"候选会话均无法获取用户令牌，尝试结果={string.Join(", ", attempts)}";
+        return false;
     }
 
     /// <summary>
@@ -243,55 +443,83 @@ public static class InteractiveProcessLauncher
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            Console.WriteLine("[InteractiveProcessLauncher] 仅支持 Windows 平台");
+            Log("仅支持 Windows 平台");
             return (false, 0);
         }
 
-        var sessionId = WTSGetActiveConsoleSessionId();
-        if (sessionId == 0xFFFFFFFF)
-        {
-            Console.WriteLine("[InteractiveProcessLauncher] 无法获取活动控制台会话 ID（可能没有用户登录）");
-            return (false, 0);
-        }
+        Log($"准备在交互式会话启动进程，commandLine={commandLine}, workingDirectory={(string.IsNullOrWhiteSpace(workingDirectory) ? "<null>" : workingDirectory)}, useElevatedTokenIfAvailable={useElevatedTokenIfAvailable}");
 
-        Console.WriteLine($"[InteractiveProcessLauncher] 目标会话 ID: {sessionId}");
+        var consoleSessionId = WTSGetActiveConsoleSessionId();
+        if (consoleSessionId == 0xFFFFFFFF)
+            Log("无法获取活动控制台会话 ID，将尝试自动发现可用交互会话");
+        else
+            Log($"活动控制台会话 ID: {consoleSessionId}");
 
         IntPtr userToken = IntPtr.Zero;
+        IntPtr interactiveUserToken = IntPtr.Zero;
         IntPtr duplicateToken = IntPtr.Zero;
         IntPtr environment = IntPtr.Zero;
+        uint sessionId = 0;
 
         try
         {
+            if (!TryResolveInteractiveUserToken(consoleSessionId, out interactiveUserToken, out sessionId, out var tokenResolveDetail))
+            {
+                Log($"未找到可用交互用户令牌：{tokenResolveDetail}。请确保有用户登录到桌面会话（本地或 RDP 活动会话）。");
+                return (false, 0);
+            }
+
+            Log($"目标会话 ID: {sessionId}，{tokenResolveDetail}");
+
+            var interactiveUserSid = GetTokenUserSidString(interactiveUserToken);
+            Log($"交互用户令牌: {DescribeTokenUser(interactiveUserToken)}");
+
             if (useElevatedTokenIfAvailable)
             {
-                userToken = TryGetElevatedTokenForSession(sessionId);
-                if (userToken != IntPtr.Zero)
-                    Console.WriteLine("[InteractiveProcessLauncher] 使用该会话中的高完整性令牌（管理员身份）启动");
+                if (!string.IsNullOrWhiteSpace(interactiveUserSid))
+                {
+                    userToken = TryGetElevatedTokenForSession(sessionId, interactiveUserSid);
+                    if (userToken != IntPtr.Zero)
+                        Log($"使用该会话中的高完整性令牌（管理员身份）启动，令牌用户: {DescribeTokenUser(userToken)}");
+                    else
+                        Log("未找到高完整性进程令牌，将使用普通用户令牌；可配置 RemoteControl:ElevatedAgent 凭据并在登录时以管理员运行");
+                }
                 else
-                    Console.WriteLine("[InteractiveProcessLauncher] 未找到高完整性进程令牌，将使用普通用户令牌；可配置 RemoteControl:ElevatedAgent 凭据并在登录时以管理员运行");
+                {
+                    Log("交互用户 SID 解析失败，跳过高完整性令牌扫描，直接回退普通用户令牌");
+                }
             }
 
             if (userToken == IntPtr.Zero)
             {
-                if (!WTSQueryUserToken(sessionId, out userToken))
-                {
-                    var error = Marshal.GetLastWin32Error();
-                    Console.WriteLine($"[InteractiveProcessLauncher] WTSQueryUserToken 失败，错误码: {error}。" +
-                        "请确保 IIS 应用程序池以 LocalSystem 身份运行。");
-                    return (false, 0);
-                }
+                userToken = interactiveUserToken;
+                interactiveUserToken = IntPtr.Zero;
+
+                Log($"回退到普通用户令牌启动，令牌用户: {DescribeTokenUser(userToken)}");
             }
+
+            Log($"最终用于 CreateProcessAsUser 的原始令牌用户: {DescribeTokenUser(userToken)}");
 
             if (!DuplicateTokenEx(userToken, TOKEN_ALL_ACCESS, IntPtr.Zero,
                 SecurityImpersonation, TokenPrimary, out duplicateToken))
             {
                 var error = Marshal.GetLastWin32Error();
-                Console.WriteLine($"[InteractiveProcessLauncher] DuplicateTokenEx 失败，错误码: {error}");
+                Log($"DuplicateTokenEx 失败，错误: {FormatWin32Error(error)}");
                 return (false, 0);
             }
 
+            Log($"DuplicateTokenEx 成功，得到主令牌，令牌用户: {DescribeTokenUser(duplicateToken)}");
+
             if (!CreateEnvironmentBlock(out environment, duplicateToken, false))
+            {
+                var envError = Marshal.GetLastWin32Error();
+                Log($"CreateEnvironmentBlock 失败，将继续以空环境启动，错误: {FormatWin32Error(envError)}");
                 environment = IntPtr.Zero;
+            }
+            else
+            {
+                Log("CreateEnvironmentBlock 成功");
+            }
 
             var si = new STARTUPINFO();
             si.cb = Marshal.SizeOf(si);
@@ -304,7 +532,7 @@ public static class InteractiveProcessLauncher
                 environment, workingDirectory, ref si, out var pi))
             {
                 var error = Marshal.GetLastWin32Error();
-                Console.WriteLine($"[InteractiveProcessLauncher] CreateProcessAsUser 失败，错误码: {error}");
+                Log($"CreateProcessAsUser 失败，错误: {FormatWin32Error(error)}，commandLine={commandLine}, desktop={si.lpDesktop}");
                 return (false, 0);
             }
 
@@ -312,18 +540,19 @@ public static class InteractiveProcessLauncher
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
 
-            Console.WriteLine($"[InteractiveProcessLauncher] 成功在会话 {sessionId} 中启动进程 (PID: {processId}): {commandLine}");
+            Log($"成功在会话 {sessionId} 中启动进程 (PID: {processId}): {commandLine}");
             return (true, processId);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[InteractiveProcessLauncher] 异常: {ex.Message}");
+            LogException("LaunchInInteractiveSession 异常", ex);
             return (false, 0);
         }
         finally
         {
             if (environment != IntPtr.Zero) DestroyEnvironmentBlock(environment);
             if (duplicateToken != IntPtr.Zero) CloseHandle(duplicateToken);
+            if (interactiveUserToken != IntPtr.Zero) CloseHandle(interactiveUserToken);
             if (userToken != IntPtr.Zero) CloseHandle(userToken);
         }
     }
@@ -342,13 +571,13 @@ public static class InteractiveProcessLauncher
         // 验证路径存在
         if (File.Exists(dllPath))
         {
-            Console.WriteLine($"[InteractiveProcessLauncher] 应用 DLL 路径: {dllPath}");
+            Log($"应用 DLL 路径: {dllPath}");
             return dllPath;
         }
 
         // 回退到 Assembly.Location
         var fallback = typeof(InteractiveProcessLauncher).Assembly.Location;
-        Console.WriteLine($"[InteractiveProcessLauncher] 回退 DLL 路径: {fallback}");
+        Log($"回退 DLL 路径: {fallback}");
         return fallback;
     }
 
@@ -360,15 +589,22 @@ public static class InteractiveProcessLauncher
         // 优先使用环境变量
         var dotnetPath = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
         if (!string.IsNullOrEmpty(dotnetPath) && File.Exists(dotnetPath))
+        {
+            Log($"使用 DOTNET_HOST_PATH: {dotnetPath}");
             return dotnetPath;
+        }
 
         // 常见安装路径
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         var defaultPath = Path.Combine(programFiles, "dotnet", "dotnet.exe");
         if (File.Exists(defaultPath))
+        {
+            Log($"使用默认 dotnet 路径: {defaultPath}");
             return defaultPath;
+        }
 
         // 回退到 PATH 中的 dotnet
+        Log("dotnet.exe 未在固定路径找到，回退到 PATH 中的 dotnet");
         return "dotnet";
     }
 
@@ -389,7 +625,7 @@ public static class InteractiveProcessLauncher
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) || string.IsNullOrWhiteSpace(userName) || string.IsNullOrWhiteSpace(password))
         {
-            Console.WriteLine("[InteractiveProcessLauncher] 创建高权限代理任务：需要 Windows 且提供用户名和密码");
+            Log("创建高权限代理任务：需要 Windows 且提供用户名和密码");
             return false;
         }
 
@@ -423,7 +659,7 @@ public static class InteractiveProcessLauncher
             using var p = Process.Start(psi);
             if (p == null)
             {
-                Console.WriteLine("[InteractiveProcessLauncher] schtasks 启动失败");
+                Log("schtasks 启动失败");
                 return false;
             }
 
@@ -433,16 +669,16 @@ public static class InteractiveProcessLauncher
 
             if (p.ExitCode == 0)
             {
-                Console.WriteLine($"[InteractiveProcessLauncher] 已创建登录时高权限代理任务: {ElevatedAgentTaskName}。请注销并重新登录一次使代理以管理员身份运行。");
+                Log($"已创建登录时高权限代理任务: {ElevatedAgentTaskName}。请注销并重新登录一次使代理以管理员身份运行。");
                 return true;
             }
 
-            Console.WriteLine($"[InteractiveProcessLauncher] schtasks /create 失败，退出码: {p.ExitCode}, 错误: {errText?.Trim()}");
+            Log($"schtasks /create 失败，退出码: {p.ExitCode}, 错误: {errText?.Trim()}");
             return false;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[InteractiveProcessLauncher] 创建高权限代理任务异常: {ex.Message}");
+            LogException("创建高权限代理任务异常", ex);
             return false;
         }
     }
@@ -470,14 +706,14 @@ public static class InteractiveProcessLauncher
                 p.WaitForExit(5000);
                 if (p.ExitCode == 0)
                 {
-                    Console.WriteLine("[InteractiveProcessLauncher] 已触发高权限代理任务运行");
+                    Log("已触发高权限代理任务运行");
                     return true;
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[InteractiveProcessLauncher] 运行高权限任务失败: {ex.Message}");
+            LogException("运行高权限任务失败", ex);
         }
 
         return false;

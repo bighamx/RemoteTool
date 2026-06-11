@@ -25,10 +25,43 @@ public static class DesktopAgent
     /// <summary>
     /// 代理空闲超时时间（无连接时自动退出）
     /// </summary>
-    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan IdleTimeout = ResolveIdleTimeout();
+
+    private const int DefaultIdleTimeoutMinutes = 5;
+    private const string IdleTimeoutEnvName = "CHUCKIEHELPER_AGENT_IDLE_TIMEOUT_MINUTES";
 
     private static readonly SemaphoreSlim _launchLock = new(1, 1);
     private static bool _agentLaunchAttempted;
+
+    private static void Log(string message)
+        => AgentStartupLogger.Log("DesktopAgent", message);
+
+    private static void LogException(string message, Exception ex)
+        => AgentStartupLogger.LogException("DesktopAgent", message, ex);
+
+    private static TimeSpan ResolveIdleTimeout()
+    {
+        var raw = Environment.GetEnvironmentVariable(IdleTimeoutEnvName);
+        if (string.IsNullOrWhiteSpace(raw))
+            return TimeSpan.FromMinutes(DefaultIdleTimeoutMinutes);
+
+        if (!int.TryParse(raw, out var minutes))
+        {
+            AgentStartupLogger.Log("DesktopAgent", $"环境变量 {IdleTimeoutEnvName} 值无效: '{raw}'，使用默认 {DefaultIdleTimeoutMinutes} 分钟");
+            return TimeSpan.FromMinutes(DefaultIdleTimeoutMinutes);
+        }
+
+        if (minutes <= 0)
+            return Timeout.InfiniteTimeSpan;
+
+        if (minutes > 24 * 60)
+        {
+            AgentStartupLogger.Log("DesktopAgent", $"环境变量 {IdleTimeoutEnvName} 值过大: {minutes}，使用默认 {DefaultIdleTimeoutMinutes} 分钟");
+            return TimeSpan.FromMinutes(DefaultIdleTimeoutMinutes);
+        }
+
+        return TimeSpan.FromMinutes(minutes);
+    }
 
     #region 服务端（在交互式会话中运行）
 
@@ -37,23 +70,33 @@ public static class DesktopAgent
     /// </summary>
     public static async Task RunServerAsync(CancellationToken ct)
     {
-        Console.WriteLine("[DesktopAgent] 桌面代理服务器启动中...");
+        var idleTimeoutText = IdleTimeout == Timeout.InfiniteTimeSpan
+            ? "disabled"
+            : $"{IdleTimeout.TotalMinutes:0} min";
+        Log($"桌面代理服务器启动中，协议版本={ProtocolVersion}，日志文件={AgentStartupLogger.LogFilePath}，idleTimeout={idleTimeoutText}");
         var systemService = new SystemService();
         var lastActivity = DateTime.UtcNow;
 
         // 空闲超时检查任务
-        _ = Task.Run(async () =>
+        if (IdleTimeout != Timeout.InfiniteTimeSpan)
         {
-            while (!ct.IsCancellationRequested)
+            _ = Task.Run(async () =>
             {
-                await Task.Delay(TimeSpan.FromMinutes(1), ct);
-                if (DateTime.UtcNow - lastActivity > IdleTimeout)
+                while (!ct.IsCancellationRequested)
                 {
-                    Console.WriteLine("[DesktopAgent] 空闲超时，代理即将退出");
-                    Environment.Exit(0);
+                    await Task.Delay(TimeSpan.FromMinutes(1), ct);
+                    if (DateTime.UtcNow - lastActivity > IdleTimeout)
+                    {
+                        Log("空闲超时，代理即将退出");
+                        Environment.Exit(0);
+                    }
                 }
-            }
-        }, ct);
+            }, ct);
+        }
+        else
+        {
+            Log($"已禁用空闲自动退出（{IdleTimeoutEnvName} <= 0）");
+        }
 
         while (!ct.IsCancellationRequested)
         {
@@ -66,10 +109,10 @@ public static class DesktopAgent
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous);
 
-                Console.WriteLine("[DesktopAgent] 等待客户端连接...");
+                Log($"等待客户端连接，管道名={PipeName}");
                 await pipeServer.WaitForConnectionAsync(ct);
                 lastActivity = DateTime.UtcNow;
-                Console.WriteLine("[DesktopAgent] 客户端已连接");
+                Log("客户端已连接");
 
                 // 每个连接在当前循环中同步处理（简单可靠）
                 // 对于并发请求，多个管道实例会同时接受连接
@@ -79,7 +122,7 @@ public static class DesktopAgent
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[DesktopAgent] 处理连接时出错: {ex.Message}");
+                    LogException("处理连接时出错", ex);
                 }
             }
             catch (OperationCanceledException)
@@ -88,12 +131,12 @@ public static class DesktopAgent
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DesktopAgent] 管道服务器错误: {ex.Message}");
+                LogException("管道服务器错误", ex);
                 await Task.Delay(1000, ct);
             }
         }
 
-        Console.WriteLine("[DesktopAgent] 桌面代理服务器已停止");
+        Log("桌面代理服务器已停止");
     }
 
     /// <summary>
@@ -106,7 +149,7 @@ public static class DesktopAgent
         if (requestBytes == null || requestBytes.Length == 0) return;
 
         var requestJson = Encoding.UTF8.GetString(requestBytes);
-        Console.WriteLine($"[DesktopAgent] 收到命令: {requestJson}");
+        Log($"收到命令: {requestJson}");
 
         using var doc = JsonDocument.Parse(requestJson);
         var root = doc.RootElement;
@@ -147,7 +190,7 @@ public static class DesktopAgent
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DesktopAgent] 处理命令 '{type}' 时出错: {ex.Message}");
+            LogException($"处理命令 '{type}' 时出错", ex);
             response = ErrorResponse(ex.Message);
         }
 
@@ -603,40 +646,48 @@ public static class DesktopAgent
     /// </summary>
     public static async Task EnsureAgentRunningAsync()
     {
+        Log("EnsureAgentRunningAsync 开始执行");
         // 先尝试 ping
         if (await TryPingAgentAsync())
+        {
+            Log("代理已在线，无需启动");
             return;
+        }
 
         await _launchLock.WaitAsync();
         try
         {
             // 再次检查（可能其他线程已启动）
             if (await TryPingAgentAsync())
+            {
+                Log("代理在加锁后已在线（可能被其他线程启动）");
                 return;
+            }
 
             if (_agentLaunchAttempted)
             {
-                Console.WriteLine("[DesktopAgent] 已尝试过启动代理但仍不可用");
+                Log("已尝试过启动代理但仍不可用，重置启动尝试标记后重试");
                 // 重置标志，允许再次尝试
                 _agentLaunchAttempted = false;
             }
 
-            Console.WriteLine("[DesktopAgent] 代理未运行，正在启动...");
+            Log("代理未运行，准备启动交互式会话进程");
 
             var dllPath = InteractiveProcessLauncher.GetApplicationDllPath();
             var dotnetPath = InteractiveProcessLauncher.GetDotnetPath();
             var commandLine = $"\"{dotnetPath}\" \"{dllPath}\" --desktop-agent";
+            Log($"启动命令: {commandLine}");
 
             var (success, pid) = InteractiveProcessLauncher.LaunchInInteractiveSession(commandLine, useElevatedTokenIfAvailable: true);
             _agentLaunchAttempted = true;
 
             if (!success)
             {
-                Console.WriteLine("[DesktopAgent] 启动代理失败。请确保 IIS 应用程序池以 LocalSystem 身份运行。");
+                Log("启动代理失败。请查看 InteractiveProcessLauncher 的错误日志（Win32 错误码与文本）并确认 IIS 应用程序池身份为 LocalSystem。");
                 return;
             }
 
-            Console.WriteLine($"[DesktopAgent] 代理进程已启动 (PID: {pid})，等待就绪...");
+            Log($"代理进程已启动 (PID: {pid})，等待就绪...");
 
             // 等待代理就绪（最多 10 秒）
             for (int i = 0; i < 20; i++)
@@ -644,15 +695,32 @@ public static class DesktopAgent
                 await Task.Delay(500);
                 if (await TryPingAgentAsync())
                 {
-                    Console.WriteLine("[DesktopAgent] 代理已就绪");
+                    Log("代理已就绪");
                     return;
                 }
             }
 
-            Console.WriteLine("[DesktopAgent] 代理启动超时");
+            Log("代理启动超时（启动后 10 秒内未通过 ping）");
+            try
+            {
+                using var proc = Process.GetProcessById(pid);
+                if (proc.HasExited)
+                {
+                    Log($"代理进程已退出，PID={pid}, ExitCode={proc.ExitCode}");
+                }
+                else
+                {
+                    Log($"代理进程仍在运行，PID={pid}, SessionId={proc.SessionId}, StartTime={proc.StartTime:yyyy-MM-dd HH:mm:ss}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogException($"启动超时后检查代理进程状态失败，PID={pid}", ex);
+            }
         }
         finally
         {
+            Log("EnsureAgentRunningAsync 结束，释放启动锁");
             _launchLock.Release();
         }
     }
@@ -666,10 +734,14 @@ public static class DesktopAgent
         {
             var response = await SendCommandInternalAsync(
                 "{\"type\":\"ping\"}", TimeSpan.FromSeconds(2));
-            return response != null;
+            var ok = response != null;
+            if (!ok)
+                Log("TryPingAgentAsync 失败：代理无响应");
+            return ok;
         }
-        catch
+        catch (Exception ex)
         {
+            LogException("TryPingAgentAsync 异常", ex);
             return false;
         }
     }
@@ -995,12 +1067,12 @@ public static class DesktopAgent
         }
         catch (OperationCanceledException)
         {
-            Console.WriteLine($"[DesktopAgent] 命令超时: {commandJson}");
+            Log($"命令超时: {commandJson}, timeout={timeout.TotalMilliseconds}ms");
             return null;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DesktopAgent] 发送命令失败: {ex.Message}");
+            LogException($"发送命令失败: {commandJson}", ex);
             return null;
         }
     }

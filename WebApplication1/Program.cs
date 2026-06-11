@@ -3,7 +3,7 @@ using ChuckieHelper.WebApi.Services;
 using ChuckieHelper.WebApi.Services.RemoteControl;
 using ChuckieHelper.WebApi.Extensions;
 using Hangfire;
-using Hangfire.Console; 
+using Hangfire.Console;
 using Hangfire.Storage.SQLite;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -22,9 +22,11 @@ namespace ChuckieHelper.WebApi
             // 此模式由 IIS 进程在检测到 Session 0 时自动启动。
             if (args.Contains("--desktop-agent"))
             {
-                Console.WriteLine("[DesktopAgent] 以桌面代理模式启动");
-                Console.WriteLine($"[DesktopAgent] 进程 ID: {Environment.ProcessId}");
-                Console.WriteLine($"[DesktopAgent] 用户: {Environment.UserName}");
+                AgentStartupLogger.Log("Program", "检测到 --desktop-agent 参数，进入桌面代理模式");
+                AgentStartupLogger.Log("Program", $"日志文件: {AgentStartupLogger.LogFilePath}");
+                AgentStartupLogger.Log("Program", $"进程 ID: {Environment.ProcessId}");
+                AgentStartupLogger.Log("Program", $"用户: {Environment.UserDomainName}\\{Environment.UserName}");
+                AgentStartupLogger.Log("Program", $"启动参数: {string.Join(' ', args)}");
 
 
                 var cts = new CancellationTokenSource();
@@ -39,10 +41,16 @@ namespace ChuckieHelper.WebApi
                 }
                 catch (OperationCanceledException)
                 {
-                    Console.WriteLine("[DesktopAgent] 代理已停止");
+                    AgentStartupLogger.Log("Program", "桌面代理收到取消信号，准备停止");
+                }
+                catch (Exception ex)
+                {
+                    AgentStartupLogger.LogException("Program", "桌面代理模式运行异常", ex);
+                    throw;
                 }
                 finally
                 {
+                    AgentStartupLogger.Log("Program", "桌面代理模式退出");
                     cts.Dispose();
                 }
                 return;
@@ -142,12 +150,12 @@ namespace ChuckieHelper.WebApi
             var instanceName = (app.Configuration["InstanceName"] ?? "Home").Trim();
             if (string.Equals(instanceName, "Office", StringComparison.OrdinalIgnoreCase))
             {
-              
+
             }
             else
             {
                 app.UseHangfireQBittorrentMoveTask();
-             
+
             }
             app.UseHangfireExampleTask();
             app.UseHangfireDdnsTask();
@@ -167,7 +175,7 @@ namespace ChuckieHelper.WebApi
                     return;
                 }
 
-                
+
                 var token = context.Request.Cookies["access_token"]
                     ?? context.Request.Query["access_token"].ToString();
                 var authService = context.RequestServices.GetRequiredService<AuthService>();
@@ -176,7 +184,7 @@ namespace ChuckieHelper.WebApi
                     context.Response.StatusCode = 401;
                     return;
                 }
-                
+
                 // 从查询参数获取终端类型；Linux 仅支持 shell，Windows 支持 shell/cmd/powershell
                 var typeParam = context.Request.Query["type"].ToString().ToLower();
                 var terminalType = typeParam switch
