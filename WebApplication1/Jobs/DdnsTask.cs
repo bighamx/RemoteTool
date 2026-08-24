@@ -30,14 +30,19 @@ namespace ChuckieHelper.WebApi.Jobs
 
         public async Task Execute(PerformContext context)
         {
-            var ipv6 = GetGlobalIPv6Address();
-            if (string.IsNullOrEmpty(ipv6))
+            var candidate = GetBestGlobalIPv6Address();
+            if (candidate == null)
             {
                 context.SetTextColor(ConsoleTextColor.Red);
                 context.WriteLine("未找到有效的 IPv6 地址。");
                 context.ResetTextColor();
                 return;
             }
+
+            var ipv6 = candidate.Address.ToString();
+            context.WriteLine(
+                $"选用本机 IPv6 地址：{ipv6}（网卡：{candidate.InterfaceName}，" +
+                $"剩余首选寿命：{TimeSpan.FromSeconds(candidate.PreferredLifetime)}）");
 
             // check current
             var client = _httpClientFactory.CreateClient();
@@ -108,30 +113,90 @@ namespace ChuckieHelper.WebApi.Jobs
             }
         }
 
-        private string? GetGlobalIPv6Address()
+        private Ipv6Candidate? GetBestGlobalIPv6Address()
         {
-            foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces())
-            {
-                if (networkInterface.OperationalStatus != OperationalStatus.Up) continue;
-
-                var ipProperties = networkInterface.GetIPProperties();
-                foreach (var ip in ipProperties.UnicastAddresses)
+            return NetworkInterface.GetAllNetworkInterfaces()
+                .Where(networkInterface => networkInterface.OperationalStatus == OperationalStatus.Up)
+                .SelectMany(networkInterface =>
                 {
-                    if (ip.Address.AddressFamily == AddressFamily.InterNetworkV6 &&
-                        !IPAddress.IsLoopback(ip.Address) &&
-                        !ip.Address.IsIPv6LinkLocal &&
-                        !ip.Address.IsIPv6SiteLocal &&
-                        (ip.Address.ToString().StartsWith("2") || ip.Address.ToString().StartsWith("3"))) // Global Unicast start with 2000::/3
-                    {
-                        // Filter Logic from PowerShell:
-                        // AddressState -eq 'Preferred' (Not directly available in .NET Standard easy way without PInvoke or assuming default)
-                        // But typically Global IPv6 that is not temporary is what we want.
-                        // For simplicity, returning the first Global Unicast IPv6.
-                        return ip.Address.ToString();
-                    }
-                }
+                    var ipProperties = networkInterface.GetIPProperties();
+                    var hasIpv6Gateway = ipProperties.GatewayAddresses.Any(gateway =>
+                        gateway.Address.AddressFamily == AddressFamily.InterNetworkV6);
+
+                    return ipProperties.UnicastAddresses
+                        .Where(ip => IsGlobalUnicast(ip.Address) &&
+                            ip.DuplicateAddressDetectionState == DuplicateAddressDetectionState.Preferred &&
+                            ip.SuffixOrigin != SuffixOrigin.Random &&
+                            ip.AddressPreferredLifetime > 0)
+                        .Select(ip => new Ipv6Candidate(
+                            ip.Address,
+                            networkInterface.Name,
+                            IsPhysicalInterface(networkInterface.NetworkInterfaceType),
+                            hasIpv6Gateway,
+                            ip.SuffixOrigin,
+                            ip.AddressPreferredLifetime,
+                            ip.AddressValidLifetime));
+                })
+                .OrderByDescending(candidate => candidate.IsPhysicalInterface)
+                .ThenByDescending(candidate => candidate.HasIpv6Gateway)
+                .ThenByDescending(candidate => candidate.SuffixOrigin == SuffixOrigin.LinkLayerAddress)
+                .ThenByDescending(candidate => candidate.PreferredLifetime)
+                .ThenByDescending(candidate => candidate.ValidLifetime)
+                .ThenBy(candidate => candidate.InterfaceName, StringComparer.Ordinal)
+                .ThenBy(candidate => candidate.Address.ToString(), StringComparer.Ordinal)
+                .FirstOrDefault();
+        }
+
+        private static bool IsGlobalUnicast(IPAddress address)
+        {
+            if (address.AddressFamily != AddressFamily.InterNetworkV6 ||
+                IPAddress.IsLoopback(address) ||
+                address.IsIPv6LinkLocal ||
+                address.IsIPv6SiteLocal)
+            {
+                return false;
             }
-            return null;
+
+            var bytes = address.GetAddressBytes();
+            return bytes.Length == 16 && (bytes[0] & 0xE0) == 0x20; // 2000::/3
+        }
+
+        private static bool IsPhysicalInterface(NetworkInterfaceType interfaceType)
+        {
+            return interfaceType == NetworkInterfaceType.Ethernet ||
+                interfaceType == NetworkInterfaceType.GigabitEthernet ||
+                interfaceType == NetworkInterfaceType.FastEthernetFx ||
+                interfaceType == NetworkInterfaceType.FastEthernetT ||
+                interfaceType == NetworkInterfaceType.Wireless80211;
+        }
+
+        private sealed class Ipv6Candidate
+        {
+            public Ipv6Candidate(
+                IPAddress address,
+                string interfaceName,
+                bool isPhysicalInterface,
+                bool hasIpv6Gateway,
+                SuffixOrigin suffixOrigin,
+                long preferredLifetime,
+                long validLifetime)
+            {
+                Address = address;
+                InterfaceName = interfaceName;
+                IsPhysicalInterface = isPhysicalInterface;
+                HasIpv6Gateway = hasIpv6Gateway;
+                SuffixOrigin = suffixOrigin;
+                PreferredLifetime = preferredLifetime;
+                ValidLifetime = validLifetime;
+            }
+
+            public IPAddress Address { get; }
+            public string InterfaceName { get; }
+            public bool IsPhysicalInterface { get; }
+            public bool HasIpv6Gateway { get; }
+            public SuffixOrigin SuffixOrigin { get; }
+            public long PreferredLifetime { get; }
+            public long ValidLifetime { get; }
         }
     }
 
