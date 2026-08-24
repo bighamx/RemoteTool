@@ -6,6 +6,11 @@ namespace ChuckieHelper.Lib
 {
     public static class QbHelper
     {
+        private static readonly HashSet<string> MediaLibraryDirectories = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "TV", "Movie", "JAV", "Bangumi", "H-Anima", "Animation", "Porn", "ERO"
+        };
+
         public static async Task<bool> Maintence(this QBittorrent qb, Action<string> log = null)
         {
             log ??= Console.WriteLine;
@@ -27,14 +32,10 @@ namespace ChuckieHelper.Lib
                     continue;
                 }
 
-                string safeName = SanitizeFileName(torrent.name);
                 //处理单个文件被下载到媒体库根文件夹的情况
-                var libDir = new[] { "TV", "Movie", "JAV", "Bangumi", "H-Anima", "Animation", "Porn" };
-                if (torrent.NoDir && libDir.Contains(GetDirName(torrent.save_path), StringComparer.OrdinalIgnoreCase))
+                if (torrent.NoDir && IsMediaLibraryRoot(torrent.save_path))
                 {
-                    var dstPath = Path.Combine(torrent.save_path, safeName.Split('.').First());
-                    await qb.SetTorrentLocation(torrent.hash, dstPath);
-                    log($"{torrent.name}  {torrent.save_path} >> {dstPath}");
+                    await qb.MoveSingleFileTorrentToOwnDirectory(torrent, log);
                 }
             }
             return true;
@@ -98,14 +99,14 @@ namespace ChuckieHelper.Lib
                     await home.StartTorrentAsync(torrent.hash);
                 }
                 //处理单个文件被下载到媒体库根文件夹的情况
-                var libDir = new[] { "TV", "Movie", "JAV", "Bangumi", "H-Anima", "Porn" };
-                if (torrent.NoDir && libDir.Contains(GetDirName(dstPath), StringComparer.OrdinalIgnoreCase))
+                if (torrent.NoDir && IsMediaLibraryRoot(dstPath))
                 {
-
-                    dstPath = Path.Combine(torrent.save_path, safeName.Split('.').First());
-                    await home.SetTorrentLocation(torrent.hash, dstPath);
+                    await home.MoveSingleFileTorrentToOwnDirectory(
+                        torrent.hash,
+                        torrent.name,
+                        dstPath,
+                        log);
                     await home.StartTorrentAsync(torrent.hash);
-                    log($"{torrent.name}  {torrent.save_path} >> {dstPath}");
                 }
                 log($"已转移: {torrent.name}");
             }
@@ -116,6 +117,64 @@ namespace ChuckieHelper.Lib
         {
             return path.Split('/', '\\').Last();
         }
+
+        private static bool IsMediaLibraryRoot(string path)
+        {
+            return !string.IsNullOrWhiteSpace(path) && MediaLibraryDirectories.Contains(GetDirName(path));
+        }
+
+        public static Task<bool> MoveSingleFileTorrentToOwnDirectory(
+            this QBittorrent qb,
+            Torrent torrent,
+            Action<string> log = null)
+        {
+            if (torrent == null || !torrent.NoDir)
+            {
+                return Task.FromResult(false);
+            }
+
+            return qb.MoveSingleFileTorrentToOwnDirectory(
+                torrent.hash,
+                torrent.name,
+                torrent.save_path,
+                log);
+        }
+
+        public static async Task<bool> MoveSingleFileTorrentToOwnDirectory(
+            this QBittorrent qb,
+            string hash,
+            string fileName,
+            string savePath,
+            Action<string> log = null)
+        {
+            log ??= Console.WriteLine;
+
+            if (string.IsNullOrWhiteSpace(hash) ||
+                string.IsNullOrWhiteSpace(fileName) ||
+                string.IsNullOrWhiteSpace(savePath))
+            {
+                log("无法整理单文件种子：任务哈希、文件名或保存路径为空。");
+                return false;
+            }
+
+            var folderName = GetSafeMediaFolderName(fileName);
+            var destinationPath = Path.Combine(savePath, folderName);
+            var moved = await qb.SetTorrentLocation(hash, destinationPath);
+
+            log(moved
+                ? $"qB 已移动: {fileName}  {savePath} >> {destinationPath}"
+                : $"qB 移动失败: {fileName}  {savePath} >> {destinationPath}");
+
+            return moved;
+        }
+
+        public static string GetSafeMediaFolderName(string fileName)
+        {
+            var baseName = Path.GetFileNameWithoutExtension(fileName);
+            var safeName = SanitizeFileName(baseName).TrimEnd(' ', '.');
+            return string.IsNullOrWhiteSpace(safeName) ? "_" : safeName;
+        }
+
         public static async Task Export(this QBittorrent qb, string exportDir, Action<string> log = null)
         {
             log ??= Console.WriteLine;
