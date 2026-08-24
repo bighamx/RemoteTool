@@ -216,21 +216,36 @@ namespace ChuckieHelper.WebApi.Jobs
 
                 foreach (var torrent in torrents)
                 {
-                    if (torrent.NoDir)
+                    if (torrent.HasNoRootDirectory)
                     {
-                        var contentPath = NormalizeLocalPath(torrent.content_path);
-                        if (contentPath == null)
+                        var torrentFiles = await qb.GetTorrentFilesAsync(torrent.hash);
+                        var savePath = NormalizeLocalPath(torrent.save_path);
+                        if (torrentFiles.Count == 1)
                         {
-                            var savePath = NormalizeLocalPath(torrent.save_path);
-                            if (savePath != null && !string.IsNullOrWhiteSpace(torrent.name))
+                            var contentPath = NormalizeLocalPath(torrent.content_path);
+                            if (contentPath == null || string.Equals(contentPath, savePath, StringComparison.OrdinalIgnoreCase))
                             {
-                                contentPath = NormalizeLocalPath(Path.Combine(savePath, torrent.name));
+                                contentPath = savePath == null
+                                    ? null
+                                    : NormalizeLocalPath(Path.Combine(savePath, torrentFiles[0].name));
+                            }
+
+                            if (contentPath != null)
+                            {
+                                paths.Add(new QbManagedPath(contentPath, false, torrent, torrentFiles.Count));
                             }
                         }
-
-                        if (contentPath != null)
+                        else if (torrentFiles.Count > 1 && savePath != null)
                         {
-                            paths.Add(new QbManagedPath(contentPath, false, torrent));
+                            foreach (var torrentFile in torrentFiles)
+                            {
+                                var relativePath = torrentFile.name.Replace('/', Path.DirectorySeparatorChar);
+                                var filePath = NormalizeLocalPath(Path.Combine(savePath, relativePath));
+                                if (filePath != null)
+                                {
+                                    paths.Add(new QbManagedPath(filePath, false, torrent, torrentFiles.Count));
+                                }
+                            }
                         }
                     }
                     else
@@ -239,7 +254,7 @@ namespace ChuckieHelper.WebApi.Jobs
                             string.IsNullOrWhiteSpace(torrent.root_path) ? torrent.content_path : torrent.root_path);
                         if (rootPath != null)
                         {
-                            paths.Add(new QbManagedPath(rootPath, true, torrent));
+                            paths.Add(new QbManagedPath(rootPath, true, torrent, 0));
                         }
                     }
                 }
@@ -286,14 +301,17 @@ namespace ChuckieHelper.WebApi.Jobs
             QbManagedPath managedPath,
             PerformContext context)
         {
-            if (!managedPath.Torrent.NoDir)
+            if (!managedPath.Torrent.HasNoRootDirectory || managedPath.FileCount < 1)
             {
-                context.WriteLine($"Skipping qB-managed multi-file torrent: {managedPath.Torrent.name}");
+                context.WriteLine($"Skipping qB-managed torrent that already has a root directory: {managedPath.Torrent.name}");
                 return false;
             }
 
-            context.WriteLine($"Delegating qB-managed file move to qB: {managedPath.Torrent.name}");
-            return await qb.MoveSingleFileTorrentToOwnDirectory(managedPath.Torrent, context.WriteLine);
+            context.WriteLine($"Delegating qB-managed rootless torrent move to qB: {managedPath.Torrent.name}");
+            return await qb.MoveRootlessTorrentToOwnDirectory(
+                managedPath.Torrent,
+                managedPath.FileCount,
+                context.WriteLine);
         }
 
         private static string? NormalizeLocalPath(string path)
@@ -360,11 +378,12 @@ namespace ChuckieHelper.WebApi.Jobs
             public List<string> Locations { get; set; }
         }
 
-        private sealed class QbManagedPath(string path, bool isDirectory, Torrent torrent)
+        private sealed class QbManagedPath(string path, bool isDirectory, Torrent torrent, int fileCount)
         {
             public string Path { get; } = path;
             public bool IsDirectory { get; } = isDirectory;
             public Torrent Torrent { get; } = torrent;
+            public int FileCount { get; } = fileCount;
         }
 
         private sealed class QbSnapshot(QBittorrent client, List<QbManagedPath> managedPaths)

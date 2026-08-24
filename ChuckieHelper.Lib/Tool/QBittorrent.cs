@@ -200,7 +200,8 @@ namespace ChuckieHelper.Lib.Tool
             bool skipChecking = false,
             string name = null,
             string tags = null,
-            int priority = -1)
+            int priority = -1,
+            string contentLayout = null)
         {
             using var form = new MultipartFormDataContent();
 
@@ -213,6 +214,9 @@ namespace ChuckieHelper.Lib.Tool
 
             if (priority >= 0)
                 form.Add(new StringContent(priority.ToString()), "priority");
+
+            if (!string.IsNullOrWhiteSpace(contentLayout))
+                form.Add(new StringContent(contentLayout), "contentLayout");
 
             var response = await client.PostAsync("/api/v2/torrents/add", form);
             return response.IsSuccessStatusCode;
@@ -327,14 +331,17 @@ namespace ChuckieHelper.Lib.Tool
         public string download_path { get; set; }
 
         /// <summary>
-        /// 种子内是否仅含有单个文件,无文件夹
+        /// 当前内容布局是否没有根目录。单文件种子和 NoSubfolder 多文件种子都可能为 true。
         /// </summary>
-        public bool NoDir => root_path == "";
+        public bool HasNoRootDirectory => string.IsNullOrEmpty(root_path);
+
+        // 保留旧属性，避免影响现有调用方；不能用它判断种子是否只有一个文件。
+        public bool NoDir => HasNoRootDirectory;
 
         /// <summary>
         /// 种子内是文件夹,且文件夹内只有一个文件
         /// </summary>
-        public bool IsSingleFileInDir => !NoDir && root_path != content_path;
+        public bool IsSingleFileInDir => !HasNoRootDirectory && root_path != content_path;
     }
 
 

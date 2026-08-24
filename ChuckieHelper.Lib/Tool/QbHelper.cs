@@ -32,10 +32,18 @@ namespace ChuckieHelper.Lib
                     continue;
                 }
 
-                //处理单个文件被下载到媒体库根文件夹的情况
-                if (torrent.NoDir && IsMediaLibraryRoot(torrent.save_path))
+                if (torrent.HasNoRootDirectory)
                 {
-                    await qb.MoveSingleFileTorrentToOwnDirectory(torrent, log);
+                    var torrentFiles = await qb.GetTorrentFilesAsync(torrent.hash);
+                    var isScatteredMultiFileTorrent = torrentFiles.Count > 1 &&
+                        !IsAlreadyInOwnDirectory(torrent.save_path, torrent.name, torrentFiles.Count);
+                    var isSingleFileInMediaRoot = torrentFiles.Count == 1 &&
+                        IsMediaLibraryRoot(torrent.save_path);
+
+                    if (isScatteredMultiFileTorrent || isSingleFileInMediaRoot)
+                    {
+                        await qb.MoveRootlessTorrentToOwnDirectory(torrent, torrentFiles.Count, log);
+                    }
                 }
             }
             return true;
@@ -71,7 +79,8 @@ namespace ChuckieHelper.Lib
                 //请求种子文件
                 var torrentBytes = await homeDocker.ExportTorrentFileAsync(torrent.hash);
 
-                var ignoreFiles = homeDocker.GetTorrentFilesAsync(torrent.hash).Result.Where(x => x.priority == 0).Select(x => x.index).ToList();
+                var torrentFiles = await homeDocker.GetTorrentFilesAsync(torrent.hash);
+                var ignoreFiles = torrentFiles.Where(x => x.priority == 0).Select(x => x.index).ToList();
 
 
                 //转移到另一个qb
@@ -83,7 +92,13 @@ namespace ChuckieHelper.Lib
 
 
                 var done = torrent.progress >= 1;
-                bool added = await home.AddTorrentAsync(torrentBytes, dstPath, done, safeName);
+                var contentLayout = torrentFiles.Count > 1 ? "Subfolder" : null;
+                bool added = await home.AddTorrentAsync(
+                    torrentBytes,
+                    dstPath,
+                    done,
+                    safeName,
+                    contentLayout: contentLayout);
                 if (added)
                 {
                     await homeDocker.DeleteTorrent(torrent.hash);
@@ -98,13 +113,14 @@ namespace ChuckieHelper.Lib
                     //await home.TorrentActionAsync("recheck", torrent.hash);
                     await home.StartTorrentAsync(torrent.hash);
                 }
-                //处理单个文件被下载到媒体库根文件夹的情况
-                if (torrent.NoDir && IsMediaLibraryRoot(dstPath))
+                //处理无根目录种子被下载到媒体库根文件夹的情况
+                if (torrent.HasNoRootDirectory && torrentFiles.Count == 1 && IsMediaLibraryRoot(dstPath))
                 {
-                    await home.MoveSingleFileTorrentToOwnDirectory(
+                    await home.MoveRootlessTorrentToOwnDirectory(
                         torrent.hash,
                         torrent.name,
                         dstPath,
+                        torrentFiles.Count,
                         log);
                     await home.StartTorrentAsync(torrent.hash);
                 }
@@ -123,21 +139,84 @@ namespace ChuckieHelper.Lib
             return !string.IsNullOrWhiteSpace(path) && MediaLibraryDirectories.Contains(GetDirName(path));
         }
 
+        private static bool IsAlreadyInOwnDirectory(string savePath, string torrentName, int fileCount)
+        {
+            if (string.IsNullOrWhiteSpace(savePath))
+            {
+                return false;
+            }
+
+            var currentDirectoryName = GetDirName(Path.TrimEndingDirectorySeparator(savePath));
+            var expectedDirectoryName = GetTorrentFolderName(torrentName, fileCount);
+            return string.Equals(currentDirectoryName, expectedDirectoryName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static Task<bool> MoveRootlessTorrentToOwnDirectory(
+            this QBittorrent qb,
+            Torrent torrent,
+            int fileCount,
+            Action<string> log = null)
+        {
+            if (torrent == null || !torrent.HasNoRootDirectory || fileCount < 1)
+            {
+                return Task.FromResult(false);
+            }
+
+            return qb.MoveRootlessTorrentToOwnDirectory(
+                torrent.hash,
+                torrent.name,
+                torrent.save_path,
+                fileCount,
+                log);
+        }
+
+        public static async Task<bool> MoveRootlessTorrentToOwnDirectory(
+            this QBittorrent qb,
+            string hash,
+            string torrentName,
+            string savePath,
+            int fileCount,
+            Action<string> log = null)
+        {
+            log ??= Console.WriteLine;
+
+            if (string.IsNullOrWhiteSpace(hash) ||
+                string.IsNullOrWhiteSpace(torrentName) ||
+                string.IsNullOrWhiteSpace(savePath) ||
+                fileCount < 1)
+            {
+                log("无法整理无根目录种子：任务哈希、名称、保存路径或文件数量无效。");
+                return false;
+            }
+
+            if (IsAlreadyInOwnDirectory(savePath, torrentName, fileCount))
+            {
+                log($"qB 已位于独立目录，跳过: {torrentName}  {savePath}");
+                return false;
+            }
+
+            var folderName = GetTorrentFolderName(torrentName, fileCount);
+            var destinationPath = Path.Combine(savePath, folderName);
+            var moved = await qb.SetTorrentLocation(hash, destinationPath);
+
+            log(moved
+                ? $"qB 已移动 ({fileCount} 个文件): {torrentName}  {savePath} >> {destinationPath}"
+                : $"qB 移动失败 ({fileCount} 个文件): {torrentName}  {savePath} >> {destinationPath}");
+
+            return moved;
+        }
+
         public static Task<bool> MoveSingleFileTorrentToOwnDirectory(
             this QBittorrent qb,
             Torrent torrent,
             Action<string> log = null)
         {
-            if (torrent == null || !torrent.NoDir)
+            if (torrent == null || !torrent.HasNoRootDirectory)
             {
                 return Task.FromResult(false);
             }
 
-            return qb.MoveSingleFileTorrentToOwnDirectory(
-                torrent.hash,
-                torrent.name,
-                torrent.save_path,
-                log);
+            return qb.MoveRootlessTorrentToOwnDirectory(torrent, 1, log);
         }
 
         public static async Task<bool> MoveSingleFileTorrentToOwnDirectory(
@@ -147,25 +226,18 @@ namespace ChuckieHelper.Lib
             string savePath,
             Action<string> log = null)
         {
-            log ??= Console.WriteLine;
+            return await qb.MoveRootlessTorrentToOwnDirectory(hash, fileName, savePath, 1, log);
+        }
 
-            if (string.IsNullOrWhiteSpace(hash) ||
-                string.IsNullOrWhiteSpace(fileName) ||
-                string.IsNullOrWhiteSpace(savePath))
+        private static string GetTorrentFolderName(string torrentName, int fileCount)
+        {
+            if (fileCount == 1)
             {
-                log("无法整理单文件种子：任务哈希、文件名或保存路径为空。");
-                return false;
+                return GetSafeMediaFolderName(torrentName);
             }
 
-            var folderName = GetSafeMediaFolderName(fileName);
-            var destinationPath = Path.Combine(savePath, folderName);
-            var moved = await qb.SetTorrentLocation(hash, destinationPath);
-
-            log(moved
-                ? $"qB 已移动: {fileName}  {savePath} >> {destinationPath}"
-                : $"qB 移动失败: {fileName}  {savePath} >> {destinationPath}");
-
-            return moved;
+            var safeName = SanitizeFileName(torrentName).TrimEnd(' ', '.');
+            return string.IsNullOrWhiteSpace(safeName) ? "_" : safeName;
         }
 
         public static string GetSafeMediaFolderName(string fileName)
