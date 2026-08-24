@@ -72,10 +72,12 @@ namespace ChuckieHelper.WebApi.Jobs
 
             string recordId = json.result[0].id;
             string currentIp = json.result[0].content;
+            int currentTtl = json.result[0].ttl != null ? (int)json.result[0].ttl : 0;
+            bool currentProxied = json.result[0].proxied != null ? (bool)json.result[0].proxied : false;
 
-            if (currentIp != ipv6)
+            if (currentIp != ipv6 || currentTtl != _settings.Ttl || currentProxied != _settings.Proxied)
             {
-                context.WriteLine($"检测到 IPv6 地址变更：{currentIp} -> {ipv6}，正在更新 DNS 记录...");
+                context.WriteLine($"检测到 DNS 配置或 IP 地址变更：IP ({currentIp} -> {ipv6}), TTL ({currentTtl} -> {_settings.Ttl}), Proxied ({currentProxied} -> {_settings.Proxied})，正在更新 DNS 记录...");
 
                 var updateBody = new
                 {
