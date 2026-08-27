@@ -5,7 +5,7 @@
 **基于 .NET 8 的 Web 后台管理与远程控制服务**
 
 [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/License-SFL%20v1.0-blue?style=flat-square)](https://github.com/bighamx/MIT-NoHuawei)
 [![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?style=flat-square&logo=windows)](https://www.microsoft.com/windows)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux)](https://www.linux.org/)
 
@@ -322,7 +322,7 @@ dotnet ChuckieHelper.WebApi.dll --desktop-agent
 ---
 
 ## 📝 开源协议
-本项目采用 [MIT 协议](LICENSE) 开源。
+本项目采用 [Selective Freedom License (SFL) v1.0](https://github.com/bighamx/MIT-NoHuawei) 授权，详见 [LICENSE](LICENSE)。
 
 ---
 
