@@ -1,46 +1,159 @@
 @{
     Layout = "_Layout";
     ViewBag.Title = "Hangfire";
-    ViewBag.TargetUrl = "/hangfire-inner";
 }
 
-<iframe src="@ViewBag.TargetUrl" class="wrapper-iframe" style="width: 100%; height: 100%; border: none;"></iframe>
+<iframe id="hangfire-frame"
+        title="Hangfire 任务"
+        class="wrapper-iframe"
+        style="width: 100%; height: 100%; border: none;"></iframe>
 
 @section Scripts {
     <script>
-        document.addEventListener('DOMContentLoaded', () => {
-             // Inject Custom CSS/JS into Iframe
-            const iframe = document.querySelector('iframe');
-            if (iframe) {
-                iframe.onload = function() {
-                    try {
-                        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                        
-                        // Inject CSS
-                        fetch('/css/hangfire.css')
-                            .then(response => response.text())
-                            .then(css => {
-                                const style = iframeDoc.createElement('style');
-                                style.textContent = css;
-                                iframeDoc.head.appendChild(style);
-                            })
-                            .catch(err => console.error('Failed to load theme CSS:', err));
+        (() => {
+            const innerBasePath = '/hangfire-inner';
+            const iframe = document.getElementById('hangfire-frame');
 
-                        // Inject JS
-                        fetch('/js/hangfire.js')
-                            .then(response => response.text())
-                            .then(js => {
-                                const script = iframeDoc.createElement('script');
-                                script.textContent = js;
-                                iframeDoc.body.appendChild(script);
-                            })
-                            .catch(err => console.error('Failed to load custom JS:', err));
-
-                    } catch (e) {
-                         // Cross-origin ignored
-                    }
-                };
+            if (!iframe) {
+                return;
             }
-        });
+
+            function isHangfireUrl(url) {
+                return url.origin === window.location.origin
+                    && (url.pathname === innerBasePath || url.pathname.startsWith(`${innerBasePath}/`));
+            }
+
+            function getInnerUrlFromHash() {
+                const hashRoute = window.location.hash.slice(1);
+                const route = hashRoute
+                    ? (hashRoute.startsWith('/') ? hashRoute : `/${hashRoute}`)
+                    : '/';
+
+                const targetUrl = new URL(`${innerBasePath}${route}`, window.location.origin);
+                return isHangfireUrl(targetUrl)
+                    ? targetUrl
+                    : new URL(innerBasePath, window.location.origin);
+            }
+
+            function getOuterHash(innerUrl) {
+                const relativePath = innerUrl.pathname.slice(innerBasePath.length) || '/';
+                return `#${relativePath}${innerUrl.search}${innerUrl.hash}`;
+            }
+
+            function syncOuterAddress() {
+                try {
+                    const innerUrl = new URL(iframe.contentWindow.location.href);
+                    if (!isHangfireUrl(innerUrl)) {
+                        return;
+                    }
+
+                    const nextHash = getOuterHash(innerUrl);
+                    if (window.location.hash !== nextHash) {
+                        window.history.replaceState(
+                            window.history.state,
+                            '',
+                            `${window.location.pathname}${window.location.search}${nextHash}`);
+                    }
+                } catch (error) {
+                    console.debug('Unable to synchronize the Hangfire address:', error);
+                }
+            }
+
+            function navigateIframeFromHash() {
+                const targetUrl = getInnerUrlFromHash();
+
+                try {
+                    const currentUrl = new URL(iframe.contentWindow.location.href);
+                    if (currentUrl.href === targetUrl.href) {
+                        return;
+                    }
+                } catch {
+                    // The initial about:blank page has no Hangfire URL to compare.
+                }
+
+                iframe.src = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
+            }
+
+            function trackInnerHistory() {
+                const iframeWindow = iframe.contentWindow;
+                const iframeHistory = iframeWindow.history;
+
+                if (iframeHistory.__hangfireOuterHashSyncInstalled) {
+                    return;
+                }
+
+                Object.defineProperty(iframeHistory, '__hangfireOuterHashSyncInstalled', {
+                    value: true,
+                    configurable: true
+                });
+
+                ['pushState', 'replaceState'].forEach(methodName => {
+                    const originalMethod = iframeHistory[methodName];
+                    iframeHistory[methodName] = function (...args) {
+                        const result = originalMethod.apply(this, args);
+                        syncOuterAddress();
+                        return result;
+                    };
+                });
+
+                iframeWindow.addEventListener('popstate', syncOuterAddress);
+                iframeWindow.addEventListener('hashchange', syncOuterAddress);
+            }
+
+            function injectCustomization() {
+                const iframeDocument = iframe.contentDocument || iframe.contentWindow.document;
+
+                fetch('/css/hangfire.css')
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`HTTP ${response.status}`);
+                        }
+                        return response.text();
+                    })
+                    .then(css => {
+                        if (iframeDocument !== iframe.contentDocument) {
+                            return;
+                        }
+
+                        const style = iframeDocument.createElement('style');
+                        style.textContent = css;
+                        iframeDocument.head.appendChild(style);
+                    })
+                    .catch(error => console.error('Failed to load Hangfire theme CSS:', error));
+
+                fetch('/js/hangfire.js')
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`HTTP ${response.status}`);
+                        }
+                        return response.text();
+                    })
+                    .then(js => {
+                        if (iframeDocument !== iframe.contentDocument) {
+                            return;
+                        }
+
+                        const script = iframeDocument.createElement('script');
+                        script.textContent = js;
+                        iframeDocument.body.appendChild(script);
+                    })
+                    .catch(error => console.error('Failed to load Hangfire custom JS:', error));
+            }
+
+            iframe.addEventListener('load', () => {
+                try {
+                    syncOuterAddress();
+                    trackInnerHistory();
+                    injectCustomization();
+                } catch (error) {
+                    console.debug('Unable to initialize the Hangfire iframe:', error);
+                }
+            });
+
+            window.addEventListener('hashchange', navigateIframeFromHash);
+            window.addEventListener('popstate', navigateIframeFromHash);
+
+            navigateIframeFromHash();
+        })();
     </script>
 }
