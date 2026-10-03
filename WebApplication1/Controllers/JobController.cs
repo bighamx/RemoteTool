@@ -1,5 +1,6 @@
 using ChuckieHelper.WebApi.Jobs;
 using Hangfire;
+using Hangfire.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,6 +14,18 @@ namespace ChuckieHelper.WebApi.Controllers;
 [Route("api/[controller]")]
 public class JobController : ControllerBase
 {
+    [HttpGet("overview")]
+    public IActionResult Overview()
+    {
+        using var connection = JobStorage.Current.GetConnection();
+        var jobs = connection.GetRecurringJobs().Select(x => new
+        {
+            x.Id, x.Cron, x.TimeZoneId, x.Queue, x.LastJobState,
+            x.LastExecution, x.NextExecution, x.Error
+        });
+        var stats = JobStorage.Current.GetMonitoringApi().GetStatistics();
+        return Ok(new { recurring = jobs, stats });
+    }
 
     [HttpPost("example/trigger")]
     public ActionResult<JobTriggerResult> TriggerExampleTask(string path)

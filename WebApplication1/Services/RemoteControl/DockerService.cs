@@ -1029,6 +1029,8 @@ public class DockerService : IDockerService
             processInfo.WorkingDirectory = workingDirectory;
         }
 
+        processInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+        processInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
         using var process = Process.Start(processInfo);
         if (process == null)
         {
@@ -1086,6 +1088,10 @@ public class DockerService : IDockerService
         try
         {
             Console.WriteLine($"ExecuteProcess starting: {processInfo.FileName} {processInfo.Arguments}");
+
+            // Docker emits UTF-8 even when the Windows console code page is GBK.
+            processInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            processInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
 
             using var process = Process.Start(processInfo);
             if (process == null)

@@ -126,7 +126,7 @@ WebApplication1/hangfire.db-shm
 WebApplication1/hangfire.db-wal
 
 # ChuckieHelper project (excluded from public repo)
-ChuckieHelper/
+/ChuckieHelper/
 WebApplication1/.config/dotnet-tools.json
 
 # codex: local build artifacts
@@ -139,3 +139,25 @@ WebApplication1/.config/dotnet-tools.json
 node_modules/
 **/node_modules/
 # codex: end local build artifacts
+.tmp-mobile-build/
+screenshots/android-*.png
+screenshots/web-performance-*.png
+
+# AOCI agent host integration (machine-bound; do not commit)
+.codex/config.toml
+.codex/config.toml.backup.*
+
+# Code-intelligence tool artifacts (machine-local indexes; not project source)
+# ./.codegraph/.gitignore and ./.aoci/.gitignore already self-ignore their own contents.
+.codegraph/
+.gitnexus/
+graphify-out/
+.claude/skills/gitnexus-*/
+CLAUDE.md
+# AOCI cognition files — remove the 4 lines below if you adopt AOCI for real
+# (its governance/baseline files are meant to be committed and team-shared).
+.aoci/
+aoci.txt
+aoci.meta.txt
+aoci.code.txt
+AGENTS.md

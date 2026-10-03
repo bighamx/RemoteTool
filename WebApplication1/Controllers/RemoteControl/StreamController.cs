@@ -85,12 +85,12 @@ public class StreamController : ControllerBase
     // Allowed values for input validation
     private static readonly HashSet<string> AllowedResolutions = new()
     {
-        "640x360", "854x480", "1280x720", "1920x1080", "2560x1440", "3840x2160"
+        "original", "640x360", "854x480", "1280x720", "1920x1080", "2560x1440", "3840x2160"
     };
 
     private static readonly HashSet<string> AllowedBitrates = new()
     {
-        "500k", "1M", "2M", "3M", "4M", "5M", "8M", "10M", "15M", "20M"
+        "250k", "500k", "1M", "2M", "3M", "4M", "5M", "8M", "10M", "15M", "20M"
     };
 
     /// <summary>
@@ -104,6 +104,9 @@ public class StreamController : ControllerBase
         [FromQuery] string bitrate = "3M",
         [FromQuery] string maxrate = "5M",
         [FromQuery] string crf = "18",
+        [FromQuery] string format = "mp4",
+        [FromQuery] int fps = 60,
+        [FromQuery] string colors = "full",
         CancellationToken cancellationToken = default)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
@@ -153,7 +156,8 @@ public class StreamController : ControllerBase
 
             // Set response headers
             var response = Response;
-            response.Headers.Append("Content-Type", "video/mp4");
+            var rawH264 = string.Equals(format, "h264", StringComparison.OrdinalIgnoreCase);
+            response.Headers.Append("Content-Type", rawH264 ? "video/h264" : "video/mp4");
             response.Headers.Append("Cache-Control", "no-cache, no-store");
             response.Headers.Append("Connection", "keep-alive");
             response.Headers.Append("X-Content-Type-Options", "nosniff");
@@ -161,6 +165,12 @@ public class StreamController : ControllerBase
             // 先确定编码器，再根据编码器类型选择截屏方式
             var (encoder, encoderParams) = await GetEncoderAsync(crf, cancellationToken);
             var (screenCaptureInput, captureMethod) = await GetScreenCaptureInputAsync(encoder, cancellationToken);
+            response.Headers["X-Capture-Method"] = captureMethod;
+            AgentStartupLogger.Log("StreamCapture", $"Selected {captureMethod}, encoder={encoder}");
+            fps = new[] { 10, 15, 24, 30, 60 }.Contains(fps) ? fps : 60;
+            colors = colors == "rgb565" ? "rgb565" : "full";
+            screenCaptureInput = screenCaptureInput.Replace($"framerate={Framerate}", $"framerate={fps}")
+                .Replace($"-framerate {Framerate} ", $"-framerate {fps} ");
 
             // Calculate appropriate buffer size
             var bitrateKbps = ParseBitrateToKbps(bitrate);
@@ -172,40 +182,33 @@ public class StreamController : ControllerBase
 
             var isSession0 = InteractiveProcessLauncher.IsRunningInSession0;
 
-            // 根据截屏方式决定滤镜链和像素格式：
-            // ddagrab + 硬件编码器：帧始终在 GPU 内存，不做 CPU 侧处理（零开销）
-            // gdigrab + 任意编码器：CPU 帧，需要 scale + yuv420p 转换
-            string vfArg, pixFmtArg;
-            if (captureMethod == "ddagrab")
-            {
-                // GPU 路径：ddagrab 产出 d3d11 帧 → 直送硬件编码器
-                // 不做 hwdownload、不做 CPU 缩放、不做格式转换
-                vfArg = "";
-                pixFmtArg = "";
-            }
-            else
-            {
-                // CPU 路径：gdigrab → scale → yuv420p → 编码
-                vfArg = $"-vf scale={resolution}";
-                pixFmtArg = "-pix_fmt yuv420p";
-            }
-
-            // GOP = 帧率的一半（每 0.5 秒一个关键帧，平衡延迟与压缩率）
-            var gopSize = Framerate / 2;
+            // Original quality retains the zero-copy GPU path. Other modes resize and
+            // optionally quantize RGB before hardware encoding, preserving aspect ratio.
+            var filters = new List<string>();
+            if (captureMethod == "ddagrab") filters.AddRange(new[] { "hwdownload", "format=bgra" });
+            if (resolution != "original")
+                filters.Add($"scale={resolution.Replace('x', ':')}:force_original_aspect_ratio=decrease:force_divisible_by=2");
+            if (colors == "rgb565")
+                filters.AddRange(new[] { "format=rgb24", "lutrgb=r='floor(val/8)*8':g='floor(val/4)*4':b='floor(val/8)*8'" });
+            filters.Add("format=yuv420p");
+            var vfArg = $"-vf {string.Join(',', filters)}";
+            var pixFmtArg = "-pix_fmt yuv420p";
+            if (resolution == "original" && colors == "full" && captureMethod == "ddagrab") { vfArg = ""; pixFmtArg = ""; }
+            var gopSize = Math.Max(1, fps / 2);
             // frag_duration = 一帧时长（微秒），每帧立即输出一个分片
-            var fragDuration = 1_000_000 / Framerate;
+            var fragDuration = 1_000_000 / fps;
 
             // 构建 FFmpeg 参数（不含输出目标，根据模式分别追加）
-            var ffmpegArgsBase = $"-hide_banner -loglevel error " +
+            var ffmpegArgsBase = $"-hide_banner -nostdin -loglevel error " +
                            $"-probesize 32 -analyzeduration 0 -fflags +nobuffer+genpts " +
                            $"{screenCaptureInput} " +
                            $"{vfArg} {pixFmtArg} ".TrimEnd() + " " +
                            $"-c:v {encoder} {encoderParams} -b:v {bitrate} -maxrate {maxrate} -bufsize {bufferSize} " +
                            $"-g {gopSize} -keyint_min {gopSize} -bf 0 {profileArg} {tuneArg} " +
                            $"-flush_packets 1 " +
-                           $"-frag_duration {fragDuration} " +
-                           $"-movflags +frag_keyframe+empty_moov+default_base_moof " +
-                           $"-f mp4";
+                           (rawH264
+                               ? "-bsf:v h264_metadata=aud=insert -f h264"
+                               : $"-frag_duration {fragDuration} -movflags +frag_keyframe+empty_moov+default_base_moof -f mp4");
 
             Console.WriteLine($"encoder: {encoder}, capture: {captureMethod}, quality: {resolution}, {bitrate}, CRF {crf}, session0: {isSession0}");
 
@@ -304,7 +307,7 @@ public class StreamController : ControllerBase
 
                 var processInfo = new ProcessStartInfo
                 {
-                    FileName = "ffmpeg",
+                    FileName = FfmpegExecutable.Path,
                     Arguments = ffmpegArgs,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
@@ -496,7 +499,7 @@ public class StreamController : ControllerBase
         {
             var ffmpegCheck = new ProcessStartInfo
             {
-                FileName = "ffmpeg",
+                FileName = FfmpegExecutable.Path,
                 Arguments = "-version",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -628,7 +631,7 @@ public class StreamController : ControllerBase
     {
         lock (_cacheLock)
         {
-            if (_cachedScreenCaptureInput != null)
+            if (_cachedScreenCaptureInput != null && !InteractiveProcessLauncher.IsRunningInSession0)
             {
                 var method = _cachedScreenCaptureInput.Contains("ddagrab") ? "ddagrab" : "gdigrab";
                 return (_cachedScreenCaptureInput, method);
@@ -675,13 +678,15 @@ public class StreamController : ControllerBase
     /// </summary>
     private static async Task<bool> TestDdagrabPipelineAsync(string encoder, CancellationToken cancellationToken)
     {
+        if (InteractiveProcessLauncher.IsRunningInSession0)
+            return await TestInteractiveDdagrabAsync(encoder, cancellationToken);
         try
         {
             Console.WriteLine($"Testing ddagrab + {encoder} pipeline (capturing 10 frames)...");
 
             var psi = new ProcessStartInfo
             {
-                FileName = "ffmpeg",
+                FileName = FfmpegExecutable.Path,
                 Arguments = $"-hide_banner -f lavfi -i \"ddagrab=framerate={Framerate}\" -c:v {encoder} -frames:v 10 -f null -",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -718,6 +723,43 @@ public class StreamController : ControllerBase
         {
             Console.WriteLine($"ddagrab + {encoder} pipeline test error: {ex.Message}");
             return false;
+        }
+    }
+
+    // Session 0 cannot duplicate the interactive desktop. Probe through the same
+    // desktop agent used by the real stream, and re-probe when the input desktop changes.
+    private static async Task<bool> TestInteractiveDdagrabAsync(string encoder, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        int pid = 0;
+        try
+        {
+            listener.Start(1);
+            int port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            var args = $"-hide_banner -nostdin -loglevel error -f lavfi -i \"ddagrab=framerate=30:draw_mouse=1\" -c:v {encoder} -frames:v 3 -f h264 tcp://127.0.0.1:{port}";
+            var launched = await DesktopAgent.LaunchFFmpegInAgentAsync(args, timeout.Token);
+            pid = launched.Pid;
+            if (pid == 0) return false;
+            using var client = await listener.AcceptTcpClientAsync(timeout.Token);
+            using var stream = client.GetStream();
+            byte[] buffer = new byte[4096];
+            int bytes = 0, count;
+            while ((count = await stream.ReadAsync(buffer, timeout.Token)) > 0) bytes += count;
+            AgentStartupLogger.Log("StreamCapture", $"Interactive DXGI probe produced {bytes} bytes");
+            return bytes > 128;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return false; }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            AgentStartupLogger.Log("StreamCapture", "Interactive DXGI probe failed: " + error.Message);
+            return false;
+        }
+        finally
+        {
+            listener.Stop();
+            if (pid > 0) try { using var process = Process.GetProcessById(pid); if (!process.HasExited && process.ProcessName.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase)) process.Kill(); } catch { }
         }
     }
 
@@ -775,7 +817,7 @@ public class StreamController : ControllerBase
 
             var testProcess = new ProcessStartInfo
             {
-                FileName = "ffmpeg",
+                FileName = FfmpegExecutable.Path,
                 Arguments = testArgs,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,

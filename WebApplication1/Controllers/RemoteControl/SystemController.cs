@@ -10,10 +10,12 @@ namespace ChuckieHelper.WebApi.Controllers.RemoteControl;
 public class SystemController : ControllerBase
 {
     private readonly ISystemControlService _systemService;
+    private readonly PerformanceMonitor _performance;
 
-    public SystemController(ISystemControlService systemService)
+    public SystemController(ISystemControlService systemService, PerformanceMonitor performance)
     {
         _systemService = systemService;
+        _performance = performance;
     }
 
     private IActionResult ApiResult(object? data = null, string? message = null, bool success = true)
@@ -165,4 +167,7 @@ public class SystemController : ControllerBase
             return ApiError($"Get system info failed: {ex.Message}");
         }
     }
+
+    [HttpGet("performance")]
+    public IActionResult Performance([FromQuery] int seconds = 60) => ApiResult(_performance.Snapshot(seconds));
 }

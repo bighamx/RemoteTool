@@ -86,6 +86,14 @@ public static class InteractiveProcessLauncher
     private static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
 
     [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool SetTokenInformation(IntPtr token, int informationClass, ref uint value, uint length);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateProcessW")]
+    private static extern bool CreateProcessOnDesktop(string application, System.Text.StringBuilder commandLine,
+        IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint flags,
+        IntPtr environment, string workingDirectory, ref STARTUPINFO startup, out PROCESS_INFORMATION process);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool GetTokenInformation(IntPtr tokenHandle, int tokenInformationClass,
         IntPtr tokenInformation, uint tokenInformationLength, out uint returnLength);
 
@@ -174,6 +182,50 @@ public static class InteractiveProcessLauncher
 
     private static bool? _isSession0;
     private static readonly object _lock = new();
+
+    /// <summary>Reuse an already-LocalSystem service token in the interactive session. Never change account privileges.</summary>
+    public static (bool Success, int ProcessId) LaunchDesktopAgent(string commandLine)
+    {
+        if (!OperatingSystem.IsWindows() || !WindowsIdentity.GetCurrent().IsSystem)
+            return LaunchInInteractiveSession(commandLine, useElevatedTokenIfAvailable: true);
+        uint session = WTSGetActiveConsoleSessionId();
+        if (session == 0xFFFFFFFF) return LaunchInInteractiveSession(commandLine, useElevatedTokenIfAvailable: true);
+        IntPtr original = IntPtr.Zero, duplicate = IntPtr.Zero, environment = IntPtr.Zero;
+        try
+        {
+            using var current = Process.GetCurrentProcess();
+            if (!OpenProcessToken(current.Handle, TOKEN_DUPLICATE | TOKEN_QUERY, out original)
+                || !DuplicateTokenEx(original, TOKEN_ALL_ACCESS, IntPtr.Zero, SecurityImpersonation, TokenPrimary, out duplicate)
+                || !SetTokenInformation(duplicate, 12, ref session, sizeof(uint)))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            CreateEnvironmentBlock(out environment, duplicate, false);
+            var startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>(), lpDesktop = @"winsta0\default" };
+            if (!CreateProcessAsUser(duplicate, null, commandLine, IntPtr.Zero, IntPtr.Zero, false,
+                    CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, environment, null, ref startup, out var process))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            CloseHandle(process.hThread); CloseHandle(process.hProcess);
+            Log($"Started LocalSystem desktop agent in session {session}, PID={process.dwProcessId}");
+            return (true, process.dwProcessId);
+        }
+        catch (Exception ex) { LogException("LocalSystem desktop agent launch failed", ex); return (false, 0); }
+        finally
+        {
+            if (environment != IntPtr.Zero) DestroyEnvironmentBlock(environment);
+            if (duplicate != IntPtr.Zero) CloseHandle(duplicate);
+            if (original != IntPtr.Zero) CloseHandle(original);
+        }
+    }
+
+    internal static int LaunchOnCurrentInputDesktop(string executable, string arguments, string desktopName)
+    {
+        var startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>(), lpDesktop = @"winsta0\" + desktopName };
+        var command = new System.Text.StringBuilder($"\"{executable}\" {arguments}");
+        if (!CreateProcessOnDesktop(executable, command, IntPtr.Zero, IntPtr.Zero, false, CREATE_NO_WINDOW,
+            IntPtr.Zero, Path.GetDirectoryName(executable), ref startup, out var process))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        CloseHandle(process.hThread); CloseHandle(process.hProcess);
+        return process.dwProcessId;
+    }
 
     /// <summary>
     /// 在指定会话中查找高完整性进程并复制其主令牌，用于以“管理员身份”创建子进程。调用方须 CloseHandle 返回的令牌。

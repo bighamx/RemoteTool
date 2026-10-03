@@ -3,11 +3,14 @@
     Layout = "_Layout";
 }
 @section Styles {
-    <link rel="stylesheet" href="~/css/remote.css" />
+    <link rel="stylesheet" href="~/css/remote.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/performance.css" asp-append-version="true" />
 }
 @section Scripts {
     <script src="~/js/mp4box.all.min.js"></script>
-    <script src="~/js/remote.js"></script>
+    <script src="~/js/performance.js" asp-append-version="true"></script>
+    <script src="~/js/media-preview.js" asp-append-version="true"></script>
+    <script src="~/js/remote.js" asp-append-version="true"></script>
 }
 
 @section Tabs {
@@ -78,96 +81,30 @@
             </div>
             <div id="action-result" class="action-result"></div>
 
-            <!-- System Information Section -->
-            <div class="info-container">
-                <div class="info-header">
-                    <h2>系统信息</h2>
-                    <div class="info-header-actions">
-                        <label class="auto-refresh-toggle">
-                            <input type="checkbox" id="sysinfo-auto-refresh" checked>
-                            <span>自动刷新</span>
-                        </label>
-                        <button id="refresh-info-btn" class="btn btn-secondary btn-sm btn-refresh" title="刷新">
-                            <span class="refresh-icon">
-                                <svg aria-hidden="true"><use href="#icon-refresh" /></svg>
-                            </span>
-                        </button>
-                    </div>
+            <!-- Unified system monitoring -->
+            <div class="perf-heading system-monitor-heading">
+                <div>
+                    <h2>系统监控</h2>
+                    <p>实时采样 · 历史保留 15 分钟</p>
                 </div>
-
-                <!-- 动态监控：CPU + 内存 并排 -->
-                <div class="sysinfo-row">
-                    <div class="sysinfo-section sysinfo-flex">
-                        <h3 class="sysinfo-section-title">🔲 处理器</h3>
-                        <div class="sysinfo-compact-info">
-                            <span id="info-cpu-name-compact">-</span>
-                            <span class="sysinfo-sep">|</span>
-                            <span id="info-cpu-cores-compact">-</span>
-                            <span class="sysinfo-sep">|</span>
-                            <span id="info-cpu-clock-compact">-</span>
-                            <span class="sysinfo-sep">|</span>
-                            <span id="info-cpu-temp-compact">-</span>
-                        </div>
-                        <div class="sysinfo-bar-container">
-                            <label>占用</label>
-                            <div class="sysinfo-bar">
-                                <div id="info-cpu-bar" class="sysinfo-bar-fill" style="width: 0%"></div>
-                            </div>
-                            <span id="info-cpu-usage" class="sysinfo-bar-label">0%</span>
-                        </div>
-                    </div>
-                    <div class="sysinfo-section sysinfo-flex">
-                        <h3 class="sysinfo-section-title">💾 内存</h3>
-                        <div class="sysinfo-bar-container">
-                            <label id="info-mem-detail">- / -</label>
-                            <div class="sysinfo-bar">
-                                <div id="info-mem-bar" class="sysinfo-bar-fill" style="width: 0%"></div>
-                            </div>
-                            <span id="info-mem-usage" class="sysinfo-bar-label">0%</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 动态监控：GPU + 磁盘 并排 -->
-                <div class="sysinfo-row">
-                    <div class="sysinfo-section sysinfo-flex">
-                        <h3 class="sysinfo-section-title">🎮 显卡</h3>
-                        <div id="info-gpu-list"><span class="text-muted">-</span></div>
-                    </div>
-                    <div class="sysinfo-section sysinfo-flex">
-                        <h3 class="sysinfo-section-title">💿 磁盘</h3>
-                        <div id="info-drive-list"><span class="text-muted">-</span></div>
-                    </div>
-                </div>
-
-                <!-- 网络 + 基本信息 并排 -->
-                <div class="sysinfo-row">
-                    <div class="sysinfo-section sysinfo-flex">
-                        <h3 class="sysinfo-section-title">🌐 网络</h3>
-                        <div id="info-network-list"><span class="text-muted">-</span></div>
-                    </div>
-                    <div class="sysinfo-section sysinfo-flex">
-                        <h3 class="sysinfo-section-title">🖥️ 基本信息</h3>
-                        <div class="sysinfo-basic-grid">
-                            <div class="sysinfo-basic-item">
-                                <span class="sysinfo-label">计算机名</span><span id="info-machine">-</span>
-                            </div>
-                            <div class="sysinfo-basic-item">
-                                <span class="sysinfo-label">用户名</span><span id="info-user">-</span>
-                            </div>
-                            <div class="sysinfo-basic-item">
-                                <span class="sysinfo-label">操作系统</span><span id="info-os">-</span>
-                            </div>
-                            <div class="sysinfo-basic-item">
-                                <span class="sysinfo-label">架构</span><span id="info-arch">-</span>
-                            </div>
-                            <div class="sysinfo-basic-item">
-                                <span class="sysinfo-label">运行时间</span><span id="info-uptime">-</span>
-                            </div>
-                        </div>
-                    </div>
+                <div class="system-monitor-actions">
+                    <select id="system-history-range" class="perf-range" aria-label="历史时间范围">
+                        <option value="60">最近 60 秒</option>
+                        <option value="300">最近 5 分钟</option>
+                        <option value="900">最近 15 分钟</option>
+                    </select>
+                    <label class="auto-refresh-toggle">
+                        <input type="checkbox" id="sysinfo-auto-refresh" checked>
+                        <span>自动刷新</span>
+                    </label>
+                    <button id="refresh-info-btn" class="btn btn-secondary btn-sm btn-refresh" title="刷新">
+                        <span class="refresh-icon">
+                            <svg aria-hidden="true"><use href="#icon-refresh" /></svg>
+                        </span>
+                    </button>
                 </div>
             </div>
+            <div id="performance-dashboard" data-performance-dashboard></div>
         </div>
 
         <!-- Processes Tab -->
@@ -702,7 +639,7 @@
                         title="上一个">
                     <svg class="preview-nav-icon" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-left" /></svg>
                 </button>
-                <video id="preview-video" class="preview-video" controls preload="auto">
+                <video id="preview-video" class="preview-video" controls playsinline preload="metadata">
                     您的浏览器不支持视频播放
                 </video>
                 <button type="button" id="preview-video-next-btn" class="preview-nav-btn preview-next-btn"
@@ -712,8 +649,10 @@
             </div>
         </div>
         <div class="preview-footer">
+            <span id="preview-media-error" class="preview-media-error"></span>
             <span id="preview-counter" class="preview-counter" style="display: none;"></span>
             <div class="preview-footer-actions">
+                <button id="preview-fit-btn" class="btn btn-secondary">适应屏幕</button>
                 <button id="preview-download-btn" class="btn btn-success">💾 下载</button>
                 <button id="preview-close-footer-btn" class="btn btn-secondary">关闭</button>
             </div>

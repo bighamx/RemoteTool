@@ -20,13 +20,30 @@ public class InputController : ControllerBase
         _systemService = systemService;
     }
 
+    [HttpPost("text")]
+    [HttpPost("mouse-relative")]
+    [HttpPost("pointer-click")]
+    [HttpPost("pointer-wheel")]
+    public async Task<IActionResult> NativeInput([FromBody] System.Text.Json.JsonElement request)
+    {
+        var kind = Request.Path.Value!.Split('/').Last();
+        var text = request.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+        if (text.Length > 2048) return ApiError("Text is too long");
+        int Value(string name) => request.TryGetProperty(name, out var p) ? p.GetInt32() : 0;
+        if (InteractiveProcessLauncher.IsRunningInSession0)
+            await DesktopAgent.SendNativeInputAsync(kind, text, Value("dx"), Value("dy"), Value("button"));
+        else await InputDesktopDispatcher.RunAsync(() => { NativeDesktopInput.Execute(kind,text,Value("dx"),Value("dy"),Value("button"));return Array.Empty<byte>(); });
+        return Ok(new { message = "Input sent" });
+    }
+
     [HttpPost("click")]
-    public IActionResult Click([FromBody] ClickRequest request)
+    public async Task<IActionResult> Click([FromBody] ClickRequest request)
     {
         if (request.X < 0 || request.X > 1 || request.Y < 0 || request.Y > 1)
             return ApiError("Invalid coordinates");
 
-        _systemService.SendMouseClick(request.X, request.Y);
+        if (InteractiveProcessLauncher.IsRunningInSession0) await DesktopAgent.SendMouseClickAsync(request.X,request.Y);
+        else _systemService.SendMouseClick(request.X, request.Y);
         return Ok(new { message = "Click sent" });
     }
 

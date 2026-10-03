@@ -80,6 +80,11 @@ namespace ChuckieHelper.WebApi
 
             // Remote Control Services
             builder.Services.AddRemoteControlServices();
+            builder.Services.AddSingleton<DeviceIdentity>();
+            builder.Services.AddSingleton<PerformanceMonitor>();
+            builder.Services.AddSingleton<HardwareSensorMonitor>();
+            builder.Services.AddHostedService(services => services.GetRequiredService<HardwareSensorMonitor>());
+            builder.Services.AddHostedService(services => services.GetRequiredService<PerformanceMonitor>());
 
             // Configure JWT Authentication
             builder.Services.AddJwtAuthentication(builder.Configuration);
@@ -218,6 +223,7 @@ namespace ChuckieHelper.WebApi
                 }
 
                 var systemService = context.RequestServices.GetRequiredService<SystemService>();
+                context.Response.Headers["X-Chuckie-Input-Ack"] = "1";
                 var webSocket = await context.WebSockets.AcceptWebSocketAsync();
                 await InputWebSocketHandler.RunAsync(webSocket, systemService, context.RequestAborted);
             });

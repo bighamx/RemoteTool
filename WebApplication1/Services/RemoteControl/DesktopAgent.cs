@@ -20,7 +20,7 @@ public static class DesktopAgent
     /// <summary>
     /// 代理协议版本号（每次修改代理协议时递增，用于检测旧版本代理）
     /// </summary>
-    public const int ProtocolVersion = 2;
+    public const int ProtocolVersion = 5;
 
     /// <summary>
     /// 代理空闲超时时间（无连接时自动退出）
@@ -31,7 +31,9 @@ public static class DesktopAgent
     private const string IdleTimeoutEnvName = "CHUCKIEHELPER_AGENT_IDLE_TIMEOUT_MINUTES";
 
     private static readonly SemaphoreSlim _launchLock = new(1, 1);
+    private static readonly SemaphoreSlim CommandLock = new(1, 1);
     private static bool _agentLaunchAttempted;
+    private static bool _legacyAgentDetected;
 
     private static void Log(string message)
         => AgentStartupLogger.Log("DesktopAgent", message);
@@ -149,11 +151,12 @@ public static class DesktopAgent
         if (requestBytes == null || requestBytes.Length == 0) return;
 
         var requestJson = Encoding.UTF8.GetString(requestBytes);
-        Log($"收到命令: {requestJson}");
 
         using var doc = JsonDocument.Parse(requestJson);
         var root = doc.RootElement;
         var type = root.GetProperty("type").GetString() ?? "";
+        // Do not persist clipboard contents or typed text in diagnostics.
+        if (type is not "screenshot" and not "mouse_move" and not "ping") Log($"收到命令: {type}");
 
         // FFmpeg 流式命令需要特殊处理（长连接，不走请求-响应模式）
         if (type == "start_ffmpeg")
@@ -166,7 +169,7 @@ public static class DesktopAgent
 
         try
         {
-            response = type switch
+            byte[] Dispatch() => type switch
             {
                 "screenshot" => HandleScreenshot(systemService),
                 "mouse_click" => HandleMouseClick(root, systemService),
@@ -178,19 +181,21 @@ public static class DesktopAgent
                 "mouse_wheel" => HandleMouseWheel(root, systemService),
                 "keyboard" => HandleKeyboard(root, systemService),
                 "keyboard_multi" => HandleKeyboardMulti(root, systemService),
+                "native_input" => HandleNativeInput(root),
                 "lock" => HandleLock(systemService),
                 "screen_bounds" => HandleScreenBounds(systemService),
                 "launch_ffmpeg" => HandleLaunchFFmpeg(root),
                 "enum_windows" => HandleEnumWindows(),
                 "clipboard_get" => HandleClipboardGet(systemService),
                 "clipboard_set" => HandleClipboardSet(root, systemService),
-                "ping" => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { ok = true, version = ProtocolVersion })),
+                "ping" => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { ok = true, version = ProtocolVersion, pid = Environment.ProcessId, isSystem = System.Security.Principal.WindowsIdentity.GetCurrent().IsSystem })),
                 _ => ErrorResponse($"未知命令类型: {type}")
             };
+            response = type == "ping" ? Dispatch() : await InputDesktopDispatcher.RunAsync(Dispatch);
         }
         catch (Exception ex)
         {
-            LogException($"处理命令 '{type}' 时出错", ex);
+            if (!(type == "screenshot" && ex is System.ComponentModel.Win32Exception)) LogException($"处理命令 '{type}' 时出错", ex);
             response = ErrorResponse(ex.Message);
         }
 
@@ -215,19 +220,19 @@ public static class DesktopAgent
 
     private static byte[] HandleMouseClick(JsonElement root, SystemService svc)
     {
-        svc.SendMouseClick(root.GetProperty("x").GetDouble(), root.GetProperty("y").GetDouble());
+        NativeDesktopInput.ClickAt(root.GetProperty("x").GetDouble(), root.GetProperty("y").GetDouble(), 0);
         return OkResponse();
     }
 
     private static byte[] HandleMouseRightClick(JsonElement root, SystemService svc)
     {
-        svc.SendMouseRightClick(root.GetProperty("x").GetDouble(), root.GetProperty("y").GetDouble());
+        NativeDesktopInput.ClickAt(root.GetProperty("x").GetDouble(), root.GetProperty("y").GetDouble(), 2);
         return OkResponse();
     }
 
     private static byte[] HandleMouseMiddleClick(JsonElement root, SystemService svc)
     {
-        svc.SendMouseMiddleClick(root.GetProperty("x").GetDouble(), root.GetProperty("y").GetDouble());
+        NativeDesktopInput.ClickAt(root.GetProperty("x").GetDouble(), root.GetProperty("y").GetDouble(), 1);
         return OkResponse();
     }
 
@@ -324,10 +329,16 @@ public static class DesktopAgent
         if (ffmpegPath == null)
             return ErrorResponse("FFmpeg 未找到。请确保 ffmpeg 已安装并在系统 PATH 中。");
 
-        Console.WriteLine($"[DesktopAgent] launch_ffmpeg: {ffmpegPath} {args}");
+        Log($"launch_ffmpeg: {ffmpegPath} {args}");
 
         try
         {
+            if (!string.Equals(InputDesktopDispatcher.CurrentDesktopName, "Default", StringComparison.OrdinalIgnoreCase))
+            {
+                var childId = InteractiveProcessLauncher.LaunchOnCurrentInputDesktop(ffmpegPath, args, InputDesktopDispatcher.CurrentDesktopName);
+                Log($"FFmpeg:{childId} started on desktop {InputDesktopDispatcher.CurrentDesktopName}");
+                return Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { ok = true, pid = childId }));
+            }
             var psi = new ProcessStartInfo
             {
                 FileName = ffmpegPath,
@@ -351,7 +362,9 @@ public static class DesktopAgent
                 {
                     using var reader = proc.StandardError;
                     while (await reader.ReadLineAsync() is { } line)
-                        Console.WriteLine($"[DesktopAgent FFmpeg:{proc.Id}] {line}");
+                        Log($"FFmpeg:{proc.Id} {line}");
+                    await proc.WaitForExitAsync();
+                    Log($"FFmpeg:{proc.Id} exited with code {proc.ExitCode}");
                 }
                 catch { /* 忽略 */ }
             });
@@ -524,6 +537,7 @@ public static class DesktopAgent
         // 常见安装位置
         var candidates = new[]
         {
+            FfmpegExecutable.Path,
             "ffmpeg", // PATH 中
             @"C:\ffmpeg\bin\ffmpeg.exe",
             @"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
@@ -664,6 +678,12 @@ public static class DesktopAgent
                 return;
             }
 
+            if (_legacyAgentDetected)
+            {
+                StopLegacyAgents();
+                _legacyAgentDetected = false;
+            }
+
             if (_agentLaunchAttempted)
             {
                 Log("已尝试过启动代理但仍不可用，重置启动尝试标记后重试");
@@ -672,13 +692,14 @@ public static class DesktopAgent
             }
 
             Log("代理未运行，准备启动交互式会话进程");
+            Log($"Desktop broker LocalSystem={System.Security.Principal.WindowsIdentity.GetCurrent().IsSystem}");
 
             var dllPath = InteractiveProcessLauncher.GetApplicationDllPath();
             var dotnetPath = InteractiveProcessLauncher.GetDotnetPath();
             var commandLine = $"\"{dotnetPath}\" \"{dllPath}\" --desktop-agent";
             Log($"启动命令: {commandLine}");
 
-            var (success, pid) = InteractiveProcessLauncher.LaunchInInteractiveSession(commandLine, useElevatedTokenIfAvailable: true);
+            var (success, pid) = InteractiveProcessLauncher.LaunchDesktopAgent(commandLine);
             _agentLaunchAttempted = true;
 
             if (!success)
@@ -734,7 +755,16 @@ public static class DesktopAgent
         {
             var response = await SendCommandInternalAsync(
                 "{\"type\":\"ping\"}", TimeSpan.FromSeconds(2));
-            var ok = response != null;
+            var ok = false;
+            if (response != null)
+            {
+                using var document = JsonDocument.Parse(response);
+                ok = document.RootElement.TryGetProperty("ok", out var result) && result.GetBoolean()
+                    && document.RootElement.TryGetProperty("version", out var version) && version.GetInt32() >= ProtocolVersion;
+                if (ok && System.Security.Principal.WindowsIdentity.GetCurrent().IsSystem)
+                    ok = document.RootElement.TryGetProperty("isSystem", out var identity) && identity.GetBoolean();
+                if (!ok) _legacyAgentDetected = true;
+            }
             if (!ok)
                 Log("TryPingAgentAsync 失败：代理无响应");
             return ok;
@@ -743,6 +773,26 @@ public static class DesktopAgent
         {
             LogException("TryPingAgentAsync 异常", ex);
             return false;
+        }
+    }
+
+    private static void StopLegacyAgents()
+    {
+        var root = Path.GetDirectoryName(InteractiveProcessLauncher.GetApplicationDllPath())!;
+        var shadow = root.IndexOf("ShadowCopyDirectory", StringComparison.OrdinalIgnoreCase);
+        if (shadow >= 0) root = root[..shadow].TrimEnd(Path.DirectorySeparatorChar);
+        using var query = new System.Management.ManagementObjectSearcher("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name='dotnet.exe' OR Name='ChuckieHelper.WebApi.exe'");
+        foreach (System.Management.ManagementObject entry in query.Get())
+        {
+            var command = entry["CommandLine"]?.ToString() ?? "";
+            if (!command.Contains("--desktop-agent", StringComparison.OrdinalIgnoreCase)
+                || !command.Contains(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || !command.Contains("ChuckieHelper.WebApi", StringComparison.OrdinalIgnoreCase)) continue;
+            using var process = Process.GetProcessById(Convert.ToInt32(entry["ProcessId"]));
+            if (process.Id == Environment.ProcessId) continue;
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(3000);
+            Log($"Retired legacy desktop agent PID={process.Id}");
         }
     }
 
@@ -777,9 +827,12 @@ public static class DesktopAgent
     public static async Task SendMouseClickAsync(double x, double y, CancellationToken ct = default)
     {
         await EnsureAgentRunningAsync();
-        await SendCommandInternalAsync(
+        var response = await SendCommandInternalAsync(
             JsonSerializer.Serialize(new { type = "mouse_click", x, y }),
             TimeSpan.FromSeconds(3));
+        if (response == null) throw new IOException("Desktop click timed out");
+        using var result = JsonDocument.Parse(response);
+        if (!result.RootElement.GetProperty("ok").GetBoolean()) throw new InvalidOperationException(result.RootElement.GetProperty("error").GetString());
     }
 
     /// <summary>
@@ -1054,6 +1107,7 @@ public static class DesktopAgent
     /// </summary>
     private static async Task<byte[]?> SendCommandInternalAsync(string commandJson, TimeSpan timeout)
     {
+        await CommandLock.WaitAsync();
         using var cts = new CancellationTokenSource(timeout);
         try
         {
@@ -1067,14 +1121,31 @@ public static class DesktopAgent
         }
         catch (OperationCanceledException)
         {
-            Log($"命令超时: {commandJson}, timeout={timeout.TotalMilliseconds}ms");
+            Log($"命令超时, timeout={timeout.TotalMilliseconds}ms");
             return null;
         }
         catch (Exception ex)
         {
-            LogException($"发送命令失败: {commandJson}", ex);
+            LogException("发送桌面命令失败", ex);
             return null;
         }
+        finally { CommandLock.Release(); }
+    }
+
+    public static async Task SendNativeInputAsync(string kind, string text = "", int dx = 0, int dy = 0, int button = 0)
+    {
+        await EnsureAgentRunningAsync();
+        var response = await SendCommandInternalAsync(JsonSerializer.Serialize(new { type = "native_input", kind, text, dx, dy, button }), TimeSpan.FromSeconds(5));
+        if (response == null) throw new IOException("Desktop input timed out");
+        using var result = JsonDocument.Parse(response);
+        if (!result.RootElement.GetProperty("ok").GetBoolean()) throw new InvalidOperationException(result.RootElement.GetProperty("error").GetString());
+    }
+
+    private static byte[] HandleNativeInput(JsonElement root)
+    {
+        NativeDesktopInput.Execute(root.GetProperty("kind").GetString() ?? "", root.GetProperty("text").GetString() ?? "",
+            root.GetProperty("dx").GetInt32(), root.GetProperty("dy").GetInt32(), root.GetProperty("button").GetInt32());
+        return Encoding.UTF8.GetBytes("{\"ok\":true}");
     }
 
     #endregion

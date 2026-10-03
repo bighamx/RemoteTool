@@ -3823,3 +3823,4 @@ input.multi-select-row {
     font-family: 'Cascadia Code', 'Fira Code', monospace;
     /* Ensure consistent rendering */
 }
+.preview-content{min-height:0;overflow:hidden;padding:10px}.preview-container{height:90dvh;max-height:90dvh}.preview-header{padding:10px 16px;gap:12px}.preview-header h3{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.preview-image,.preview-video{width:100%;height:100%;object-fit:contain}.preview-image{touch-action:none;user-select:none;cursor:grab}.preview-image:active{cursor:grabbing}.preview-media-error{font-size:12px;color:var(--accent-danger);flex:1;overflow-wrap:anywhere}.preview-footer{gap:12px;flex-wrap:wrap}@media(max-width:600px){.file-preview .preview-container{width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0}.preview-nav-btn{width:36px;height:36px}.preview-prev-btn{left:5px}.preview-next-btn{right:5px}.preview-header{padding:8px 12px}.preview-footer{padding:10px 12px}}

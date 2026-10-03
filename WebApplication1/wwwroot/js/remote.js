@@ -997,7 +997,6 @@ class RemoteControl {
         if (previewImageEl) {
             previewImageEl.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this.previewNextImage();
             });
         }
         const previewVideoPrevBtn = document.getElementById('preview-video-prev-btn');
@@ -2413,13 +2412,19 @@ class RemoteControl {
     async loadSystemInfo() {
         this.setRefreshState('refresh-info-btn', true);
         try {
-            const response = await fetch('/api/system/info', {
+            const dashboard = document.getElementById('performance-dashboard')?.performanceDashboard;
+            if (dashboard) {
+                await dashboard.poll(true);
+                if (dashboard.data?.info) this.renderSystemInfo(dashboard.data.info);
+                return;
+            }
+            const response = await fetch('/api/system/performance', {
                 headers: { 'Authorization': `Bearer ${this.token}` }
             });
 
             if (response.ok) {
                 const info = await response.json();
-                info.success && this.renderSystemInfo(info.data);
+                info.success && info.data.info && this.renderSystemInfo(info.data.info);
             }
         } catch (error) {
             console.error('Failed to load system info:', error);
@@ -2435,109 +2440,6 @@ class RemoteControl {
             osBadge.textContent = info.platform;
             osBadge.className = `badge ${info.platform.toLowerCase()}`;
             osBadge.style.display = 'inline-flex';
-        }
-
-        // 基本信息
-        document.getElementById('info-machine').textContent = info.machineName;
-        document.getElementById('info-user').textContent = info.userName;
-        document.getElementById('info-os').textContent = info.osVersion;
-        document.getElementById('info-arch').textContent = info.is64Bit ? '64 位' : '32 位';
-        document.getElementById('info-uptime').textContent = info.upTime;
-
-        // CPU 信息（紧凑行）
-        document.getElementById('info-cpu-name-compact').textContent = info.cpuName || '-';
-        document.getElementById('info-cpu-cores-compact').textContent =
-            info.cpuCores > 0 ? `${info.cpuCores}C / ${info.cpuLogicalProcessors}T` : '-';
-        document.getElementById('info-cpu-clock-compact').textContent =
-            info.cpuMaxClockSpeedMHz > 0 ? `${(info.cpuMaxClockSpeedMHz / 1000).toFixed(2)} GHz` : '-';
-
-        // CPU 温度
-        const cpuTempCompact = document.getElementById('info-cpu-temp-compact');
-        if (info.cpuTemperature > 0) {
-            const tempClass = info.cpuTemperature > 85 ? 'temp-hot' : info.cpuTemperature > 65 ? 'temp-warm' : 'temp-normal';
-            cpuTempCompact.innerHTML = `<span class="${tempClass}">${info.cpuTemperature}°C</span>`;
-        } else {
-            cpuTempCompact.textContent = 'N/A';
-        }
-
-        // CPU 占用率
-        this.updateBar('info-cpu-bar', 'info-cpu-usage', info.cpuUsagePercent);
-
-        // 内存信息
-        const totalMemGB = (info.totalMemoryMB / 1024).toFixed(1);
-        const usedMemGB = (info.usedMemoryMB / 1024).toFixed(1);
-        document.getElementById('info-mem-detail').textContent = `${usedMemGB} GB / ${totalMemGB} GB`;
-        this.updateBar('info-mem-bar', 'info-mem-usage', info.memoryUsagePercent);
-
-        // GPU 信息
-        const gpuListEl = document.getElementById('info-gpu-list');
-        if (info.gpus && info.gpus.length > 0) {
-            gpuListEl.innerHTML = info.gpus.map(gpu => {
-                let details = [];
-                if (gpu.memoryMB > 0) {
-                    if (gpu.memoryUsedMB > 0) {
-                        details.push(`显存: <span class="val">${gpu.memoryUsedMB} MB / ${gpu.memoryMB} MB</span>`);
-                    } else {
-                        details.push(`显存: <span class="val">${gpu.memoryMB} MB</span>`);
-                    }
-                }
-                if (gpu.usagePercent >= 0) details.push(`占用: <span class="val">${gpu.usagePercent}%</span>`);
-                if (gpu.temperature >= 0) {
-                    const tc = gpu.temperature > 85 ? 'temp-hot' : gpu.temperature > 65 ? 'temp-warm' : 'temp-normal';
-                    details.push(`温度: <span class="val ${tc}">${gpu.temperature}°C</span>`);
-                }
-                if (gpu.driverVersion) details.push(`驱动: <span class="val">${gpu.driverVersion}</span>`);
-
-                return `<div class="sysinfo-gpu-card">
-                    <div class="sysinfo-card-title">${this.escapeHtml(gpu.name)}</div>
-                    <div class="sysinfo-card-details">${details.map(d => `<span>${d}</span>`).join('')}</div>
-                    ${gpu.memoryMB > 0 && gpu.memoryUsedMB > 0 ? `
-                    <div class="sysinfo-bar-container" style="margin-top:8px">
-                        <label>显存占用</label>
-                        <div class="sysinfo-bar">
-                            <div class="sysinfo-bar-fill ${this.getBarClass(Math.round(gpu.memoryUsedMB / gpu.memoryMB * 100))}" style="width:${Math.round(gpu.memoryUsedMB / gpu.memoryMB * 100)}%"></div>
-                        </div>
-                        <span class="sysinfo-bar-label">${Math.round(gpu.memoryUsedMB / gpu.memoryMB * 100)}%</span>
-                    </div>` : ''}
-                </div>`;
-            }).join('');
-        } else {
-            gpuListEl.innerHTML = '<span class="text-muted">未检测到显卡</span>';
-        }
-
-        // 磁盘信息
-        const driveListEl = document.getElementById('info-drive-list');
-        if (info.drives && info.drives.length > 0) {
-            driveListEl.innerHTML = info.drives.map(drive => `
-                <div class="sysinfo-drive-card">
-                    <div class="sysinfo-card-title">${this.escapeHtml(drive.name)} <span style="font-weight:400;font-size:12px;color:var(--text-secondary)">${drive.driveFormat}</span></div>
-                    <div class="sysinfo-bar-container">
-                        <label>${drive.usedGB} / ${drive.totalGB} GB</label>
-                        <div class="sysinfo-bar">
-                            <div class="sysinfo-bar-fill ${this.getBarClass(drive.usagePercent)}" style="width:${drive.usagePercent}%"></div>
-                        </div>
-                        <span class="sysinfo-bar-label">${drive.usagePercent}%</span>
-                    </div>
-                </div>
-            `).join('');
-        } else {
-            driveListEl.innerHTML = '<span class="text-muted">未检测到磁盘</span>';
-        }
-
-        // 网络适配器
-        const netListEl = document.getElementById('info-network-list');
-        if (info.networkAdapters && info.networkAdapters.length > 0) {
-            netListEl.innerHTML = info.networkAdapters.map(net => `
-                <div class="sysinfo-net-card">
-                    <div class="sysinfo-card-title">${this.escapeHtml(net.name)}</div>
-                    <div class="sysinfo-card-details">
-                        <span>速率: <span class="val">${net.speedMbps >= 1000 ? (net.speedMbps / 1000) + ' Gbps' : net.speedMbps + ' Mbps'}</span></span>
-                        ${net.macAddress ? `<span>MAC: <span class="val">${net.macAddress}</span></span>` : ''}
-                    </div>
-                </div>
-            `).join('');
-        } else {
-            netListEl.innerHTML = '<span class="text-muted">未检测到网络适配器</span>';
         }
 
         // 保存平台信息供其他方法使用
