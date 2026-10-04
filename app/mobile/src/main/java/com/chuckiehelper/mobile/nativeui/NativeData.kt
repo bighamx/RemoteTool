@@ -70,7 +70,11 @@ fun displayTime(value: String, zone: java.time.ZoneId = java.time.ZoneId.systemD
 
 class LoginRequired : IOException("登录已过期，请重新登录")
 
-class NativeApi(val base: String, private val probing: Boolean = false) {
+class NativeApi(
+    val base: String,
+    private val probing: Boolean = false,
+    private val noRetry: Boolean = false,
+) {
     companion object {
         val client =
             OkHttpClient.Builder()
@@ -104,6 +108,7 @@ class NativeApi(val base: String, private val probing: Boolean = false) {
                         .newBuilder()
                         .callTimeout(3500, java.util.concurrent.TimeUnit.MILLISECONDS)
                         .build()
+                else if (noRetry) client.newBuilder().retryOnConnectionFailure(false).build()
                 else client)
                 .newCall(request)
         cont.invokeOnCancellation { call.cancel() }
@@ -217,6 +222,13 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
     private var connectJob: Job? = null
     private var connectionEpoch = 0
 
+    init {
+        val lastId = prefs.getString("last_device", null)
+        val last = devices.find { it.id == lastId }
+            ?: devices.singleOrNull()?.takeIf { prefs.contains("channel_${it.id}") }
+        if (last != null) connect(last)
+    }
+
     private fun readDevices() =
         runCatching {
                 JSONArray(prefs.getString("devices", "[]")).objects().map { d ->
@@ -286,6 +298,16 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun connect(device: Device) {
+        val current = devices.find { it.id == device.id } ?: device
+        val url = preferredChannel(current)?.takeIf { it in current.endpoints }
+            ?: current.endpoints.firstOrNull() ?: return
+        channelDevice = null
+        checkingChannels = false
+        channelChecks = emptyList()
+        startConnection(current, url)
+    }
+
+    fun openChannels(device: Device) {
         channelDevice = devices.find { it.id == device.id } ?: device
         refreshChannels()
     }
@@ -357,6 +379,10 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
             closeChannels()
             return
         }
+        startConnection(device, url)
+    }
+
+    private fun startConnection(device: Device, url: String) {
         val epoch = ++connectionEpoch
         connectJob?.cancel()
         connecting = true
@@ -401,10 +427,11 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
                         session =
                             Session(
                                 device,
-                                reachable.map { if (it.url == selected.url) selected else it },
+                                (reachable.filter { it.url != selected.url } + selected),
                                 api,
                             )
-                        prefs.edit().putString("channel_${device.id}", url).apply()
+                        prefs.edit().putString("channel_${device.id}", url)
+                            .putString("last_device", device.id).apply()
                         browsingDevices = false
                         channelDevice = null
                     }

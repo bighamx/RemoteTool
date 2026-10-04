@@ -61,6 +61,9 @@ fun NativeApp(model: NativeModel) {
             )
     MaterialTheme(colorScheme = colors) {
         val snackbar = remember { SnackbarHostState() }
+        val backDispatcher =
+            androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current
+                ?.onBackPressedDispatcher
         val session = model.session.takeUnless { model.browsingDevices }
         val pages = rememberSaveableStateHolder()
         var route by rememberSaveable { mutableStateOf("系统") }
@@ -106,6 +109,7 @@ fun NativeApp(model: NativeModel) {
                             IconButton(
                                 onClick = {
                                     if (model.browsingDevices) model.returnToDevice()
+                                    else if (detail == "Hermes") backDispatcher?.onBackPressed()
                                     else detail = null
                                 }
                             ) {
@@ -114,7 +118,7 @@ fun NativeApp(model: NativeModel) {
                     },
                     actions = {
                         if (session != null)
-                            IconButton(onClick = { model.connect(session.device) }) {
+                            IconButton(onClick = { model.openChannels(session.device) }) {
                                 Icon(Icons.Outlined.Route, "连接通道")
                             }
                         if (session != null)
@@ -145,7 +149,7 @@ fun NativeApp(model: NativeModel) {
                     }
             },
         ) { padding ->
-            Box(Modifier.fillMaxSize().padding(padding)) {
+            Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
                 when {
                     model.connecting && model.channelDevice == null ->
                         Column(
@@ -190,11 +194,19 @@ fun NativeApp(model: NativeModel) {
                                     "Compose 管理" -> ComposeScreen(api, error, composeTarget)
                                     "终端" -> TerminalScreen(api, error)
                                     "Hangfire" -> JobsScreen(api, error)
+                                    "Hermes" -> HermesScreen(api, session.device.id)
                                     else ->
                                         Column(
                                             Modifier.padding(16.dp),
                                             verticalArrangement = Arrangement.spacedBy(12.dp),
                                         ) {
+                                            ToolRow(
+                                                "Hermes",
+                                                "会话 · 模型 · 工具执行",
+                                                Icons.Outlined.SmartToy,
+                                            ) {
+                                                detail = "Hermes"
+                                            }
                                             ToolRow(
                                                 "命令终端",
                                                 "Shell · PowerShell · CMD",
@@ -217,7 +229,7 @@ fun NativeApp(model: NativeModel) {
                                                 "当前：${session.api.base}\n检测所有地址并手动选择",
                                                 Icons.Outlined.Route,
                                             ) {
-                                                model.connect(session.device)
+                                                model.openChannels(session.device)
                                             }
                                         }
                                 }
@@ -299,7 +311,7 @@ private fun DeviceScreen(model: NativeModel) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item { Text("检测各地址的响应时间，然后选择连接通道。", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item { Text("连接时使用上次的通道，可在设备内手动切换。", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(model.devices, key = { it.id }) { device ->
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

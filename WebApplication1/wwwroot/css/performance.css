@@ -16,13 +16,13 @@
 .perf-range { width: auto; }
 .perf-adapter { margin-top: 5px; width: 100%; }
 .perf-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1px; grid-auto-flow: dense; column-gap: 14px; align-items: start; }
-.perf-grid > .perf-card { margin-bottom: 14px; }
+.perf-grid > .perf-card, .perf-grid > .perf-details { margin: 0 0 14px; }
 .perf-card, .perf-details {
     min-width: 0; border: 1px solid var(--border-color, #304056); border-radius: 16px;
     background: var(--bg-card, var(--card, #192436));
     color: var(--text-primary, var(--text, #eef4fa));
 }
-.perf-card { padding: 18px; }
+.perf-card { padding: 18px; box-sizing: border-box; }
 .perf-card header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; min-height: 48px; }
 .perf-card header > div { min-width: 0; }
 .perf-card h3 { font-size: 16px; margin: 0; }
@@ -32,6 +32,7 @@
 .perf-chart svg { display: block; width: 100%; height: 138px; color: var(--text-secondary, #9aafc3); }
 .perf-axis, .perf-time { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-secondary, #9aafc3); }
 .perf-axis span:last-child { display: none; }
+.perf-minimum { position: absolute; left: 0; bottom: 14px; font-size: 10px; color: var(--text-secondary, #9aafc3); }
 .perf-footer { font-size: 12px; color: var(--text-secondary, #9aafc3); margin-top: 10px; overflow-wrap: anywhere; }
 .perf-network-values { display: flex; flex-wrap: wrap; gap: 18px; font-size: 21px; font-weight: 650; }
 .perf-temperature-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; font-size: 12px; }
@@ -41,6 +42,9 @@
     display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere;
 }
 .perf-temperature-values b { font-size: 20px; line-height: 1.15; white-space: nowrap; }
+.perf-thermal-card .perf-temperature-values { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.perf-fans-card .perf-temperature-values { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.perf-fans-card .perf-temperature-values b { font-size: 16px; }
 .perf-temperature-values small { font-size: 10px; color: var(--text-secondary, #9aafc3); overflow-wrap: anywhere; }
 .perf-empty { display: flex; align-items: center; justify-content: center; min-height: 120px; color: var(--text-secondary, #9aafc3); font-size: 13px; text-align: center; padding: 16px; }
 .perf-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; font-size: 13px; margin: 12px 0 0; }
@@ -51,6 +55,10 @@
 .perf-device-heading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
 .perf-device-heading > span { font-size: 12px; color: var(--text-secondary, #9aafc3); }
 .perf-device progress { display: block; width: 100%; height: 6px; accent-color: #4ecdb2; margin-top: 10px; }
+.perf-disk-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.perf-disk-grid .perf-device { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--border-color, #304056); border-radius: 10px; background: var(--bg-secondary, transparent); }
+.perf-disk-grid .perf-device-heading { display: block; }
+.perf-disk-grid .perf-device-heading > span { display: block; margin-top: 5px; }
 .perf-inline-details { margin-top: 12px; border-top: 1px solid var(--border-color, #304056); }
 .perf-inline-details summary { cursor: pointer; padding: 12px 0; font-size: 12px; font-weight: 600; }
 .perf-details { margin-top: 14px; overflow: hidden; }
@@ -58,13 +66,20 @@
 .perf-core-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 0 16px 16px; }
 .perf-core-grid article { min-width: 0; }
 .perf-core-grid .perf-chart svg { height: 85px; }
+.perf-core-temperatures .perf-core-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.perf-core-temperatures .perf-chart svg { height: 65px; }
+.perf-core-temperatures .perf-time { display: none; }
+.perf-core-temperatures .perf-core-last-row .perf-time { display: flex; }
+@media (max-width: 1100px) {
+    .perf-core-temperatures .perf-core-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 [data-theme="light"] .perf-chart svg { color: #57606a; }
 [data-theme="light"] .perf-card { box-shadow: 0 2px 8px #1d385408; }
 @media (max-width: 680px) {
     .perf-grid { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; gap: 12px; }
-    .perf-grid > .perf-card { grid-row-end: auto !important; margin-bottom: 0; }
+    .perf-grid > .perf-card, .perf-grid > .perf-details { grid-row-end: auto !important; margin-bottom: 0; }
     .perf-card { padding: 15px; }
     .perf-heading { align-items: flex-start; }
     .system-monitor-actions { gap: 8px; width: 100%; }
-    .perf-core-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .perf-core-grid, .perf-core-temperatures .perf-core-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

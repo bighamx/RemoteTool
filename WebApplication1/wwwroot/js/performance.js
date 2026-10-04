@@ -5,12 +5,12 @@
     const rate = value => { let n = Math.max(0, value || 0), unit = 0; while (n >= 1024 && unit < 3) { n /= 1024; unit++; } return `${n.toFixed(unit ? 1 : 0)} ${['B/s','KB/s','MB/s','GB/s'][unit]}`; };
     let colors = ['#49b7e8','#a58bfa','#4ecdb2','#f2b66f','#ec86ab'];
 
-    function chart(history, series, seconds, maximum, suffix) {
+    function chart(history, series, seconds, maximum, suffix, minimum = 0) {
         if (!history.length || !series.length) return '<div class="perf-empty">等待采样数据…</div>';
         const right = Date.now(), left = right - seconds * 1000;
-        const max = Math.max(1, maximum);
+        const max = Math.max(minimum + 1, maximum);
         const x = sample => Math.max(0, Math.min(600, (Date.parse(sample.timestamp) - left) / (seconds * 1000) * 600));
-        const y = value => 150 - Math.max(0, Math.min(max, value)) / max * 140;
+        const y = value => 150 - (Math.max(minimum, Math.min(max, value)) - minimum) / (max - minimum) * 140;
         let paths = '';
         series.forEach((s, i) => {
             // Missing measurements are gaps, never synthetic zeroes.
@@ -25,7 +25,7 @@
             history.forEach(sample => { const v = s.get(sample); if (Number.isFinite(v) && v >= 0) segment.push([x(sample),y(v)]); else flush(); });
             flush();
         });
-        return `<div class="perf-chart"><div class="perf-axis"><span>${escape(suffix === '%' ? '100%' : suffix === '°C' ? `${max} °C` : rate(max))}</span><span>0</span></div><svg viewBox="0 0 600 160" preserveAspectRatio="none" role="img" aria-label="最近 ${seconds} 秒历史曲线"><g stroke="currentColor" opacity=".13">${[10,45,80,115,150].map(y=>`<line x1="0" y1="${y}" x2="600" y2="${y}"/>`).join('')}${[0,100,200,300,400,500,600].map(x=>`<line x1="${x}" y1="10" x2="${x}" y2="150"/>`).join('')}</g>${paths}</svg><div class="perf-time"><span>${seconds === 60 ? '60 秒前' : `${seconds/60} 分钟前`}</span><span>现在</span></div></div>`;
+        return `<div class="perf-chart"><div class="perf-axis"><span>${escape(suffix === '%' ? '100%' : suffix === '°C' ? `${max} °C` : rate(max))}</span><span>0</span></div><svg viewBox="0 0 600 160" preserveAspectRatio="none" role="img" aria-label="最近 ${seconds} 秒历史曲线"><g stroke="currentColor" opacity=".13">${[10,45,80,115,150].map(y=>`<line x1="0" y1="${y}" x2="600" y2="${y}"/>`).join('')}${[0,100,200,300,400,500,600].map(x=>`<line x1="${x}" y1="10" x2="${x}" y2="150"/>`).join('')}</g>${paths}</svg>${minimum ? `<span class="perf-minimum">${escape(minimum)} ${escape(suffix)}</span>` : ''}<div class="perf-time"><span>${seconds === 60 ? '60 秒前' : `${seconds/60} 分钟前`}</span><span>现在</span></div></div>`;
     }
 
     class Dashboard {
@@ -36,15 +36,29 @@
             }
             this.themeObserver = new MutationObserver(() => {if(this.data)this.render();});
             this.themeObserver.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
-            this.layoutObserver = new ResizeObserver(entries => {
-                entries.forEach(({target}) => this.sizeCard(target));
-            });
+            this.layoutObserver = new ResizeObserver(() => this.layoutCards());
         }
         dispose() { clearInterval(this.timer);this.themeObserver.disconnect();this.layoutObserver.disconnect(); }
         sizeCard(card) {
             card.style.gridRowEnd = window.matchMedia('(min-width: 681px)').matches
                 ? `span ${Math.ceil(card.getBoundingClientRect().height + 14)}`
                 : 'auto';
+        }
+        layoutCards() {
+            const coreGrid = this.element.querySelector('.perf-core-temperatures .perf-core-grid');
+            if (coreGrid && coreGrid.getBoundingClientRect().width > 0) {
+                const columns = getComputedStyle(coreGrid).gridTemplateColumns.split(' ').length;
+                const charts = [...coreGrid.children];
+                const lastRowStart = Math.floor((charts.length - 1) / columns) * columns;
+                charts.forEach((chart, index) => chart.classList.toggle('perf-core-last-row', index >= lastRowStart));
+            }
+            const pair = [...this.element.querySelectorAll('.perf-network-card, .perf-gpu-card')];
+            pair.forEach(card => { card.style.minHeight = ''; });
+            if (pair.length === 2 && window.matchMedia('(min-width: 681px)').matches) {
+                const height = Math.ceil(Math.max(...pair.map(card => card.getBoundingClientRect().height)));
+                pair.forEach(card => { card.style.minHeight = `${height}px`; });
+            }
+            this.element.querySelectorAll('.perf-grid > .perf-card, .perf-grid > .perf-details').forEach(card => this.sizeCard(card));
         }
         async poll(force = false) {
             if (!this.element.isConnected) { this.dispose(); return; }
@@ -77,7 +91,7 @@
             const cpu = chart(history,[{get:s=>s.cpuPercent,color:colors[0]}],this.seconds,100,'%');
             const ram = chart(history,[{get:s=>s.memoryPercent,color:colors[1]}],this.seconds,100,'%');
             const net = chart(history,[{get:s=>read(s,'receiveBytesPerSecond'),color:colors[2]},{get:s=>read(s,'sendBytesPerSecond'),color:colors[3]}],this.seconds,networkMax,'B/s');
-            const temp = temperatures.length ? chart(history,temperatures.slice(0,12).map((t,i)=>({get:s=>s.temperatures?.find(x=>t.id ? x.id===t.id : x.name===t.name)?.celsius,color:colors[i%colors.length]})),this.seconds,110,'°C') : '<div class="perf-empty">设备没有提供可读取的温度传感器</div>';
+            const temp = temperatures.length ? chart(history,temperatures.slice(0,12).map((t,i)=>({get:s=>s.temperatures?.find(x=>t.id ? x.id===t.id : x.name===t.name)?.celsius,color:colors[i%colors.length]})),this.seconds,70,'°C',35) : '<div class="perf-empty">设备没有提供可读取的温度传感器</div>';
             const facts = pairs => `<dl class="perf-facts">${pairs.map(([label, value]) => `<dt>${escape(label)}</dt><dd>${escape(value ?? '—')}</dd>`).join('')}</dl>`;
             const hardwareKey = name => String(name || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
             const gpuTemperatures = gpu => {
@@ -89,7 +103,7 @@
             };
             const hardwareCards = this.options.details === false ? '' : `
                 <article class="perf-card perf-gpu-card"><header><div><h3>显卡</h3><p>GPU 占用 · 显存 · 温度 · 驱动</p></div></header>${(info.gpus || []).map(g => `<section class="perf-device"><h4>${escape(g.name)}</h4>${facts([['占用', g.usagePercent >= 0 ? percent(g.usagePercent) : '不可用'], ['显存', g.memoryMB > 0 ? `${g.memoryUsedMB >= 0 ? `${g.memoryUsedMB} / ` : ''}${g.memoryMB} MB` : '不可用'], ...gpuTemperatures(g), ['驱动', g.driverVersion || '—']])}${g.memoryMB > 0 && g.memoryUsedMB >= 0 ? `<progress aria-label="显存占用" max="${g.memoryMB}" value="${g.memoryUsedMB}"></progress>` : ''}</section>`).join('') || '<div class="perf-empty">未检测到显卡</div>'}</article>
-                <article class="perf-card perf-disk-card"><header><div><h3>磁盘空间</h3><p>分区容量与可用空间</p></div></header>${(info.drives || []).map(d => `<section class="perf-device"><div class="perf-device-heading"><h4>${escape(d.name)}</h4><span>${escape(d.driveFormat || '')} · ${percent(d.usagePercent)}</span></div><div class="perf-footer">已用 ${escape(d.usedGB)} / ${escape(d.totalGB)} GB · 可用 ${escape(d.freeGB)} GB</div><progress aria-label="${escape(d.name)} 空间占用" max="100" value="${Number.isFinite(d.usagePercent) ? d.usagePercent : 0}"></progress></section>`).join('') || '<div class="perf-empty">未检测到磁盘</div>'}</article>`;
+                <article class="perf-card perf-disk-card"><header><div><h3>磁盘空间</h3><p>分区容量与可用空间</p></div></header><div class="perf-disk-grid">${(info.drives || []).map(d => `<section class="perf-device"><div class="perf-device-heading"><h4>${escape(d.name)}</h4><span>${escape(d.driveFormat || '')} · ${percent(d.usagePercent)}</span></div><div class="perf-footer">已用 ${escape(d.usedGB)} / ${escape(d.totalGB)} GB · 可用 ${escape(d.freeGB)} GB</div><progress aria-label="${escape(d.name)} 空间占用" max="100" value="${Number.isFinite(d.usagePercent) ? d.usagePercent : 0}"></progress></section>`).join('') || '<div class="perf-empty">未检测到磁盘</div>'}</div></article>`;
             const adapters = (info.networkAdapters || []).map(n => `<section class="perf-device"><h4>${escape(n.name)}</h4>${facts([['连接速率', n.speedMbps >= 1000 ? `${n.speedMbps / 1000} Gbps` : `${n.speedMbps || 0} Mbps`], ...(n.macAddress ? [['MAC', n.macAddress]] : [])])}</section>`).join('');
             this.layoutObserver.disconnect();
             this.element.innerHTML = `${this.options.heading === false ? '' : `<div class="perf-heading"><div><h2>系统监控</h2><p>实时采样 · 历史保留 15 分钟</p></div><select class="perf-range" aria-label="历史时间范围"><option value="60">最近 60 秒</option><option value="300">最近 5 分钟</option><option value="900">最近 15 分钟</option></select></div>`}
@@ -100,17 +114,18 @@
                 ${hardwareCards}
                 <article class="perf-card perf-thermal-card"><header><div><h3>设备温度</h3><p>${escape(latest.sensorStatus||'仅显示已读取的传感器')}</p></div></header><div class="perf-temperature-values">${temperatures.map((t,i)=>`<span title="${escape(t.hardware||'')}" style="color:${colors[i%colors.length]}">${escape(sensorName(t.name))} <b>${t.celsius.toFixed(0)} °C</b>${t.hardware?`<small> · ${escape(t.hardware)}</small>`:''}</span>`).join('')}</div>${temp}</article>
                 <article class="perf-card perf-fans-card"><header><div><h3>风扇与水泵</h3><p>实际转速 · RPM</p></div></header>${fans.length ? `<div class="perf-temperature-values">${fans.map(f=>`<span title="${escape(f.hardware||'')}">${escape(sensorName(f.name))} <b>${Math.round(f.rpm)} RPM</b></span>`).join('')}</div>` : '<div class="perf-empty">设备没有提供可读取的转速传感器</div>'}</article>
+            ${coreTemperatures.length?`<details class="perf-details perf-core-temperatures" data-panel="core-temperatures"><summary>CPU 核心温度 · ${coreTemperatures.length} 核</summary><div class="perf-core-grid">${coreTemperatures.map((t,i)=>`<article><div class="perf-footer">${escape(sensorName(t.name))} · ${t.celsius.toFixed(0)} °C</div>${chart(history,[{get:s=>s.temperatures?.find(x=>x.id===t.id)?.celsius,color:colors[0]}],this.seconds,110,'°C')}</article>`).join('')}</div></details>`:''}
             </div>
-            ${latest.cpuCores?.length ? `<details class="perf-details" data-panel="cores"><summary>逻辑处理器曲线 · ${latest.cpuCores.length} 个</summary><div class="perf-core-grid">${latest.cpuCores.map((v,i)=>`<article><div class="perf-footer">CPU ${i} · ${percent(v)}</div>${chart(history,[{get:s=>s.cpuCores?.[i],color:colors[0]}],this.seconds,100,'%')}</article>`).join('')}</div></details>` : ''}
-            ${coreTemperatures.length?`<details class="perf-details perf-core-temperatures" data-panel="core-temperatures"><summary>CPU 核心温度 · ${coreTemperatures.length} 核</summary><div class="perf-core-grid">${coreTemperatures.map((t,i)=>`<article><div class="perf-footer">${escape(sensorName(t.name))} · ${t.celsius.toFixed(0)} °C</div>${chart(history,[{get:s=>s.temperatures?.find(x=>x.id===t.id)?.celsius,color:colors[0]}],this.seconds,110,'°C')}</article>`).join('')}</div></details>`:''}`;
+            ${latest.cpuCores?.length ? `<details class="perf-details" data-panel="cores"><summary>逻辑处理器曲线 · ${latest.cpuCores.length} 个</summary><div class="perf-core-grid">${latest.cpuCores.map((v,i)=>`<article><div class="perf-footer">CPU ${i} · ${percent(v)}</div>${chart(history,[{get:s=>s.cpuCores?.[i],color:colors[0]}],this.seconds,100,'%')}</article>`).join('')}</div></details>` : ''}`;
             const range = this.options.rangeElement || this.element.querySelector('.perf-range');
             if (range) { range.value = String(this.seconds); range.onchange = () => { this.seconds = Number(range.value); this.data = null; this.poll(true); }; }
             const adapter = this.element.querySelector('.perf-adapter'); adapter.value = this.adapter; adapter.onchange = () => {this.adapter=adapter.value;this.render();};
-            this.element.querySelectorAll('details').forEach(d=>{d.open=open.has(d.dataset.panel);});
-            this.element.querySelectorAll('.perf-grid > .perf-card').forEach(card => {
-                this.sizeCard(card);
-                this.layoutObserver.observe(card);
+            this.element.querySelectorAll('details').forEach(d => {
+                d.open = open.has(d.dataset.panel);
+                d.addEventListener('toggle', () => this.layoutCards());
             });
+            this.layoutCards();
+            this.element.querySelectorAll('.perf-grid > .perf-card, .perf-grid > .perf-details').forEach(card => this.layoutObserver.observe(card));
         }
     }
     window.PerformanceDashboard = {mount:(element,options)=>new Dashboard(element,options)};

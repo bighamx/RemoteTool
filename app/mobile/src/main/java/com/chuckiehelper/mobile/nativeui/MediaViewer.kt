@@ -75,7 +75,12 @@ fun MediaViewer(api: NativeApi, file: JSONObject, close: () -> Unit, download: (
                     AsyncImage(
                         model =
                             ImageRequest.Builder(context)
-                                .data(api.base + "/api/files/preview-image?path=${q(path)}")
+                                .data(
+                                    api.base +
+                                        file.optString("url").ifBlank {
+                                            "/api/files/preview-image?path=${q(path)}"
+                                        }
+                                )
                                 .addHeader("Cookie", api.cookie())
                                 .crossfade(true)
                                 .build(),
@@ -126,7 +131,10 @@ fun MediaViewer(api: NativeApi, file: JSONObject, close: () -> Unit, download: (
                                 .apply {
                                     setMediaItem(
                                         MediaItem.fromUri(
-                                            api.base + "/api/files/stream?path=${q(path)}"
+                                            api.base +
+                                                file.optString("url").ifBlank {
+                                                    "/api/files/stream?path=${q(path)}"
+                                                }
                                         )
                                     )
                                     addListener(

@@ -174,6 +174,11 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
         val file = targets.first()
         val target = file.optString("path")
         when (name) {
+            "复制路径" -> {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("文件路径", "\"$target\""))
+                onError("路径已复制")
+            }
             "Compose 管理" -> onCompose(target)
             "下载" -> download(file)
             "文本编辑" -> edit(file, false)
@@ -397,7 +402,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                                     expanded = menuFile?.optString("path") == target,
                                     onDismissRequest = { menuFile = null },
                                 ) {
-                                    val actions = mutableListOf("重命名", "复制", "移动", "压缩")
+                                    val actions = mutableListOf("复制路径", "重命名", "复制", "移动", "压缩")
                                     if (
                                         !isDir &&
                                             file

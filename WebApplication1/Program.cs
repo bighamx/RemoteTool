@@ -81,6 +81,12 @@ namespace ChuckieHelper.WebApi
             // Remote Control Services
             builder.Services.AddRemoteControlServices();
             builder.Services.AddSingleton<DeviceIdentity>();
+            builder.Services.AddSingleton<HermesBridge>();
+            builder.Services.AddSingleton<HermesManagement>();
+            builder.Services.AddSingleton<HermesAttachments>();
+            builder.Services.AddHostedService<HermesAttachmentCleanup>();
+            builder.Services.AddHttpClient("hermes", client => client.Timeout = Timeout.InfiniteTimeSpan)
+                .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
             builder.Services.AddSingleton<PerformanceMonitor>();
             builder.Services.AddSingleton<HardwareSensorMonitor>();
             builder.Services.AddHostedService(services => services.GetRequiredService<HardwareSensorMonitor>());

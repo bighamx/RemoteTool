@@ -122,6 +122,7 @@ fun SystemScreen(
                         history.map { it.optDouble("cpuPercent").toFloat() },
                         100f,
                         MaterialTheme.colorScheme.primary,
+                        headerDetail = cpuTemperatureLabel(latest.array("temperatures").objects()),
                     )
                 }
                 item {
@@ -188,8 +189,16 @@ fun SystemScreen(
                     }
                 }
                 item("cores") {
-                    ExpandableSystemCard("逻辑处理器", "${latest.array("cpuCores").length()} 核") {
-                        val count = latest.array("cpuCores").length()
+                    val count = latest.array("cpuCores").length()
+                    val knownCount =
+                        count.takeIf { it > 0 }
+                            ?: info.optInt("cpuLogicalProcessors", info.optInt("processorCount"))
+                    ExpandableSystemCard(
+                        "逻辑处理器",
+                        if (knownCount > 0) "$knownCount 核" else "等待处理器数据",
+                    ) {
+                        if (count == 0)
+                            Text("核心曲线暂未获取，稍后自动刷新", style = MaterialTheme.typography.bodySmall)
                         (0 until count).chunked(2).forEach { row ->
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 row.forEach { index ->
@@ -213,7 +222,7 @@ fun SystemScreen(
                     }
                 }
             }
-            item("device-info") { ExpandableSystemCard("更多设备信息") { InfoRows(info) } }
+            item("device-info") { ExpandableSystemCard("更多设备信息") { SystemDetails(info) } }
         }
     }
     action?.let { (name, path) ->
@@ -297,6 +306,7 @@ fun MetricCard(
     max: Float?,
     color: Color,
     second: List<Float> = emptyList(),
+    headerDetail: String? = null,
 ) {
     ExpandableSystemCard(
         title,
@@ -304,6 +314,7 @@ fun MetricCard(
         defaultExpanded = true,
         value = value,
         valueColor = color,
+        headerDetail = headerDetail,
     ) {
         Sparkline(values, max, color, Modifier.fillMaxWidth().height(105.dp), second)
     }
@@ -316,6 +327,7 @@ private fun ExpandableSystemCard(
     defaultExpanded: Boolean = false,
     value: String? = null,
     valueColor: Color = MaterialTheme.colorScheme.primary,
+    headerDetail: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     var expanded by rememberSaveable(title) { mutableStateOf(defaultExpanded) }
@@ -337,8 +349,17 @@ private fun ExpandableSystemCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
             }
-            if (value != null)
-                Text(value, style = MaterialTheme.typography.titleLarge, color = valueColor)
+            if (value != null || headerDetail != null)
+                Column(horizontalAlignment = Alignment.End) {
+                    if (value != null)
+                        Text(value, style = MaterialTheme.typography.titleLarge, color = valueColor)
+                    if (headerDetail != null)
+                        Text(
+                            headerDetail,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                }
             Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null)
         }
         if (expanded)
@@ -348,6 +369,22 @@ private fun ExpandableSystemCard(
                 content = content,
             )
     }
+}
+
+private fun cpuTemperatureLabel(temperatures: List<JSONObject>): String {
+    val valid = temperatures.filter { it.optDouble("celsius").isFinite() }
+    fun named(name: String) =
+        valid.filter { it.optString("name") == name }.maxOfOrNull { it.optDouble("celsius") }
+    val core =
+        named("Core Max")
+            ?: valid
+                .filter { it.optString("name").matches(Regex("(?:[PE]-Core|CPU Core) #\\d+")) }
+                .maxOfOrNull { it.optDouble("celsius") }
+            ?: named("Core Average")
+    val pack = named("CPU Package") ?: named("CPU (Tctl/Tdie)") ?: named("CPU Die (average)")
+    if (core == null && pack == null) return "温度暂无"
+    fun reading(value: Double?) = value?.let { "%.0f".format(it) } ?: "—"
+    return "${reading(core)} / ${reading(pack)} °C"
 }
 
 @Composable
