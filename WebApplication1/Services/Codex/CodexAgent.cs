@@ -521,7 +521,13 @@ internal sealed class CodexAgent : IAsyncDisposable
                 if (context.Request.Query["cursor"].Count > 0) request["cursor"] = context.Request.Query["cursor"].ToString();
                 var result = await rpc.Call("thread/list", request);
                 _ = NotifyDesktop(result.A("data").Where(thread => thread.S("originator") == "chuckie_helper_mobile").Select(thread => thread.S("id")).ToArray());
-                var unique = result.A("data").Where(t => t.S("id").Length > 0).GroupBy(t => t.S("id")).Select(group => (JsonNode)Session(group.First()));
+                var threads = result.A("data").Where(t => t.S("id").Length > 0).GroupBy(t => t.S("id")).Select(group => group.First()).ToArray();
+                var previews = LatestSessionPreview.Read(Path.Combine(home, "thread_history_1.sqlite"), threads.Select(thread => thread.S("id")), true);
+                var unique = threads.Select(thread => {
+                    var row = Session(thread);
+                    if (previews.TryGetValue(thread.S("id"), out var text)) { row["latest_user_message"] = text; row["preview"] = text; }
+                    return (JsonNode)row;
+                });
                 return Obj(("data", new JsonArray(unique.ToArray())), ("next_cursor", result["nextCursor"]), ("has_more", result.S("nextCursor").Length > 0));
             }
             if (p.Length == 1) {

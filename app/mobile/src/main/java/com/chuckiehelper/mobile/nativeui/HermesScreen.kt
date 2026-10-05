@@ -262,7 +262,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 items(
                     model.sessions.filter {
                         it.optString("title").contains(filter, true) ||
-                            it.optString("preview").contains(filter, true)
+                            it.optString("latest_user_message", it.optString("preview")).contains(filter, true)
                     },
                     key = { it.getString("id") },
                 ) { session ->
@@ -299,7 +299,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                             }
                             }
                             Text(
-                                session.optString("preview"),
+                                session.optString("latest_user_message", session.optString("preview")),
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 2,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,

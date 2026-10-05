@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace ChuckieHelper.WebApi.Controllers;
 
 [ApiController, Authorize, Route("api/hermes")]
-public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs) : ControllerBase
+public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, IConfiguration configuration) : ControllerBase
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效的会话或任务标识");
     [HttpGet("capabilities")] public async Task<IActionResult> Capabilities(CancellationToken ct) {
@@ -43,7 +43,20 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         try { return Ok(await management.Invoke(action, body, ct)); }
         catch (InvalidOperationException error) { return StatusCode(503, new { message = error.Message }); }
     }
-    [HttpGet("sessions")] public Task Sessions([FromQuery] int offset = 0, CancellationToken ct = default) => Forward(HttpMethod.Get, $"api/sessions?limit=50&offset={Math.Max(0, offset)}", null, null, ct);
+    [HttpGet("sessions")] public async Task<IActionResult> Sessions([FromQuery] int offset = 0, CancellationToken ct = default) {
+        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions?limit=50&offset={Math.Max(0, offset)}", null, null, ct);
+        if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 会话列表" });
+        var result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!;
+        if (result["data"] is System.Text.Json.Nodes.JsonArray rows) {
+            var key = configuration["Hermes:KeyFile"] ?? Environment.GetEnvironmentVariable("HERMES_API_KEY_FILE")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "hermes", ".env");
+            var previews = LatestSessionPreview.Read(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(key))!, "state.db"), rows.Select(row => row?["id"]?.ToString()), false);
+            foreach (var row in rows.OfType<System.Text.Json.Nodes.JsonObject>()) {
+                if (previews.TryGetValue(row["id"]!.ToString(), out var text)) { row["latest_user_message"] = text; row["preview"] = text; }
+            }
+        }
+        return Ok(result);
+    }
     [HttpPost("sessions")] public Task CreateSession([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "api/sessions", body, null, ct);
     [HttpGet("sessions/{id}")] public Task SessionInfo(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"api/sessions/{Id(id)}", null, null, ct);
     [HttpPatch("sessions/{id}")] public Task RenameSession(string id, [FromBody] JsonElement body, CancellationToken ct)
