@@ -32,6 +32,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import org.json.JSONObject
 import kotlinx.coroutines.launch
 
@@ -56,15 +57,22 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     LaunchedEffect(api.base) { model.bind(api) }
     LaunchedEffect(api.base, agent, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            if (agent == "codex") while (true) { awaitUiRead(model.fetchUsage()); kotlinx.coroutines.delay(30000) }
+            if (agent == "codex") while (true) { awaitUiRead(model.fetchUsage()); kotlinx.coroutines.delay(agentUsagePollDelay(model.hasKnownActivity)) }
         }
     }
-    LaunchedEffect(model, lifecycle) {
+    LaunchedEffect(model, lifecycle, model.hasKnownActivity) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            while (true) { model.tickActivity(); kotlinx.coroutines.delay(1000) }
+            if (model.hasKnownActivity) while (true) { model.tickActivity(); kotlinx.coroutines.delay(5000) }
         }
     }
     var list by rememberSaveable { mutableStateOf(true) }
+    DisposableEffect(model, list, lifecycle) {
+        fun update() { model.setObserving(!list && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
+        val observer = LifecycleEventObserver { _, _ -> update() }
+        lifecycle.addObserver(observer)
+        update()
+        onDispose { lifecycle.removeObserver(observer); model.setObserving(false) }
+    }
     var renameChat by remember { mutableStateOf<JSONObject?>(null) }
     var deleteChat by remember { mutableStateOf<JSONObject?>(null) }
     var models by remember { mutableStateOf(false) }
@@ -78,21 +86,21 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     var questionPanel by remember { mutableStateOf(false) }
     LaunchedEffect(model.selectedId, list, api.base, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            if (!list && model.selectedId != null) while (true) { awaitUiRead(model.pollContext()); kotlinx.coroutines.delay(10000) }
+            if (!list && model.selectedId != null) while (true) { awaitUiRead(model.pollContext()); kotlinx.coroutines.delay(agentContextPollDelay(model.hasExecution)) }
         }
     }
     LaunchedEffect(model.selectedId, list, api.base, agent, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             if (!list && model.selectedId != null) while (true) {
                 awaitUiRead(model.pollExternalActivity())
-                kotlinx.coroutines.delay(2000)
+                kotlinx.coroutines.delay(agentExternalPollDelay(model.externalRunning))
             }
         }
     }
     LaunchedEffect(model.asyncQuestion?.optString("request_id"), list) { if (!list && model.asyncQuestion != null) questionPanel = true }
     LaunchedEffect(api.base, list, agent, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            if (list) while (true) { awaitUiRead(model.pollSessionStates()); kotlinx.coroutines.delay(5000) }
+            if (list) while (true) { awaitUiRead(model.pollSessionStates()); kotlinx.coroutines.delay(agentSessionPollDelay(model.hasKnownActivity)) }
         }
     }
     androidx.activity.compose.BackHandler(enabled = !list) { list = true }
@@ -793,9 +801,12 @@ private fun ComposerMenu(
 
 @Composable
 private fun RunTimers(runId: String?, timing: AgentRunTiming, responseLabel: String = "距上次响应", compacting: Boolean = false) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     var now by remember(runId) { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(runId) {
-        while (true) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) }
+    LaunchedEffect(runId, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) }
+        }
     }
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         listOf(

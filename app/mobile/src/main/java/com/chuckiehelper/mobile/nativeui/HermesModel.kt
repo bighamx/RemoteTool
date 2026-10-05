@@ -8,6 +8,7 @@ import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.channels.Channel
 import org.json.JSONObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -38,7 +39,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var sessionActivities by mutableStateOf<Map<String, SessionActivityEvidence>>(emptyMap())
     private var activityNow by mutableLongStateOf(activityClock())
     private fun activityClock() = System.nanoTime() / 1_000_000
-    fun tickActivity() { activityNow = activityClock() }
+    fun tickActivity() {
+        if (externalActivity?.optBoolean("running") == true || sessionActivities.values.any { it.state in setOf("active", "waiting", "submitting") })
+            activityNow = activityClock()
+    }
+    val hasKnownActivity get() = runId != null || backgroundRuns.isNotEmpty() || externalRunning ||
+        sessionActivities.values.any { it.label(activityNow) in setOf("运行中", "等待确认", "正在提交") }
     private fun noteSessionActivities(rows: List<JSONObject>, requestedAt: Long) {
         rows.forEach { row ->
             val id = row.optString("id")
@@ -71,6 +77,19 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var externalActivity by mutableStateOf<JSONObject?>(null)
     private var externalVerifiedAt by mutableLongStateOf(0L)
     private var externalHistoryRevision: String? = null
+    private val observation = ForegroundObservation(::watch, ::pauseWatching)
+    private var streamConnected = false
+    private var observationEpoch = 0L
+    private var statusWake: Channel<Unit>? = null
+    fun setObserving(value: Boolean) { observation.setActive(value) }
+    private fun pauseWatching() {
+        observationEpoch++
+        watching?.cancel(); watching = null
+        streamJob?.cancel(); streamJob = null
+        streamConnected = false; statusWake = null
+        timingSave?.cancel(); timingSave = null
+        saveRuns()
+    }
     val externalRunning get() = runId == null && externalActivityRunning(externalActivity, selectedId, activityNow, externalVerifiedAt)
     val hasExecution get() = (runId != null && runSession == selectedId) || externalRunning
     val executionKey get() = runId ?: externalActivity?.optString("activity_id")?.takeIf { externalRunning }?.let { "external-$it" }
@@ -955,32 +974,43 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     private fun watch() {
+        val epoch = ++observationEpoch
         watching?.cancel()
         streamJob?.cancel()
+        streamConnected = false
+        if (!observation.active || !this::api.isInitialized) return
         val id = runId ?: return
         val watchedSession = runSession ?: return
         val connection = api
+        val wake = Channel<Unit>(Channel.CONFLATED)
+        statusWake = wake
         streamJob =
             viewModelScope.launch {
-                while (isActive && runId == id) {
+                var reconnects = 0
+                while (isActive && observation.active && runId == id) {
+                    val started = activityClock()
                     try {
-                        readEvents(id)
+                        readEvents(connection, id, epoch)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
                         /* Status polling remains authoritative; reconnect only this GET stream. */
                     }
-                    if (runId == id) delay(1500)
+                    if (activityClock() - started >= 15_000) reconnects = 0
+                    reconnects++
+                    if (runId == id) delay((1_500L * (1L shl (reconnects - 1).coerceIn(0, 4))).coerceAtMost(30_000))
                 }
             }
         watching = launch {
-            while (isActive && runId == id) {
+            var failures = 0
+            while (isActive && observation.active && runId == id) {
                 try {
                     activityNow = activityClock()
                     val requestedAt = activityNow
                     val result = connection.json("$root/runs/$id")
                     currentCoroutineContext().ensureActive()
                     if (runId != id || api !== connection) return@launch
+                    failures = 0
                     noteRunActivity(watchedSession, result, requestedAt)
                     startRunTiming(id, result)
                     state = if (result.optString("kind") == "compact" && result.optString("status") == "started") "正在压缩上下文" else statusLabel(result.optString("status"))
@@ -1040,6 +1070,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     throw e
                 } catch (e: Exception) {
                     currentCoroutineContext().ensureActive()
+                    failures++
                     // run 在服务端已不存在（404 run_not_found）：视为任务已终结，清除跟踪而不是无限重试刷错误。
                     if (e is ApiRequestFailure && e.status == 404) {
                         noteRunActivity(watchedSession, obj("status" to "missing"), activityClock())
@@ -1055,7 +1086,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     error = "暂时无法读取任务状态：${connectionFailureMessage(e)}"
                     if (e is ReadConnectionFailure) readConnectionError = error
                 }
-                delay(2000)
+                withTimeoutOrNull(agentStatusPollDelay(streamConnected, failures)) { wake.receive() }
             }
         }
     }
@@ -1065,14 +1096,16 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (runId != null) watch() else refresh()
     }
 
-    private suspend fun readEvents(id: String) {
+    private suspend fun readEvents(connection: NativeApi, id: String, epoch: Long) {
         val request =
-            api.request("$root/runs/$id/events")
+            connection.request("$root/runs/$id/events")
                 .newBuilder()
                 .apply { if (seq >= 0) header("Last-Event-ID", seq.toString()) }
                 .build()
-        api.response(request).use { response ->
-            if (!response.isSuccessful) return
+        try { connection.streamingResponse(request) { response ->
+            if (!response.isSuccessful) return@streamingResponse
+            if (runId != id || api !== connection || !observation.active || epoch != observationEpoch) return@streamingResponse
+            streamConnected = true
             withContext(Dispatchers.IO) {
                 response.body!!.charStream().buffered().use { reader ->
                     val parser = HermesSseParser()
@@ -1081,11 +1114,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         parser.line(line)?.let { json ->
                             val event = JSONObject(json)
                             withContext(Dispatchers.Main) {
-                                if (runId != id) return@withContext
+                                if (runId != id || api !== connection || !observation.active || epoch != observationEpoch) return@withContext
                                 val n = event.optLong("seq", -1)
                                 if (n >= 0 && n <= seq) return@withContext
                                 if (n >= 0) seq = n
                                 recordRunResponse(id, event)
+                                if (event.optString("type", event.optString("event")) in setOf("approval.request", "run.completed", "run.failed", "run.cancelled", "run.interrupted")) statusWake?.trySend(Unit)
                                 when (event.optString("type", event.optString("event"))) {
                                     "message.delta" -> {
                                         if (pendingTextTimestamp == null) pendingTextTimestamp = parseMessageTimestamp(event.opt("timestamp")) ?: System.currentTimeMillis()
@@ -1145,7 +1179,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     }
                 }
             }
-        }
+        } } finally { if (epoch == observationEpoch) streamConnected = false }
     }
 
     fun stop() = launch {

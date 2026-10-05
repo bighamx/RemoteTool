@@ -45,6 +45,9 @@ import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import org.json.JSONObject
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 @Composable
 @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
@@ -83,6 +86,19 @@ fun MediaViewer(api: NativeApi, file: JSONObject, close: () -> Unit, download: (
             }
     }
     DisposableEffect(player) { onDispose { player?.release() } }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(player, lifecycle) {
+        val visibility = PlaybackVisibility()
+        fun update() {
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                if (visibility.show()) player?.play()
+            } else if (visibility.hide(player?.playWhenReady == true)) player?.pause()
+        }
+        val observer = LifecycleEventObserver { _, _ -> update() }
+        lifecycle.addObserver(observer)
+        update()
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     val activity = remember(context) { context.mediaActivity() }
     DisposableEffect(activity, fullscreen) {
         val previousOrientation = activity?.requestedOrientation

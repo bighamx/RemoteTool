@@ -100,7 +100,7 @@ public class RemoteActivity extends Activity {
         long bytes=decoder!=null?decoder.receivedBytes():jpegBytes;
         long frames=decoder!=null?decoder.renderedFrames():jpegFrames;
         double seconds=(now-statsAt)/1000.0;
-        if(seconds>0&&bytes>=statsBytes&&frames>=statsFrames){
+        if(toolsVisible&&seconds>0&&bytes>=statsBytes&&frames>=statsFrames){
             double rate=(bytes-statsBytes)*8/seconds/1000000.0;
             metrics.setText(String.format(java.util.Locale.US,"%s · %s · %d×%d  %.2f Mbps  %.0f fps",
                 QUALITY_NAMES[quality],fallbackStarted?"MJPEG":"H.264",videoWidth,videoHeight,rate,(frames-statsFrames)/seconds));

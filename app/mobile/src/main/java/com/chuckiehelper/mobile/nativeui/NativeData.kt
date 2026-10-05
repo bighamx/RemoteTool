@@ -131,6 +131,22 @@ class NativeApi(
         )
     }
 
+    suspend fun <T> streamingResponse(request: Request, action: suspend (Response) -> T): T {
+        val call = client.newBuilder().retryOnConnectionFailure(false).build().newCall(request)
+        return withStreamingCallCancellation(call) {
+            val response = suspendCancellableCoroutine<Response> { cont ->
+                cont.invokeOnCancellation { call.cancel() }
+                call.enqueue(object : Callback {
+                    override fun onFailure(call: Call, error: IOException) { if (cont.isActive) cont.resumeWithException(error) }
+                    override fun onResponse(call: Call, response: Response) {
+                        if (cont.isActive) cont.resume(response) else response.close()
+                    }
+                })
+            }
+            response.use { action(it) }
+        }
+    }
+
     suspend fun json(path: String, body: JSONObject? = null): JSONObject {
         return json(request(path, body))
     }
@@ -210,7 +226,7 @@ class NativeApi(
     }
 
     suspend fun stream(path: String, body: JSONObject, onChunk: (String) -> Unit) {
-        response(request(path, body)).use { res ->
+        streamingResponse(request(path, body)) { res ->
             if (!res.isSuccessful) throw IOException("命令失败 HTTP ${res.code}")
             withContext(Dispatchers.IO) {
                 res.body!!.charStream().use { reader ->
