@@ -29,6 +29,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import org.json.JSONObject
 
 @Composable
@@ -48,9 +51,17 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 },
         )
     val agentName = model.agentName
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(api.base) { model.bind(api) }
-    LaunchedEffect(api.base, agent) {
-        if (agent == "codex") while (true) { model.fetchUsage(); kotlinx.coroutines.delay(30000) }
+    LaunchedEffect(api.base, agent, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            if (agent == "codex") while (true) { awaitUiRead(model.fetchUsage()); kotlinx.coroutines.delay(30000) }
+        }
+    }
+    LaunchedEffect(model, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) { model.tickActivity(); kotlinx.coroutines.delay(1000) }
+        }
     }
     var list by rememberSaveable { mutableStateOf(true) }
     var renameChat by remember { mutableStateOf<JSONObject?>(null) }
@@ -64,18 +75,24 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     var filter by rememberSaveable { mutableStateOf("") }
     var pendingInfo by remember { mutableStateOf(false) }
     var questionPanel by remember { mutableStateOf(false) }
-    LaunchedEffect(model.selectedId, list, api.base) {
-        if (!list && model.selectedId != null) while (true) { model.pollContext(); kotlinx.coroutines.delay(10000) }
+    LaunchedEffect(model.selectedId, list, api.base, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            if (!list && model.selectedId != null) while (true) { awaitUiRead(model.pollContext()); kotlinx.coroutines.delay(10000) }
+        }
     }
-    LaunchedEffect(model.selectedId, list, api.base, agent) {
-        if (!list && model.selectedId != null) while (true) {
-            model.pollExternalActivity().join()
-            kotlinx.coroutines.delay(2000)
+    LaunchedEffect(model.selectedId, list, api.base, agent, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            if (!list && model.selectedId != null) while (true) {
+                awaitUiRead(model.pollExternalActivity())
+                kotlinx.coroutines.delay(2000)
+            }
         }
     }
     LaunchedEffect(model.asyncQuestion?.optString("request_id"), list) { if (!list && model.asyncQuestion != null) questionPanel = true }
-    LaunchedEffect(api.base, list, agent) {
-        if (list) while (true) { model.pollSessionStates(); kotlinx.coroutines.delay(5000) }
+    LaunchedEffect(api.base, list, agent, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            if (list) while (true) { awaitUiRead(model.pollSessionStates()); kotlinx.coroutines.delay(5000) }
+        }
     }
     androidx.activity.compose.BackHandler(enabled = !list) { list = true }
     var filesDialog by remember { mutableStateOf(false) }

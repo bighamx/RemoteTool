@@ -34,9 +34,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     var sessions by mutableStateOf<List<JSONObject>>(emptyList())
         private set
     private val sessionRefreshMutex = Mutex()
+    private val historyReadMutex = Mutex()
     private var sessionActivities by mutableStateOf<Map<String, SessionActivityEvidence>>(emptyMap())
     private var activityNow by mutableLongStateOf(activityClock())
     private fun activityClock() = System.nanoTime() / 1_000_000
+    fun tickActivity() { activityNow = activityClock() }
     private fun noteSessionActivities(rows: List<JSONObject>, requestedAt: Long) {
         rows.forEach { row ->
             val id = row.optString("id")
@@ -86,7 +88,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val requestedAt = activityClock()
         activityNow = requestedAt
         try {
-            val result = connection.json("$root/sessions/${q(id)}/activity")
+            val result = withTimeout(8_000) { connection.json("$root/sessions/${q(id)}/activity") }
             if (selectedId != id || api !== connection || runId != null) return@launch
             if (!result.optBoolean("available")) return@launch
             externalActivity = result; externalVerifiedAt = requestedAt
@@ -347,9 +349,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     fun pollContext() = viewModelScope.launch {
         val id = selectedId ?: return@launch
+        val connection = api
         try {
-            val result = api.json("$root/sessions/${q(id)}/context")
-            if (selectedId != id) return@launch
+            val result = connection.json("$root/sessions/${q(id)}/context")
+            if (selectedId != id || api !== connection) return@launch
             contextInfo = result.optJSONObject("context") ?: result
             if (agent == "codex") asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
         } catch (e: CancellationException) { throw e }
@@ -616,9 +619,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun dismissLogin() { loginVisible = false }
     fun showLogin() { loginVisible = true }
     fun fetchUsage() = viewModelScope.launch {
-        try { usage = api.json("$root/usage") }
+        val connection = api
+        try { val result = connection.json("$root/usage"); if (api === connection) usage = result }
         catch (e: CancellationException) { throw e }
-        catch (_: Exception) { usage = null }
+        catch (_: Exception) { if (api === connection) usage = null }
     }
     fun importCurrentAccount() = launch { api.json("$root/accounts/import", obj()); fetchAccountsNow() }
     fun removeAccount(id: String) = launch { api.json("$root/accounts/$id/remove", obj()); fetchAccountsNow() }
@@ -706,7 +710,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         attachServerActiveRun(id)
     }
 
-    private suspend fun loadHistory(id: String) {
+    private suspend fun loadHistory(id: String) = historyReadMutex.withLock {
+        if (id == selectedId) loadHistoryNow(id)
+    }
+    private suspend fun loadHistoryNow(id: String) {
         val connection = api
         val response = connection.json("$root/sessions/$id/messages")
         if (id != selectedId || api !== connection) return
@@ -717,8 +724,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     row.optString("content").let {
                         if (role == "user") agentUserMessageText(agent, it) else it
                     }
-                if (role in listOf("user", "assistant") && text.isNotBlank() && text != "null")
-                    HermesMessage(role, text, row.optLong("id"), row.array("attachments").objects(), timestamp =
+                val attached = row.array("attachments").objects()
+                if (visibleAgentMessage(role, text, attached.size))
+                    HermesMessage(role, text.takeUnless { it == "null" }.orEmpty(), row.optLong("id"), attached, timestamp =
                         parseMessageTimestamp(row.opt("timestamp")) ?: parseMessageTimestamp(row.opt("created_at")), narration = isAssistantNarration(row))
                 else null
             }

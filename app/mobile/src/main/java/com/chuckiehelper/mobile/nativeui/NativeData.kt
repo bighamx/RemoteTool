@@ -142,7 +142,7 @@ class NativeApi(
             val result = try { jsonOnce(request, fresh = attempt > 0) }
             catch (error: IOException) {
                 currentCoroutineContext().ensureActive()
-                if (mayRetryRead(request.method, probing, attempt, error)) {
+                if (mayRetryRead(request.method, probing, attempt, error, noRetry)) {
                     android.util.Log.i("ChuckieNetwork", "${request.method} ${request.url.encodedPath}: retry read on fresh connection (${error.javaClass.simpleName})")
                     attempt++; delay(250); continue
                 }

@@ -14,5 +14,6 @@ class NetworkReadPolicyTest {
         assertFalse(mayRetryRead("GET", false, 0, LoginRequired()))
         assertFalse(mayRetryRead("GET", false, 0, ApiRequestFailure("missing", 404)))
         assertTrue(mayRetryRead("GET", false, 0, ApiRequestFailure("recycling", 503)))
+        assertFalse(mayRetryRead("GET", false, 0, abort, noRetry = true))
     }
 }
