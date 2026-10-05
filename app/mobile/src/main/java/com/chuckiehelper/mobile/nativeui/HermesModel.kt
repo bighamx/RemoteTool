@@ -155,6 +155,32 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private val backgroundRuns = mutableStateMapOf<String, String>().apply { putAll(runCatching {
         JSONObject(prefs.getString("trackedRuns", "{}").orEmpty()).let { rows -> rows.keys().asSequence().associateWith { rows.getString(it) }.toMutableMap() }
     }.getOrDefault(mutableMapOf())) }
+    private val runTimings = mutableStateMapOf<String, AgentRunTiming>().apply { putAll(runCatching {
+        JSONObject(prefs.getString("runTimings", "{}").orEmpty()).let { rows ->
+            rows.keys().asSequence().associateWith { AgentRunTiming.restore(rows.getJSONObject(it)) }
+        }
+    }.getOrDefault(emptyMap())) }
+    val currentRunTiming get() = runId?.let { runTimings[it] } ?: AgentRunTiming()
+    private var timingSave: Job? = null
+    private fun saveRunTimings() {
+        val tracked = backgroundRuns.values.toSet() + listOfNotNull(runId)
+        val rows = JSONObject()
+        runTimings.filterKeys { it in tracked }.forEach { (id, timing) -> rows.put(id, timing.json()) }
+        prefs.edit().putString("runTimings", rows.toString()).apply()
+    }
+    private fun startRunTiming(id: String, result: JSONObject, fallback: Long? = null) {
+        val old = runTimings[id] ?: AgentRunTiming()
+        val started = parseMessageTimestamp(result.opt("started_at")) ?: parseMessageTimestamp(result.opt("created_at"))
+        runTimings[id] = old.copy(startedAt = started ?: old.startedAt ?: fallback)
+    }
+    private fun recordRunResponse(id: String, event: JSONObject) {
+        val old = runTimings[id] ?: AgentRunTiming()
+        val updated = old.event(event, System.currentTimeMillis())
+        if (old == updated) return
+        runTimings[id] = updated
+        // Coalesce token bursts into one preference write per second.
+        if (timingSave?.isActive != true) timingSave = viewModelScope.launch { delay(1000); saveRunTimings() }
+    }
     init {
         if (runId != null && runSession != null) backgroundRuns[runSession!!] = runId!!
         runId = selectedId?.let { backgroundRuns.remove(it) }
@@ -164,6 +190,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val tracked = backgroundRuns.toMutableMap()
         if (runId != null && runSession != null) tracked[runSession!!] = runId!!
         prefs.edit().putString("trackedRuns", JSONObject(tracked as Map<*, *>).toString()).apply()
+        saveRunTimings()
     }
     private var pendingSubmissions by mutableStateOf(runCatching {
         val rows = JSONObject(prefs.getString("pendingSubmissions", "{}").orEmpty())
@@ -269,8 +296,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (runId != null || submitting || hasPendingSubmission) throw java.io.IOException("请先结束或核对当前任务，再压缩上下文")
         setSubmitting(id, true)
         try {
+            val started = System.currentTimeMillis()
             val request = api.request("$root/sessions/${q(id)}/compact", obj()).newBuilder().header("Idempotency-Key", UUID.randomUUID().toString()).build()
             val result = api.json(request)
+            startRunTiming(result.getString("run_id"), result, started)
             if (selectedId != id) {
                 backgroundRuns[id] = result.getString("run_id"); saveRuns()
                 return@launch
@@ -380,6 +409,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         when (result.optString("status")) {
             "started", "submitting" -> {
                 val id = result.getString("run_id")
+                startRunTiming(id, result, pending.timestamp)
                 removePending(session)
                 if (selectedId == session) {
                     runId = id; runSession = session
@@ -555,6 +585,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             val result = connection.json("$root/sessions/${q(id)}/active-run")
             if (selectedId != id || api !== connection || runId != null) return
             val serverRun = result.optString("run_id").takeIf { it.isNotBlank() && it != "null" } ?: return
+            startRunTiming(serverRun, result)
             runId = serverRun; runSession = id
             seq = -1; events = emptyList(); eventCount = 0; approval = null; pendingText = ""
             prefs.edit().putString("run", serverRun).putString("runSession", id).apply()
@@ -784,6 +815,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 val request = api.request("$root/runs", payload).newBuilder().header("Idempotency-Key", key).build()
                 val response = api.json(request)
                 val startedRun = response.getString("run_id")
+                startRunTiming(startedRun, response, pending.timestamp)
                 questionAccepted(session); removePending(session)
                 if (selectedId == session) {
                     runId = startedRun; runSession = session
@@ -834,6 +866,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     val result = api.json("$root/runs/$id")
                     currentCoroutineContext().ensureActive()
                     if (runId != id) return@launch
+                    startRunTiming(id, result)
                     state = if (result.optString("kind") == "compact" && result.optString("status") == "started") "正在压缩上下文" else statusLabel(result.optString("status"))
                     approval = result.optJSONObject("approval")
                     result.optJSONObject("runtime")?.let {
@@ -934,6 +967,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                 val n = event.optLong("seq", -1)
                                 if (n >= 0 && n <= seq) return@withContext
                                 if (n >= 0) seq = n
+                                recordRunResponse(id, event)
                                 when (event.optString("type", event.optString("event"))) {
                                     "message.delta" -> {
                                         if (pendingTextTimestamp == null) pendingTextTimestamp = parseMessageTimestamp(event.opt("timestamp")) ?: System.currentTimeMillis()

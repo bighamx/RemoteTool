@@ -349,6 +349,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                     )
                                     TextButton(onClick = { stop = true }) { Text("停止") }
                                 }
+                                RunTimers(model.runId, model.currentRunTiming)
                                 if (model.events.isNotEmpty())
                                     TextButton(onClick = { showTools = !showTools }) {
                                         // 显示本 run 收到的工具/进度事件总数（events 列表只保留最近 30 条，直接用 size 会一直显示截断后的值）
@@ -722,6 +723,25 @@ private fun ComposerMenu(
                     .verticalScroll(rememberScrollState()).padding(vertical = 4.dp),
                 content = content,
             )
+        }
+    }
+}
+
+@Composable
+private fun RunTimers(runId: String?, timing: AgentRunTiming) {
+    val now by produceState(System.currentTimeMillis(), runId) {
+        while (true) { value = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) }
+    }
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        listOf(
+            (if (timing.lastResponseAt == null) "等待首次响应" else "距上次响应") to (timing.lastResponseAt ?: timing.startedAt),
+            "任务已运行" to timing.startedAt,
+        ).forEach { (label, since) ->
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(formatRunElapsed(since, now), style = MaterialTheme.typography.titleSmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+            }
         }
     }
 }
