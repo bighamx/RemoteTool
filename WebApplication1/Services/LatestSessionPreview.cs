@@ -7,7 +7,7 @@ namespace ChuckieHelper.WebApi.Services;
 
 internal static class LatestSessionPreview
 {
-    private static string ContentText(JsonArray parts) {
+    internal static string ContentText(JsonArray parts) {
         var text = string.Join("\n", parts.OfType<JsonObject>().Where(part => part["text"] != null).Select(part => part["text"]!.ToString()));
         if (string.IsNullOrWhiteSpace(text) && parts.OfType<JsonObject>().Any(part => part["type"]?.ToString() is "image" or "localImage" or "image_url" or "input_image")) return "图片附件";
         return text;

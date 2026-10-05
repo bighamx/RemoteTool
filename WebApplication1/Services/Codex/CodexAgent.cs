@@ -526,6 +526,8 @@ internal sealed class CodexAgent : IAsyncDisposable
                 var unique = threads.Select(thread => {
                     var row = Session(thread);
                     if (previews.TryGetValue(thread.S("id"), out var text)) { row["latest_user_message"] = text; row["preview"] = text; }
+                    var continuation = CodexPreviewRollout.Read(home, thread.S("id"), thread.S("path"));
+                    if (continuation.Length > 0) { row["latest_user_message"] = continuation; row["preview"] = continuation; }
                     return (JsonNode)row;
                 });
                 return Obj(("data", new JsonArray(unique.ToArray())), ("next_cursor", result["nextCursor"]), ("has_more", result.S("nextCursor").Length > 0));
