@@ -75,7 +75,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     val executionTiming get() = if (runId != null) currentRunTiming else externalActivityTiming(externalActivity)
     val executionEvents get() = if (runId != null) events else externalActivityEvents(externalActivity)
     val executionEventCount get() = if (runId != null) eventCount else externalActivity?.optInt("event_count") ?: 0
-    val executionState get() = if (runId != null) state else "执行中"
+    val executionState get() = if (runId != null) state else externalActivityLabel(externalActivity)
+    val executionCompacting get() = executionState == "正在压缩上下文"
 
     fun pollExternalActivity() = viewModelScope.launch {
         if (capabilities.optJSONObject("chuckie_features")?.optBoolean("external_session_activity") != true) return@launch
@@ -89,8 +90,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (selectedId != id || api !== connection || runId != null) return@launch
             if (!result.optBoolean("available")) return@launch
             externalActivity = result; externalVerifiedAt = requestedAt
+            val compactedAt = parseMessageTimestamp(result.opt("compacted_at"))
+            val compactedId = result.optString("compaction_id").takeIf { it.isNotBlank() && it != "null" }
+            if (compactedAt != null && compactedId != null) recordExternalCompaction(id, compactedId, compactedAt)
             noteRunActivity(id, obj("status" to if (result.optBoolean("running")) "started" else "completed"), requestedAt)
-            val revision = "$id:${result.optString("activity_id")}:${result.optLong("revision")}:${result.optBoolean("running")}"
+            val revision = "$id:${result.optString("activity_id")}:${result.optLong("revision")}:${result.optBoolean("running")}:${result.optString("kind")}:${result.opt("compacted_at")}"
             if (revision != externalHistoryRevision && historyJob?.isActive != true) {
                 loadHistory(id)
                 if (selectedId == id && api === connection) externalHistoryRevision = revision
@@ -217,6 +221,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     private fun saveCompactionNotices() {
         prefs.edit().putString("compactionNotices", org.json.JSONArray(compactionNotices.map { it.json() }).toString()).apply()
+    }
+    private fun recordExternalCompaction(session: String, compactedId: String, time: Long) {
+        val key = "external-$compactedId"
+        if (compactionNotices.any { it.run == key || it.session == session && kotlin.math.abs(it.timestamp - time) < 5_000 }) return
+        val history = if (selectedId == session) messages else cachedHistory[session].orEmpty()
+        val anchor = history.lastOrNull { it.serverId > 0 && it.timestamp?.let { at -> at <= time } == true }?.serverId ?: 0
+        compactionNotices = compactionNotices + AgentCompactionNotice(key, session, time, anchor)
+        saveCompactionNotices()
+        val merged = mergeCompactionNotices(history, compactionNotices.filter { it.session == session })
+        cachedHistory[session] = merged
+        if (selectedId == session) messages = merged
     }
     // 切走时挂到后台的 run（sessionId -> runId）。服务端继续执行，切回对应会话时恢复跟踪。
     private val backgroundRuns = mutableStateMapOf<String, String>().apply { putAll(runCatching {

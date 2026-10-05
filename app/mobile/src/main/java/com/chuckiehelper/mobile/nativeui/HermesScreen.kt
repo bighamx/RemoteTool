@@ -353,7 +353,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                             MessageBubble("assistant", model.pendingText, api = api, availableFiles = model.files, agentName = agentName, timestamp = model.pendingTextTimestamp, narrationTexts = model.narrationTexts)
                     }
                     item {
-                        var showTools by remember { mutableStateOf(false) }
+                        var showTools by remember(model.executionKey) { mutableStateOf(false) }
                         Card(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(12.dp)) {
                                 Row(
@@ -368,13 +368,18 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                     if (model.runId != null) TextButton(onClick = { stop = true }) { Text("停止") }
                                 }
                                 RunTimers(model.executionKey, model.executionTiming,
-                                    responseLabel = if (model.runId == null) "距上次已保存响应" else "距上次响应")
-                                if (model.executionEvents.isNotEmpty())
+                                    responseLabel = if (model.runId == null) "距上次已保存响应" else "距上次响应", compacting = model.executionCompacting)
+                                if (model.executionCompacting) {
+                                    LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+                                    Text("正在整理上下文，完成后可继续对话", Modifier.padding(top = 8.dp),
+                                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                if (!model.executionCompacting && model.executionEvents.isNotEmpty())
                                     TextButton(onClick = { showTools = !showTools }) {
                                         // 显示本 run 收到的工具/进度事件总数（events 列表只保留最近 30 条，直接用 size 会一直显示截断后的值）
                                         Text("工具与进度 · ${model.executionEventCount}")
                                     }
-                                if (showTools)
+                                if (showTools && !model.executionCompacting)
                                     model.executionEvents.forEach {
                                         Row(
                                             Modifier.fillMaxWidth(),
@@ -747,15 +752,15 @@ private fun ComposerMenu(
 }
 
 @Composable
-private fun RunTimers(runId: String?, timing: AgentRunTiming, responseLabel: String = "距上次响应") {
+private fun RunTimers(runId: String?, timing: AgentRunTiming, responseLabel: String = "距上次响应", compacting: Boolean = false) {
     var now by remember(runId) { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(runId) {
         while (true) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) }
     }
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         listOf(
-            (if (timing.lastResponseAt == null) "等待首次响应" else responseLabel) to (timing.lastResponseAt ?: timing.startedAt),
-            "任务已运行" to timing.startedAt,
+            (if (compacting) "等待压缩结果" else if (timing.lastResponseAt == null) "等待首次响应" else responseLabel) to (timing.lastResponseAt ?: timing.startedAt),
+            (if (compacting) "压缩已运行" else "任务已运行") to timing.startedAt,
         ).forEach { (label, since) ->
             Column(Modifier.weight(1f)) {
                 Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

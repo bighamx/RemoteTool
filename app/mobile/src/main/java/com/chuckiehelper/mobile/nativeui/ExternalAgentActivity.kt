@@ -7,9 +7,14 @@ internal fun externalActivityRunning(snapshot: JSONObject?, session: String?, no
         snapshot.optString("session_id") == session && now - verifiedAt <= 30_000
 
 internal fun externalActivityTiming(snapshot: JSONObject?) = AgentRunTiming(
-    startedAt = parseMessageTimestamp(snapshot?.opt("started_at")),
-    lastResponseAt = parseMessageTimestamp(snapshot?.opt("last_response_at")),
+    startedAt = parseMessageTimestamp(snapshot?.opt(if (snapshot.optString("kind") == "compact") "phase_started_at" else "started_at")),
+    lastResponseAt = parseMessageTimestamp(snapshot?.opt("last_response_at"))?.takeIf {
+        snapshot?.optString("kind") != "compact" || parseMessageTimestamp(snapshot.opt("phase_started_at"))?.let { start -> it >= start } == true
+    },
 )
+
+internal fun externalActivityLabel(snapshot: JSONObject?) =
+    if (snapshot?.optString("kind") == "compact") "正在压缩上下文" else "执行中"
 
 internal fun externalActivityEvents(snapshot: JSONObject?): List<HermesEvent> {
     if (snapshot == null) return emptyList()

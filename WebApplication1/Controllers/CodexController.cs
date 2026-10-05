@@ -31,9 +31,26 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
         return Ok(attachments.AddMessageAttachments(id, await upstream.Content.ReadAsStringAsync(ct)));
     }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
-    [HttpGet("sessions/{id}/activity")] public IActionResult SessionActivity(string id) {
+    [HttpGet("sessions/{id}/activity")] public async Task<IActionResult> SessionActivity(string id, CancellationToken ct) {
         Response.Headers.CacheControl = "no-store";
-        return Ok(activity.Read(Id(id)));
+        var result = activity.Read(Id(id));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(4));
+        try {
+            using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{Id(id)}/desktop-activity", null, timeout.Token);
+            if (upstream.IsSuccessStatusCode) {
+                var live = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(timeout.Token));
+                if (live?["available"]?.GetValue<bool>() == true) {
+                    if (live["activity_id"]?.ToString() != result["activity_id"]?.ToString()) {
+                        result["progress"] = new System.Text.Json.Nodes.JsonArray(); result["event_count"] = 0; result["last_response_at"] = null;
+                    }
+                    foreach (var field in new[] { "available", "running", "activity_id", "kind", "started_at", "phase_started_at" }) result[field] = live[field]?.DeepClone();
+                    result["observed_only"] = true; result["source"] = "desktop";
+                    if (result["running"]?.GetValue<bool>() != true) { result["progress"] = new System.Text.Json.Nodes.JsonArray(); result["event_count"] = 0; }
+                }
+            }
+        } catch (Exception error) when (!ct.IsCancellationRequested && error is HttpRequestException or OperationCanceledException or JsonException or InvalidOperationException) { }
+        return Ok(result);
     }
     [HttpPost("sessions/{id}/files"), RequestSizeLimit(501L * 1024 * 1024), RequestFormLimits(MultipartBodyLengthLimit = 501L * 1024 * 1024)]
     public async Task<IActionResult> Upload(string id, IFormFile file, CancellationToken ct) {

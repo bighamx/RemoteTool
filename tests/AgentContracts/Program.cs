@@ -95,6 +95,21 @@ try {
     for (var i = 0; i < 40; i++) File.AppendAllText(activityPath, Record("response_item", new() { ["type"] = "function_call", ["name"] = "test", ["call_id"] = "many-"+i, ["arguments"] = "{}" }, stamp+10000+i));
     snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
     Check(snapshot["activity"]["event_count"].GetValue<int>() == 40 && snapshot["activity"]["progress"].AsArray().Count == 30, "desktop tool total survives display limit");
+    File.AppendAllText(activityPath, Record("event_msg", new() { ["type"] = "item_started", ["turn_id"] = "turn-2", ["started_at_ms"] = stamp+20000, ["item"] = new JsonObject { ["type"] = "ContextCompaction" } }, stamp+20000));
+    snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
+    Check(snapshot["activity"]["kind"].ToString() == "compact" && snapshot["activity"]["phase_started_at"].GetValue<long>() == stamp+20000, "compaction has separate phase clock");
+    File.AppendAllText(activityPath, Record("compacted", new() { ["compaction_response_id"] = "compact-id" }, stamp+21000));
+    snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
+    Check(snapshot["activity"]["compacted_at"].GetValue<long>() == stamp+21000 && snapshot["activity"]["compaction_id"].ToString() == "compact-id", "native compaction completion can be displayed without sending a message");
+    var desktop = JsonNode.Parse("""{"turns":[{"turnId":"old","turnStartedAtMs":1000,"status":"completed","items":[]},{"turnId":"compact","turnStartedAtMs":2000,"status":"inProgress","items":[{"type":"contextCompaction","completed":false}]}]}""")!.AsObject();
+    var live = CodexDesktopActivity.Project(desktop);
+    Check(live["running"].GetValue<bool>() && live["kind"].ToString() == "compact" && live["phase_started_at"].GetValue<long>() == 2000, "desktop manual compaction uses its own start time");
+    desktop["turns"]![1]!["items"]!.AsArray().Insert(0, new JsonObject { ["type"] = "commandExecution" });
+    live = CodexDesktopActivity.Project(desktop);
+    Check(live["kind"].ToString() == "compact" && live["phase_started_at"] == null, "automatic compaction does not inherit old task timer when item start is unavailable");
+    desktop["turns"]![1]!["status"] = "completed"; desktop["turns"]![1]!["items"]![1]!["completed"] = true;
+    Check(!CodexDesktopActivity.Project(desktop)["running"].GetValue<bool>(), "completed desktop turn is idle despite a retained writer");
+    Check(!CodexDesktopActivity.Project(new())["available"].GetValue<bool>(), "incomplete desktop snapshot cannot prove idle");
 } finally { Directory.Delete(temp, true); }
 Console.WriteLine($"Agent contract checks: {count} passed");
 var input = "{\"type\":\"text\",\"text\":\"" + new string('汉', 2048) + "\"}";

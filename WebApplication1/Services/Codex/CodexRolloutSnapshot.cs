@@ -14,7 +14,8 @@ internal static class CodexRolloutSnapshot
         public bool Oversized, Running;
         public JsonObject Settings = new(), Context = Obj(("available", false)), Question;
         public Dictionary<string, JsonObject> Pending = new();
-        public long StartedAt, LastResponseAt, ActivityRevision;
+        public long StartedAt, LastResponseAt, ActivityRevision, CompactedAt, PhaseStartedAt;
+        public string Kind = "task", CompactionId = "";
         public string TurnId = "";
         public int ToolCount;
         public Dictionary<string, JsonObject> Tools = new();
@@ -61,6 +62,8 @@ internal static class CodexRolloutSnapshot
                 return Obj(("settings", state.Settings), ("context", context), ("question", state.Question), ("running", state.Running),
                     ("activity", Obj(("started_at", state.StartedAt > 0 ? (object)state.StartedAt : null),
                         ("last_response_at", state.LastResponseAt > 0 ? (object)state.LastResponseAt : null), ("activity_id", state.TurnId),
+                        ("kind", state.Kind), ("phase_started_at", state.PhaseStartedAt > 0 ? (object)state.PhaseStartedAt : null),
+                        ("compacted_at", state.CompactedAt > 0 ? (object)state.CompactedAt : null), ("compaction_id", state.CompactionId),
                         ("revision", state.ActivityRevision), ("event_count", state.ToolCount),
                         ("progress", new JsonArray(state.Tools.Values.TakeLast(30).Select(tool => tool.DeepClone()).ToArray())))));
             }
@@ -75,16 +78,24 @@ internal static class CodexRolloutSnapshot
                 state.Settings = Obj(("model", payload["model"]), ("reasoningEffort", payload["effort"] ?? payload["reasoning_effort"]),
                     ("serviceTier", payload["service_tier"]), ("collaborationMode", payload["collaboration_mode"]));
             }
-            if (kind == "compacted") state.Context = Obj(("available", false));
+            if (kind == "compacted") {
+                state.Context = Obj(("available", false)); state.CompactedAt = timestamp;
+                state.CompactionId = payload.S("compaction_response_id", $"{state.TurnId}:{timestamp}"); state.ActivityRevision++;
+            }
             if (kind == "token_usage_record" && payload["usage"] is { } usage) state.Context["tokens"] = usage.L("total_tokens");
             if (kind == "event_msg") {
                 var type = payload.S("type");
                 if (type == "task_started") {
                     state.Running = true; state.StartedAt = timestamp; state.LastResponseAt = 0;
                     state.TurnId = payload.S("turn_id"); state.Tools.Clear(); state.ToolCount = 0; state.ActivityRevision++;
+                    state.Kind = "task"; state.PhaseStartedAt = timestamp;
                 } else if (type is "task_complete" or "turn_aborted" &&
                     (state.TurnId.Length == 0 || payload.S("turn_id").Length == 0 || payload.S("turn_id") == state.TurnId)) {
                     state.Running = false; state.ActivityRevision++;
+                }
+                if (type == "item_started" && payload["item"].S("type").Equals("ContextCompaction", StringComparison.OrdinalIgnoreCase) &&
+                    (payload.S("turn_id").Length == 0 || payload.S("turn_id") == state.TurnId)) {
+                    state.Kind = "compact"; state.PhaseStartedAt = payload.L("started_at_ms") > 0 ? payload.L("started_at_ms") : timestamp; state.ActivityRevision++;
                 }
                 if (type == "token_count" && payload["info"] is { } info) {
                     var last = info["last_token_usage"]; var limit = info.L("model_context_window");

@@ -35,4 +35,13 @@ class ExternalAgentActivityTest {
         assertEquals(4, events.size)
         assertTrue(externalActivityEvents(null).isEmpty())
     }
+    @Test fun compactionHasOwnLabelAndClockAndNeverUsesAnOldResponse() {
+        val snapshot = active().put("kind", "compact").put("phase_started_at", 1_791_200_005_000L)
+        assertEquals("正在压缩上下文", externalActivityLabel(snapshot))
+        assertEquals(1_791_200_005_000L, externalActivityTiming(snapshot).startedAt)
+        assertNull(externalActivityTiming(snapshot).lastResponseAt)
+        snapshot.put("phase_started_at", org.json.JSONObject.NULL)
+        assertNull(externalActivityTiming(snapshot).startedAt)
+        assertEquals("执行中", externalActivityLabel(active()))
+    }
 }

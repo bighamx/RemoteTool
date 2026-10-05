@@ -536,6 +536,7 @@ internal sealed class CodexAgent : IAsyncDisposable
             return await Models();
         }
         if (p[0] == "sessions") {
+            if (p.Length == 3 && p[2] == "desktop-activity" && method == "GET") return await CodexDesktopActivity.Read(p[1], context.RequestAborted);
             if (p.Length == 1 && method == "GET") {
                 var request = Obj(("limit", 50), ("sortKey", "updated_at"), ("sourceKinds", new JsonArray("cli", "vscode", "appServer")));
                 if (context.Request.Query["cursor"].Count > 0) request["cursor"] = context.Request.Query["cursor"].ToString();
@@ -627,7 +628,26 @@ internal sealed class CodexAgent : IAsyncDisposable
             }
             if (p.Length == 1) return await StartRun(body, context.Request.Headers["Idempotency-Key"].ToString());
             JsonObject state; lock (gate) state = runs[p[1]]?.DeepClone() as JsonObject ?? throw new CodexError("任务不存在", 404);
-            if (p.Length == 2) { state["runtime"] = Obj(("model", state.S("model")), ("provider", state.S("provider"))); return state; }
+            if (p.Length == 2) {
+                if (state.S("owner") == "desktop" && state.S("status") == "started" && state.S("turn_id").Length > 0) {
+                    var observed = await CodexDesktopActivity.Read(state.S("session_id"), context.RequestAborted);
+                    if (observed.B("available") && (observed.S("activity_id") != state.S("turn_id") || !observed.B("running"))) {
+                        // The tracked desktop turn ended or a newer one replaced it. Never keep its old timer alive.
+                        var known = observed["turn_statuses"].S(state.S("turn_id"));
+                        var finished = known is "completed" or "failed" or "interrupted" ? known : "acceptance_unknown";
+                        lock (gate) {
+                            if (runs[p[1]].S("status") == "started") {
+                                runs[p[1]]!["status"] = finished;
+                                if (finished == "acceptance_unknown") runs[p[1]]!["error"] = "桌面已进入另一轮任务，原轮次结果不在当前快照中，请查看会话历史核对";
+                                if (active.GetValueOrDefault(state.S("session_id")) == p[1]) active.Remove(state.S("session_id"));
+                                Persist();
+                            }
+                            state = runs[p[1]]!.DeepClone().AsObject();
+                        }
+                    }
+                }
+                state["runtime"] = Obj(("model", state.S("model")), ("provider", state.S("provider"))); return state;
+            }
             if (p[2] == "stop") {
                 if (state.S("status") == "started" && state.S("owner") == "desktop") await CodexDesktopSync.StopCompact(state.S("session_id"));
                 else if (state.S("turn_id").Length > 0 && state.S("status") == "started") await rpc.Call("turn/interrupt", Obj(("threadId", state.S("session_id")), ("turnId", state.S("turn_id"))));
