@@ -7,7 +7,6 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -121,7 +120,10 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     val context = LocalContext.current
     val scroll = rememberLazyListState()
     val uiScope = rememberCoroutineScope()
-    val messageKeys = remember(model.messages) { chatMessageKeys(model.messages) }
+    // LazyColumn evaluates its content later, potentially after history/SSE updates.
+    // Capture the row and key together; never index keys using a newer model list.
+    val messageRows = model.messages
+    val messageItems = remember(messageRows) { chatMessageItems(messageRows) }
     val sessionsScroll = rememberLazyListState()
     var openedChat by remember { mutableStateOf<String?>(null) }
     var followLatest by remember(model.selectedId, list) { mutableStateOf(true) }
@@ -353,7 +355,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                itemsIndexed(model.messages, key = { index, _ -> messageKeys[index] }) { _, message ->
+                items(messageItems, key = { it.key }) { item ->
+                    val message = item.message
                     if (message.role == "system") {
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically) {
