@@ -4,6 +4,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SteeringMessagesTest {
+    @Test fun hashIdOrderAndAnUnconfirmedOldTimestampDoNotAcknowledgeMessages() {
+        val note = SteeringMessage("key", "session", "插话", setOf(100), 100, "发送状态待核对", 1)
+        val history = (0 until 500).map { HermesMessage("assistant", "output", 1000L + it, timestamp = 2000L + it) }
+        assertEquals(listOf(note), pendingSteeringMessages(history, listOf(note)))
+        assertTrue(pendingSteeringMessages(history, listOf(note.copy(delivery = "已送达"))).isEmpty())
+        assertEquals(listOf(note.copy(delivery = "已送达")), pendingSteeringMessages(history.take(2), listOf(note.copy(delivery = "已送达"))))
+    }
+    @Test fun exactMatchWinsOverWindowAgeAndOnlyConsumesOneRepeatedMessage() {
+        val note = SteeringMessage("key1", "session", "插话", emptySet(), 100, "已送达", 1)
+        val second = note.copy(key = "key2", delivery = "发送状态待核对")
+        val history = listOf(HermesMessage("user", "插话", 1, timestamp = 2000)) + (0 until 499).map { HermesMessage("assistant", "output", 1000L + it, timestamp = 2000L + it) }
+        val (pending, accepted) = reconcileSteeringMessages(history, listOf(note, second))
+        assertEquals(listOf(second), pending)
+        assertEquals(note, accepted.single().first)
+    }
     @Test fun identicalSteersNeedSeparateHistoryRowsAndPartialTextNeverAcknowledges() {
         val first = SteeringMessage("first", "session", "同意", setOf(10), 10, "已送达")
         val second = first.copy(key = "second")

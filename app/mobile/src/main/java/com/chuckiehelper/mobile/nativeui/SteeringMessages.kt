@@ -24,30 +24,29 @@ fun pendingSteeringMessages(history: List<HermesMessage>, steering: List<Steerin
 fun reconcileSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): Pair<List<SteeringMessage>, List<Pair<SteeringMessage, HermesMessage>>> {
     val consumed = mutableSetOf<Long>()
     val acknowledged = mutableListOf<Pair<SteeringMessage, HermesMessage>>()
-    // 历史窗口可能裁掉插话对应的真实记录（默认页 500 条）——插话发出时它在服务端，
-    // 现在只是滑出窗口。两种判据（旧记录无 timestamp，用 anchor；新记录用 timestamp）：
-    //   anchor < 窗口最小 serverId —— anchor 是发送时最后一条真实消息 id，已滑出窗口 ⇒ 插话本身更早滑出
-    //   timestamp < 窗口最旧时间戳
-    // 判定成立即视为已确认，不再作为 pending 重放（调用方会从持久层清除）。
-    val windowOldestId = history.mapNotNull { it.serverId.takeIf { id -> id > 0 } }.minOrNull()
-    val windowOldestTs = history.mapNotNull { it.timestamp }.minOrNull()
     val pending = steering.filter { message ->
-        val slidOutOfWindow =
-            (windowOldestId != null && message.anchor > 0 && message.anchor < windowOldestId) ||
-            (windowOldestTs != null && message.timestamp != null && message.timestamp < windowOldestTs)
-        if (slidOutOfWindow && message.delivery != "发送失败") {
+        // Match first so real messages always receive their attachments. Codex IDs
+        // are hashes: numeric ID order cannot prove that a record left the window.
+        val match = history.firstOrNull { it.serverId !in consumed && steeringAppearsInHistory(message, listOf(it)) }
+        if (match != null) {
+            consumed += match.serverId; acknowledged += message to match; false
+        } else if (message.attachments.isEmpty() && outsideSteeringWindow(history, message)) {
             false
-        } else {
-            val match = history.firstOrNull { it.serverId !in consumed && steeringAppearsInHistory(message, listOf(it)) }
-            if (match == null) true else { consumed += match.serverId; acknowledged += message to match; false }
-        }
+        } else true
     }
     return pending to acknowledged
+}
+
+private fun outsideSteeringWindow(history: List<HermesMessage>, message: SteeringMessage): Boolean {
+    if (history.size < 500 || message.delivery != "已送达" || message.timestamp == null) return false
+    val oldest = history.mapNotNull { it.timestamp }.minOrNull() ?: return false
+    return message.timestamp < oldest
 }
 
 fun mergeSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): List<HermesMessage> {
     val rows = history.toMutableList()
     pendingSteeringMessages(history, steering).forEach { message ->
+        if (outsideSteeringWindow(history, message)) return@forEach
         if (rows.any { it.localKey == message.key }) return@forEach
         val anchor = rows.indexOfLast { it.serverId == message.anchor && it.serverId > 0 }
         var index = if (anchor >= 0) anchor + 1 else rows.size
