@@ -192,7 +192,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
-                    model.runtime,
+                    model.runtime + if (!list && model.sessionEffort.isNotBlank()) " · 思考${effortLabel(model.sessionEffort)}" else "",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -865,7 +865,7 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                     "${if (global) "全局默认" else "当前会话"}：$currentProvider · $currentModel",
                     style = MaterialTheme.typography.labelSmall,
                 )
-                LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                LazyColumn(Modifier.heightIn(max = if (selected != null) 180.dp else 340.dp)) {
                     if (provider == null) {
                         items(
                             model.modelOptions.array("providers").objects().filter {
@@ -943,7 +943,10 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                                     Text("当前使用", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
                             }
                         }
-                        if (selected != null) item {
+
+                    }
+                }
+                        if (selected != null) Column {
                             HorizontalDivider(Modifier.padding(vertical = 8.dp))
                             val efforts = reasoningChoices(model.agent, provider, selected)
                             if (efforts.isNotEmpty()) {
@@ -969,8 +972,6 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                             }
                             Text("保存后用于下一轮消息", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                    }
-                }
                 model.modelWarning?.let {
                     Text(
                         it,

@@ -171,7 +171,7 @@ fun DockerScreen(api: NativeApi, onError: (String) -> Unit) {
                                                                     )
                                                                     .optString("logs")
                                                     } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
+                                                        if (e is kotlinx.coroutines.CancellationException) throw e
                                                         onError(e.message ?: "读取失败")
                                                     }
                                                 }
@@ -273,7 +273,7 @@ fun ComposeScreen(api: NativeApi, onError: (String) -> Unit, initialPath: String
         try {
             projects = api.json("/api/docker/compose/status").array("data").objects()
         } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is kotlinx.coroutines.CancellationException) throw e
             onError(e.message ?: "项目读取失败")
         }
     }

@@ -33,6 +33,7 @@ import coil.request.ImageRequest
 import org.json.JSONObject
 
 @Composable
+@androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
 fun MediaViewer(api: NativeApi, file: JSONObject, close: () -> Unit, download: () -> Unit) {
     val context = LocalContext.current
     val path = file.optString("path")

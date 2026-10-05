@@ -47,7 +47,7 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
                         .objects()
             error = null
         } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is kotlinx.coroutines.CancellationException) throw e
             error = e.message
         }
     }
@@ -208,7 +208,7 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
                                                     api.json("/api/native-jobs/jobs/${q(id)}")
                                                         .toString(2)
                                         } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
+                                            if (e is kotlinx.coroutines.CancellationException) throw e
                                             onError(e.message ?: "读取失败")
                                         }
                                     }

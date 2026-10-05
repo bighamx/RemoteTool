@@ -518,7 +518,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         title = session.optString("title").ifBlank { "未命名会话" }
         prefs.edit().putString("session", selectedId).apply()
         historyJob?.cancel()
-        sessionProvider = ""; sessionModel = ""
+        sessionProvider = ""; sessionModel = ""; sessionEffort = ""; sessionTier = ""
         contextInfo = null; asyncQuestion = null
         // 先回放上一次该会话的消息（如有缓存），网络刷新到位后替换 —— 消除「返回再进白屏等待」。
         cachedHistory[selectedId]?.let { cached ->
@@ -559,6 +559,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val selection = readAgentSelection(result)
         sessionProvider = selection.provider; sessionModel = selection.model
         sessionEffort = selection.effort; sessionTier = selection.tier
+        runtime = listOf(sessionProvider, sessionModel).filter { it.isNotBlank() }.joinToString(" · ")
         contextInfo = result.optJSONObject("context")
         asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
         pollContext()
@@ -669,7 +670,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (selectedId == id) {
             selectedId = null
             contextInfo = null; asyncQuestion = null
-            sessionProvider = ""; sessionModel = ""
+            sessionProvider = ""; sessionModel = ""; sessionEffort = ""; sessionTier = ""
             title = "$agentName 会话"
             messages = emptyList()
             files = emptyList()
