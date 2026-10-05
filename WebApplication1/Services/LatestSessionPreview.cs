@@ -7,6 +7,11 @@ namespace ChuckieHelper.WebApi.Services;
 
 internal static class LatestSessionPreview
 {
+    private static string ContentText(JsonArray parts) {
+        var text = string.Join("\n", parts.OfType<JsonObject>().Where(part => part["text"] != null).Select(part => part["text"]!.ToString()));
+        if (string.IsNullOrWhiteSpace(text) && parts.OfType<JsonObject>().Any(part => part["type"]?.ToString() is "image" or "localImage" or "image_url" or "input_image")) return "图片附件";
+        return text;
+    }
     private sealed class PreviewRow {
         [Column("session")] public string Session { get; set; }
         [Column("content")] public string Content { get; set; }
@@ -16,10 +21,10 @@ internal static class LatestSessionPreview
         if (string.IsNullOrWhiteSpace(content)) return "";
         var text = content.Replace("\r\n", "\n").Trim();
         try {
-            if (text.StartsWith('[') && JsonNode.Parse(text) is JsonArray parts)
-                text = string.Join("\n", parts.OfType<JsonObject>().Where(part => part["text"] != null).Select(part => part["text"]!.ToString()));
-            else if (codex && text.StartsWith('{') && JsonNode.Parse(text) is JsonObject item)
-                text = string.Join("\n", (item["content"] as JsonArray ?? new()).OfType<JsonObject>().Where(part => part["type"]?.ToString() == "text").Select(part => part["text"]?.ToString() ?? ""));
+            if (text.StartsWith('[') && JsonNode.Parse(text) is JsonArray parts && parts.OfType<JsonObject>().Any(part => part["type"]?.ToString() is "text" or "input_text" or "image" or "image_url" or "input_image"))
+                text = ContentText(parts);
+            else if (codex && text.StartsWith('{') && JsonNode.Parse(text) is JsonObject item && item["type"]?.ToString() == "userMessage")
+                text = ContentText(item["content"] as JsonArray ?? new());
         } catch (JsonException) { }
         if (text.TrimStart().StartsWith("<heartbeat>", StringComparison.Ordinal)) return "";
         const string close = "[/OUT-OF-BAND USER MESSAGE]";

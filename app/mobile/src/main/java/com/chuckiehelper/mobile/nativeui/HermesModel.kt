@@ -381,11 +381,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     fun pollSessionStates() = viewModelScope.launch {
         try {
-            if (agent == "codex") {
-                val latest = mergeSessionPage(emptyList(), api.json("$root/sessions").array("data").objects()) { it.optString("id") }
+                val connection = api
+                val latest = mergeSessionPage(emptyList(), connection.json("$root/sessions").array("data").objects()) { it.optString("id") }
+                if (api !== connection) return@launch
                 val indexed = latest.associateBy { it.optString("id") }
                 val known = sessions.map { it.optString("id") }.toSet()
                 sessions = latest.filter { it.optString("id") !in known } + sessions.map { indexed[it.optString("id")] ?: it }
+            if (agent == "codex") {
                 reconcilePendingNow()
             }
             for ((session, id) in backgroundRuns.toMap()) {
@@ -515,6 +517,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         // 先回放上一次该会话的消息（如有缓存），网络刷新到位后替换 —— 消除「返回再进白屏等待」。
         cachedHistory[selectedId]?.let { cached ->
             messages = cached
+            // 回放缓存后请求滚到底，否则打开会话停在缓存顶部等网络刷新
+            scrollToLatestRequest++
         } ?: run { messages = emptyList() }
         // 恢复该会话的后台 run 跟踪
         backgroundRuns.remove(id)?.let { resumed ->
