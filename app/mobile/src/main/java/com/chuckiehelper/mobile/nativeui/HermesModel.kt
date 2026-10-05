@@ -194,32 +194,31 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }.getOrDefault(emptyList())
     private var narrations = runCatching {
-        org.json.JSONArray(prefs.getString("assistantNarrations", "[]")).objects().map {
-            AssistantNarration(it.getString("key"), it.getString("session"), it.getString("text"), it.optLong("anchor"), it.optString("userText"), it.getLong("timestamp"))
-        }
+        restoreAssistantNarrations(org.json.JSONArray(prefs.getString("assistantNarrations", "[]")))
     }.getOrDefault(emptyList())
     private fun saveNarrations() {
         prefs.edit().putString("assistantNarrations", org.json.JSONArray(narrations.map {
-            obj("key" to it.key, "session" to it.session, "text" to it.text, "anchor" to it.anchor, "userText" to it.userText, "timestamp" to it.timestamp)
+            obj("key" to it.key, "session" to it.session, "text" to it.text, "anchor" to it.anchor,
+                "userText" to it.userText, "timestamp" to it.timestamp, "userTimestamp" to it.userTimestamp,
+                "sequence" to it.sequence, "positionVersion" to 1)
         }).toString()).apply()
     }
-    private fun showToolNarration(run: String, tool: String, preview: String, timestamp: Any?) {
+    private fun showToolNarration(run: String, tool: String, preview: String, timestamp: Any?, sequence: Long?) {
         val text = terminalNarration(tool, preview) ?: return
-        showAssistantNarration(run, text, timestamp)
+        showAssistantNarration(run, text, timestamp, sequence)
     }
     val narrationTexts: List<String> get() = narrations.filter { it.session == selectedId }.map { it.text }
-    private fun showAssistantNarration(run: String, text: String, timestamp: Any?) {
+    private fun showAssistantNarration(run: String, text: String, timestamp: Any?, sequence: Long?) {
         val session = runSession ?: return
-        if (narrations.any { it.session == session && it.key.startsWith("narration-$run-") && it.text == text }) return
-        // anchor 必须锚定真实历史消息（serverId>0）；本地行（steering/旧 narration）serverId=0，
-        // 拿它们当锚点会让 merge 把旁白气泡堆到列表尾部、把新消息挤出末位。
-        val user = messages.lastOrNull { it.role == "user" && it.serverId > 0 } ?: return
-        val now = System.currentTimeMillis()
-        val note = AssistantNarration("narration-$run-${UUID.randomUUID()}", session, text, user.serverId, user.text,
-            parseMessageTimestamp(timestamp) ?: now)
+        if (selectedId != session || runId != run) return
+        val eventTime = parseMessageTimestamp(timestamp) ?: return
+        val identity = sequence?.toString() ?: UUID.nameUUIDFromBytes("$eventTime\n$text".toByteArray(Charsets.UTF_8)).toString()
+        val key = "narration-$run-$identity"
+        if (narrations.any { it.session == session && it.key == key }) return
+        val note = assistantNarrationEvent(key, session, text, eventTime, messages, sequence) ?: return
         narrations = narrations + note; saveNarrations()
         if (pendingText.contains(text) || flushedStreamPrefix.contains(text)) return
-        messages = mergeAssistantNarrations(messages, listOf(note))
+        messages = mergeAssistantNarrations(messages, liveNarrations(session))
         cachedHistory[session] = messages
     }
     /** 旁白气泡 24h 过期：过期后不再插入聊天列表，只在进度区可回看。 */
@@ -942,7 +941,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                     }
                                     "approval.request" -> approval = event
                                     "tool.started" -> {
-                                        showToolNarration(id, event.optString("tool"), event.optString("preview"), event.opt("timestamp"))
+                                        showToolNarration(id, event.optString("tool"), event.optString("preview"), event.opt("timestamp"), n.takeIf { it >= 0 })
                                         events =
                                             (events +
                                                     HermesEvent(
@@ -983,7 +982,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                     "message.interim" -> {
                                         val text = event.optString("text")
                                         if (text.isNotBlank()) {
-                                            showAssistantNarration(id, text, event.opt("timestamp"))
+                                            showAssistantNarration(id, text, event.opt("timestamp"), n.takeIf { it >= 0 })
                                             events = (events + HermesEvent("进度", truncateNarration(text).take(100))).takeLast(30)
                                             eventCount++
                                         }
