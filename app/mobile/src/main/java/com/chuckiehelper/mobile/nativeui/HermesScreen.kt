@@ -67,6 +67,12 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     LaunchedEffect(model.selectedId, list, api.base) {
         if (!list && model.selectedId != null) while (true) { model.pollContext(); kotlinx.coroutines.delay(10000) }
     }
+    LaunchedEffect(model.selectedId, list, api.base, agent) {
+        if (!list && model.selectedId != null) while (true) {
+            model.pollExternalActivity().join()
+            kotlinx.coroutines.delay(2000)
+        }
+    }
     LaunchedEffect(model.asyncQuestion?.optString("request_id"), list) { if (!list && model.asyncQuestion != null) questionPanel = true }
     LaunchedEffect(api.base, list, agent) {
         if (list) while (true) { model.pollSessionStates(); kotlinx.coroutines.delay(5000) }
@@ -113,7 +119,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     }
     var followedSendRequest by remember { mutableStateOf(model.scrollToLatestRequest) }
     LaunchedEffect(model.selectedId, list, model.messages, model.pendingText,
-        model.events.size, model.approval, model.runId, model.scrollToLatestRequest) {
+        model.events.size, model.approval, model.runId, model.executionKey, model.executionEventCount, model.scrollToLatestRequest) {
         if (list) { openedChat = null; return@LaunchedEffect }
         val opening = openedChat != model.selectedId
         val sending = followedSendRequest != model.scrollToLatestRequest
@@ -341,9 +347,9 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         narration = message.narration || message.localKey?.startsWith("narration-") == true, narrationTexts = model.narrationTexts)
                     }
                 }
-                if (model.runId != null && model.runSession == model.selectedId) {
+                if (model.hasExecution) {
                     item {
-                        if (model.pendingText.isNotBlank())
+                        if (model.runId != null && model.pendingText.isNotBlank())
                             MessageBubble("assistant", model.pendingText, api = api, availableFiles = model.files, agentName = agentName, timestamp = model.pendingTextTimestamp, narrationTexts = model.narrationTexts)
                     }
                     item {
@@ -355,20 +361,21 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        model.state,
+                                        model.executionState,
                                         Modifier.weight(1f),
                                         style = MaterialTheme.typography.titleSmall,
                                     )
-                                    TextButton(onClick = { stop = true }) { Text("停止") }
+                                    if (model.runId != null) TextButton(onClick = { stop = true }) { Text("停止") }
                                 }
-                                RunTimers(model.runId, model.currentRunTiming)
-                                if (model.events.isNotEmpty())
+                                RunTimers(model.executionKey, model.executionTiming,
+                                    responseLabel = if (model.runId == null) "距上次已保存响应" else "距上次响应")
+                                if (model.executionEvents.isNotEmpty())
                                     TextButton(onClick = { showTools = !showTools }) {
                                         // 显示本 run 收到的工具/进度事件总数（events 列表只保留最近 30 条，直接用 size 会一直显示截断后的值）
-                                        Text("工具与进度 · ${model.eventCount}")
+                                        Text("工具与进度 · ${model.executionEventCount}")
                                     }
                                 if (showTools)
-                                    model.events.forEach {
+                                    model.executionEvents.forEach {
                                         Row(
                                             Modifier.fillMaxWidth(),
                                             verticalAlignment = Alignment.CenterVertically,
@@ -740,14 +747,14 @@ private fun ComposerMenu(
 }
 
 @Composable
-private fun RunTimers(runId: String?, timing: AgentRunTiming) {
+private fun RunTimers(runId: String?, timing: AgentRunTiming, responseLabel: String = "距上次响应") {
     var now by remember(runId) { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(runId) {
         while (true) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) }
     }
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         listOf(
-            (if (timing.lastResponseAt == null) "等待首次响应" else "距上次响应") to (timing.lastResponseAt ?: timing.startedAt),
+            (if (timing.lastResponseAt == null) "等待首次响应" else responseLabel) to (timing.lastResponseAt ?: timing.startedAt),
             "任务已运行" to timing.startedAt,
         ).forEach { (label, since) ->
             Column(Modifier.weight(1f)) {

@@ -66,6 +66,38 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     // 本 run 累计收到的工具/进度事件总数（events 列表只保留最近若干条，计数不能直接用 events.size）
     var eventCount by mutableStateOf(0)
         private set
+    private var externalActivity by mutableStateOf<JSONObject?>(null)
+    private var externalVerifiedAt by mutableLongStateOf(0L)
+    private var externalHistoryRevision: String? = null
+    val externalRunning get() = runId == null && externalActivityRunning(externalActivity, selectedId, activityNow, externalVerifiedAt)
+    val hasExecution get() = (runId != null && runSession == selectedId) || externalRunning
+    val executionKey get() = runId ?: externalActivity?.optString("activity_id")?.takeIf { externalRunning }?.let { "external-$it" }
+    val executionTiming get() = if (runId != null) currentRunTiming else externalActivityTiming(externalActivity)
+    val executionEvents get() = if (runId != null) events else externalActivityEvents(externalActivity)
+    val executionEventCount get() = if (runId != null) eventCount else externalActivity?.optInt("event_count") ?: 0
+    val executionState get() = if (runId != null) state else "执行中"
+
+    fun pollExternalActivity() = viewModelScope.launch {
+        if (capabilities.optJSONObject("chuckie_features")?.optBoolean("external_session_activity") != true) return@launch
+        val id = selectedId ?: return@launch
+        if (runId != null || submitting) { externalActivity = null; return@launch }
+        val connection = api
+        val requestedAt = activityClock()
+        activityNow = requestedAt
+        try {
+            val result = connection.json("$root/sessions/${q(id)}/activity")
+            if (selectedId != id || api !== connection || runId != null) return@launch
+            if (!result.optBoolean("available")) return@launch
+            externalActivity = result; externalVerifiedAt = requestedAt
+            noteRunActivity(id, obj("status" to if (result.optBoolean("running")) "started" else "completed"), requestedAt)
+            val revision = "$id:${result.optString("activity_id")}:${result.optLong("revision")}:${result.optBoolean("running")}"
+            if (revision != externalHistoryRevision && historyJob?.isActive != true) {
+                loadHistory(id)
+                if (selectedId == id && api === connection) externalHistoryRevision = revision
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { /* Keep only the last verified observation; it expires in 30 seconds. */ }
+    }
 
     private var conversationUi by mutableStateOf(ConversationUiState())
     var draft: String
@@ -360,6 +392,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             }
         })
         sessionActivities = emptyMap()
+        externalActivity = null; externalHistoryRevision = null
         watching?.cancel()
         streamJob?.cancel()
         launch {
@@ -598,6 +631,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             watching?.cancel(); streamJob?.cancel()
         }
         if (selectedId != id) {
+            externalActivity = null; externalHistoryRevision = null
             runSession = null
             seq = -1; events = emptyList(); eventCount = 0
             pendingText = ""; pendingTextTimestamp = null; flushedStreamPrefix = ""
@@ -784,6 +818,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val session = selectedId ?: return false
         if (hasPendingSubmission) { error = "请先核对上一次提交结果，避免重复创建任务"; return false }
         if (input.isBlank() || submitting) return false
+        if (externalRunning && !(agent == "codex" && questionId != null)) { error = "当前任务由其他渠道执行，请在发起端插话；消息和附件已保留"; return false }
         val isQuestion = questionId != null
         if (runId != null && runSession == session) {
             val id = runId!!

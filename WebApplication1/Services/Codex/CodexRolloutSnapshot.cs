@@ -14,6 +14,10 @@ internal static class CodexRolloutSnapshot
         public bool Oversized, Running;
         public JsonObject Settings = new(), Context = Obj(("available", false)), Question;
         public Dictionary<string, JsonObject> Pending = new();
+        public long StartedAt, LastResponseAt, ActivityRevision;
+        public string TurnId = "";
+        public int ToolCount;
+        public Dictionary<string, JsonObject> Tools = new();
     }
     private static readonly object gate = new();
     private static readonly Dictionary<string, State> cache = new(StringComparer.OrdinalIgnoreCase);
@@ -54,7 +58,11 @@ internal static class CodexRolloutSnapshot
                 state.Modified = file.LastWriteTimeUtc.Ticks;
                 var context = state.Context.DeepClone().AsObject();
                 if (context.L("tokens") > 0) context["available"] = true;
-                return Obj(("settings", state.Settings), ("context", context), ("question", state.Question), ("running", state.Running));
+                return Obj(("settings", state.Settings), ("context", context), ("question", state.Question), ("running", state.Running),
+                    ("activity", Obj(("started_at", state.StartedAt > 0 ? (object)state.StartedAt : null),
+                        ("last_response_at", state.LastResponseAt > 0 ? (object)state.LastResponseAt : null), ("activity_id", state.TurnId),
+                        ("revision", state.ActivityRevision), ("event_count", state.ToolCount),
+                        ("progress", new JsonArray(state.Tools.Values.TakeLast(30).Select(tool => tool.DeepClone()).ToArray())))));
             }
         } catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { return empty; }
     }
@@ -62,6 +70,7 @@ internal static class CodexRolloutSnapshot
         try {
             if (JsonNode.Parse(line) is not JsonObject record || record["payload"] is not JsonObject payload) return;
             var kind = record.S("type");
+            var timestamp = DateTimeOffset.TryParse(record.S("timestamp"), out var time) ? time.ToUnixTimeMilliseconds() : 0;
             if (kind == "turn_context") {
                 state.Settings = Obj(("model", payload["model"]), ("reasoningEffort", payload["effort"] ?? payload["reasoning_effort"]),
                     ("serviceTier", payload["service_tier"]), ("collaborationMode", payload["collaboration_mode"]));
@@ -70,14 +79,48 @@ internal static class CodexRolloutSnapshot
             if (kind == "token_usage_record" && payload["usage"] is { } usage) state.Context["tokens"] = usage.L("total_tokens");
             if (kind == "event_msg") {
                 var type = payload.S("type");
-                if (type == "task_started") state.Running = true;
-                else if (type is "task_complete" or "turn_aborted") state.Running = false;
+                if (type == "task_started") {
+                    state.Running = true; state.StartedAt = timestamp; state.LastResponseAt = 0;
+                    state.TurnId = payload.S("turn_id"); state.Tools.Clear(); state.ToolCount = 0; state.ActivityRevision++;
+                } else if (type is "task_complete" or "turn_aborted" &&
+                    (state.TurnId.Length == 0 || payload.S("turn_id").Length == 0 || payload.S("turn_id") == state.TurnId)) {
+                    state.Running = false; state.ActivityRevision++;
+                }
                 if (type == "token_count" && payload["info"] is { } info) {
                     var last = info["last_token_usage"]; var limit = info.L("model_context_window");
                     state.Context = Obj(("available", last != null), ("tokens", last.L("total_tokens")), ("limit", limit > 0 ? (object)limit : null), ("estimated", false));
                 }
             }
             if (kind != "response_item") return;
+            if (state.Running) {
+                var itemType = payload.S("type");
+                if (itemType is "function_call" or "custom_tool_call") {
+                    var id = payload.S("call_id");
+                    if (id.Length > 0 && !state.Tools.ContainsKey(id)) {
+                        var name = payload.S("name").Split('.').Last();
+                        var preview = payload.S(itemType == "custom_tool_call" ? "input" : "arguments");
+                        try {
+                            if (preview.Length <= 65536 && JsonNode.Parse(preview) is JsonObject arguments)
+                                preview = arguments.S("cmd", arguments.S("command", arguments.S("code", arguments.S("path", preview))));
+                        } catch (JsonException) { }
+                        if (preview.Length > 2048) preview = preview[..2048];
+                        preview = System.Text.RegularExpressions.Regex.Replace(preview, @"\s+", " ").Trim();
+                        if (preview.Length > 160) preview = preview[..160] + "…";
+                        state.Tools[id] = Obj(("id", id), ("tool", name), ("preview", preview), ("status", "running"), ("timestamp", timestamp));
+                        state.ToolCount++; state.LastResponseAt = Math.Max(state.LastResponseAt, timestamp); state.ActivityRevision++;
+                        if (state.Tools.Count > 128) state.Tools.Remove(state.Tools.Keys.First());
+                    }
+                } else if (itemType is "function_call_output" or "custom_tool_call_output" && state.Tools.TryGetValue(payload.S("call_id"), out var tool)) {
+                    tool["status"] = "completed"; tool["timestamp"] = timestamp;
+                    try {
+                        var output = payload.S("output");
+                        if (output.Length <= 65536 && JsonNode.Parse(output) is JsonObject result && result.B("isError")) tool["status"] = "failed";
+                    } catch (JsonException) { }
+                    state.LastResponseAt = Math.Max(state.LastResponseAt, timestamp); state.ActivityRevision++;
+                } else if (itemType == "reasoning" || itemType == "message" && payload.S("role") == "assistant") {
+                    state.LastResponseAt = Math.Max(state.LastResponseAt, timestamp); state.ActivityRevision++;
+                }
+            }
             if (payload.S("type") == "message" && payload.S("role") == "user") { state.Question = null; state.Pending.Clear(); }
             if (payload.S("type") == "function_call" && payload.S("name").Split('.').Last() == "request_user_input_async") {
                 var arguments = JsonNode.Parse(payload.S("arguments", "{}"));

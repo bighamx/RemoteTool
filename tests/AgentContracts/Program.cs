@@ -55,6 +55,46 @@ try {
     Check(CodexSessionDetails.Read(temp, history)["question"] == null, "user reply clears pending question");
     File.WriteAllText(history, "{\"type\":\"turn_context\",\"payload\":{\"model\":\"reset\"}}\n");
     Check(CodexRollout.LastModel(temp, history) == "reset", "truncation resets cached metadata");
+    var activityPath = Path.Combine(temp, "activity.jsonl");
+    const long stamp = 1791207000000;
+    string Record(string kind, JsonObject payload, long at) => System.Text.Json.JsonSerializer.Serialize(new {
+        type = kind, timestamp = DateTimeOffset.FromUnixTimeMilliseconds(at).ToString("O"), payload,
+    }) + "\n";
+    JsonObject Event(string kind, string id = "turn-1") => new() { ["type"] = kind, ["turn_id"] = id };
+    File.WriteAllText(activityPath, Record("event_msg", Event("task_started"), stamp));
+    var snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
+    Check(snapshot["running"].GetValue<bool>() && snapshot["activity"]["started_at"].GetValue<long>() == stamp, "desktop start event gives original task start");
+    Check(snapshot["activity"]["last_response_at"] == null, "no desktop response time invented");
+    File.AppendAllText(activityPath, Record("response_item", new() { ["type"] = "function_call", ["name"] = "functions.exec_command", ["call_id"] = "a", ["arguments"] = "{\"cmd\":\"echo hello\"}" }, stamp+1000)
+        + Record("response_item", new() { ["type"] = "function_call", ["name"] = "functions.exec_command", ["call_id"] = "b", ["arguments"] = "{}" }, stamp+2000));
+    snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
+    Check(snapshot["activity"]["event_count"].GetValue<int>() == 2 && snapshot["activity"]["progress"].AsArray().Count == 2, "desktop same-name tools retain distinct IDs");
+    Check(snapshot["activity"]["progress"][0]["preview"].ToString() == "echo hello", "desktop command preview extracted");
+    File.AppendAllText(activityPath, Record("response_item", new() { ["type"] = "function_call_output", ["call_id"] = "a", ["output"] = "{\"isError\":true}" }, stamp+3000));
+    snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
+    Check(snapshot["activity"]["progress"][0]["status"].ToString() == "failed" && snapshot["activity"]["progress"][1]["status"].ToString() == "running", "desktop output pairs by call ID");
+    Check(snapshot["activity"]["last_response_at"].GetValue<long>() == stamp+3000, "tool output advances desktop response clock");
+    File.AppendAllText(activityPath, Record("response_item", new() { ["type"] = "custom_tool_call", ["name"] = "exec", ["call_id"] = "freeform", ["input"] = new string('x', 400) }, stamp+4000)
+        + Record("response_item", new() { ["type"] = "custom_tool_call_output", ["call_id"] = "freeform", ["output"] = "plain result" }, stamp+5000));
+    snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
+    Check(snapshot["activity"]["progress"][2]["status"].ToString() == "completed" && snapshot["activity"]["progress"][2]["preview"].ToString().Length <= 161, "freeform desktop tools supported with bounded preview");
+    File.AppendAllText(activityPath, Record("response_item", new() { ["type"] = "reasoning", ["text"] = "THOUGHT_DO_NOT_EXPOSE" }, stamp+6000));
+    snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
+    Check(snapshot["activity"]["last_response_at"].GetValue<long>() == stamp+6000 && !snapshot["activity"].ToJsonString().Contains("THOUGHT_DO_NOT_EXPOSE"), "activity clock observes reasoning without exposing content");
+    File.AppendAllText(activityPath, Record("event_msg", Event("task_complete", "older-turn"), stamp+7000));
+    Check(CodexRolloutSnapshot.Read(temp, activityPath)["running"].GetValue<bool>(), "old completion cannot end newer desktop task");
+    File.AppendAllText(activityPath, Record("event_msg", Event("task_complete"), stamp+8000));
+    Check(!CodexRolloutSnapshot.Read(temp, activityPath)["running"].GetValue<bool>(), "matching completion clears desktop running state");
+    File.AppendAllText(activityPath, Record("event_msg", Event("task_started", "turn-2"), stamp+9000));
+    snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
+    Check(snapshot["activity"]["event_count"].GetValue<int>() == 0 && snapshot["activity"]["last_response_at"] == null, "new desktop task resets progress and response time");
+    using (var writer = new FileStream(activityPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) {
+        Check(CodexRollout.IsRunning(temp, activityPath), "live writer plus start event proves desktop running on Windows");
+    }
+    Check(!CodexRollout.IsRunning(temp, activityPath), "orphan start without a live writer is not a running task");
+    for (var i = 0; i < 40; i++) File.AppendAllText(activityPath, Record("response_item", new() { ["type"] = "function_call", ["name"] = "test", ["call_id"] = "many-"+i, ["arguments"] = "{}" }, stamp+10000+i));
+    snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
+    Check(snapshot["activity"]["event_count"].GetValue<int>() == 40 && snapshot["activity"]["progress"].AsArray().Count == 30, "desktop tool total survives display limit");
 } finally { Directory.Delete(temp, true); }
 Console.WriteLine($"Agent contract checks: {count} passed");
 var input = "{\"type\":\"text\",\"text\":\"" + new string('汉', 2048) + "\"}";

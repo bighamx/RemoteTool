@@ -88,6 +88,8 @@ namespace ChuckieHelper.WebApi
             builder.Services.AddSingleton<HermesBridge>();
             builder.Services.AddSingleton<RunRegistry>();
 builder.Services.AddSingleton<HermesManagement>();
+builder.Services.AddSingleton<HermesSessionActivity>();
+builder.Services.AddSingleton<CodexSessionActivity>();
 builder.Services.AddSingleton<HermesCompaction>();
             builder.Services.AddSingleton<HermesAttachments>();
             builder.Services.AddSingleton<CodexBridge>();

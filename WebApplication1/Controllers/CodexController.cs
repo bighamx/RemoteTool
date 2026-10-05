@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace ChuckieHelper.WebApi.Controllers;
 
 [ApiController, Authorize, Route("api/codex")]
-public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("codex")] HermesAttachments attachments, RunRegistry runs) : ControllerBase
+public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("codex")] HermesAttachments attachments, RunRegistry runs, CodexSessionActivity activity) : ControllerBase
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效会话或任务标识");
     [HttpGet("capabilities")] public Task Capabilities(CancellationToken ct) => Forward(HttpMethod.Get, "capabilities", null, ct);
@@ -31,6 +31,10 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
         return Ok(attachments.AddMessageAttachments(id, await upstream.Content.ReadAsStringAsync(ct)));
     }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
+    [HttpGet("sessions/{id}/activity")] public IActionResult SessionActivity(string id) {
+        Response.Headers.CacheControl = "no-store";
+        return Ok(activity.Read(Id(id)));
+    }
     [HttpPost("sessions/{id}/files"), RequestSizeLimit(501L * 1024 * 1024), RequestFormLimits(MultipartBodyLengthLimit = 501L * 1024 * 1024)]
     public async Task<IActionResult> Upload(string id, IFormFile file, CancellationToken ct) {
         try { return Ok(await attachments.Upload(Id(id), file, ct)); }
@@ -119,6 +123,10 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
                 HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>()?.DisableBuffering();
                 using var reader = new StreamReader(await upstream.Content.ReadAsStreamAsync(ct));
                 while (await reader.ReadLineAsync(ct) is { } line) { await Response.WriteAsync(line + "\n", ct); await Response.Body.FlushAsync(ct); }
+            } else if (path == "capabilities" && upstream.IsSuccessStatusCode) {
+                var payload = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
+                payload["chuckie_features"] = new System.Text.Json.Nodes.JsonObject { ["external_session_activity"] = true };
+                await Response.WriteAsJsonAsync(payload, ct);
             } else await upstream.Content.CopyToAsync(Response.Body, ct);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception error) when (!Response.HasStarted && error is InvalidOperationException or HttpRequestException or IOException) {
