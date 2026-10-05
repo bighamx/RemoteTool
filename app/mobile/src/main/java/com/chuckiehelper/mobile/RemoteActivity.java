@@ -346,7 +346,7 @@ public class RemoteActivity extends Activity {
         }catch(Exception e){if(running&&epoch==session){android.util.Log.w("ChuckieVideo","MJPEG interrupted",e);ui.post(()->recoverVideo(epoch,"MJPEG interrupted"));}}
         finally{if(c!=null)c.disconnect();if(streamConnection==c)streamConnection=null;}
     }
-    private String cookie(){String value=CookieManager.getInstance().getCookie(endpoint);return value==null?"":value;}
+    private String cookie(){String saved=getIntent().getStringExtra("deviceCookie");if(saved!=null)return saved;String value=CookieManager.getInstance().getCookie(endpoint);return value==null?"":value;}
     private void send(JSONObject json) {
         if(!running)return;
         final int epoch=session;

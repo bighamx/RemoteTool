@@ -249,7 +249,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     fun bind(value: NativeApi) {
         if (this::api.isInitialized && api.base == value.base) return
-        api = NativeApi(value.base, noRetry = true, onReadSuccess = {
+        api = value.withReadPolicy(noRetry = true, onReadSuccess = {
             if (api.base == value.base) {
                 if (error == readConnectionError) error = null
                 readConnectionError = null

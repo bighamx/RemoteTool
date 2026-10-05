@@ -75,6 +75,7 @@ class NativeApi(
     private val probing: Boolean = false,
     private val noRetry: Boolean = false,
     private val onReadSuccess: (() -> Unit)? = null,
+    private val authentication: DeviceAuthSession? = null,
 ) {
     companion object {
         val client =
@@ -86,7 +87,11 @@ class NativeApi(
                 .build()
     }
 
-    fun cookie(): String = CookieManager.getInstance().getCookie(base) ?: ""
+    fun cookie(): String = if (authentication != null) authentication.token?.takeIf { it.isNotBlank() }?.let { "access_token=$it" }.orEmpty()
+        else CookieManager.getInstance().getCookie(base) ?: ""
+
+    fun withReadPolicy(noRetry: Boolean, onReadSuccess: (() -> Unit)? = null) =
+        NativeApi(base, noRetry = noRetry, onReadSuccess = onReadSuccess, authentication = authentication)
 
     fun request(path: String, body: JSONObject? = null): Request =
         Request.Builder()
@@ -181,13 +186,20 @@ class NativeApi(
         })
     }
 
-    suspend fun login(username: String, password: String) {
+    suspend fun login(username: String, password: String): String {
         val result = json("/api/auth/login", obj("username" to username, "password" to password))
+        val token = result.getString("token")
+        installToken(token)
+        return token
+    }
+
+    suspend fun installToken(token: String) {
+        authentication?.token = token
         withContext(Dispatchers.Main) {
             suspendCancellableCoroutine<Unit> { c ->
                 CookieManager.getInstance().setCookie(
                     base,
-                    "access_token=${result.getString("token")}; Path=/; HttpOnly; SameSite=Strict" +
+                    "access_token=$token; Path=/; HttpOnly; SameSite=Strict" +
                         (if (base.startsWith("https:")) "; Secure" else ""),
                 ) {
                     CookieManager.getInstance().flush()
@@ -216,6 +228,9 @@ class NativeApi(
 
 class NativeModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("MainActivity", 0)
+    private val credentials = DeviceCredentialStore(application)
+    private val authenticationSessions = mutableMapOf<String, DeviceAuthSession>()
+    private var connectingDeviceId: String? = null
     var devices by mutableStateOf(readDevices())
         private set
 
@@ -294,9 +309,13 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun forget(device: Device) {
+        credentials.remove(device.id)
+        authenticationSessions.remove(device.id)?.token = null
+        device.endpoints.forEach { CookieManager.getInstance().setCookie(it, "access_token=; Max-Age=0; Path=/") }
+        CookieManager.getInstance().flush()
         devices = devices.filter { it.id != device.id }
         save()
-        if (session?.device?.id == device.id) disconnect()
+        if (session?.device?.id == device.id || connectingDeviceId == device.id) disconnect()
     }
 
     fun removeEndpoint(device: Device, url: String) {
@@ -317,6 +336,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         connectionEpoch++
         connectJob?.cancel()
         connecting = false
+        connectingDeviceId = null
         session = null
         browsingDevices = false
         loginNeeded = false
@@ -414,6 +434,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         val epoch = ++connectionEpoch
         connectJob?.cancel()
         connecting = true
+        connectingDeviceId = device.id
         connectJob =
             viewModelScope.launch {
                 try {
@@ -422,36 +443,34 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
                     if (id != device.id) throw IOException("设备标识不匹配，属于另一台电脑")
                     val reachable =
                         channelChecks.filter { it.reachable }.map { Endpoint(it.url, it.ms!!) }
-                    val cookies = CookieManager.getInstance()
-                    if (cookies.getCookie(selected.url).isNullOrBlank()) {
-                        val source =
-                            device.endpoints.firstNotNullOfOrNull {
-                                cookies.getCookie(it)?.split(';')?.map(String::trim)?.firstOrNull {
-                                    it.startsWith("access_token=")
-                                }
+                    currentCoroutineContext().ensureActive()
+                    if (epoch != connectionEpoch) return@launch
+                    val verificationAuth = DeviceAuthSession()
+                    val verificationApi = NativeApi(selected.url, authentication = verificationAuth)
+                    val recovered = DeviceAuthentication.recover(device.id, id,
+                        read = { credentials.read(device.id) },
+                        legacyTokens = {
+                            (listOf(selected.url) + device.endpoints).distinct().mapNotNull { endpoint ->
+                                CookieManager.getInstance().getCookie(endpoint)?.split(';')?.map(String::trim)
+                                    ?.firstOrNull { it.startsWith("access_token=") }?.substringAfter('=')
                             }
-                        if (source != null)
-                            suspendCancellableCoroutine<Unit> { c ->
-                                cookies.setCookie(
-                                    selected.url,
-                                    source +
-                                        "; Path=/; HttpOnly; SameSite=Strict" +
-                                        (if (selected.url.startsWith("https:")) "; Secure" else ""),
-                                ) {
-                                    cookies.flush()
-                                    if (c.isActive) c.resume(Unit)
-                                }
-                            }
-                    }
-                    val api = NativeApi(selected.url)
-                    loginNeeded =
-                        try {
-                            api.json("/api/auth/me")
-                            false
-                        } catch (e: LoginRequired) {
-                            true
-                        }
+                        },
+                        validate = { token ->
+                            verificationAuth.token = token
+                            try { verificationApi.json("/api/auth/me"); true } catch (_: LoginRequired) { false }
+                        },
+                        signIn = { login ->
+                            try { verificationApi.login(login.username, login.password) } catch (_: LoginRequired) { null }
+                        },
+                        save = { credentials.save(device.id, it) },
+                    )
+                    currentCoroutineContext().ensureActive()
+                    if (epoch != connectionEpoch) return@launch
+                    val authentication = authenticationSessions.getOrPut(device.id) { DeviceAuthSession() }
+                    val api = NativeApi(selected.url, authentication = authentication)
+                    if (recovered != null) api.installToken(recovered.token) else authentication.token = null
                     if (epoch == connectionEpoch) {
+                        loginNeeded = recovered == null
                         session =
                             Session(
                                 device,
@@ -476,9 +495,19 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
                             }
                     }
                 } finally {
-                    if (epoch == connectionEpoch) connecting = false
+                    if (epoch == connectionEpoch) { connecting = false; connectingDeviceId = null }
                 }
             }
+    }
+
+    fun savedUsername(deviceId: String): String = credentials.read(deviceId)?.username.orEmpty()
+
+    suspend fun login(target: Session, username: String, password: String) {
+        val (identity, _) = probe(target.api.base)
+        if (identity != target.device.id) throw IOException("设备标识不匹配，属于另一台电脑")
+        val token = target.api.login(username, password)
+        credentials.save(target.device.id, DeviceLogin(username, password, token))
+        if (session === target) loginNeeded = false
     }
 
     private fun channelError(error: Exception): String =

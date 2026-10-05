@@ -163,12 +163,11 @@ fun NativeApp(model: NativeModel) {
                             Text("正在验证设备并检测通道…")
                         }
                     session == null -> DeviceScreen(model)
-                    model.loginNeeded ->
-                        LoginScreen(
-                            session.api,
-                            onDone = { model.loginNeeded = false },
-                            onError = { model.message = it },
-                        )
+                    model.loginNeeded -> key(session.device.id) {
+                        LoginScreen(session.api, model.savedUsername(session.device.id),
+                            onLogin = { username, password -> model.login(session, username, password) },
+                            onError = { model.message = it })
+                    }
                     else ->
                         key(session.api.base, session.device.id) {
                             val api = session.api
@@ -478,8 +477,8 @@ private fun AddDeviceDialog(model: NativeModel, device: Device?, close: () -> Un
 }
 
 @Composable
-private fun LoginScreen(api: NativeApi, onDone: () -> Unit, onError: (String) -> Unit) {
-    var username by rememberSaveable { mutableStateOf("") }
+private fun LoginScreen(api: NativeApi, savedUsername: String, onLogin: suspend (String, String) -> Unit, onError: (String) -> Unit) {
+    var username by rememberSaveable { mutableStateOf(savedUsername) }
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -516,9 +515,8 @@ private fun LoginScreen(api: NativeApi, onDone: () -> Unit, onError: (String) ->
                 busy = true
                 scope.launch {
                     try {
-                        api.login(username, password)
+                        onLogin(username, password)
                         password = ""
-                        onDone()
                     } catch (e: Exception) {
                         onError(e.message ?: "登录失败")
                     } finally {
@@ -562,7 +560,7 @@ private fun RemoteScreen(api: NativeApi) {
         Button(
             onClick = {
                 context.startActivity(
-                    Intent(context, RemoteActivity::class.java).putExtra("endpoint", api.base)
+                    Intent(context, RemoteActivity::class.java).putExtra("endpoint", api.base).putExtra("deviceCookie", api.cookie())
                 )
             },
             modifier = Modifier.fillMaxWidth(),
