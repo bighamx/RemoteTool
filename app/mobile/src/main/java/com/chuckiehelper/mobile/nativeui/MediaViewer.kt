@@ -58,12 +58,13 @@ fun MediaViewer(api: NativeApi, file: JSONObject, close: () -> Unit, download: (
         file.optString("name").substringAfterLast('.').lowercase() in listOf("mp4", "mkv", "webm", "mov", "avi", "wmv", "m4v")
     val mediaUrl = api.base + file.optString("url").ifBlank { "/api/files/stream?path=${q(path)}" }
     var fullscreen by remember(mediaUrl) { mutableStateOf(false) }
-    var zoom by remember { mutableFloatStateOf(1f) }
-    var pan by remember { mutableStateOf(Offset.Zero) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var zoom by remember(mediaUrl) { mutableFloatStateOf(1f) }
+    var pan by remember(mediaUrl) { mutableStateOf(Offset.Zero) }
+    var error by remember(mediaUrl) { mutableStateOf<String?>(null) }
     var playing by remember(mediaUrl) { mutableStateOf(false) }
     val imageLoader =
         remember(context) { ImageLoader.Builder(context).okHttpClient(NativeApi.client).build() }
+    DisposableEffect(imageLoader) { onDispose { imageLoader.shutdown() } }
     // The player lives outside the normal/fullscreen layout: toggling never reloads
     // the URL, resets the position, or changes the user's paused state.
     val player = if (image) null else remember(api, mediaUrl) {

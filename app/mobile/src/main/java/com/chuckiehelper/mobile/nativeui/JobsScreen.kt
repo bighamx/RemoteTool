@@ -19,6 +19,7 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
     var jobs by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var refresh by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableStateOf("recurring") }
     var queue by rememberSaveable { mutableStateOf("default") }
     var offset by remember { mutableIntStateOf(0) }
@@ -52,6 +53,8 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
         }
     }
     fun action(path: String, body: JSONObject = obj()) {
+        if (busy) return
+        busy = true
         scope.launch {
             try {
                 api.json(path, body)
@@ -59,13 +62,14 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 onError(e.message ?: "操作失败")
-            }
+            } finally { busy = false }
         }
     }
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         item {
             FlowRowCompat {
                 tabs.forEach { (state, title) ->

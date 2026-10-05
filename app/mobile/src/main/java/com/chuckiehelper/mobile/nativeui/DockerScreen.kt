@@ -32,8 +32,9 @@ fun DockerScreen(api: NativeApi, onError: (String) -> Unit) {
         body: JSONObject = obj(),
         after: (JSONObject) -> Unit = { refresh++ },
     ) {
+        if (busy) return
+        busy = true
         scope.launch {
-            busy = true
             try {
                 after(api.json(path, body))
             } catch (e: Exception) {
@@ -48,6 +49,7 @@ fun DockerScreen(api: NativeApi, onError: (String) -> Unit) {
     LaunchedEffect(api, tab, refresh) {
         if (tab < 2) {
             list = null
+            error = null
             try {
                 list =
                     api.json("/api/docker/" + if (tab == 0) "containers" else "images")
@@ -278,8 +280,9 @@ fun ComposeScreen(api: NativeApi, onError: (String) -> Unit, initialPath: String
         }
     }
     fun task(action: suspend () -> Unit) {
+        if (busy) return
+        busy = true
         scope.launch {
-            busy = true
             try {
                 action()
             } catch (e: CancellationException) {
@@ -311,6 +314,7 @@ fun ComposeScreen(api: NativeApi, onError: (String) -> Unit, initialPath: String
             OutlinedTextField(
                 path,
                 { path = it },
+                enabled = !busy,
                 label = { Text("服务器上的 Compose 文件路径") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -359,6 +363,7 @@ fun ComposeScreen(api: NativeApi, onError: (String) -> Unit, initialPath: String
             OutlinedTextField(
                 content,
                 { content = it },
+                enabled = !busy,
                 label = { Text("Compose YAML") },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 240.dp, max = 420.dp),
                 textStyle =
@@ -381,6 +386,7 @@ fun ComposeScreen(api: NativeApi, onError: (String) -> Unit, initialPath: String
         if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         items(projects) { p ->
             OutlinedCard(
+                enabled = !busy,
                 onClick = {
                     val config =
                         p.optString("configFiles").split(',').firstOrNull()?.trim().orEmpty()
