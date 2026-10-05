@@ -68,6 +68,7 @@ fun NativeApp(model: NativeModel) {
         val session = model.session.takeUnless { model.browsingDevices }
         val pages = rememberSaveableStateHolder()
         var route by rememberSaveable { mutableStateOf("系统") }
+        LaunchedEffect(route) { if (route == "文件") route = "Codex" }
         var detail by remember { mutableStateOf<String?>(null) }
         var composeTarget by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
@@ -136,7 +137,7 @@ fun NativeApp(model: NativeModel) {
                         listOf(
                                 "系统" to Icons.Outlined.Speed,
                                 "远程" to Icons.Outlined.DesktopWindows,
-                                "文件" to Icons.Outlined.Folder,
+                                "Codex" to Icons.Outlined.Code,
                                 "Hermes" to Icons.Outlined.SmartToy,
                                 "更多" to Icons.Outlined.MoreHoriz,
                             )
@@ -203,7 +204,7 @@ fun NativeApp(model: NativeModel) {
                                             Modifier.padding(16.dp),
                                             verticalArrangement = Arrangement.spacedBy(12.dp),
                                         ) {
-                                            ToolRow("Codex", "会话 · 模型 · 账户与工作空间", Icons.Outlined.Code) { detail = "Codex" }
+                                            ToolRow("文件管理", "浏览 · 传输 · 图片与视频预览", Icons.Outlined.Folder) { detail = "文件" }
                                             ToolRow(
                                                 "Docker",
                                                 "容器 · Compose · 镜像管理",
