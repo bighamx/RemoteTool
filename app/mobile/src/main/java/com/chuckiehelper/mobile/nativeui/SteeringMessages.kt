@@ -21,6 +21,10 @@ fun pendingSteeringMessages(history: List<HermesMessage>, steering: List<Steerin
     return reconcileSteeringMessages(history, steering).first
 }
 
+/** 发送失败的记录超过 10 分钟即视为放弃：不再重放（失败重试应由用户主动操作，而不是每次进会话重发旧文）。 */
+fun isAbandonedSteering(message: SteeringMessage, now: Long = System.currentTimeMillis()): Boolean =
+    message.delivery == "发送失败" && message.timestamp != null && now - message.timestamp > 10 * 60 * 1000L
+
 fun reconcileSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): Pair<List<SteeringMessage>, List<Pair<SteeringMessage, HermesMessage>>> {
     val consumed = mutableSetOf<Long>()
     val acknowledged = mutableListOf<Pair<SteeringMessage, HermesMessage>>()
@@ -38,7 +42,13 @@ fun reconcileSteeringMessages(history: List<HermesMessage>, steering: List<Steer
 }
 
 private fun outsideSteeringWindow(history: List<HermesMessage>, message: SteeringMessage): Boolean {
-    if (history.size < 500 || message.delivery != "已送达" || message.timestamp == null) return false
+    if (message.delivery != "已送达") return false
+    // 旧记录无 timestamp，用 anchor：发送时锚定的消息已滑出窗口 ⇒ 该插话必然滑出。
+    if (message.timestamp == null) {
+        if (message.anchor <= 0) return false
+        val oldestId = history.mapNotNull { it.serverId.takeIf { id -> id > 0 } }.minOrNull() ?: return false
+        return message.anchor < oldestId
+    }
     val oldest = history.mapNotNull { it.timestamp }.minOrNull() ?: return false
     return message.timestamp < oldest
 }

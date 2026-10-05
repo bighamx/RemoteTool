@@ -211,13 +211,20 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private fun showAssistantNarration(run: String, text: String, timestamp: Any?) {
         val session = runSession ?: return
         if (narrations.any { it.session == session && it.key.startsWith("narration-$run-") && it.text == text }) return
-        val user = messages.lastOrNull { it.role == "user" } ?: return
+        // anchor 必须锚定真实历史消息（serverId>0）；本地行（steering/旧 narration）serverId=0，
+        // 拿它们当锚点会让 merge 把旁白气泡堆到列表尾部、把新消息挤出末位。
+        val user = messages.lastOrNull { it.role == "user" && it.serverId > 0 } ?: return
+        val now = System.currentTimeMillis()
         val note = AssistantNarration("narration-$run-${UUID.randomUUID()}", session, text, user.serverId, user.text,
-            parseMessageTimestamp(timestamp) ?: System.currentTimeMillis())
+            parseMessageTimestamp(timestamp) ?: now)
         narrations = narrations + note; saveNarrations()
         if (pendingText.contains(text) || flushedStreamPrefix.contains(text)) return
         messages = mergeAssistantNarrations(messages, listOf(note))
         cachedHistory[session] = messages
+    }
+    /** 旁白气泡 24h 过期：过期后不再插入聊天列表，只在进度区可回看。 */
+    private fun liveNarrations(id: String) = narrations.filter {
+        it.session == id && System.currentTimeMillis() - it.timestamp < 24 * 60 * 60 * 1000L
     }
     private fun saveSteering() {
         prefs.edit().putString("steeringMessages", org.json.JSONArray(steering.map { row ->
@@ -587,7 +594,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         parseMessageTimestamp(row.opt("timestamp")) ?: parseMessageTimestamp(row.opt("created_at")), narration = isAssistantNarration(row))
                 else null
             }
-        val reconciliation = reconcileSteeringMessages(messages, steering.filter { it.session == id })
+        val sessionSteering = steering.filter { it.session == id }
+        val reconciliation = reconcileSteeringMessages(messages, sessionSteering)
         for ((sent, confirmed) in reconciliation.second) {
             if (sent.attachments.isNotEmpty()) {
                 connection.json("$root/sessions/$id/messages/${confirmed.serverId}/attachments",
@@ -596,7 +604,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 messages = messages.map { if (it.serverId == confirmed.serverId) it.copy(attachments = sent.attachments) else it }
             }
         }
-        steering = steering.filter { it.session != id } + reconciliation.first
+        // 放弃的失败记录（>10 分钟）与已确认/滑出窗口的记录一并清除，防止本地气泡永久堆叠在列表尾部
+        val abandonedKeys = sessionSteering.filter { isAbandonedSteering(it) }.map { it.key }.toSet()
+        steering = steering.filter { it.session != id && it.key !in abandonedKeys } + reconciliation.first.filter { it.key !in abandonedKeys }
         saveSteering()
         messages = mergeSteeringMessages(messages, steering.filter { it.session == id })
         if (messages.isNotEmpty()) cachedHistory[id] = messages
@@ -616,7 +626,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             } else messages = messages + HermesMessage("user", local.pending.input, attachments = local.files,
                 localKey = local.pending.key, delivery = if (hasPendingFor(id)) "正在发送" else "已送达", timestamp = local.pending.timestamp)
         }
-        messages = mergeAssistantNarrations(messages, narrations.filter { it.session == id })
+        messages = mergeAssistantNarrations(messages, liveNarrations(id))
         if (messages.isNotEmpty()) cachedHistory[id] = messages
         sessions
             .find { it.optString("id") == id }
