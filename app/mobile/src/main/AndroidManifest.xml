@@ -3,7 +3,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <application android:label="ChuckieHelper" android:icon="@mipmap/ic_launcher" android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="true" android:allowBackup="false">
-        <activity android:name=".NativeActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+        <activity android:name=".NativeActivity" android:exported="true" android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|smallestScreenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
