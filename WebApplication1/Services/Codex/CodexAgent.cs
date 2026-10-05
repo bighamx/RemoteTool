@@ -488,7 +488,7 @@ internal sealed class CodexAgent : IAsyncDisposable
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
         if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("ready", rpc?.Running == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true));
         if (path == "model-options") return await Models();
         if (path == "projects" && method == "GET") return Obj(("data", await CodexProjects.List(rpc)));
         if (path == "usage") return await rpc.Call("account/rateLimits/read", new());
