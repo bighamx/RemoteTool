@@ -82,4 +82,15 @@ class NarrationReconciliationTest {
         assertEquals(listOf(user.text, canonical.text, next.text), rows.map { it.text })
         assertEquals(110L, rows[1].timestamp)
     }
+    @Test fun olderHistoriesWithoutPhaseStayCoalescedAfterStreamIdentityReconciliation() {
+        val first = note("one", "先检查部署配置").copy(streamed = true, messageId = "one")
+        val second = note("two", "先检查部署配置，然后验证服务", 120).copy(streamed = true, messageId = "two")
+        val history = listOf(user,
+            HermesMessage("assistant", first.text, serverId = narrationMessageId("one"), timestamp = 110),
+            HermesMessage("assistant", second.text, serverId = narrationMessageId("two"), timestamp = 120))
+        val merged = mergeAssistantNarrations(history, listOf(first, second))
+        assertEquals(listOf(user.text, second.text), merged.map { it.text })
+        assertEquals(first.key, merged[1].localKey)
+        assertEquals(merged, mergeAssistantNarrations(merged, listOf(first, second)))
+    }
 }

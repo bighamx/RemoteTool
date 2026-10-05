@@ -171,12 +171,12 @@ fun mergeAssistantNarrations(history: List<HermesMessage>, narrations: List<Assi
         val anchor = narrationAnchorIndex(rows, note)
         if (anchor < 0) return@forEach
         val end = (anchor + 1 until rows.size).firstOrNull { rows[it].role == "user" } ?: rows.size
-        val match = (anchor + 1 until end).firstOrNull { index -> rows[index].role == "assistant" &&
-            (note.messageId != null && rows[index].serverId == narrationMessageId(note.messageId) || narrationCovers(rows[index].text, note.text) ||
-                rows[index].serverId > 0 && rows[index].narration && narrationCovers(note.text, rows[index].text)) }
+        val exact = note.messageId?.let { id -> (anchor + 1 until end).firstOrNull { rows[it].role == "assistant" && rows[it].serverId == narrationMessageId(id) } }
+        val match = exact ?: (anchor + 1 until end).firstOrNull { index -> rows[index].role == "assistant" &&
+            (narrationCovers(rows[index].text, note.text) || rows[index].serverId > 0 && rows[index].narration && narrationCovers(note.text, rows[index].text)) }
         if (match != null) {
             if (note.streamed && (rows[match].narration || normalizedNarration(rows[match].text) == normalizedNarration(note.text)))
-                rows[match] = rows[match].copy(localKey = note.key, narration = true,
+                rows[match] = rows[match].copy(localKey = rows[match].localKey?.takeIf { it.startsWith("narration-") } ?: note.key, narration = true,
                     text = if (note.messageId != null && rows[match].serverId == narrationMessageId(note.messageId) &&
                         narrationCovers(note.text, rows[match].text) && note.text.length > rows[match].text.length) note.text else rows[match].text)
             return@forEach
@@ -193,5 +193,5 @@ fun mergeAssistantNarrations(history: List<HermesMessage>, narrations: List<Assi
         }
         rows.add(insertion, HermesMessage("assistant", note.text, localKey = note.key, timestamp = note.timestamp, narration = true))
     }
-    return rows
+    return coalesceNativeNarrations(rows)
 }
