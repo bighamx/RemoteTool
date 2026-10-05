@@ -7,6 +7,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -33,6 +34,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import org.json.JSONObject
+import kotlinx.coroutines.launch
 
 @Composable
 fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
@@ -118,6 +120,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         }
     val context = LocalContext.current
     val scroll = rememberLazyListState()
+    val uiScope = rememberCoroutineScope()
+    val messageKeys = remember(model.messages) { chatMessageKeys(model.messages) }
     val sessionsScroll = rememberLazyListState()
     var openedChat by remember { mutableStateOf<String?>(null) }
     var followLatest by remember(model.selectedId, list) { mutableStateOf(true) }
@@ -342,13 +346,14 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     item { TextButton(onClick = { model.moreSessions() }) { Text("加载更多会话") } }
             }
         } else {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
-                Modifier.weight(1f).fillMaxWidth(),
+                Modifier.fillMaxSize(),
                 state = scroll,
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(model.messages) { message ->
+                itemsIndexed(model.messages, key = { index, _ -> messageKeys[index] }) { _, message ->
                     if (message.role == "system") {
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically) {
@@ -472,6 +477,21 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 }
                 if (model.selectedId == null) item { Text("请先选择会话或新建会话") }
                 item("conversation-bottom") { Spacer(Modifier.height(1.dp)) }
+            }
+            if (!followLatest && scroll.canScrollForward) SmallFloatingActionButton(
+                onClick = {
+                    followLatest = true
+                    uiScope.launch {
+                        autoScrolling = true
+                        try {
+                            val last = scroll.layoutInfo.totalItemsCount - 1
+                            if (last >= 0) { scroll.scrollToItem(last); scroll.scrollBy(scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.size?.toFloat() ?: 0f) }
+                        } finally { autoScrolling = false }
+                    }
+                },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            ) { Icon(Icons.Outlined.ArrowDownward, "回到最新消息") }
             }
             if (model.uploading) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
