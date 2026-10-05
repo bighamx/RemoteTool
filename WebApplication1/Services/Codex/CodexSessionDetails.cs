@@ -22,39 +22,7 @@ internal static class CodexSessionDetails
         return rows;
     }
     public static JsonObject Read(string home, string path) {
-        JsonObject context = Obj(("available", false)), question = null;
-        var pendingQuestions = new Dictionary<string, JsonObject>();
-        if (string.IsNullOrWhiteSpace(path)) return Obj(("context", context), ("question", question));
-        try {
-            if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(home) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return Obj(("context", context));
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            while (reader.ReadLine() is { } line) {
-                try {
-                    if (JsonNode.Parse(line) is not JsonObject record || record["payload"] is not JsonObject payload) continue;
-                    if (record.S("type") == "compacted") context = Obj(("available", false));
-                    if (record.S("type") == "token_usage_record" && payload["usage"] is { } usage) context["tokens"] = usage.L("total_tokens");
-                    if (record.S("type") == "event_msg" && payload.S("type") == "token_count" && payload["info"] is { } info) {
-                        var last = info["last_token_usage"]; var limit = info.L("model_context_window");
-                        context = Obj(("available", last != null), ("tokens", last.L("total_tokens")), ("limit", limit > 0 ? (object)limit : null), ("estimated", false));
-                    }
-                    if (record.S("type") != "response_item") continue;
-                    if (payload.S("type") == "message" && payload.S("role") == "user") { question = null; pendingQuestions.Clear(); }
-                    if (payload.S("type") == "function_call" && payload.S("name").Split('.').Last() == "request_user_input_async") {
-                        var arguments = JsonNode.Parse(payload.S("arguments", "{}"));
-                        var questions = Questions(arguments?["questions"]);
-                        var id = payload.S("call_id", Hash(line)[..24]);
-                        if (questions.Count > 0) pendingQuestions[id] = Obj(("request_id", id), ("questions", questions), ("async", true));
-                    }
-                    if (payload.S("type") == "function_call_output" && pendingQuestions.Remove(payload.S("call_id"), out var candidate)) {
-                        // A failed/unrecognized tool call is not an actionable question.
-                        var output = JsonNode.Parse(payload.S("output", "{}"));
-                        if (output.B("accepted")) question = candidate;
-                    }
-                } catch (Exception error) when (error is JsonException or InvalidOperationException) { }
-            }
-            if (context.L("tokens") > 0) context["available"] = true;
-        } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
-        return Obj(("context", context), ("question", question));
+        var snapshot = CodexRolloutSnapshot.Read(home, path);
+        return Obj(("context", snapshot["context"]), ("question", snapshot["question"]));
     }
 }

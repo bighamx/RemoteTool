@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using static ChuckieHelper.WebApi.Services.Codex.CodexJson;
 
 namespace ChuckieHelper.WebApi.Services.Codex;
 
@@ -23,75 +24,12 @@ internal static class CodexRollout
         }
         return "";
     }
-    private static readonly object activityGate = new();
-    private static readonly Dictionary<string, (long Length, long Modified, bool Running)> activity = new(StringComparer.OrdinalIgnoreCase);
     public static bool IsRunning(string home, string path) {
-        if (string.IsNullOrWhiteSpace(path)) return false;
-        try {
-            if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(home) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
-            var info = new FileInfo(path); if (!info.Exists) return false;
-            bool running;
-            lock (activityGate) {
-                if (activity.TryGetValue(path, out var cached) && cached.Length == info.Length && cached.Modified == info.LastWriteTimeUtc.Ticks) running = cached.Running;
-                else {
-                    running = false;
-                    using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                    using var reader = new StreamReader(stream);
-                    while (reader.ReadLine() is { } line) {
-                        try {
-                            if (JsonNode.Parse(line) is JsonObject record && record["type"]?.ToString() == "event_msg" && record["payload"] is JsonObject payload) {
-                                var kind = payload["type"]?.ToString();
-                                if (kind == "task_started") running = true;
-                                else if (kind is "task_complete" or "turn_aborted") running = false;
-                            }
-                        } catch (JsonException) { }
-                    }
-                    if (activity.Count >= 512) activity.Clear();
-                    activity[path] = (info.Length, info.LastWriteTimeUtc.Ticks, running);
-                }
-            }
-            if (!running || !OperatingSystem.IsWindows()) return false;
-            try { using var probe = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); return false; }
-            catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33) { return true; }
-        } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+        if (string.IsNullOrWhiteSpace(path) || !OperatingSystem.IsWindows()) return false;
+        try { using var probe = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); return false; }
+        catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33) { return CodexRolloutSnapshot.Read(home, path).B("running"); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
     }
-    public static string LastModel(string home, string path) {
-        var model = "";
-        if (string.IsNullOrWhiteSpace(path)) return model;
-        try {
-            if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(home) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return model;
-            // Desktop Codex keeps the active rollout open for writing. Reading must
-            // share writes and renames; a partial last JSON line is expected.
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            while (reader.ReadLine() is { } line) {
-                try {
-                    if (JsonNode.Parse(line) is JsonObject record && record["type"]?.ToString() == "turn_context" &&
-                        record["payload"] is JsonObject payload && payload["model"]?.ToString() is { Length: > 0 } value) model = value;
-                } catch (JsonException) { }
-            }
-        } catch (Exception error) when (error is IOException or UnauthorizedAccessException) {
-            // Optional model metadata must not prevent opening the session.
-        }
-        return model;
-    }
-    public static JsonObject LastSettings(string home, string path) {
-        var result = new JsonObject();
-        if (string.IsNullOrWhiteSpace(path)) return result;
-        try {
-            if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(home) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return result;
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            while (reader.ReadLine() is { } line) {
-                try {
-                    var record = JsonNode.Parse(line);
-                    if (record?["type"]?.ToString() != "turn_context" || record["payload"] is not JsonObject payload) continue;
-                    result["reasoningEffort"] = (payload["effort"] ?? payload["reasoning_effort"])?.DeepClone();
-                    result["serviceTier"] = payload["service_tier"]?.DeepClone();
-                    result["collaborationMode"] = payload["collaboration_mode"]?.DeepClone();
-                } catch (JsonException) { }
-            }
-        } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
-        return result;
-    }
+    public static string LastModel(string home, string path) => LastSettings(home, path).S("model");
+    public static JsonObject LastSettings(string home, string path) => CodexRolloutSnapshot.Read(home, path)["settings"]!.AsObject();
 }

@@ -11,7 +11,7 @@ internal static class CodexPreviewRollout
     private static readonly Dictionary<string, (DateTime Checked, string[] Paths)> aliases = new();
     private static readonly Dictionary<string, (long Length, long Modified, string Text)> texts = new();
 
-    public static string Read(string home, string id, string original) {
+    public static string LatestPath(string home, string id, string original, bool requireAlias = false) {
         if (!System.Text.RegularExpressions.Regex.IsMatch(id, "^[a-zA-Z0-9_-]{1,160}$")) return "";
         try {
             var directory = Path.Combine(home, "sessions");
@@ -27,11 +27,18 @@ internal static class CodexPreviewRollout
                     aliases[id] = (DateTime.UtcNow, paths);
                 }
             }
-            if (paths.Length == 0) return "";
+            if (paths.Length == 0 && requireAlias) return "";
             var candidates = paths.Concat(string.IsNullOrWhiteSpace(original) ? Array.Empty<string>() : new[] { original });
             var file = candidates.Where(path => Path.GetFullPath(path).StartsWith(Path.GetFullPath(home) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 .Select(path => new FileInfo(path)).Where(info => info.Exists).OrderByDescending(info => info.LastWriteTimeUtc).FirstOrDefault();
-            if (file == null) return "";
+            return file?.FullName ?? "";
+        } catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { return ""; }
+    }
+    public static string Read(string home, string id, string original) {
+        try {
+            var path = LatestPath(home, id, original, requireAlias: true);
+            if (path.Length == 0) return "";
+            var file = new FileInfo(path);
             lock (gate) if (texts.TryGetValue(file.FullName, out var cached) && cached.Length == file.Length && cached.Modified == file.LastWriteTimeUtc.Ticks) return cached.Text;
             var text = ReadTail(file.FullName);
             lock (gate) {

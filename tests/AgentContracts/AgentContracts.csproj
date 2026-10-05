@@ -4,6 +4,9 @@
     <Compile Include="../../WebApplication1/Services/Codex/CodexRpc.cs" Link="CodexRpc.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexModelSettings.cs" Link="CodexModelSettings.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexRollout.cs" Link="CodexRollout.cs" />
+    <Compile Include="../../WebApplication1/Services/Codex/CodexSessionDetails.cs" Link="CodexSessionDetails.cs" />
+    <Compile Include="../../WebApplication1/Services/Codex/CodexRolloutSnapshot.cs" Link="CodexRolloutSnapshot.cs" />
+    <Compile Include="../../WebApplication1/Services/RemoteControl/FilePathPolicy.cs" Link="FilePathPolicy.cs" />
     <Compile Include="../../WebApplication1/Services/RemoteControl/WebSocketTextReader.cs" Link="WebSocketTextReader.cs" />
   </ItemGroup>
 </Project>

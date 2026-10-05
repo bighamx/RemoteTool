@@ -119,6 +119,7 @@ internal sealed class CodexAgent : IAsyncDisposable
         } finally { settingsLock.Release(); }
     }
     private void Persist() { lock (gate) Atomic(journal, runs); }
+    private string RolloutPath(JsonNode thread) => CodexPreviewRollout.LatestPath(home, thread.S("id"), thread.S("path"));
     private void PersistModels() { lock (gate) Atomic(Path.Combine(folder, "model-selections.json"), new JsonObject(sessionOverrides.Select(entry => new KeyValuePair<string, JsonNode>(entry.Key, entry.Value.DeepClone())))); }
     private void Emit(string run, string kind, params (string Key, object Value)[] values) {
         lock (gate) {
@@ -177,7 +178,7 @@ internal sealed class CodexAgent : IAsyncDisposable
         var result = Obj(("id", thread.S("id")), ("title", thread.S("name", thread.S("preview", "未命名会话"))),
         ("preview", thread.S("preview")), ("cwd", thread.S("cwd")), ("source", thread.S("source", "codex")),
         ("model", thread.S("model")), ("project_id", thread?["projectId"]), ("message_count", thread.A("turns").Count), ("status", thread?["status"]));
-        if (thread["status"].S("type") != "active" && CodexRollout.IsRunning(home, thread.S("path"))) result["status"] = Obj(("type", "active"), ("activeFlags", new JsonArray()));
+        if (thread["status"].S("type") != "active" && CodexRollout.IsRunning(home, RolloutPath(thread))) result["status"] = Obj(("type", "active"), ("activeFlags", new JsonArray()));
         return result;
     }
 
@@ -233,7 +234,7 @@ internal sealed class CodexAgent : IAsyncDisposable
                 if (active.ContainsKey(id)) throw new CodexError("请先等待当前任务结束再压缩上下文", 409);
             }
             var thread = (await rpc.Call("thread/read", Obj(("threadId", id), ("includeTurns", false))))["thread"]!;
-            if (thread["status"].S("type") == "active" || CodexRollout.IsRunning(home, thread.S("path"))) throw new CodexError("此会话正在运行，请结束任务后再压缩", 409);
+            if (thread["status"].S("type") == "active" || CodexRollout.IsRunning(home, RolloutPath(thread))) throw new CodexError("此会话正在运行，请结束任务后再压缩", 409);
             var run = "codex_" + Guid.NewGuid().ToString("N");
             JsonObject resumed;
             try { resumed = await rpc.Call("thread/resume", await ResumeSessionRequest(id)); }
@@ -382,7 +383,7 @@ internal sealed class CodexAgent : IAsyncDisposable
             var questionReply = body.S("question_reply_id");
             if (questionReply.Length > 0) {
                 var thread = (await rpc.Call("thread/read", Obj(("threadId", session), ("includeTurns", true))))["thread"]!;
-                var pending = CodexSessionDetails.Read(home, thread.S("path"))["question"];
+                var pending = CodexSessionDetails.Read(home, RolloutPath(thread))["question"];
                 if (pending.S("request_id") != questionReply) throw new CodexError("该问题已回答或过期，请刷新会话", 409);
                 steeringTurn = thread.A("turns").LastOrDefault(turn => turn.S("status") == "inProgress").S("id");
             }
@@ -392,10 +393,10 @@ internal sealed class CodexAgent : IAsyncDisposable
                 try { resumed = await rpc.Call("thread/resume", request); }
                 catch (CodexError error) when (error.Message.Contains("already has an active writer", StringComparison.OrdinalIgnoreCase)) {
                     var thread = (await rpc.Call("thread/read", Obj(("threadId", session), ("includeTurns", false))))["thread"]!;
-                    if (questionReply.Length == 0 && (thread["status"].S("type") == "active" || CodexRollout.IsRunning(home, thread.S("path")))) throw new CodexError("此会话正在另一端执行任务，请等待结束后发送", 409);
+                    if (questionReply.Length == 0 && (thread["status"].S("type") == "active" || CodexRollout.IsRunning(home, RolloutPath(thread)))) throw new CodexError("此会话正在另一端执行任务，请等待结束后发送", 409);
                     desktopOwner = true;
-                    resumed = Obj(("model", CodexRollout.LastModel(home, thread.S("path"))), ("modelProvider", thread.S("modelProvider")),
-                        ("collaborationMode", CodexRollout.LastSettings(home, thread.S("path"))["collaborationMode"]));
+                    resumed = Obj(("model", CodexRollout.LastModel(home, RolloutPath(thread))), ("modelProvider", thread.S("modelProvider")),
+                        ("collaborationMode", CodexRollout.LastSettings(home, RolloutPath(thread))["collaborationMode"]));
                 }
             }
             lock (gate) { if (!desktopOwner) loaded[session] = resumed; runs[run]!["model"] = resumed.S("model"); runs[run]!["provider"] = resumed.S("modelProvider"); }
@@ -558,20 +559,20 @@ internal sealed class CodexAgent : IAsyncDisposable
             if (p.Length == 3 && p[2] == "compact" && method == "POST") return await CompactSession(session, context.Request.Headers["Idempotency-Key"].ToString());
             if (p.Length == 3 && p[2] == "context") {
                 var thread = (await rpc.Call("thread/read", Obj(("threadId", session), ("includeTurns", false))))["thread"]!;
-                var detail = CodexSessionDetails.Read(home, thread.S("path"));
+                var detail = CodexSessionDetails.Read(home, RolloutPath(thread));
                 lock (gate) if (contexts.TryGetValue(session, out var current)) detail["context"] = current.DeepClone();
                 return detail;
             }
             if (p.Length == 2 && method == "GET") {
                 var result = await rpc.Call("thread/read", Obj(("threadId", session), ("includeTurns", false)));
-                var thread = result["thread"]!; var model = CodexRollout.LastModel(home, thread.S("path")); var provider = thread.S("modelProvider");
+                var thread = result["thread"]!; var model = CodexRollout.LastModel(home, RolloutPath(thread)); var provider = thread.S("modelProvider");
                 lock (gate) if (loaded.TryGetValue(session, out var current)) { model = current.S("model", model); provider = current.S("modelProvider", provider); }
                 lock (gate) if (sessionOverrides.TryGetValue(session, out var selected)) { model = selected.S("model", model); provider = selected.S("modelProvider", provider); }
                 var info = Session(thread); info["model"] = model; info["provider"] = provider;
-                var tuning = CodexRollout.LastSettings(home, thread.S("path"));
+                var tuning = CodexRollout.LastSettings(home, RolloutPath(thread));
                 lock (gate) if (sessionOverrides.TryGetValue(session, out var chosen)) tuning = chosen.DeepClone().AsObject();
                 info["reasoning_effort"] = tuning["reasoningEffort"]?.DeepClone(); info["service_tier"] = tuning["serviceTier"]?.DeepClone();
-                var detail = CodexSessionDetails.Read(home, thread.S("path")); info["context"] = detail["context"]?.DeepClone(); info["question"] = detail["question"]?.DeepClone();
+                var detail = CodexSessionDetails.Read(home, RolloutPath(thread)); info["context"] = detail["context"]?.DeepClone(); info["question"] = detail["question"]?.DeepClone();
                 return Obj(("session", info));
             }
             if (p.Length == 2 && method == "PATCH") { await rpc.Call("thread/name/set", Obj(("threadId", session), ("name", body.S("title")))); return Obj(("session", Obj(("id", session), ("title", body.S("title"))))); }
@@ -595,7 +596,7 @@ internal sealed class CodexAgent : IAsyncDisposable
                     try { await rpc.Call("thread/resume", request); await ReleaseSessionCore(session); }
                     catch (CodexError error) when (error.Message.Contains("already has an active writer", StringComparison.OrdinalIgnoreCase)) {
                         var thread = (await rpc.Call("thread/read", Obj(("threadId", session), ("includeTurns", false))))["thread"]!;
-                        if (thread["status"].S("type") == "active" || CodexRollout.IsRunning(home, thread.S("path"))) throw new CodexError("请等待当前任务结束后修改模型设置", 409);
+                        if (thread["status"].S("type") == "active" || CodexRollout.IsRunning(home, RolloutPath(thread))) throw new CodexError("请等待当前任务结束后修改模型设置", 409);
                         if (thread.S("modelProvider") != selection.S("modelProvider")) throw new CodexError("该会话由桌面端管理，请在桌面切换 Provider；手机可修改模型、思考程度和速度", 409);
                     }
                     lock (gate) { sessionOverrides[session] = selection; PersistModels(); }

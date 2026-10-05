@@ -31,6 +31,22 @@ try {
     var actual = CodexRollout.LastSettings(temp, path);
     Check(actual["reasoningEffort"]?.ToString() == "low" && actual["serviceTier"]?.ToString() == "default", "latest settings and partial line");
     Check(CodexRollout.LastSettings(temp, Path.Combine(Path.GetTempPath(), "outside.jsonl")).Count == 0, "rollout path boundary");
+    var history = Path.Combine(temp, "history.jsonl");
+    File.WriteAllText(history, "{\"type\":\"turn_context\",\"payload\":{\"model\":\"old\",\"effort\":\"high\"}}\n");
+    Check(CodexRollout.LastModel(temp, history) == "old", "snapshot initial model");
+    File.AppendAllText(history, "{\"type\":\"turn_context\",\"payload\":{\"model\":\"new\"");
+    Check(CodexRollout.LastModel(temp, history) == "old", "incomplete append deferred");
+    File.AppendAllText(history, "}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"total_tokens\":123},\"model_context_window\":456}}}\n");
+    Check(CodexRollout.LastModel(temp, history) == "new" && CodexSessionDetails.Read(temp, history)["context"]?["tokens"]?.ToString() == "123", "completed append updates metadata");
+    var question = "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input_async\",\"call_id\":\"q\",\"arguments\":\"{\\\"questions\\\":[{\\\"question\\\":\\\"Choose\\\"}]}\"}}\n";
+    File.AppendAllText(history, question);
+    Check(CodexSessionDetails.Read(temp, history)["question"] == null, "unaccepted question hidden");
+    File.AppendAllText(history, "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"q\",\"output\":\"{\\\"accepted\\\":true}\"}}\n");
+    Check(CodexSessionDetails.Read(temp, history)["question"]?["request_id"]?.ToString() == "q", "accepted question visible");
+    File.AppendAllText(history, "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\"}}\n");
+    Check(CodexSessionDetails.Read(temp, history)["question"] == null, "user reply clears pending question");
+    File.WriteAllText(history, "{\"type\":\"turn_context\",\"payload\":{\"model\":\"reset\"}}\n");
+    Check(CodexRollout.LastModel(temp, history) == "reset", "truncation resets cached metadata");
 } finally { Directory.Delete(temp, true); }
 Console.WriteLine($"Agent contract checks: {count} passed");
 var input = "{\"type\":\"text\",\"text\":\"" + new string('汉', 2048) + "\"}";
