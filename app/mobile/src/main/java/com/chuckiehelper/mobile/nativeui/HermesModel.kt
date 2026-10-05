@@ -186,6 +186,28 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 (0 until ids.length()).map { ids.getLong(it) }.toSet(), row.optLong("anchor"), row.optString("delivery", "发送状态待核对"), parseMessageTimestamp(row.opt("timestamp")))
         }
     }.getOrDefault(emptyList())
+    private var narrations = runCatching {
+        org.json.JSONArray(prefs.getString("assistantNarrations", "[]")).objects().map {
+            AssistantNarration(it.getString("key"), it.getString("session"), it.getString("text"), it.optLong("anchor"), it.optString("userText"), it.getLong("timestamp"))
+        }
+    }.getOrDefault(emptyList())
+    private fun saveNarrations() {
+        prefs.edit().putString("assistantNarrations", org.json.JSONArray(narrations.map {
+            obj("key" to it.key, "session" to it.session, "text" to it.text, "anchor" to it.anchor, "userText" to it.userText, "timestamp" to it.timestamp)
+        }).toString()).apply()
+    }
+    private fun showToolNarration(run: String, tool: String, preview: String, timestamp: Any?) {
+        val session = runSession ?: return
+        val text = terminalNarration(tool, preview) ?: return
+        if (narrations.any { it.session == session && it.key.startsWith("narration-$run-") && it.text == text }) return
+        if (pendingText.split("\n\n").any { it.trim() == text.trim() }) return
+        val user = messages.lastOrNull { it.role == "user" } ?: return
+        val note = AssistantNarration("narration-$run-${UUID.randomUUID()}", session, text, user.serverId, user.text,
+            parseMessageTimestamp(timestamp) ?: System.currentTimeMillis())
+        narrations = narrations + note; saveNarrations()
+        messages = mergeAssistantNarrations(messages, listOf(note))
+        cachedHistory[session] = messages
+    }
     private fun saveSteering() {
         prefs.edit().putString("steeringMessages", org.json.JSONArray(steering.map { row ->
             obj("key" to row.key, "session" to row.session, "text" to row.text, "existingIds" to org.json.JSONArray(row.existingIds.toList()),
@@ -574,6 +596,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             } else messages = messages + HermesMessage("user", local.pending.input, attachments = local.files,
                 localKey = local.pending.key, delivery = if (hasPendingFor(id)) "正在发送" else "已送达", timestamp = local.pending.timestamp)
         }
+        messages = mergeAssistantNarrations(messages, narrations.filter { it.session == id })
         if (messages.isNotEmpty()) cachedHistory[id] = messages
         sessions
             .find { it.optString("id") == id }
@@ -623,6 +646,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (!result.optBoolean("deleted")) throw java.io.IOException("$agentName 未删除该会话")
         sessions = sessions.filter { it.optString("id") != id }
         cachedHistory.remove(id)
+        narrations = narrations.filterNot { it.session == id }; saveNarrations()
         localSubmissions.remove(id)
         draftFiles = draftFiles - id
         conversationUi = conversationUi.forget(id)
@@ -881,6 +905,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                     }
                                     "approval.request" -> approval = event
                                     "tool.started" -> {
+                                        showToolNarration(id, event.optString("tool"), event.optString("preview"), event.opt("timestamp"))
                                         events =
                                             (events +
                                                     HermesEvent(
