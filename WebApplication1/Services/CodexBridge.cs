@@ -26,7 +26,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             timeout.CancelAfter(TimeSpan.FromSeconds(2));
             using var response = await clients.CreateClient("codex").SendAsync(request, timeout.Token);
             if (!response.IsSuccessStatusCode) return false;
-            var status = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+            using var status = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
             return status.RootElement.TryGetProperty("implementation", out var implementation) && implementation.GetString() == "dotnet-v2";
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
         catch (HttpRequestException) { return false; }
@@ -51,9 +51,9 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             }
             var configPath = Path.Combine(folder, "connection.json");
             var statusPath = Path.Combine(folder, "status.json");
-            if (File.Exists(configPath)) token = JsonDocument.Parse(await File.ReadAllTextAsync(configPath, ct)).RootElement.GetProperty("token").GetString();
+            if (File.Exists(configPath)) { using var saved = JsonDocument.Parse(await File.ReadAllTextAsync(configPath, ct)); token = saved.RootElement.GetProperty("token").GetString(); }
             if (File.Exists(statusPath)) {
-                try { port = JsonDocument.Parse(await File.ReadAllTextAsync(statusPath, ct)).RootElement.GetProperty("port").GetInt32(); } catch (JsonException) { }
+                try { using var saved = JsonDocument.Parse(await File.ReadAllTextAsync(statusPath, ct)); port = saved.RootElement.GetProperty("port").GetInt32(); } catch (JsonException) { }
                 if (await Ready(ct)) return;
             }
             var profile = OperatingSystem.IsWindows()
@@ -87,7 +87,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             for (var i = 0; i < 80; i++) {
                 await Task.Delay(250, ct);
                 if (File.Exists(statusPath)) {
-                    try { port = JsonDocument.Parse(await File.ReadAllTextAsync(statusPath, ct)).RootElement.GetProperty("port").GetInt32(); } catch (JsonException) { continue; }
+                    try { using var saved = JsonDocument.Parse(await File.ReadAllTextAsync(statusPath, ct)); port = saved.RootElement.GetProperty("port").GetInt32(); } catch (JsonException) { continue; }
                     if (await Ready(ct)) return;
                 }
             }

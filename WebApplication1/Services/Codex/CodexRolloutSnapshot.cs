@@ -81,6 +81,7 @@ internal static class CodexRolloutSnapshot
             if (kind == "compacted") {
                 state.Context = Obj(("available", false)); state.CompactedAt = timestamp;
                 state.CompactionId = payload.S("compaction_response_id", $"{state.TurnId}:{timestamp}"); state.ActivityRevision++;
+                state.Kind = "task"; state.PhaseStartedAt = state.StartedAt;
             }
             if (kind == "token_usage_record" && payload["usage"] is { } usage) state.Context["tokens"] = usage.L("total_tokens");
             if (kind == "event_msg") {

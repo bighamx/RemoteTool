@@ -101,6 +101,7 @@ try {
     File.AppendAllText(activityPath, Record("compacted", new() { ["compaction_response_id"] = "compact-id" }, stamp+21000));
     snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
     Check(snapshot["activity"]["compacted_at"].GetValue<long>() == stamp+21000 && snapshot["activity"]["compaction_id"].ToString() == "compact-id", "native compaction completion can be displayed without sending a message");
+    Check(snapshot["activity"]["kind"].ToString() == "task", "automatic compaction completion restores task phase");
     var desktop = JsonNode.Parse("""{"turns":[{"turnId":"old","turnStartedAtMs":1000,"status":"completed","items":[]},{"turnId":"compact","turnStartedAtMs":2000,"status":"inProgress","items":[{"type":"contextCompaction","completed":false}]}]}""")!.AsObject();
     var live = CodexDesktopActivity.Project(desktop);
     Check(live["running"].GetValue<bool>() && live["kind"].ToString() == "compact" && live["phase_started_at"].GetValue<long>() == 2000, "desktop manual compaction uses its own start time");
