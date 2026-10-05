@@ -12,7 +12,8 @@ public sealed class HermesManagement(IConfiguration configuration)
     {
         var keyFile = configuration["Hermes:KeyFile"] ?? Environment.GetEnvironmentVariable("HERMES_API_KEY_FILE")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "hermes", ".env");
-        var home = Path.GetDirectoryName(Path.GetFullPath(keyFile))!;
+        var home = configuration["Hermes:HomeDirectory"]
+            ?? Path.GetDirectoryName(Path.GetFullPath(keyFile))!;
         var source = configuration["Hermes:SourceDirectory"] ?? Path.Combine(home, "hermes-agent");
         var python = Path.Combine(source, "venv", "Scripts", "python.exe");
         var script = Path.Combine(Path.GetDirectoryName(RemoteControl.InteractiveProcessLauncher.GetApplicationDllPath())!, "hermes", "hermes_management.py");
@@ -31,18 +32,16 @@ public sealed class HermesManagement(IConfiguration configuration)
             using var process = Process.Start(start)!;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(action == "compress_session" ? TimeSpan.FromMinutes(15) : TimeSpan.FromSeconds(60));
-            var output = process.StandardOutput.ReadToEndAsync();
-            var errors = process.StandardError.ReadToEndAsync(); // Drain only; never log credential-bearing diagnostics.
+            var (output, errors) = (process.StandardOutput.ReadToEndAsync(), process.StandardError.ReadToEndAsync());
             await process.StandardInput.WriteAsync(JsonSerializer.Serialize(new { action, body }));
             process.StandardInput.Close();
             try { await process.WaitForExitAsync(timeout.Token); }
             catch { if (!process.HasExited) process.Kill(entireProcessTree: true); throw; }
-            await errors;
-            // Runtime selection may emit startup diagnostics; only the final adapter
-            // JSON is consumed. Diagnostics stay private and are never logged.
+            var errorText = await errors;
             var json = (await output).Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim() ?? "";
+            if (process.ExitCode != 0 || string.IsNullOrEmpty(json) || json[0] != '{')
+                throw new InvalidOperationException("Hermes 模型设置失败: " + (errorText.Length > 400 ? errorText[^400..] : errorText) + " | " + (json.Length > 200 ? json[..200] : json));
             using var result = JsonDocument.Parse(json);
-            if (process.ExitCode != 0) throw new InvalidOperationException("Hermes 模型设置失败，请检查服务端配置");
             return result.RootElement.Clone();
         }
         finally { operationGate.Release(); }
