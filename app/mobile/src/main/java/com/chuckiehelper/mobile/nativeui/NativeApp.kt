@@ -462,6 +462,7 @@ private fun AddDeviceDialog(model: NativeModel, device: Device?, close: () -> Un
                             model.add(name, url, device?.id)
                             close()
                         } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                             error = e.message
                         } finally {
                             busy = false
@@ -520,6 +521,7 @@ private fun LoginScreen(api: NativeApi, savedUsername: String, onLogin: suspend 
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                         onError(e.message ?: "登录失败")
                     } finally {
                         busy = false

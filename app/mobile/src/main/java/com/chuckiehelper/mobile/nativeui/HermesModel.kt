@@ -1019,9 +1019,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             runtime = modelOptions.optString("provider") + " · " + modelOptions.optString("model")
     }
 
-    fun refreshFiles() = launch {
-        selectedId?.let {
-            files = api.json("$root/sessions/$it/files").array("data").objects()
+    fun refreshFiles() {
+        val session = selectedId ?: return; val connection = api
+        launch {
+            val result = connection.json("$root/sessions/$session/files").array("data").objects()
+            if (selectedId == session && api === connection) files = result
         }
     }
 
@@ -1029,10 +1031,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         pendingFiles = pendingFiles.filter { it.optString("id") != id }
     }
 
-    fun upload(uri: android.net.Uri, image: Boolean) = launch {
-        val session = selectedId ?: throw java.io.IOException("请先选择会话")
-        if (pendingFiles.size >= 8) throw java.io.IOException("每条消息最多 8 个附件")
+    fun upload(uri: android.net.Uri, image: Boolean) {
+        val session = selectedId ?: return; val connection = api
+        if (uploading) return
+        if (pendingFiles.size >= 8) { setError(session, "每条消息最多 8 个附件"); return }
         uploading = true
+        launch {
         try {
             val file =
                 withContext(Dispatchers.IO) { prepareHermesUpload(getApplication(), uri, image) }
@@ -1043,17 +1047,18 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         .addFormDataPart("file", file.name, file.body)
                         .build()
                 val request =
-                    api.request("$root/sessions/$session/files")
+                    connection.request("$root/sessions/$session/files")
                         .newBuilder()
                         .post(multipart)
                         .build()
-                val result = api.json(request)
-                if (selectedId == session) pendingFiles = pendingFiles + result
+                val result = connection.json(request)
+                draftFiles = draftFiles + (session to (draftFiles[session].orEmpty() + result))
             } finally {
                 file.temporary.delete()
             }
         } finally {
             uploading = false
+        }
         }
     }
 

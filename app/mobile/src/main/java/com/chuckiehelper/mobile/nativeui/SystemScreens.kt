@@ -51,6 +51,7 @@ fun SystemScreen(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                     error = e.message ?: e.javaClass.simpleName
                 }
                 delay(3000)
@@ -233,6 +234,7 @@ fun SystemScreen(
                     api.json("/api/system/$path", obj())
                     onError("$name 已发送")
                 } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                     onError(e.message ?: "操作失败")
                 }
             }
@@ -460,6 +462,7 @@ fun ProcessScreen(api: NativeApi, onError: (String) -> Unit) {
             processes = api.json("/api/system/processes").array("data").objects()
             error = null
         } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
             error = e.message
         }
     }
@@ -532,6 +535,7 @@ fun ProcessScreen(api: NativeApi, onError: (String) -> Unit) {
                     api.json("/api/system/kill/${p.optInt("id")}", obj())
                     refresh++
                 } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                     onError(e.message ?: "结束失败")
                 }
             }

@@ -25,6 +25,7 @@ fun TerminalScreen(api: NativeApi, onError: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     val buffer = remember(api, type, attempt) { TerminalBuffer() }
     DisposableEffect(api, type, attempt) {
+        val live = java.util.concurrent.atomic.AtomicBoolean(true)
         output = ""
         state = "连接中"
         val request =
@@ -37,12 +38,12 @@ fun TerminalScreen(api: NativeApi, onError: (String) -> Unit) {
                 request,
                 object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
-                        scope.launch { state = "已连接" }
+                        scope.launch { if (live.get()) state = "已连接" }
                     }
 
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         val value = buffer.append(text)
-                        scope.launch { output = value }
+                        scope.launch { if (live.get()) output = value }
                     }
 
                     override fun onFailure(
@@ -51,18 +52,23 @@ fun TerminalScreen(api: NativeApi, onError: (String) -> Unit) {
                         response: Response?,
                     ) {
                         scope.launch {
+                            if (!live.get()) return@launch
                             state = "已断开"
                             onError("终端连接失败：${t.message}")
                         }
                     }
 
                     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                        scope.launch { state = "已断开" }
+                        scope.launch { if (live.get()) state = "已断开" }
+                    }
+                    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                        webSocket.close(code, reason)
                     }
                 },
             )
         socket = ws
         onDispose {
+            live.set(false)
             socket = null
             ws.close(1000, "Leaving terminal")
         }
