@@ -135,6 +135,11 @@ private fun clearHermesLocalFile(context: Context, api: NativeApi, file: JSONObj
 @Composable
 fun HermesFilesDialog(api: NativeApi, files: List<JSONObject>, onClose: () -> Unit) {
     val context = LocalContext.current
+    // Both agent APIs include the server file's UTC LastWriteTime ticks in v.
+    // Directory enumeration and the attachment's hashed ID do not imply age.
+    val newestFirst = remember(files) {
+        files.sortedByDescending { Uri.parse(it.optString("url")).getQueryParameter("v")?.toLongOrNull() ?: Long.MIN_VALUE }
+    }
     var preview by remember { mutableStateOf<JSONObject?>(null) }
     var selected by remember { mutableStateOf(setOf<String>()) }
     var confirm by remember { mutableStateOf(false) }
@@ -154,7 +159,7 @@ fun HermesFilesDialog(api: NativeApi, files: List<JSONObject>, onClose: () -> Un
                 Modifier.heightIn(max = 430.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(files, key = { it.getString("id") }) { file ->
+                items(newestFirst, key = { it.getString("id") }) { file ->
                     OutlinedCard(Modifier.fillMaxWidth()) {
                         Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             val id = file.getString("id")
