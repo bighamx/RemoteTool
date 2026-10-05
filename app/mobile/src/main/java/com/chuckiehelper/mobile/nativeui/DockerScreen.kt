@@ -420,7 +420,7 @@ fun ComposeScreen(api: NativeApi, onError: (String) -> Unit, initialPath: String
     }
     output?.let { TextDocument("Compose 输出", it, false, { if (!busy) output = null }) {} }
     if (chooseFile)
-        PathPicker(api, "选择 Compose 配置", parentPath(path), false, { chooseFile = false }) { target
+        PathPicker(api, "选择 Compose 配置", parentPath(path), directoryOnly = false, close = { chooseFile = false }) { target
             ->
             chooseFile = false
             openFile(target)

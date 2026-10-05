@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NativeBehaviorTest {
+    @Test fun folderBackUsesTheSameScrollKeyDespiteTrailingSeparators() {
+        assertEquals(directoryPositionKey("D:\\GIT"), directoryPositionKey(parentPath("D:\\GIT\\ChuckieHelper")))
+        assertEquals(directoryPositionKey("D:\\GIT\\"), directoryPositionKey("d:/git"))
+        assertNotEquals(directoryPositionKey(""), directoryPositionKey("/"))
+        assertNotEquals(directoryPositionKey("/Var"), directoryPositionKey("/var"))
+    }
     @Test
     fun composeShortcutRecognizesStandardAndOverrideNames(){
         assertTrue(isComposeFile("docker-compose.yml"))

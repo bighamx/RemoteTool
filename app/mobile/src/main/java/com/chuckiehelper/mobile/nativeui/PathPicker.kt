@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /** Browse the remote device's filesystem, never Android's local storage. */
@@ -26,6 +27,7 @@ fun PathPicker(
     title: String,
     initial: String,
     directoryOnly: Boolean = true,
+    allowCreateDirectory: Boolean = false,
     close: () -> Unit,
     select: (String) -> Unit,
 ) {
@@ -35,6 +37,8 @@ fun PathPicker(
     var error by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
     var manual by remember { mutableStateOf(false) }
+    var newDirectory by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     LaunchedEffect(api, path, refresh) {
         loading = true
         error = null
@@ -64,6 +68,7 @@ fun PathPicker(
                         IconButton(onClick = close) { Icon(Icons.Outlined.Close, "关闭") }
                     },
                     actions = {
+                        if (allowCreateDirectory) IconButton(onClick = { newDirectory = true }, enabled = path.isNotBlank() && !loading) { Icon(Icons.Outlined.CreateNewFolder, "新建文件夹") }
                         IconButton(onClick = { manual = true }) {
                             Icon(Icons.Outlined.Edit, "手动输入路径")
                         }
@@ -155,5 +160,19 @@ fun PathPicker(
                 path = it
                 manual = false
             }
+        if (newDirectory) InputDialog("新建文件夹", "文件夹名称", "", { newDirectory = false }) { name ->
+            newDirectory = false
+            if (name.isBlank() || name in listOf(".", "..") || name.any { it == '/' || it == '\\' }) error = "请输入有效文件夹名称"
+            else scope.launch {
+                loading = true; error = null
+                try {
+                    val destination = path.trimEnd('/', '\\') + (if (path.startsWith('/')) "/" else "\\") + name.trim()
+                    api.json("/api/files/create-directory", obj("path" to destination))
+                    path = destination
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { error = e.message ?: "无法创建文件夹" }
+                finally { loading = false }
+            }
+        }
     }
 }

@@ -17,6 +17,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -39,12 +40,18 @@ fun parentPath(path: String): String {
     val index = maxOf(p.lastIndexOf('/'), p.lastIndexOf('\\'))
     return if (index < 0) "" else p.substring(0, index + 1)
 }
+fun directoryPositionKey(path: String): String {
+    if (path.isEmpty()) return "<drives>"
+    val normalized = path.replace('\\', '/').let { if (it == "/") it else it.trimEnd('/') }
+    return if (path.startsWith("\\\\") || Regex("^[a-zA-Z]:").containsMatchIn(path)) normalized.lowercase() else normalized
+}
 
 @Composable
 fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -> Unit) {
     var path by rememberSaveable { mutableStateOf("") }
     var inputPath by rememberSaveable { mutableStateOf("") }
     var files by remember { mutableStateOf<List<JSONObject>?>(null) }
+    var filesPath by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -57,6 +64,15 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val visibleFiles = files.orEmpty()
+    var directoryPositions by rememberSaveable { mutableStateOf(hashMapOf<String, ArrayList<Int>>()) }
+    val fileScroll = rememberSaveable(path, saver = LazyListState.Saver) {
+        val saved = directoryPositions[directoryPositionKey(path)] ?: arrayListOf(0, 0)
+        LazyListState(saved[0], saved[1])
+    }
+    DisposableEffect(path, fileScroll) {
+        val currentPath = path
+        onDispose { directoryPositions = HashMap(directoryPositions).apply { put(directoryPositionKey(currentPath), arrayListOf(fileScroll.firstVisibleItemIndex, fileScroll.firstVisibleItemScrollOffset)) } }
+    }
     fun task(action: suspend () -> Unit) {
         scope.launch {
             busy = true
@@ -72,6 +88,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
         }
     }
     fun navigate(next: String) {
+        directoryPositions = HashMap(directoryPositions).apply { put(directoryPositionKey(path), arrayListOf(fileScroll.firstVisibleItemIndex, fileScroll.firstVisibleItemScrollOffset)) }
         path = next
         inputPath = next
         selected = emptySet()
@@ -87,13 +104,19 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
         navigate(parentPath(path))
     }
     LaunchedEffect(api, path, refresh) {
+        val requestedPath = path
         files = null
+        filesPath = null
+        error = null
         try {
             files =
                 api.json("/api/files/list" + (if (path.isEmpty()) "" else "?path=${q(path)}"))
                     .array("data")
                     .objects()
+            filesPath = requestedPath
             error = null
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             error = e.message
         }
@@ -309,9 +332,10 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
             }
         }
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (files == null) ErrorPane(error) { refresh++ }
+        if (files == null || filesPath != path) ErrorPane(error) { refresh++ }
         else
             LazyColumn(
+                state = fileScroll,
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(7.dp),
             ) {
@@ -480,7 +504,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
             }
         }
         if (name in listOf("复制", "移动", "解压"))
-            PathPicker(api, "$name 到…", initial, true, { input = null }, submit)
+            PathPicker(api, "$name 到…", initial, directoryOnly = true, close = { input = null }, select = submit)
         else
             InputDialog(
                 name,
