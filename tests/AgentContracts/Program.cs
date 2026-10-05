@@ -1,6 +1,14 @@
 using System.Text.Json.Nodes;
 using ChuckieHelper.WebApi.Services.Codex;
 
+if (args.Length == 3 && args[0] == "--probe") {
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    var result = CodexRolloutSnapshot.Read(args[1], args[2]); var first = watch.Elapsed.TotalMilliseconds;
+    watch.Restart(); for (var i = 0; i < 100; i++) CodexRolloutSnapshot.Read(args[1], args[2]);
+    Console.WriteLine($"Rollout read: {new FileInfo(args[2]).Length / 1024 / 1024} MiB; initial {first:F1} ms; cached average {watch.Elapsed.TotalMilliseconds / 100:F3} ms; context available {result["context"]?["available"]}");
+    return;
+}
+
 var catalog = JsonNode.Parse("""{"data":[{"model":"m","supportedReasoningEfforts":[{"reasoningEffort":"high"},{"reasoningEffort":"low"}],"serviceTiers":[{"id":"priority"}],"defaultReasoningEffort":"low","defaultServiceTier":"priority"}]}""")!.AsObject();
 var count = 0;
 void Check(bool valid, string name) { if (!valid) throw new Exception(name); count++; }

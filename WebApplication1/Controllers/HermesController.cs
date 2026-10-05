@@ -23,7 +23,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     }
     [HttpGet("sessions/{id}/context")] public async Task<IActionResult> SessionContext(string id, CancellationToken ct) {
         try { return Ok(await management.Invoke("session_context", JsonSerializer.SerializeToElement(new { session_id = Id(id) }), ct)); }
-        catch (InvalidOperationException) { return Ok(new { available = false }); }
+        catch (InvalidOperationException error) { return Ok(new { available = false, message = error.Message }); }
     }
     [HttpGet("models")] public Task Models(CancellationToken ct) => Forward(HttpMethod.Get, "v1/models", null, null, ct);
     [HttpPost("sessions/{id}/compact")] public IActionResult Compact(string id) {
@@ -36,7 +36,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         using var upstream = await bridge.SendAsync(HttpMethod.Get, "api/model/options", null, null, ct);
         if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 模型目录" });
         var result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
-        var info = await management.Invoke("model_info", null, ct);
+        var info = await management.Invoke("model_reasoning", null, ct);
         if (info.TryGetProperty("reasoning_effort", out var effort)) result["reasoning_effort"] = System.Text.Json.Nodes.JsonValue.Create(effort.ToString());
         return Ok(result);
     }

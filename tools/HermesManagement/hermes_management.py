@@ -19,8 +19,14 @@ import hermes_bootstrap
 def main():
     request = json.load(sys.stdin)
     action = request.get("action")
-    if action not in {"providers", "save_provider", "default_model", "model_info", "session_context", "compress_session"}:
+    if action not in {"providers", "save_provider", "default_model", "model_info", "model_reasoning", "session_context", "compress_session"}:
         raise ValueError("Unsupported settings operation")
+    if action == "model_reasoning":
+        with contextlib.redirect_stdout(io.StringIO()):
+            from hermes_cli.config import load_config
+            effort = (load_config().get("agent") or {}).get("reasoning_effort")
+        print(json.dumps({"reasoning_effort": "none" if effort is False else effort or ""}))
+        return
     with contextlib.redirect_stdout(io.StringIO()):
         from hermes_cli.web_routers.config_env import list_custom_endpoints, upsert_custom_endpoint
         from hermes_cli.web_routers.models import get_model_info, set_model_assignment
