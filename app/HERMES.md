@@ -1,6 +1,6 @@
 # Hermes 原生模块
 
-入口：更多 → Hermes。当前电脑的 ChuckieHelper 服务端连接本机 Hermes；手机沿用设备地址与现有登录，不直接访问 8642，也不保存 API Server 密钥。
+入口：底部 Hermes 标签。当前电脑的 ChuckieHelper 服务端连接本机 Hermes；手机沿用设备地址与现有登录，不直接访问 8642，也不保存 API Server 密钥。
 
 ## 界面与操作
 
@@ -40,5 +40,15 @@ SSE 解析跳过注释与 keepalive，支持多行 data 和事件序号，重连
 - 模型管理辅助脚本复制到 Web 输出目录 `hermes/hermes_management.py`。默认安装目录为 `.env` 同级的 `hermes-agent`，使用其 `venv/Scripts/python.exe`；可用 `Hermes:SourceDirectory` 指定。
 - 本机 0.21.5 的 API Server 未开放全局配置管理。受限辅助脚本仅调用已安装 Hermes 官方 Dashboard 的 `list_custom_endpoints`、`upsert_custom_endpoint`、`get_model_info`、`set_model_assignment`，操作白名单为四项，没有任意命令或任意配置文件接口。
 - 修改模型设置前在 Hermes 自己的 `backups/chuckie-helper` 创建配置备份。测试在独立配置目录中完成，不更改本机实际默认模型。
+
+## 上下文与手动压缩
+
+- 显示当前消息上下文与模型窗口，优先采用 Hermes 的持久用量锚点；无锚点时标记估算。窗口使用网关的模型解析链。
+- 输入框快捷命令及 `/compact`、`/compress` 使用本项目的异步压缩任务，右上角菜单不显示压缩入口，不把斜杠命令当作普通模型提示。
+- 调用已安装 Hermes 的 `compress_now` 与事务内归档压缩，保持会话 ID。原始消息归档保留，提交前使用 SQLite backup API 建立可恢复快照；没有修改 Hermes 源码。
+- 获得 Hermes 跨进程会话回合租约后才压缩，其他端正在运行时拒绝。任务最多运行 15 分钟，停止会结束独立辅助进程树；结果不确定时提示核对，不自动再压缩。
+- 请求标识及任务结果持久化，网络断开后可以继续查询。较短上下文返回无需压缩。
+- 辅助脚本在读取 stdin 前初始化 Hermes 官方运行环境，兼容托管 Python 依赖代际切换；只输出经过筛选的最终 JSON，启动诊断不发送到手机。
+- 当前 HTTP API 的审批响应不等同于 `clarify` 的结构化问答。安装版本的 HTTP Agent 没有配置 clarify 回调；普通追问可以通过下一条消息或 steer 回答。
 
 官方参考：https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server

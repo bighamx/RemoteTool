@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -24,36 +25,52 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.json.JSONObject
 
 @Composable
-fun HermesScreen(api: NativeApi, deviceId: String) {
+fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     val app = LocalContext.current.applicationContext as Application
     val model: HermesModel =
         viewModel(
-            key = "hermes-$deviceId",
+            key = "$agent-$deviceId",
             factory =
-                remember(deviceId) {
+                remember(deviceId, agent) {
                     object : ViewModelProvider.Factory {
                         override fun <T : ViewModel> create(modelClass: Class<T>): T {
                             @Suppress("UNCHECKED_CAST")
-                            return HermesModel(app, deviceId) as T
+                            return HermesModel(app, deviceId, agent) as T
                         }
                     }
                 },
         )
+    val agentName = model.agentName
     LaunchedEffect(api.base) { model.bind(api) }
+    LaunchedEffect(api.base, agent) {
+        if (agent == "codex") while (true) { model.fetchUsage(); kotlinx.coroutines.delay(30000) }
+    }
     var list by rememberSaveable { mutableStateOf(true) }
     var renameChat by remember { mutableStateOf<JSONObject?>(null) }
     var deleteChat by remember { mutableStateOf<JSONObject?>(null) }
     var models by remember { mutableStateOf(false) }
     var providers by remember { mutableStateOf(false) }
+    var accountsPanel by remember { mutableStateOf(false) }
+    var createCodex by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var stop by remember { mutableStateOf(false) }
     var filter by rememberSaveable { mutableStateOf("") }
+    var pendingInfo by remember { mutableStateOf(false) }
+    var questionPanel by remember { mutableStateOf(false) }
+    LaunchedEffect(model.selectedId, list, api.base) {
+        if (!list && model.selectedId != null) while (true) { model.pollContext(); kotlinx.coroutines.delay(10000) }
+    }
+    LaunchedEffect(model.asyncQuestion?.optString("request_id"), list) { if (!list && model.asyncQuestion != null) questionPanel = true }
+    LaunchedEffect(api.base, list, agent) {
+        if (list) while (true) { model.pollSessionStates(); kotlinx.coroutines.delay(5000) }
+    }
     androidx.activity.compose.BackHandler(enabled = !list) { list = true }
     var filesDialog by remember { mutableStateOf(false) }
     var attachMenu by remember { mutableStateOf(false) }
@@ -78,25 +95,49 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
         }
     val context = LocalContext.current
     val scroll = rememberLazyListState()
-    LaunchedEffect(model.selectedId, model.messages.size, list) {
-        if (!list && model.messages.isNotEmpty()) {
-            withFrameNanos {}
-            val last = scroll.layoutInfo.totalItemsCount - 1
-            if (last >= 0) scroll.scrollToItem(last)
+    val sessionsScroll = rememberLazyListState()
+    var openedChat by remember { mutableStateOf<String?>(null) }
+    var followLatest by remember(model.selectedId, list) { mutableStateOf(true) }
+    var autoScrolling by remember { mutableStateOf(false) }
+    var userScrolling by remember { mutableStateOf(false) }
+    // Remember the user's intent before the list grows. Measuring proximity after
+    // insertion wrongly treats a newly appended long bubble as reading old history.
+    LaunchedEffect(scroll, model.selectedId, list) {
+        snapshotFlow { scroll.isScrollInProgress }.collect { active ->
+            if (active && !autoScrolling) userScrolling = true
+            if (!active && userScrolling) {
+                followLatest = !scroll.canScrollForward
+                userScrolling = false
+            }
         }
     }
-    LaunchedEffect(model.pendingText.length) {
-        val atBottom =
-            scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index ==
-                scroll.layoutInfo.totalItemsCount - 1
-        if (!list && !scroll.isScrollInProgress && atBottom) {
-            withFrameNanos {}
-            val last = scroll.layoutInfo.totalItemsCount - 1
-            if (last >= 0) scroll.scrollToItem(last)
-        }
+    var followedSendRequest by remember { mutableStateOf(model.scrollToLatestRequest) }
+    LaunchedEffect(model.selectedId, list, model.messages, model.pendingText,
+        model.events.size, model.approval, model.runId, model.scrollToLatestRequest) {
+        if (list) { openedChat = null; return@LaunchedEffect }
+        val opening = openedChat != model.selectedId
+        val sending = followedSendRequest != model.scrollToLatestRequest
+        followedSendRequest = model.scrollToLatestRequest
+        if (opening || sending) followLatest = true
+        if (model.messages.isEmpty() && model.pendingText.isEmpty()) return@LaunchedEffect
+        if (!shouldScrollChatToLatest(opening, followLatest, sending) || userScrolling && !opening && !sending) return@LaunchedEffect
+        openedChat = model.selectedId
+        autoScrolling = true
+        try {
+            // Allow Compose to measure the new bubble/footer before choosing the tail.
+            repeat(2) {
+                withFrameNanos {}
+                val last = scroll.layoutInfo.totalItemsCount - 1
+                if (last >= 0) {
+                    scroll.scrollToItem(last)
+                    scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.let { tail -> scroll.scrollBy(tail.size.toFloat()) }
+                }
+            }
+        } finally { autoScrolling = false }
     }
     fun createChat() {
-        model.newSession(newHermesChatName()) { list = false }
+        if (agent == "codex") { createCodex = true; model.fetchProjects() }
+        else model.newSession(newHermesChatName(), { list = false })
     }
     fun command(value: String) {
         when (value.trim().substringBefore(' ')) {
@@ -107,12 +148,16 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
             }
             "/sessions" -> list = true
             "/stop" -> stop = true
+            "/compact", "/compress" -> model.compact()
             "/status" -> model.reconnect()
             "/providers" -> {
                 providers = true
                 model.fetchProviders()
             }
-            else -> model.error = "支持 /new /model /sessions /stop /status /providers"
+            "/account", "/workspace" -> {
+                if (agent == "codex") { accountsPanel = true; model.fetchAccounts() }
+            }
+            else -> model.error = "支持 /new /model /sessions /stop /status /providers" + if (agent == "codex") " /compact" else ""
         }
     }
     Column(Modifier.fillMaxSize().imePadding()
@@ -143,7 +188,7 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                 renameChat = obj("id" to model.selectedId, "title" to model.title)
             }) {
                 Text(
-                    if (list) "Hermes 会话" else model.title,
+                    if (list) "$agentName 会话" else model.title,
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
@@ -152,18 +197,21 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(
                 onClick = {
                     list = !list
                     model.refresh()
-                }
+                }, modifier = Modifier.size(40.dp)
             ) {
                 Icon(Icons.Outlined.ChatBubbleOutline, "会话列表")
             }
-            IconButton(onClick = { createChat() }, enabled = !model.submitting) { Icon(Icons.Outlined.Add, "新建会话") }
+            IconButton(onClick = { createChat() }, enabled = !model.submitting, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.Add, "新建会话") }
             Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Hermes 菜单") }
+                IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.MoreVert, "$agentName 菜单") }
                 DropdownMenu(menu, { menu = false }) {
+                    if (agent == "codex") DropdownMenuItem(text = { Text("账户与工作空间") }, onClick = { menu = false; accountsPanel = true; model.fetchAccounts() })
                     listOf("模型选择" to "/model", "Provider 管理" to "/providers", "刷新与重连" to "/status")
                         .forEach { (name, value) ->
                             DropdownMenuItem(
@@ -176,7 +224,11 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                         }
                 }
             }
+            }
+            }
         }
+        if (agent == "codex") CodexUsage(model, compact = true) { accountsPanel = true; model.fetchAccounts() }
+        if (!list && model.selectedId != null) AgentContextInfo(model.contextInfo)
         model.error?.let { error ->
             Surface(color = MaterialTheme.colorScheme.errorContainer) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
@@ -201,11 +253,12 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
             )
             LazyColumn(
                 Modifier.weight(1f),
+                state = sessionsScroll,
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (model.sessions.isEmpty() && !model.loading)
-                    item { Text("暂无会话。点击 + 开始与 Hermes 对话。") }
+                    item { Text("暂无会话。点击 + 开始与 $agentName 对话。") }
                 items(
                     model.sessions.filter {
                         it.optString("title").contains(filter, true) ||
@@ -230,11 +283,17 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.titleSmall,
                             )
+                            model.sessionActivity(session)?.let { activity ->
+                                Surface(modifier = Modifier.clickable(enabled = activity == "待核对") { pendingInfo = true }, color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
+                                    Text(activity, Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
                             var actions by remember { mutableStateOf(false) }
                             Box {
                                 IconButton(onClick = { actions = true }) { Icon(Icons.Outlined.MoreVert, "会话操作") }
                                 DropdownMenu(actions, { actions = false }) {
                                     DropdownMenuItem(text = { Text("修改名称") }, onClick = { actions = false; renameChat = session })
+                                    if (model.hasPendingFor(session.getString("id"))) DropdownMenuItem(text = { Text("核对上次提交") }, onClick = { actions = false; pendingInfo = true })
                                     DropdownMenuItem(text = { Text("删除会话", color = MaterialTheme.colorScheme.error) }, onClick = { actions = false; deleteChat = session })
                                 }
                             }
@@ -246,8 +305,11 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
                             Text(
-                                "${session.optString("source")} · ${session.optInt("message_count")} 条消息",
+                                if (agent == "codex") session.optString("cwd").ifBlank { "Codex 会话" }
+                                else "${session.optString("source")} · ${session.optInt("message_count")} 条消息",
                                 style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -264,12 +326,12 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(model.messages) { message ->
-                    MessageBubble(message.role, message.text, message.attachments, api, model.files)
+                    MessageBubble(message.role, message.text, message.attachments, api, model.files, agentName, message.delivery, message.timestamp)
                 }
                 if (model.runId != null && model.runSession == model.selectedId) {
                     item {
                         if (model.pendingText.isNotBlank())
-                            MessageBubble("assistant", model.pendingText, api = api, availableFiles = model.files)
+                            MessageBubble("assistant", model.pendingText, api = api, availableFiles = model.files, agentName = agentName, timestamp = model.pendingTextTimestamp)
                     }
                     item {
                         var showTools by remember { mutableStateOf(false) }
@@ -288,7 +350,8 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                                 }
                                 if (model.events.isNotEmpty())
                                     TextButton(onClick = { showTools = !showTools }) {
-                                        Text("工具与进度 · ${model.events.size}")
+                                        // 显示本 run 收到的工具/进度事件总数（events 列表只保留最近 30 条，直接用 size 会一直显示截断后的值）
+                                        Text("工具与进度 · ${model.eventCount}")
                                     }
                                 if (showTools)
                                     model.events.forEach {
@@ -333,7 +396,7 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                                 Modifier.padding(14.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Text("Hermes 等待你的决定", style = MaterialTheme.typography.titleSmall)
+                                Text("$agentName 等待你的决定", style = MaterialTheme.typography.titleSmall)
                                 SelectionContainer {
                                     Text(
                                         approval.optString("description").ifBlank {
@@ -349,7 +412,9 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                                             style = MaterialTheme.typography.bodySmall,
                                         )
                                     }
-                                Row {
+                                if (agent == "codex" && approval.optString("kind") == "user_input") {
+                                    CodexQuestions(approval) { model.answerQuestions(it) }
+                                } else Row {
                                     FilledTonalButton(onClick = { model.approve("once") }) {
                                         Text("仅允许本次")
                                     }
@@ -369,6 +434,7 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text("上传附件中…", style = MaterialTheme.typography.labelSmall)
             }
+            if (model.asyncQuestion != null) TextButton(onClick = { questionPanel = true }, modifier = Modifier.fillMaxWidth()) { Text("有问题需要你回答 · 查看选项") }
             if (model.pendingFiles.isNotEmpty())
                 androidx.compose.foundation.lazy.LazyRow(
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -422,14 +488,14 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                             )
                         }
                         ComposerMenu(commands, { commands = false }, onBounds = { commandPanelBounds = it }) {
-                            listOf(
+                            (listOf(
                                     "新建会话" to "/new",
                                     "切换模型" to "/model",
                                     "会话历史" to "/sessions",
                                     "Provider 管理" to "/providers",
                                     "状态与重连" to "/status",
                                     "停止任务" to "/stop",
-                                )
+                                ) + listOf("压缩上下文" to "/compact") + if (agent == "codex") listOf("账户与工作空间" to "/account") else emptyList())
                                 .forEach { (label, value) ->
                                     DropdownMenuItem(
                                         text = {
@@ -533,7 +599,7 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                     ) {
                         IconButton(
                             onClick = {
-                                if (model.runId != null) stop = true
+                                if (model.runId != null && !canSend) stop = true
                                 else if (model.draft.trim().startsWith("/")) {
                                     command(model.draft)
                                     model.draft = ""
@@ -543,9 +609,9 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
                             modifier = Modifier.size(40.dp),
                         ) {
                             Icon(
-                                if (model.runId != null) Icons.Outlined.Stop
+                                if (model.runId != null && !canSend) Icons.Outlined.Stop
                                 else Icons.Outlined.Send,
-                                if (model.runId != null) "停止任务" else "发送消息",
+                                if (model.runId != null && !canSend) "停止任务" else "发送消息",
                                 modifier = Modifier.size(21.dp),
                                 tint =
                                     if (canSend || model.runId != null)
@@ -576,12 +642,31 @@ fun HermesScreen(api: NativeApi, deviceId: String) {
         }
     }
     if (stop)
-        ConfirmDialog("停止 Hermes 任务", "请求在安全中断点停止，不会撤销已经执行的操作。", { stop = false }) {
+        ConfirmDialog("停止 $agentName 任务", "请求在安全中断点停止，不会撤销已经执行的操作。", { stop = false }) {
             model.stop()
             stop = false
         }
     if (models) HermesModelPicker(model) { models = false }
     if (providers) HermesProviderDialog(model) { providers = false }
+    if (accountsPanel) CodexAccountsDialog(model, { accountsPanel = false }) { list = true }
+    if (questionPanel && model.asyncQuestion != null && !list) AlertDialog(
+        onDismissRequest = { questionPanel = false }, title = { Text("需要你的回答") },
+        text = { androidx.compose.foundation.rememberScrollState().let { state ->
+            Column(Modifier.heightIn(max = 440.dp).verticalScroll(state)) {
+                CodexQuestions(model.asyncQuestion!!) { answers -> if (model.answerAsyncQuestion(model.asyncQuestion!!, answers)) questionPanel = false }
+            }
+        } },
+        confirmButton = {}, dismissButton = { TextButton(onClick = { questionPanel = false }) { Text("稍后回答") } },
+    )
+    if (pendingInfo) AlertDialog(onDismissRequest = { pendingInfo = false }, title = { Text("上次提交未确认") },
+        text = { Text("手机未收到某次提交的确认结果，此标记不代表电脑正在运行任务。可先核对会话历史；清除记录会恢复输入草稿，不会终止电脑任务。") },
+        confirmButton = { TextButton(onClick = { model.reconcilePending(); pendingInfo = false }) { Text("重新核对") } },
+        dismissButton = { Row { TextButton(onClick = { model.clearPendingRecord(); pendingInfo = false }) { Text("清除记录") }; TextButton(onClick = { pendingInfo = false }) { Text("关闭") } } })
+    if (createCodex) CodexNewSessionDialog(api, model, { createCodex = false }) { options ->
+        model.newSession(newHermesChatName(), { createCodex = false; list = false }, options)
+    }
+    if (agent == "codex") CodexLoginDialog(model)
+    if (agent == "codex") CodexSwitchingDialog(model)
     if (filesDialog) HermesFilesDialog(api, model.files) { filesDialog = false }
     preview?.let { file ->
         MediaViewer(api, file, { preview = null }, { downloadHermesFile(context, api, file) })
@@ -647,6 +732,9 @@ private fun MessageBubble(
     attachments: List<JSONObject> = emptyList(),
     api: NativeApi? = null,
     availableFiles: List<JSONObject> = emptyList(),
+    agentName: String = "Hermes",
+    delivery: String? = null,
+    timestamp: Long? = null,
 ) {
     val context = LocalContext.current
     var preview by remember { mutableStateOf<JSONObject?>(null) }
@@ -667,13 +755,19 @@ private fun MessageBubble(
         ) {
             SelectionContainer {
                 Column(Modifier.padding(14.dp)) {
-                    Text(
-                        if (role == "user") "你" else "Hermes",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Text(if (role == "user") "你" else agentName,
+                            modifier = Modifier.alignByBaseline(), style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary)
+                        formatMessageTimestamp(timestamp).takeIf { it.isNotBlank() }?.let { time ->
+                            Text(time, modifier = Modifier.alignByBaseline(),
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f), maxLines = 1)
+                        }
+                    }
                     Spacer(Modifier.height(5.dp))
                     if (presentation.text.isNotBlank()) HermesMarkdown(presentation.text)
+                    delivery?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     presentation.unavailable.forEach { name ->
                         Text("附件暂不可用：$name", style = MaterialTheme.typography.bodySmall)
                     }
@@ -714,6 +808,11 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
     var provider by remember { mutableStateOf<JSONObject?>(null) }
     var selected by remember { mutableStateOf<String?>(null) }
     var filter by remember { mutableStateOf("") }
+    val currentProvider = if (global) model.modelOptions.optString("provider") else model.sessionProvider.ifBlank { model.modelOptions.optString("provider") }
+    val currentModel = if (global) model.modelOptions.optString("model") else model.sessionModel.ifBlank { model.modelOptions.optString("model") }
+    LaunchedEffect(provider?.optString("slug"), global, currentProvider, currentModel) {
+        selected = if (provider?.optString("slug") == currentProvider) currentModel.takeIf { it.isNotBlank() } else null
+    }
     fun previous() {
         provider = null
         selected = null
@@ -752,7 +851,7 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                     singleLine = true,
                 )
                 Text(
-                    "默认：${model.modelOptions.optString("provider")} · ${model.modelOptions.optString("model")}",
+                    "${if (global) "全局默认" else "当前会话"}：$currentProvider · $currentModel",
                     style = MaterialTheme.typography.labelSmall,
                 )
                 LazyColumn(Modifier.heightIn(max = 340.dp)) {
@@ -770,6 +869,8 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                                     filter = ""
                                 },
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(containerColor = if (p.optString("slug") == currentProvider) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh),
+                                border = if (p.optString("slug") == currentProvider) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
                             ) {
                                 Column(Modifier.padding(12.dp)) {
                                     Text(
@@ -778,7 +879,8 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                                     )
                                     Text(
                                         "${p.array("models").length()} 个模型" +
-                                            (if (p.optBoolean("is_current")) " · 默认 Provider"
+                                            (if (p.optString("slug") == currentProvider) " · 当前使用"
+                                            else if (p.optBoolean("is_current")) " · 全局默认"
                                             else ""),
                                         style = MaterialTheme.typography.labelSmall,
                                     )
@@ -826,6 +928,8 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                                     Modifier.weight(1f),
                                     style = MaterialTheme.typography.bodySmall,
                                 )
+                                if (provider!!.optString("slug") == currentProvider && name == currentModel)
+                                    Text("当前使用", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
                             }
                         }
                     }
@@ -887,7 +991,8 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
             LazyColumn(Modifier.heightIn(max = 420.dp)) {
                 item {
                     Text(
-                        "新增或编辑 OpenAI / Responses / Anthropic 兼容端点。已有密钥不会返回手机。",
+                        if (model.agent == "codex") "新增或编辑 Responses API 兼容端点。已有密钥不会返回手机。"
+                        else "新增或编辑 OpenAI / Responses / Anthropic 兼容端点。已有密钥不会返回手机。",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -976,12 +1081,12 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
                         visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
                     )
-                    listOf(
+                    (if (model.agent == "codex") listOf("codex_responses" to "Responses API") else listOf(
                             "" to "自动识别",
                             "chat_completions" to "Chat Completions",
                             "codex_responses" to "Responses API",
                             "anthropic_messages" to "Anthropic Messages",
-                        )
+                        ))
                         .forEach { (mode, label) ->
                             FilterChip(
                                 transport == mode,

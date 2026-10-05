@@ -17,7 +17,7 @@ fun extractHermesMedia(text: String): HermesMediaText {
 fun presentHermesMessage(text: String, attached: List<JSONObject>, available: List<JSONObject>): HermesPresentation {
     val files = attached.toMutableList()
     val unavailable = mutableListOf<String>()
-    val parsed = extractHermesMedia(text)
+    val parsed = extractHermesMedia(codexQuestionReplyDisplay(text))
     parsed.paths.forEach { path ->
         val name = path.substringAfterLast('/')
         val candidates = (attached + available).distinctBy { it.optString("id") }.filter {

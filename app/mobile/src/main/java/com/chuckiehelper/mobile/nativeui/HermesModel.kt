@@ -15,13 +15,18 @@ data class HermesMessage(
     val text: String,
     val serverId: Long = 0,
     val attachments: List<JSONObject> = emptyList(),
+    val localKey: String? = null,
+    val delivery: String? = null,
+    val timestamp: Long? = null,
 )
 
 data class HermesEvent(val type: String, val text: String, val detail: String = "")
 
 /** Durable run ids, never a persisted provider secret or automatically replayed prompt. */
-class HermesModel(application: Application, deviceId: String) : AndroidViewModel(application) {
-    private val prefs = application.getSharedPreferences("hermes-$deviceId", 0)
+class HermesModel(application: Application, deviceId: String, val agent: String = "hermes") : AndroidViewModel(application) {
+    val agentName = if (agent == "codex") "Codex" else "Hermes"
+    private val root = "/api/$agent"
+    private val prefs = application.getSharedPreferences("$agent-$deviceId", 0)
     private lateinit var api: NativeApi
     var sessions by mutableStateOf<List<JSONObject>>(emptyList())
         private set
@@ -29,7 +34,7 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
     var selectedId by mutableStateOf(prefs.getString("session", null))
         private set
 
-    var title by mutableStateOf("Hermes")
+    var title by mutableStateOf(agentName)
         private set
 
     var messages by mutableStateOf<List<HermesMessage>>(emptyList())
@@ -38,8 +43,20 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
     var events by mutableStateOf<List<HermesEvent>>(emptyList())
         private set
 
-    var draft by mutableStateOf("")
+    // 本 run 累计收到的工具/进度事件总数（events 列表只保留最近若干条，计数不能直接用 events.size）
+    var eventCount by mutableStateOf(0)
+        private set
+
+    private var conversationUi by mutableStateOf(ConversationUiState())
+    var draft: String
+        get() = conversationUi.entry(selectedId).draft
+        set(value) { conversationUi = conversationUi.draft(selectedId, value) }
+    private fun setDraft(session: String?, value: String) { conversationUi = conversationUi.draft(session, value) }
+    private fun setError(session: String?, value: String?) { conversationUi = conversationUi.error(session, value) }
+    private fun setSubmitting(session: String?, value: Boolean) { conversationUi = conversationUi.submitting(session, value) }
     var pendingText by mutableStateOf("")
+        private set
+    var pendingTextTimestamp by mutableStateOf<Long?>(null)
         private set
 
     var runId by mutableStateOf(prefs.getString("run", null))
@@ -51,12 +68,13 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
     var state by mutableStateOf("就绪")
         private set
 
-    var error by mutableStateOf<String?>(null)
+    var error: String?
+        get() = conversationUi.entry(selectedId).error
+        set(value) { setError(selectedId, value) }
     var loading by mutableStateOf(false)
         private set
 
-    var submitting by mutableStateOf(false)
-        private set
+    val submitting get() = conversationUi.entry(selectedId).submitting
 
     var uploading by mutableStateOf(false)
         private set
@@ -64,8 +82,10 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
     var files by mutableStateOf<List<JSONObject>>(emptyList())
         private set
 
-    var pendingFiles by mutableStateOf<List<JSONObject>>(emptyList())
-        private set
+    private var draftFiles by mutableStateOf<Map<String?, List<JSONObject>>>(emptyMap())
+    var pendingFiles: List<JSONObject>
+        get() = draftFiles[selectedId].orEmpty()
+        private set(value) { draftFiles = draftFiles + (selectedId to value) }
 
     var capabilities by mutableStateOf(JSONObject())
         private set
@@ -83,6 +103,10 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
         private set
 
     var modelWarning by mutableStateOf<String?>(null)
+    var sessionProvider by mutableStateOf("")
+        private set
+    var sessionModel by mutableStateOf("")
+        private set
 
     var hasMore by mutableStateOf(false)
         private set
@@ -91,39 +115,176 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
     private var historyJob: Job? = null
     private var streamJob: Job? = null
     private var seq = -1L
-    private var optimisticKey: String? = null
-    private var optimisticText: String? = null
-    private var optimisticSession: String? = null
-    private var optimisticAfter = 0L
-    private var optimisticFiles: List<JSONObject> = emptyList()
+    private data class LocalSubmission(val pending: PendingAgentSubmission, val existing: Set<Long>, val after: Long, val files: List<JSONObject>)
+    private val localSubmissions = mutableMapOf<String, LocalSubmission>()
+    private var nextCursor: String? = null
+    var accounts by mutableStateOf(JSONObject())
+        private set
+    var workspaces by mutableStateOf(JSONObject())
+        private set
+    var loginInfo by mutableStateOf<JSONObject?>(null)
+        private set
+    var loginVisible by mutableStateOf(false)
+        private set
+    var usage by mutableStateOf<JSONObject?>(null)
+        private set
+    var switchingAccount by mutableStateOf(false)
+        private set
+    var workspaceUsages by mutableStateOf<Map<String, JSONObject>>(emptyMap())
+        private set
+    var workspaceUsageLoading by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var projects by mutableStateOf<List<JSONObject>>(emptyList())
+        private set
+    var projectsLoading by mutableStateOf(false)
+        private set
+    var contextInfo by mutableStateOf<JSONObject?>(null)
+        private set
+    var asyncQuestion by mutableStateOf<JSONObject?>(null)
+        private set
+    // 每会话最近一次成功加载的消息列表（内存级，进程内有效），用于 select() 时先回放再刷新。
+    private val cachedHistory = mutableMapOf<String, List<HermesMessage>>()
+    // 切走时挂到后台的 run（sessionId -> runId）。服务端继续执行，切回对应会话时恢复跟踪。
+    private val backgroundRuns = mutableStateMapOf<String, String>().apply { putAll(runCatching {
+        JSONObject(prefs.getString("trackedRuns", "{}").orEmpty()).let { rows -> rows.keys().asSequence().associateWith { rows.getString(it) }.toMutableMap() }
+    }.getOrDefault(mutableMapOf())) }
+    init {
+        if (runId != null && runSession != null) backgroundRuns[runSession!!] = runId!!
+        runId = selectedId?.let { backgroundRuns.remove(it) }
+        runSession = selectedId.takeIf { runId != null }
+    }
+    private fun saveRuns() {
+        val tracked = backgroundRuns.toMutableMap()
+        if (runId != null && runSession != null) tracked[runSession!!] = runId!!
+        prefs.edit().putString("trackedRuns", JSONObject(tracked as Map<*, *>).toString()).apply()
+    }
+    private var pendingSubmissions by mutableStateOf(runCatching {
+        val rows = JSONObject(prefs.getString("pendingSubmissions", "{}").orEmpty())
+        rows.keys().asSequence().associateWith { id ->
+            val row = rows.getJSONObject(id)
+            PendingAgentSubmission(row.getString("key"), row.getString("input"), row.array("attachments").let { ids -> (0 until ids.length()).map { ids.getString(it) } }, row.optLong("timestamp"), row.optString("questionId").takeIf { it.isNotBlank() && it != "null" })
+        }.toMutableMap().apply {
+            val session = prefs.getString("pendingSession", null)
+            val key = prefs.getString("pendingKey", null)
+            if (session != null && key != null && !containsKey(session)) put(session, PendingAgentSubmission(key, prefs.getString("pendingInput", "").orEmpty(), org.json.JSONArray(prefs.getString("pendingAttachments", "[]")).let { ids -> (0 until ids.length()).map { ids.getString(it) } }, prefs.getLong("pendingTimestamp", 0), prefs.getString("answeringQuestion", null).takeIf { prefs.getString("answeringQuestionSession", null) == session }))
+        }.toMap()
+    }.getOrDefault(emptyMap<String, PendingAgentSubmission>()))
+    private fun savePending() {
+        val rows = JSONObject()
+        pendingSubmissions.forEach { (id, pending) -> rows.put(id, obj("key" to pending.key, "input" to pending.input, "attachments" to org.json.JSONArray(pending.attachmentIds), "timestamp" to pending.timestamp, "questionId" to pending.questionId)) }
+        prefs.edit().putString("pendingSubmissions", rows.toString()).remove("pendingKey").remove("pendingInput").remove("pendingSession").remove("pendingAttachments").remove("pendingTimestamp").apply()
+    }
+    private fun removePending(session: String) { pendingSubmissions = pendingSubmissions - session; savePending() }
+    var scrollToLatestRequest by mutableStateOf(0L)
+        private set
+    private var readConnectionError: String? = null
+    private var flushedStreamPrefix = ""
+    private var steering = runCatching {
+        org.json.JSONArray(prefs.getString("steeringMessages", "[]")).objects().map { row ->
+            val ids = row.array("existingIds")
+            SteeringMessage(row.getString("key"), row.getString("session"), row.getString("text"),
+                (0 until ids.length()).map { ids.getLong(it) }.toSet(), row.optLong("anchor"), row.optString("delivery", "发送状态待核对"), parseMessageTimestamp(row.opt("timestamp")))
+        }
+    }.getOrDefault(emptyList())
+    private fun saveSteering() {
+        prefs.edit().putString("steeringMessages", org.json.JSONArray(steering.map { row ->
+            obj("key" to row.key, "session" to row.session, "text" to row.text, "existingIds" to org.json.JSONArray(row.existingIds.toList()),
+                "anchor" to row.anchor, "delivery" to if (row.delivery == "正在发送") "发送状态待核对" else row.delivery, "timestamp" to row.timestamp)
+        }).toString()).apply()
+    }
+    private fun updateSteering(key: String, delivery: String) {
+        steering = steering.map { if (it.key == key) it.copy(delivery = delivery) else it }
+        messages = messages.map { if (it.localKey == key) it.copy(delivery = delivery) else it }
+        saveSteering()
+    }
+    fun pollContext() = viewModelScope.launch {
+        val id = selectedId ?: return@launch
+        try {
+            val result = api.json("$root/sessions/${q(id)}/context")
+            if (selectedId != id) return@launch
+            contextInfo = result.optJSONObject("context") ?: result
+            if (agent == "codex") asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { }
+    }
+    private fun visibleQuestion(question: JSONObject?, session: String): JSONObject? = question?.takeUnless {
+        val id = it.optString("request_id")
+        prefs.getStringSet("answeredQuestions:$session", emptySet())!!.contains(id) ||
+            (prefs.getString("answeringQuestion:$session", null) == id) || pendingSubmissions[session]?.questionId == id
+    }
+    private fun questionAccepted(session: String) {
+        val question = prefs.getString("answeringQuestion:$session", null) ?: return
+        val answered = prefs.getStringSet("answeredQuestions:$session", emptySet())!!.toMutableSet()
+        answered.add(question)
+        prefs.edit().putStringSet("answeredQuestions:$session", (answered.filter { it != question }.takeLast(63) + question).toSet()).remove("answeringQuestion:$session").apply()
+        if (selectedId == session && asyncQuestion?.optString("request_id") == question) asyncQuestion = null
+    }
+    fun answerAsyncQuestion(request: JSONObject, answers: JSONObject): Boolean {
+        val session = selectedId ?: return false
+        val accepted = sendInput(codexQuestionReply(request, answers), questionId = request.optString("request_id"))
+        if (accepted && selectedId == session) asyncQuestion = null
+        return accepted
+    }
+    fun compact() = launch {
+        val id = selectedId ?: return@launch
+        if (runId != null || submitting || hasPendingSubmission) throw java.io.IOException("请先结束或核对当前任务，再压缩上下文")
+        setSubmitting(id, true)
+        try {
+            val request = api.request("$root/sessions/${q(id)}/compact", obj()).newBuilder().header("Idempotency-Key", UUID.randomUUID().toString()).build()
+            val result = api.json(request)
+            if (selectedId != id) {
+                backgroundRuns[id] = result.getString("run_id"); saveRuns()
+                return@launch
+            }
+            runId = result.getString("run_id"); runSession = id; seq = -1; events = emptyList(); eventCount = 0; pendingText = ""; approval = null; state = "正在压缩上下文"
+            prefs.edit().putString("run", runId).putString("runSession", id).remove("runMessageKey").apply()
+            saveRuns(); watch()
+        } finally { setSubmitting(id, false) }
+    }
+    fun fetchProjects() = launch {
+        projectsLoading = true; error = null
+        try { projects = api.json("$root/projects").array("data").objects() }
+        finally { projectsLoading = false }
+    }
 
     fun bind(value: NativeApi) {
         if (this::api.isInitialized && api.base == value.base) return
-        api = NativeApi(value.base, noRetry = true)
+        api = NativeApi(value.base, noRetry = true, onReadSuccess = {
+            if (api.base == value.base) {
+                if (error == readConnectionError) error = null
+                readConnectionError = null
+            }
+        })
         watching?.cancel()
         streamJob?.cancel()
         launch {
-            capabilities = api.json("/api/hermes/capabilities")
-            if (capabilities.optJSONObject("features")?.optBoolean("run_submission") != true)
-                throw java.io.IOException("当前 Hermes 不支持可恢复任务接口")
+            capabilities = api.json("$root/capabilities")
+            if (agent == "hermes" && capabilities.optJSONObject("features")?.optBoolean("run_submission") != true)
+                throw java.io.IOException("当前 $agentName 不支持可恢复任务接口")
             refreshSessions()
+            if (agent == "codex") reconcilePendingNow()
             fetchModels()
-            selectedId?.let { loadHistory(it) }
+            if (agent == "codex") fetchAccountsNow()
+            selectedId?.let { loadHistory(it); loadSelection(it) }
             if (runId != null) watch()
-            else if (hasPendingSubmission) error = "上次任务提交结果尚未确认，请使用原标识核对并重试"
+            else if (hasPendingSubmission && agent == "hermes") error = "上次任务提交结果尚未确认，请使用原标识核对并重试"
         }
     }
 
-    private fun launch(block: suspend CoroutineScope.() -> Unit) =
-        viewModelScope.launch {
+    private fun launch(block: suspend CoroutineScope.() -> Unit): Job {
+        val originatingSession = selectedId
+        return viewModelScope.launch {
             try {
                 block()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                error = e.message ?: "Hermes 请求失败"
+                currentCoroutineContext().ensureActive()
+                setError(originatingSession, connectionFailureMessage(e))
+                if (e is ReadConnectionFailure && selectedId == originatingSession) readConnectionError = error
             }
         }
+    }
 
     fun refresh() = launch {
         refreshSessions()
@@ -133,96 +294,320 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
     private suspend fun refreshSessions(offset: Int = 0) {
         loading = true
         try {
-            val result = api.json("/api/hermes/sessions?offset=$offset")
-            sessions =
-                if (offset == 0) result.array("data").objects()
-                else (sessions + result.array("data").objects()).distinctBy { it.optString("id") }
+            val result = api.json(if (agent == "codex") "$root/sessions" +
+                (if (offset > 0 && nextCursor != null) "?cursor=${q(nextCursor!!)}" else "")
+                else "$root/sessions?offset=$offset")
+            sessions = mergeSessionPage(
+                if (offset == 0) emptyList() else sessions,
+                result.array("data").objects(),
+            ) { it.optString("id") }
             hasMore = result.optBoolean("has_more")
+            nextCursor = result.optString("next_cursor").takeIf { it.isNotBlank() && it != "null" }
         } finally {
             loading = false
         }
     }
 
     fun moreSessions() = launch { refreshSessions(sessions.size) }
+    fun sessionActivity(session: JSONObject): String? {
+        val id = session.optString("id")
+        if ((runId != null && runSession == id) || backgroundRuns.containsKey(id)) return if (approval != null && runSession == id) "等待确认" else "运行中"
+        val status = session.optJSONObject("status")
+        val type = status?.optString("type") ?: session.optString("status")
+        if (type in listOf("active", "running", "started", "in_progress")) {
+            val flags = status?.array("activeFlags")?.let { (0 until it.length()).map { index -> it.optString(index) } }.orEmpty()
+            return if (flags.any { it in listOf("waitingOnApproval", "waitingOnUserInput") }) "等待确认" else "运行中"
+        }
+        if (hasPendingFor(id)) return "待核对"
+        return null
+    }
+    fun hasPendingFor(id: String) = pendingSubmissions.containsKey(id)
+    fun clearPendingRecord(restoreDraft: Boolean = true) {
+        val session = selectedId ?: return
+        val pending = pendingSubmissions[session] ?: return
+        removePending(session)
+        prefs.edit().remove("answeringQuestion:$session").apply()
+        localSubmissions.remove(session)
+        if (restoreDraft && draft.isBlank() && pending.questionId == null) draft = pending.input
+        error = null; state = ""
+        refresh()
+    }
+    fun reconcilePending() = launch { reconcilePendingNow() }
+    private suspend fun reconcilePendingNow(session: String? = selectedId) {
+        if (agent != "codex" || session == null) return
+        val pending = pendingSubmissions[session] ?: return
+        val result = api.json("$root/runs/lookup?key=${q(pending.key)}")
+        if (pendingSubmissions[session]?.key != pending.key || !result.optBoolean("found")) return
+        when (result.optString("status")) {
+            "started", "submitting" -> {
+                val id = result.getString("run_id")
+                removePending(session)
+                if (selectedId == session) {
+                    runId = id; runSession = session
+                    seq = -1; events = emptyList(); eventCount = 0; approval = null; pendingText = ""; state = "执行中"
+                    prefs.edit().putString("run", id).putString("runSession", session).putString("runMessageKey", pending.key).apply()
+                    watch()
+                } else backgroundRuns[session] = id
+                saveRuns()
+            }
+            "completed" -> { removePending(session); if (selectedId == session) loadHistory(session) }
+            "failed", "interrupted" -> {
+                removePending(session)
+                if (conversationUi.entry(session).draft.isBlank() && pending.questionId == null) setDraft(session, pending.input)
+            }
+        }
+    }
+    fun pollSessionStates() = viewModelScope.launch {
+        try {
+            if (agent == "codex") {
+                val latest = mergeSessionPage(emptyList(), api.json("$root/sessions").array("data").objects()) { it.optString("id") }
+                val indexed = latest.associateBy { it.optString("id") }
+                val known = sessions.map { it.optString("id") }.toSet()
+                sessions = latest.filter { it.optString("id") !in known } + sessions.map { indexed[it.optString("id")] ?: it }
+                reconcilePendingNow()
+            }
+            for ((session, id) in backgroundRuns.toMap()) {
+                try {
+                    val result = api.json("$root/runs/$id")
+                    if (result.optString("status") in setOf("completed", "failed", "cancelled", "interrupted", "acceptance_unknown") && backgroundRuns[session] == id) {
+                        backgroundRuns.remove(session); saveRuns()
+                    }
+                } catch (e: CancellationException) { throw e }
+                catch (e: ApiRequestFailure) {
+                    if (e.status == 404 && backgroundRuns[session] == id) { backgroundRuns.remove(session); saveRuns() }
+                } catch (_: Exception) { }
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { }
+    }
+
+    private suspend fun fetchAccountsNow() {
+        accounts = api.json("$root/accounts")
+        workspaces = api.json("$root/workspaces")
+        fetchWorkspaceUsages()
+    }
+    fun fetchWorkspaceUsages(force: Boolean = false) {
+        if (agent != "codex") return
+        workspaces.array("data").objects().forEach { row ->
+            val id = row.optString("id")
+            if (id.isBlank() || id in workspaceUsageLoading) return@forEach
+            workspaceUsageLoading = workspaceUsageLoading + id
+            viewModelScope.launch {
+                try {
+                    val result = api.json("$root/workspaces/${q(id)}/usage" + if (force) "?refresh=true" else "")
+                    if (result.optString("workspace_id") == id) workspaceUsages = workspaceUsages + (id to result)
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { workspaceUsages = workspaceUsages + (id to obj("available" to false, "error" to "暂时无法读取用量，请刷新重试")) }
+                finally { workspaceUsageLoading = workspaceUsageLoading - id }
+            }
+        }
+    }
+    fun fetchAccounts() = launch { error = null; fetchAccountsNow() }
+
+    private suspend fun resetAccountView() {
+        historyJob?.cancel()
+        selectedId = null
+        contextInfo = null; asyncQuestion = null
+        sessionProvider = ""; sessionModel = ""
+        messages = emptyList()
+        files = emptyList()
+        pendingFiles = emptyList()
+        draft = ""
+        title = agentName
+        prefs.edit().remove("session").apply()
+        fetchAccountsNow()
+        refreshSessions()
+        fetchModels()
+    }
+    fun switchAccount(id: String, workspace: Boolean, onDone: () -> Unit) = launch {
+        if (switchingAccount) return@launch
+        switchingAccount = true
+        error = null
+        try {
+            api.json("$root/${if (workspace) "workspaces" else "accounts"}/$id/use", obj())
+            watching?.cancel(); streamJob?.cancel()
+            runId = null; runSession = null; approval = null; usage = null
+            backgroundRuns.clear(); saveRuns(); pendingSubmissions = emptyMap(); savePending(); conversationUi = ConversationUiState(); draftFiles = emptyMap(); localSubmissions.clear()
+            prefs.edit().remove("run").remove("runSession").remove("pendingKey").remove("pendingInput").remove("pendingSession").apply()
+            resetAccountView()
+            fetchUsage()
+            onDone()
+        } finally { switchingAccount = false }
+    }
+    fun beginAccountLogin(name: String, workspace: Boolean, onStarted: () -> Unit) = launch {
+        if (runId != null || hasPendingSubmission) throw java.io.IOException("请先停止或核对当前任务再登录")
+        loginInfo = api.json(if (workspace) "$root/workspaces" else "$root/accounts/login", obj("name" to name))
+        onStarted()
+        while (loginInfo?.optBoolean("completed") != true) {
+            delay(2000)
+            loginInfo = api.json("$root/accounts/login-status")
+        }
+        if (loginInfo?.optBoolean("success") == true) fetchAccountsNow()
+        else error = loginInfo?.optString("error").orEmpty().ifBlank { "登录未完成" }
+    }
+    fun dismissLogin() { loginVisible = false }
+    fun showLogin() { loginVisible = true }
+    fun fetchUsage() = viewModelScope.launch {
+        try { usage = api.json("$root/usage") }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { usage = null }
+    }
+    fun importCurrentAccount() = launch { api.json("$root/accounts/import", obj()); fetchAccountsNow() }
+    fun removeAccount(id: String) = launch { api.json("$root/accounts/$id/remove", obj()); fetchAccountsNow() }
+    fun answerQuestions(answers: JSONObject) = launch {
+        if (submitting) return@launch
+        val id = runId ?: return@launch
+        val session = selectedId
+        val request = approval?.optString("request_id") ?: return@launch
+        setSubmitting(session, true); setError(session, null)
+        try {
+            api.json("$root/runs/$id/approval", obj("request_id" to request, "answers" to answers))
+            if (selectedId == session && runId == id && approval?.optString("request_id") == request) approval = null
+        } finally { setSubmitting(session, false) }
+    }
 
     fun select(session: JSONObject) {
-        selectedId = session.getString("id")
+        val id = session.getString("id")
+        // 切换会话时把当前 run 挂到后台（服务端继续跑），切回时恢复跟踪。
+        // runId/runSession 语义 = 「当前选中会话的 run」，不再是全局单值锁。
+        if (runId != null && runSession != null && runSession != id) {
+            backgroundRuns[runSession!!] = runId!!
+            runId = null; runSession = null; approval = null
+            pendingText = ""; flushedStreamPrefix = ""; pendingTextTimestamp = null
+            events = emptyList(); eventCount = 0
+            watching?.cancel(); streamJob?.cancel()
+        }
+        if (selectedId != id) {
+            runSession = null
+            seq = -1; events = emptyList(); eventCount = 0
+            pendingText = ""; pendingTextTimestamp = null; flushedStreamPrefix = ""
+            state = "就绪"; readConnectionError = null; files = emptyList()
+            prefs.edit().remove("run").remove("runSession").apply()
+        }
+        selectedId = id
         title = session.optString("title").ifBlank { "未命名会话" }
         prefs.edit().putString("session", selectedId).apply()
         historyJob?.cancel()
-        messages = emptyList()
-        pendingFiles = emptyList()
-        historyJob = launch { loadHistory(selectedId!!) }
+        sessionProvider = ""; sessionModel = ""
+        contextInfo = null; asyncQuestion = null
+        // 先回放上一次该会话的消息（如有缓存），网络刷新到位后替换 —— 消除「返回再进白屏等待」。
+        cachedHistory[selectedId]?.let { cached ->
+            messages = cached
+        } ?: run { messages = emptyList() }
+        // 恢复该会话的后台 run 跟踪
+        backgroundRuns.remove(id)?.let { resumed ->
+            runId = resumed; runSession = id
+            prefs.edit().putString("run", resumed).putString("runSession", id).apply()
+            watch()
+        }
+        saveRuns()
+        historyJob = launch { reconcilePendingNow(id); loadHistory(id); loadSelection(id) }
+    }
+
+    /** 多端共享：本地没有跟踪时，向服务端查询该会话是否有其它设备发起的活跃 run，有则以观察者身份挂载。 */
+    private suspend fun attachServerActiveRun(id: String) {
+        if (runId != null || submitting) return
+        val connection = api
+        try {
+            val result = connection.json("$root/sessions/${q(id)}/active-run")
+            if (selectedId != id || api !== connection || runId != null) return
+            val serverRun = result.optString("run_id").takeIf { it.isNotBlank() && it != "null" } ?: return
+            runId = serverRun; runSession = id
+            seq = -1; events = emptyList(); eventCount = 0; approval = null; pendingText = ""
+            prefs.edit().putString("run", serverRun).putString("runSession", id).apply()
+            state = "执行中"
+            saveRuns(); watch()
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { }
+    }
+    private suspend fun loadSelection(id: String) {
+        val connection = api
+        val result = connection.json("$root/sessions/$id").optJSONObject("session") ?: return
+        if (selectedId != id || api !== connection) return
+        val config = result.optJSONObject("model_config")
+        sessionProvider = result.optString("provider").takeIf { it.isNotBlank() && it != "null" }
+            ?: config?.optString("requested_provider")?.takeIf { it.isNotBlank() && it != "null" }.orEmpty()
+        sessionModel = config?.optString("requested_model")?.takeIf { it.isNotBlank() && it != "null" }
+            ?: result.optString("model").takeIf { it.isNotBlank() && it != "null" }.orEmpty()
+        contextInfo = result.optJSONObject("context")
+        asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
+        pollContext()
+        attachServerActiveRun(id)
     }
 
     private suspend fun loadHistory(id: String) {
-        val response = api.json("/api/hermes/sessions/$id/messages")
-        if (id != selectedId) return
+        val connection = api
+        val response = connection.json("$root/sessions/$id/messages")
+        if (id != selectedId || api !== connection) return
         messages =
             response.array("data").objects().mapNotNull { row ->
                 val role = row.optString("role")
                 val text =
                     row.optString("content").let {
-                        if (role == "user") it.substringBefore("\n\n[ChuckieHelper 持久附件]") else it
+                        if (role == "user") {
+                            val text = it.substringBefore("\n\n[ChuckieHelper 持久附件]")
+                            if (agent == "codex") text.substringBefore("\n\n附件文件：\n") else text
+                        } else it
                     }
                 if (role in listOf("user", "assistant") && text.isNotBlank() && text != "null")
-                    HermesMessage(role, text, row.optLong("id"), row.array("attachments").objects())
+                    HermesMessage(role, text, row.optLong("id"), row.array("attachments").objects(), timestamp =
+                        parseMessageTimestamp(row.opt("timestamp")) ?: parseMessageTimestamp(row.opt("created_at")))
                 else null
             }
-        if (optimisticSession == id && optimisticText != null) {
-            val acknowledged =
-                messages.firstOrNull {
-                    it.role == "user" &&
-                        it.serverId > optimisticAfter &&
-                        it.text.contains(optimisticText!!)
-                }
+        steering = steering.filter { it.session != id } + pendingSteeringMessages(messages, steering.filter { it.session == id })
+        saveSteering()
+        messages = mergeSteeringMessages(messages, steering.filter { it.session == id })
+        if (messages.isNotEmpty()) cachedHistory[id] = messages
+        localSubmissions[id]?.let { local ->
+            val acknowledged = messages.firstOrNull {
+                it.role == "user" && (if (agent == "codex") it.serverId !in local.existing else it.serverId > local.after) &&
+                    it.text.replace("\r\n", "\n").trim() == local.pending.input.replace("\r\n", "\n").trim()
+            }
             if (acknowledged != null) {
-                if (optimisticFiles.isNotEmpty()) {
-                    api.json(
-                        "/api/hermes/sessions/$id/messages/${acknowledged.serverId}/attachments",
-                        obj("ids" to org.json.JSONArray(optimisticFiles.map { it.getString("id") })),
-                    )
-                    messages =
-                        messages.map {
-                            if (it.serverId == acknowledged.serverId)
-                                it.copy(attachments = optimisticFiles)
-                            else it
-                        }
+                if (local.files.isNotEmpty()) {
+                    connection.json("$root/sessions/$id/messages/${acknowledged.serverId}/attachments",
+                        obj("ids" to org.json.JSONArray(local.files.map { it.getString("id") })))
+                    if (selectedId != id || api !== connection) return
+                    messages = messages.map { if (it.serverId == acknowledged.serverId) it.copy(attachments = local.files) else it }
                 }
-                optimisticText = null
-            } else
-                messages =
-                    messages +
-                        HermesMessage("user", optimisticText!!, attachments = optimisticFiles)
+                localSubmissions.remove(id)
+            } else messages = messages + HermesMessage("user", local.pending.input, attachments = local.files,
+                localKey = local.pending.key, delivery = if (hasPendingFor(id)) "正在发送" else "已送达", timestamp = local.pending.timestamp)
         }
+        if (messages.isNotEmpty()) cachedHistory[id] = messages
         sessions
             .find { it.optString("id") == id }
             ?.let { title = it.optString("title").ifBlank { "未命名会话" } }
-        if (selectedId == id)
-            files = api.json("/api/hermes/sessions/$id/files").array("data").objects()
+        if (selectedId == id) {
+            val loadedFiles = connection.json("$root/sessions/$id/files").array("data").objects()
+            if (selectedId == id && api === connection) files = loadedFiles
+        }
     }
 
-    fun newSession(name: String, onDone: () -> Unit = {}) = launch {
+    fun newSession(name: String, onDone: () -> Unit = {}, project: JSONObject? = null) = launch {
         if (submitting) return@launch
-        submitting = true
+        val originatingSession = selectedId
+        setSubmitting(originatingSession, true)
         try {
+            val body = obj("title" to name.ifBlank { newHermesChatName() })
+            if (agent == "codex") project?.keys()?.forEach { key -> body.put(key, project.get(key)) }
             val result =
                 api.json(
-                    "/api/hermes/sessions",
-                    obj("title" to name.ifBlank { newHermesChatName() }),
+                    "$root/sessions",
+                    body,
                 )
             val session = result.getJSONObject("session")
             select(session)
             onDone()
             refreshSessions()
         } finally {
-            submitting = false
+            setSubmitting(originatingSession, false)
         }
     }
 
     fun renameSession(id: String, name: String, onDone: () -> Unit) = launch {
         val body = obj("title" to name.trim()).toString().toRequestBody("application/json".toMediaType())
-        val result = api.json(api.request("/api/hermes/sessions/$id").newBuilder().patch(body).build())
+        val result = api.json(api.request("$root/sessions/$id").newBuilder().patch(body).build())
         val renamed = result.getJSONObject("session").optString("title")
         sessions = sessions.map { if (it.optString("id") == id) JSONObject(it.toString()).put("title", renamed) else it }
         if (selectedId == id) title = renamed
@@ -230,16 +615,24 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
     }
 
     fun deleteSession(id: String, onDone: () -> Unit) = launch {
-        if ((runId != null && runSession == id) || (hasPendingSubmission && prefs.getString("pendingSession", null) == id)) {
+        if ((runId != null && runSession == id) || backgroundRuns.containsKey(id) || hasPendingFor(id)) {
             error = "请先停止或核对该会话的任务，再删除会话"
             return@launch
         }
-        val result = api.json("/api/hermes/sessions/$id/delete", obj())
-        if (!result.optBoolean("deleted")) throw java.io.IOException("Hermes 未删除该会话")
+        val result = api.json("$root/sessions/$id/delete", obj())
+        if (!result.optBoolean("deleted")) throw java.io.IOException("$agentName 未删除该会话")
         sessions = sessions.filter { it.optString("id") != id }
+        cachedHistory.remove(id)
+        localSubmissions.remove(id)
+        draftFiles = draftFiles - id
+        conversationUi = conversationUi.forget(id)
+        steering = steering.filterNot { it.session == id }
+        saveSteering()
         if (selectedId == id) {
             selectedId = null
-            title = "Hermes 会话"
+            contextInfo = null; asyncQuestion = null
+            sessionProvider = ""; sessionModel = ""
+            title = "$agentName 会话"
             messages = emptyList()
             files = emptyList()
             pendingFiles = emptyList()
@@ -249,90 +642,112 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
         onDone()
     }
 
-    fun send() {
-        if (hasPendingSubmission) {
-            error = "请先核对上一次提交结果，避免重复创建任务"
-            return
+    fun send(): Boolean = sendInput(draft.trim().ifBlank { if (pendingFiles.isNotEmpty()) "请查看附件" else "" })
+
+    private fun sendInput(input: String, questionId: String? = null): Boolean {
+        val session = selectedId ?: return false
+        if (hasPendingSubmission) { error = "请先核对上一次提交结果，避免重复创建任务"; return false }
+        if (input.isBlank() || submitting) return false
+        val isQuestion = questionId != null
+        if (runId != null && runSession == session) {
+            val id = runId!!
+            if (id.startsWith("hcompact_") || state == "正在压缩上下文") { error = "请等待压缩完成后发送"; return false }
+            if (!isQuestion && pendingFiles.isNotEmpty()) { error = "请等待当前任务结束后发送附件"; return false }
+            if (!isQuestion) draft = ""
+            error = null
+            setSubmitting(session, true)
+            val steerKey = UUID.randomUUID().toString()
+            val record = SteeringMessage(steerKey, session, input, messages.map { it.serverId }.filter { it > 0 }.toSet(), messages.lastOrNull { it.serverId > 0 }?.serverId ?: 0, timestamp = System.currentTimeMillis())
+            steering = steering + record; saveSteering()
+            if (pendingText.isNotBlank()) {
+                messages = messages + HermesMessage("assistant", pendingText, localKey = "stream-$steerKey", timestamp = pendingTextTimestamp)
+                flushedStreamPrefix += pendingText; pendingText = ""; pendingTextTimestamp = null
+            }
+            messages = messages + HermesMessage("user", input, localKey = steerKey, delivery = "正在发送", timestamp = record.timestamp)
+            scrollToLatestRequest++
+            if (isQuestion) prefs.edit().putString("answeringQuestion:$session", questionId).apply()
+            launch {
+                try {
+                    val request = api.request("$root/runs/$id/steer", obj("input" to input)).newBuilder().header("Idempotency-Key", steerKey).build()
+                    api.json(request)
+                    questionAccepted(session); updateSteering(steerKey, "已送达")
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    currentCoroutineContext().ensureActive()
+                    setError(session, connectionFailureMessage(e))
+                    updateSteering(steerKey, if (e is ApiRequestFailure) "发送失败" else "发送状态待核对")
+                    if (!isQuestion && conversationUi.entry(session).draft.isBlank()) setDraft(session, input)
+                    if (isQuestion) prefs.edit().remove("answeringQuestion:$session").apply()
+                    if (selectedId == session) pollContext()
+                } finally { setSubmitting(session, false) }
+            }
+            return true
         }
-        val input = draft.trim().ifBlank { if (pendingFiles.isNotEmpty()) "请查看附件" else "" }
-        val session = selectedId ?: return
-        if (input.isEmpty() || runId != null || submitting) return
-        val key = UUID.randomUUID().toString()
-        prefs
-            .edit()
-            .putString("pendingKey", key)
-            .putString("pendingInput", input)
-            .putString("pendingSession", session)
-            .putString(
-                "pendingAttachments",
-                org.json.JSONArray(pendingFiles.map { it.getString("id") }).toString(),
-            )
-            .apply()
-        submit(key, input, session)
+        val pending = PendingAgentSubmission(UUID.randomUUID().toString(), input,
+            if (isQuestion) emptyList() else pendingFiles.map { it.getString("id") }, System.currentTimeMillis(), questionId)
+        pendingSubmissions = pendingSubmissions + (session to pending); savePending()
+        if (isQuestion) prefs.edit().putString("answeringQuestion:$session", questionId).apply()
+        submit(pending, session)
+        return true
     }
 
     fun retryPending() {
-        val key = prefs.getString("pendingKey", null) ?: return
-        val input = prefs.getString("pendingInput", null) ?: return
-        val session = prefs.getString("pendingSession", null) ?: return
-        if (runId == null && !submitting) submit(key, input, session)
+        val session = selectedId ?: return
+        val pending = pendingSubmissions[session] ?: return
+        if (runId == null && !submitting) submit(pending, session)
     }
+    val hasPendingSubmission get() = selectedId?.let { hasPendingFor(it) } == true && runId == null
 
-    val hasPendingSubmission
-        get() = prefs.contains("pendingKey") && runId == null
-
-    private fun submit(key: String, input: String, session: String) {
-        submitting = true
-        error = null
-        if (optimisticKey != key) {
-            optimisticKey = key
-            optimisticText = input
-            optimisticSession = session
-            optimisticAfter = messages.maxOfOrNull { it.serverId } ?: 0
-            optimisticFiles = pendingFiles.toList()
-            if (selectedId == session)
-                messages = messages + HermesMessage("user", input, attachments = optimisticFiles)
+    private fun submit(pending: PendingAgentSubmission, session: String) {
+        val key = pending.key; val input = pending.input
+        val provider = sessionProvider; val model = sessionModel
+        val attached = pendingFiles.filter { it.optString("id") in pending.attachmentIds }
+        setSubmitting(session, true); setError(session, null)
+        if (localSubmissions[session]?.pending?.key != key) {
+            localSubmissions[session] = LocalSubmission(pending, messages.map { it.serverId }.toSet(), messages.maxOfOrNull { it.serverId } ?: 0, attached)
+            if (selectedId == session) {
+                messages = messages + HermesMessage("user", input, attachments = attached, localKey = key, delivery = "正在发送", timestamp = pending.timestamp)
+                scrollToLatestRequest++
+            }
         }
-        draft = ""
+        if (pending.questionId == null) setDraft(session, "")
         launch {
             try {
-                val request =
-                    api.request(
-                            "/api/hermes/runs",
-                            obj(
-                                "input" to input,
-                                "session_id" to session,
-                                "attachment_ids" to
-                                    org.json.JSONArray(prefs.getString("pendingAttachments", "[]")),
-                            ),
-                        )
-                        .newBuilder()
-                        .header("Idempotency-Key", key)
-                        .build()
+                val payload = obj("input" to input, "session_id" to session,
+                    "account_id" to if (agent == "codex") accounts.optString("current").takeIf { it.isNotBlank() && it != "null" } else null,
+                    "attachment_ids" to org.json.JSONArray(pending.attachmentIds))
+                if (agent == "codex" && pending.questionId != null) payload.put("question_reply_id", pending.questionId)
+                if (agent == "hermes") {
+                    provider.takeIf { it.isNotBlank() }?.let { payload.put("provider", it) }
+                    model.takeIf { it.isNotBlank() }?.let { payload.put("model", it) }
+                }
+                val request = api.request("$root/runs", payload).newBuilder().header("Idempotency-Key", key).build()
                 val response = api.json(request)
-                runId = response.getString("run_id")
-                prefs.edit().putString("runMessageKey", key).apply()
-                pendingFiles = emptyList()
-                runSession = session
-                draft = ""
-                pendingText = ""
-                events = emptyList()
-                approval = null
-                seq = -1
-                state = "执行中"
-                prefs
-                    .edit()
-                    .putString("run", runId)
-                    .putString("runSession", session)
-                    .remove("pendingKey")
-                    .remove("pendingInput")
-                    .remove("pendingSession")
-                    .apply()
-                watch()
-                loadHistory(session)
-            } finally {
-                submitting = false
-            }
+                val startedRun = response.getString("run_id")
+                questionAccepted(session); removePending(session)
+                if (selectedId == session) {
+                    runId = startedRun; runSession = session
+                    prefs.edit().putString("runMessageKey", key).putString("run", startedRun).putString("runSession", session).apply()
+                    pendingFiles = pendingFiles.filterNot { it.optString("id") in pending.attachmentIds }
+                    pendingText = ""; flushedStreamPrefix = ""; pendingTextTimestamp = null
+                    events = emptyList(); eventCount = 0; approval = null; seq = -1; state = "执行中"
+                    watch(); loadHistory(session)
+                } else backgroundRuns[session] = startedRun
+                saveRuns()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (e is ApiRequestFailure) {
+                    removePending(session)
+                    prefs.edit().remove("answeringQuestion:$session").apply()
+                    if (pending.questionId == null && conversationUi.entry(session).draft.isBlank()) setDraft(session, input)
+                    localSubmissions.remove(session)
+                    if (selectedId == session) {
+                        messages = messages.map { if (it.localKey == key) it.copy(delivery = "发送失败") else it }
+                        pollContext()
+                    }
+                } else if (agent == "codex") try { reconcilePendingNow(session) } catch (_: Exception) { }
+                setError(session, connectionFailureMessage(e))
+            } finally { setSubmitting(session, false) }
         }
     }
 
@@ -356,25 +771,32 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
         watching = launch {
             while (isActive && runId == id) {
                 try {
-                    val result = api.json("/api/hermes/runs/$id")
-                    state = statusLabel(result.optString("status"))
+                    val result = api.json("$root/runs/$id")
+                    currentCoroutineContext().ensureActive()
+                    if (runId != id) return@launch
+                    state = if (result.optString("kind") == "compact" && result.optString("status") == "started") "正在压缩上下文" else statusLabel(result.optString("status"))
                     approval = result.optJSONObject("approval")
                     result.optJSONObject("runtime")?.let {
                         runtime = it.optString("provider") + " · " + it.optString("model")
+                        if (selectedId == runSession) { sessionProvider = it.optString("provider"); sessionModel = it.optString("model") }
                     }
                     if (
                         result.optString("status") in
-                            setOf("completed", "failed", "cancelled", "interrupted")
+                            setOf("completed", "failed", "cancelled", "interrupted", "acceptance_unknown")
                     ) {
                         if (result.optString("status") != "completed")
                             error = result.optString("error").ifBlank { state }
                         if (result.optString("output").isNotBlank())
-                            pendingText = result.optString("output")
+                            pendingText = result.optString("output").removePrefix(flushedStreamPrefix)
                         runId = null
+                        backgroundRuns.values.remove(id); saveRuns()
                         approval = null
                         streamJob?.cancel()
                         prefs.edit().remove("run").remove("runSession").apply()
-                        runSession?.let { loadHistory(it) }
+                        val finishedSession = runSession
+                        finishedSession?.let { loadHistory(it) }
+                        currentCoroutineContext().ensureActive()
+                        if (selectedId != finishedSession || runId != null) return@launch
                         val returned =
                             files.filter {
                                 it.optBoolean("outgoing") &&
@@ -388,7 +810,7 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
                                 finalMessage != null
                         ) {
                             api.json(
-                                "/api/hermes/sessions/${runSession}/messages/${finalMessage.serverId}/attachments",
+                                "$root/sessions/${runSession}/messages/${finalMessage.serverId}/attachments",
                                 obj(
                                     "ids" to org.json.JSONArray(returned.map { it.getString("id") })
                                 ),
@@ -407,7 +829,20 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    error = "暂时无法读取任务状态，可刷新重新连接：${e.message}"
+                    currentCoroutineContext().ensureActive()
+                    // run 在服务端已不存在（404 run_not_found）：视为任务已终结，清除跟踪而不是无限重试刷错误。
+                    if (e is ApiRequestFailure && e.status == 404) {
+                        runId = null; approval = null
+                        streamJob?.cancel()
+                        backgroundRuns.values.remove(id); saveRuns()
+                        prefs.edit().remove("run").remove("runSession").apply()
+                        state = "任务记录已不存在，请核对会话历史"
+                        runSession?.let { loadHistory(it) }
+                        refreshSessions()
+                        break
+                    }
+                    error = "暂时无法读取任务状态：${connectionFailureMessage(e)}"
+                    if (e is ReadConnectionFailure) readConnectionError = error
                 }
                 delay(2000)
             }
@@ -421,7 +856,7 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
 
     private suspend fun readEvents(id: String) {
         val request =
-            api.request("/api/hermes/runs/$id/events")
+            api.request("$root/runs/$id/events")
                 .newBuilder()
                 .apply { if (seq >= 0) header("Last-Event-ID", seq.toString()) }
                 .build()
@@ -435,13 +870,17 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
                         parser.line(line)?.let { json ->
                             val event = JSONObject(json)
                             withContext(Dispatchers.Main) {
+                                if (runId != id) return@withContext
                                 val n = event.optLong("seq", -1)
                                 if (n >= 0 && n <= seq) return@withContext
                                 if (n >= 0) seq = n
                                 when (event.optString("type", event.optString("event"))) {
-                                    "message.delta" -> pendingText += event.optString("delta")
+                                    "message.delta" -> {
+                                        if (pendingTextTimestamp == null) pendingTextTimestamp = parseMessageTimestamp(event.opt("timestamp")) ?: System.currentTimeMillis()
+                                        pendingText += event.optString("delta")
+                                    }
                                     "approval.request" -> approval = event
-                                    "tool.started" ->
+                                    "tool.started" -> {
                                         events =
                                             (events +
                                                     HermesEvent(
@@ -453,6 +892,8 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
                                                             .take(100),
                                                     ))
                                                 .takeLast(20)
+                                        eventCount++
+                                    }
                                     "tool.completed",
                                     "tool.failed" -> {
                                         val index =
@@ -477,14 +918,22 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
                                                     else item
                                                 }
                                     }
-                                    "message.interim" ->
-                                        events =
-                                            (events +
-                                                    HermesEvent(
-                                                        "进度",
-                                                        event.optString("text").take(100),
-                                                    ))
-                                                .takeLast(30)
+                                    "message.interim" -> {
+                                        if (pendingTextTimestamp == null) pendingTextTimestamp = parseMessageTimestamp(event.opt("timestamp")) ?: System.currentTimeMillis()
+                                        val text = event.optString("text")
+                                        // 途中的旁白消息直接进聊天流（用户不再长时间看不到任何输出）；
+                                        // 进度区保留一份便于回看。
+                                        // 去重：同一段文本若已被 delta 流或已 flush 的前缀覆盖（旁白与正式输出
+                                        // 内容相同时网关会推两遍），只进进度区，不再追加聊天流。
+                                        if (text.isNotBlank()) {
+                                            val alreadyShown = pendingText.contains(text) || flushedStreamPrefix.contains(text) ||
+                                                messages.lastOrNull { it.role == "assistant" }?.text?.contains(text) == true
+                                            if (!alreadyShown)
+                                                pendingText += if (pendingText.isBlank()) text else "\n\n$text"
+                                            events = (events + HermesEvent("进度", text.take(100))).takeLast(30)
+                                            eventCount++
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -496,31 +945,37 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
 
     fun stop() = launch {
         runId?.let {
-            api.json("/api/hermes/runs/$it/stop", obj())
+            api.json("$root/runs/$it/stop", obj())
             state = "正在停止"
         }
     }
 
     fun approve(choice: String) = launch {
+        if (submitting) return@launch
         val id = runId ?: return@launch
         val body = obj("choice" to choice)
         approval
             ?.optString("request_id")
             ?.takeIf { it.isNotBlank() }
             ?.let { body.put("request_id", it) }
-        api.json("/api/hermes/runs/$id/approval", body)
-        approval = null
+        val session = selectedId
+        val requestId = approval?.optString("request_id")
+        setSubmitting(session, true); setError(session, null)
+        try {
+            api.json("$root/runs/$id/approval", body)
+            if (selectedId == session && runId == id && approval?.optString("request_id") == requestId) approval = null
+        } finally { setSubmitting(session, false) }
     }
 
     fun fetchModels() = launch {
-        modelOptions = api.json("/api/hermes/model-options")
+        modelOptions = api.json("$root/model-options")
         if (runtime.isBlank())
             runtime = modelOptions.optString("provider") + " · " + modelOptions.optString("model")
     }
 
     fun refreshFiles() = launch {
         selectedId?.let {
-            files = api.json("/api/hermes/sessions/$it/files").array("data").objects()
+            files = api.json("$root/sessions/$it/files").array("data").objects()
         }
     }
 
@@ -542,7 +997,7 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
                         .addFormDataPart("file", file.name, file.body)
                         .build()
                 val request =
-                    api.request("/api/hermes/sessions/$session/files")
+                    api.request("$root/sessions/$session/files")
                         .newBuilder()
                         .post(multipart)
                         .build()
@@ -556,7 +1011,7 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
         }
     }
 
-    fun fetchProviders() = launch { providers = api.json("/api/hermes/providers") }
+    fun fetchProviders() = launch { providers = api.json("$root/providers") }
 
     fun setModel(
         provider: String,
@@ -569,15 +1024,16 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
         if (global) {
             body.put("scope", "main")
             body.put("confirm_expensive_model", confirm)
-            val result = api.json("/api/hermes/default-model", body)
+            val result = api.json("$root/default-model", body)
             if (result.optBoolean("confirm_required")) {
                 modelWarning = result.optString("confirm_message")
                 return@launch
             }
         } else {
             val id = selectedId ?: throw java.io.IOException("请先选择会话")
-            api.json("/api/hermes/sessions/$id/model", body)
+            api.json("$root/sessions/$id/model", body)
             runtime = "$provider · $model"
+            sessionProvider = provider; sessionModel = model
         }
         fetchModels()
         modelWarning = null
@@ -585,7 +1041,7 @@ class HermesModel(application: Application, deviceId: String) : AndroidViewModel
     }
 
     fun saveProvider(body: JSONObject, onDone: () -> Unit) = launch {
-        api.json("/api/hermes/providers", body)
+        api.json("$root/providers", body)
         fetchProviders()
         fetchModels()
         onDone()

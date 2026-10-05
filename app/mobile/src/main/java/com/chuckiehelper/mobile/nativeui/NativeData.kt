@@ -74,6 +74,7 @@ class NativeApi(
     val base: String,
     private val probing: Boolean = false,
     private val noRetry: Boolean = false,
+    private val onReadSuccess: (() -> Unit)? = null,
 ) {
     companion object {
         val client =
@@ -108,7 +109,7 @@ class NativeApi(
                         .newBuilder()
                         .callTimeout(3500, java.util.concurrent.TimeUnit.MILLISECONDS)
                         .build()
-                else if (noRetry) client.newBuilder().retryOnConnectionFailure(false).build()
+                else if (noRetry || request.method !in setOf("GET", "HEAD")) client.newBuilder().retryOnConnectionFailure(false).build()
                 else client)
                 .newCall(request)
         cont.invokeOnCancellation { call.cancel() }
@@ -130,27 +131,54 @@ class NativeApi(
     }
 
     suspend fun json(request: Request): JSONObject {
-        return response(request).use { res ->
-            if (res.code == 401) throw LoginRequired()
-            val raw = withContext(Dispatchers.IO) { res.body?.string().orEmpty() }
-            val value =
-                withContext(Dispatchers.Default) { runCatching { JSONObject(raw) }.getOrNull() }
-            if (!res.isSuccessful)
-                throw IOException(
-                    value?.optString("message")?.takeIf { it.isNotBlank() }
-                        ?: "请求失败 HTTP ${res.code}"
-                )
-            if (value == null) throw IOException("服务返回了非 JSON 响应")
-            if (value.has("success") && !value.optBoolean("success"))
-                throw IOException(value.optString("message", "操作失败"))
-            if (value.optJSONObject("data")?.optInt("fail", 0)?.let { it > 0 } == true)
-                throw IOException(value.optString("message", "部分项目操作失败"))
-            for (cookie in res.headers.values("Set-Cookie")) withContext(Dispatchers.Main) {
+        var attempt = 0
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val result = try { jsonOnce(request, fresh = attempt > 0) }
+            catch (error: IOException) {
+                currentCoroutineContext().ensureActive()
+                if (mayRetryRead(request.method, probing, attempt, error)) {
+                    android.util.Log.i("ChuckieNetwork", "${request.method} ${request.url.encodedPath}: retry read on fresh connection (${error.javaClass.simpleName})")
+                    attempt++; delay(250); continue
+                }
+                android.util.Log.w("ChuckieNetwork", "${request.method} ${request.url.encodedPath}: ${error.javaClass.simpleName}")
+                if (request.method in setOf("GET", "HEAD") && !probing && error !is LoginRequired &&
+                    (error !is ApiRequestFailure || error.status in setOf(502, 503, 504))) throw ReadConnectionFailure(error)
+                throw error
+            }
+            for (cookie in result.second) withContext(Dispatchers.Main) {
                 CookieManager.getInstance().setCookie(base, cookie)
                 CookieManager.getInstance().flush()
             }
-            value
+            if (request.method in setOf("GET", "HEAD")) withContext(Dispatchers.Main) { onReadSuccess?.invoke() }
+            return result.first
         }
+    }
+
+    private suspend fun jsonOnce(request: Request, fresh: Boolean): Pair<JSONObject, List<String>> = suspendCancellableCoroutine { cont ->
+        val builder = client.newBuilder().retryOnConnectionFailure(false)
+        if (probing) builder.callTimeout(3500, java.util.concurrent.TimeUnit.MILLISECONDS)
+        if (fresh) builder.connectionPool(ConnectionPool(0, 1, java.util.concurrent.TimeUnit.SECONDS))
+        val call = builder.build().newCall(request)
+        // Keep cancellation wired through headers, body reading and JSON parsing.
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) { if (cont.isActive) cont.resumeWithException(e) }
+            override fun onResponse(call: Call, response: Response) {
+                response.use { res ->
+                    try {
+                        if (res.code == 401) throw LoginRequired()
+                        val raw = res.body?.string().orEmpty()
+                        val value = runCatching { JSONObject(raw) }.getOrNull()
+                        if (!res.isSuccessful) throw ApiRequestFailure(value?.optString("message")?.takeIf { it.isNotBlank() } ?: "请求失败 HTTP ${res.code}", res.code)
+                        if (value == null) throw ApiRequestFailure("服务返回了非 JSON 响应", res.code)
+                        if (value.has("success") && !value.optBoolean("success")) throw ApiRequestFailure(value.optString("message", "操作失败"), res.code)
+                        if (value.optJSONObject("data")?.optInt("fail", 0)?.let { it > 0 } == true) throw ApiRequestFailure(value.optString("message", "部分项目操作失败"), res.code)
+                        if (cont.isActive) cont.resume(value to res.headers.values("Set-Cookie"))
+                    } catch (error: Exception) { if (cont.isActive) cont.resumeWithException(error) }
+                }
+            }
+        })
     }
 
     suspend fun login(username: String, password: String) {

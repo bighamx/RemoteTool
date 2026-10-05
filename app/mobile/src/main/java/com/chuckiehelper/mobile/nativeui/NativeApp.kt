@@ -27,6 +27,7 @@ import org.json.JSONObject
 
 @Composable
 fun NativeApp(model: NativeModel) {
+    val savedScreens = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val dark = isSystemInDarkTheme()
     val colors =
         if (dark)
@@ -70,6 +71,7 @@ fun NativeApp(model: NativeModel) {
         var detail by remember { mutableStateOf<String?>(null) }
         var composeTarget by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
+        val keyboardVisible = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
         LaunchedEffect(model.message) {
             model.message?.let {
                 snackbar.showSnackbar(it)
@@ -109,7 +111,7 @@ fun NativeApp(model: NativeModel) {
                             IconButton(
                                 onClick = {
                                     if (model.browsingDevices) model.returnToDevice()
-                                    else if (detail == "Hermes") backDispatcher?.onBackPressed()
+                                    else if (detail in listOf("Hermes", "Codex")) backDispatcher?.onBackPressed()
                                     else detail = null
                                 }
                             ) {
@@ -129,13 +131,13 @@ fun NativeApp(model: NativeModel) {
                 )
             },
             bottomBar = {
-                if (session != null && !model.loginNeeded && detail == null)
+                if (session != null && !model.loginNeeded && detail == null && !keyboardVisible)
                     NavigationBar {
                         listOf(
                                 "系统" to Icons.Outlined.Speed,
                                 "远程" to Icons.Outlined.DesktopWindows,
                                 "文件" to Icons.Outlined.Folder,
-                                "Docker" to Icons.Outlined.Layers,
+                                "Hermes" to Icons.Outlined.SmartToy,
                                 "更多" to Icons.Outlined.MoreHoriz,
                             )
                             .forEach { (name, icon) ->
@@ -185,27 +187,30 @@ fun NativeApp(model: NativeModel) {
                                         )
                                     "进程" -> ProcessScreen(api, error)
                                     "远程" -> RemoteScreen(api)
-                                    "文件" ->
+                                    "文件" -> savedScreens.SaveableStateProvider("files-${session.device.id}") {
                                         FilesScreen(api, error) { path ->
                                             composeTarget = path
                                             detail = "Compose 管理"
                                         }
+                                    }
                                     "Docker" -> DockerScreen(api, error)
                                     "Compose 管理" -> ComposeScreen(api, error, composeTarget)
                                     "终端" -> TerminalScreen(api, error)
                                     "Hangfire" -> JobsScreen(api, error)
-                                    "Hermes" -> HermesScreen(api, session.device.id)
+                                    "Hermes" -> savedScreens.SaveableStateProvider("hermes-${session.device.id}") { HermesScreen(api, session.device.id) }
+                                    "Codex" -> savedScreens.SaveableStateProvider("codex-${session.device.id}") { HermesScreen(api, session.device.id, "codex") }
                                     else ->
                                         Column(
                                             Modifier.padding(16.dp),
                                             verticalArrangement = Arrangement.spacedBy(12.dp),
                                         ) {
+                                            ToolRow("Codex", "会话 · 模型 · 账户与工作空间", Icons.Outlined.Code) { detail = "Codex" }
                                             ToolRow(
-                                                "Hermes",
-                                                "会话 · 模型 · 工具执行",
-                                                Icons.Outlined.SmartToy,
+                                                "Docker",
+                                                "容器 · Compose · 镜像管理",
+                                                Icons.Outlined.Layers,
                                             ) {
-                                                detail = "Hermes"
+                                                detail = "Docker"
                                             }
                                             ToolRow(
                                                 "命令终端",
