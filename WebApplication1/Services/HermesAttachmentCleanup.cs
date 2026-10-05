@@ -1,6 +1,6 @@
 namespace ChuckieHelper.WebApi.Services;
 
-public sealed class HermesAttachmentCleanup(HermesAttachments attachments, ILogger<HermesAttachmentCleanup> logger) : BackgroundService
+public sealed class HermesAttachmentCleanup(HermesAttachments attachments, [FromKeyedServices("codex")] HermesAttachments codex, ILogger<HermesAttachmentCleanup> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -11,8 +11,11 @@ public sealed class HermesAttachmentCleanup(HermesAttachments attachments, ILogg
         {
             try
             {
-                var result = await Task.Run(() => attachments.Cleanup(DateTime.UtcNow), stoppingToken);
-                if (result.Count > 0) logger.LogInformation("Hermes attachment cleanup removed {Count} files ({Bytes} bytes)", result.Count, result.Bytes);
+                var result = await Task.Run(() => {
+                    var first = attachments.Cleanup(DateTime.UtcNow); var second = codex.Cleanup(DateTime.UtcNow);
+                    return (Count: first.Count + second.Count, Bytes: first.Bytes + second.Bytes);
+                }, stoppingToken);
+                if (result.Count > 0) logger.LogInformation("Agent attachment cleanup removed {Count} files ({Bytes} bytes)", result.Count, result.Bytes);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
             catch (Exception error) { logger.LogWarning(error, "Hermes attachment cleanup failed; will retry next day"); }

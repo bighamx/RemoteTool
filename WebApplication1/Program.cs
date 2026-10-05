@@ -17,6 +17,10 @@ namespace ChuckieHelper.WebApi
     {
         public static async Task Main(string[] args)
         {
+            if (args.Length == 2 && args[0] == "--codex-bridge") {
+                await Services.Codex.CodexAgent.RunAsync(args[1]);
+                return;
+            }
             // 桌面代理模式：当以 --desktop-agent 参数启动时，
             // 不启动 Web 服务器，而是运行命名管道服务器处理桌面操作。
             // 此模式由 IIS 进程在检测到 Session 0 时自动启动。
@@ -82,8 +86,14 @@ namespace ChuckieHelper.WebApi
             builder.Services.AddRemoteControlServices();
             builder.Services.AddSingleton<DeviceIdentity>();
             builder.Services.AddSingleton<HermesBridge>();
-            builder.Services.AddSingleton<HermesManagement>();
+            builder.Services.AddSingleton<RunRegistry>();
+builder.Services.AddSingleton<HermesManagement>();
+builder.Services.AddSingleton<HermesCompaction>();
             builder.Services.AddSingleton<HermesAttachments>();
+            builder.Services.AddSingleton<CodexBridge>();
+            builder.Services.AddKeyedSingleton("codex", new HermesAttachments("codex"));
+            builder.Services.AddHttpClient("codex", client => client.Timeout = Timeout.InfiniteTimeSpan)
+                .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
             builder.Services.AddHostedService<HermesAttachmentCleanup>();
             builder.Services.AddHttpClient("hermes", client => client.Timeout = Timeout.InfiniteTimeSpan)
                 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });

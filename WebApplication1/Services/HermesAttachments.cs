@@ -8,7 +8,13 @@ namespace ChuckieHelper.WebApi.Services;
 
 public sealed class HermesAttachments
 {
-    private readonly string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ChuckieHelper", "hermes-attachments");
+    private readonly string root;
+    private readonly string agent;
+    public HermesAttachments(string agent = "hermes") {
+        if (agent is not ("hermes" or "codex")) throw new ArgumentException("无效 Agent");
+        this.agent = agent;
+        root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ChuckieHelper", agent + "-attachments");
+    }
     public (int Count, long Bytes) Cleanup(DateTime utcNow) => CleanupDirectory(root, utcNow);
 
     internal static (int Count, long Bytes) CleanupDirectory(string directory, DateTime utcNow)
@@ -58,7 +64,7 @@ public sealed class HermesAttachments
         return new { id = Identifier(Path.GetRelativePath(Folder(session), path)), name, size = file.Length,
             mime = Mime(path), outgoing = Path.GetRelativePath(Folder(session), path).StartsWith("outbox" + Path.DirectorySeparatorChar),
             messageKey = Path.GetRelativePath(Folder(session), path).Split(Path.DirectorySeparatorChar) is var pieces && pieces.Length >= 3 && pieces[0] == "outbox" ? pieces[1] : "",
-            url = $"/api/hermes/sessions/{session}/files/{Identifier(Path.GetRelativePath(Folder(session), path))}?v={file.LastWriteTimeUtc.Ticks}" };
+            url = $"/api/{agent}/sessions/{session}/files/{Identifier(Path.GetRelativePath(Folder(session), path))}?v={file.LastWriteTimeUtc.Ticks}" };
     }
     public static string Mime(string path) => Path.GetExtension(path).ToLowerInvariant() switch {
         ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".webp" => "image/webp", ".gif" => "image/gif",
@@ -120,6 +126,18 @@ public sealed class HermesAttachments
         if (parts.Count > 1) body["input"] = new JsonArray(new JsonObject { ["role"] = "user", ["content"] = parts });
         body.Remove("attachment_ids");
         body["instructions"] = (body["instructions"]?.GetValue<string>() ?? "") + "\n" + notes;
+        return JsonSerializer.SerializeToElement(body);
+    }
+    public JsonElement PrepareCodexRun(JsonElement input, string requestKey) {
+        var body = JsonNode.Parse(input.GetRawText())!.AsObject();
+        var session = body["session_id"]!.GetValue<string>();
+        var outbox = Path.Combine(Folder(session), "outbox", requestKey);
+        Directory.CreateDirectory(outbox);
+        var ids = body["attachment_ids"]?.AsArray() ?? new JsonArray();
+        if (ids.Count > 8) throw new ArgumentException("每条消息最多 8 个附件");
+        body["attachment_paths"] = new JsonArray(ids.Select(id => JsonValue.Create(Resolve(session, id!.GetValue<string>()))).ToArray());
+        body["outbox"] = outbox;
+        body.Remove("attachment_ids");
         return JsonSerializer.SerializeToElement(body);
     }
     private readonly object bindingLock = new();

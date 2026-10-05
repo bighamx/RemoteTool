@@ -7,11 +7,21 @@ using System.Text.RegularExpressions;
 namespace ChuckieHelper.WebApi.Controllers;
 
 [ApiController, Authorize, Route("api/hermes")]
-public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments) : ControllerBase
+public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs) : ControllerBase
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效的会话或任务标识");
     [HttpGet("capabilities")] public Task Capabilities(CancellationToken ct) => Forward(HttpMethod.Get, "v1/capabilities", null, null, ct);
+    [HttpGet("sessions/{id}/context")] public async Task<IActionResult> SessionContext(string id, CancellationToken ct) {
+        try { return Ok(await management.Invoke("session_context", JsonSerializer.SerializeToElement(new { session_id = Id(id) }), ct)); }
+        catch (InvalidOperationException) { return Ok(new { available = false }); }
+    }
     [HttpGet("models")] public Task Models(CancellationToken ct) => Forward(HttpMethod.Get, "v1/models", null, null, ct);
+    [HttpPost("sessions/{id}/compact")] public IActionResult Compact(string id) {
+        var key = Request.Headers["Idempotency-Key"].ToString();
+        if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) return BadRequest(new { message = "压缩需要唯一请求标识" });
+        try { return Ok(compaction.Start(Id(id), key)); }
+        catch (InvalidOperationException error) { return Conflict(new { message = error.Message }); }
+    }
     [HttpGet("model-options")] public Task ModelOptions(CancellationToken ct) => Forward(HttpMethod.Get, "api/model/options", null, null, ct);
     [HttpPost("sessions/{id}/model")] public Task SessionModel(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"api/sessions/{Id(id)}/model", body, null, ct);
     [HttpGet("providers")] public Task<IActionResult> Providers(CancellationToken ct) => Settings("providers", null, ct);
@@ -25,6 +35,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     }
     [HttpGet("sessions")] public Task Sessions([FromQuery] int offset = 0, CancellationToken ct = default) => Forward(HttpMethod.Get, $"api/sessions?limit=50&offset={Math.Max(0, offset)}", null, null, ct);
     [HttpPost("sessions")] public Task CreateSession([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "api/sessions", body, null, ct);
+    [HttpGet("sessions/{id}")] public Task SessionInfo(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"api/sessions/{Id(id)}", null, null, ct);
     [HttpPatch("sessions/{id}")] public Task RenameSession(string id, [FromBody] JsonElement body, CancellationToken ct)
     {
         var title = body.GetProperty("title").GetString()?.Trim();
@@ -43,14 +54,73 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     }
     [HttpPost("sessions/{id}/messages/{messageId}/attachments")] public IActionResult BindAttachments(string id, string messageId, [FromBody] JsonElement body)
     { attachments.Bind(Id(id), messageId, body.GetProperty("ids").EnumerateArray().Select(value => value.GetString()!).ToArray()); return Ok(new { success = true }); }
-    [HttpPost("runs")] public Task Run([FromBody] JsonElement body, CancellationToken ct)
+    [HttpPost("runs")] public async Task Run([FromBody] JsonElement body, CancellationToken ct)
     {
         var key = Request.Headers["Idempotency-Key"].ToString();
-        if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; return Response.WriteAsJsonAsync(new { message = "任务提交需要唯一的 Idempotency-Key" }, ct); }
-        try { return Forward(HttpMethod.Post, "v1/runs", attachments.PrepareRun(body, key), key, ct); }
-        catch (Exception error) when (error is ArgumentException or FileNotFoundException) { Response.StatusCode = 400; return Response.WriteAsJsonAsync(new { message = error.Message }, ct); }
+        if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = "任务提交需要唯一的 Idempotency-Key" }, ct); return; }
+        try
+        {
+            using var upstream = await bridge.SendAsync(HttpMethod.Post, "v1/runs", attachments.PrepareRun(body, key), key, ct, Request.Headers["Last-Event-ID"].ToString());
+            Response.Headers.CacheControl = "no-store";
+            var payload = await upstream.Content.ReadAsStringAsync(ct);
+            if (!upstream.IsSuccessStatusCode)
+            {
+                Response.StatusCode = upstream.StatusCode == System.Net.HttpStatusCode.Unauthorized ? 502 : (int)upstream.StatusCode;
+                await Response.WriteAsJsonAsync(new { message = $"Hermes 请求失败（HTTP {(int)upstream.StatusCode}）" }, ct);
+                return;
+            }
+            // 登记「会话当前活跃 run」供多端共享（平板打开同一会话可挂载实时进度）。
+            try
+            {
+                using var doc = JsonDocument.Parse(payload);
+                var runId = doc.RootElement.TryGetProperty("run_id", out var r) ? r.GetString() : null;
+                var sessionId = body.TryGetProperty("session_id", out var s) ? s.GetString() : null;
+                if (!string.IsNullOrEmpty(runId) && !string.IsNullOrEmpty(sessionId)) runs.Register("hermes", sessionId, runId);
+            }
+            catch (JsonException) { }
+            Response.StatusCode = (int)upstream.StatusCode;
+            Response.ContentType = upstream.Content.Headers.ContentType?.ToString() ?? "application/json";
+            await Response.WriteAsync(payload, ct);
+        }
+        catch (Exception error) when (error is ArgumentException or FileNotFoundException) { Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = error.Message }, ct); }
     }
-    [HttpGet("runs/{id}")] public Task Status(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"v1/runs/{Id(id)}", null, null, ct);
+
+    /// <summary>多端共享：该会话当前是否有活跃 run（供其它设备挂载实时进度）。终态自动清除。</summary>
+    [HttpGet("sessions/{id}/active-run")] public async Task ActiveRun(string id, CancellationToken ct)
+    {
+        var sessionId = Id(id);
+        var runId = runs.Query("hermes", sessionId);
+        if (runId == null) { await Response.WriteAsJsonAsync(new { run_id = (string?)null }, ct); return; }
+        // 校验 Hermes 侧真实状态：终态（含 404）即清除登记，避免幽灵 run。
+        try
+        {
+            using var upstream = await bridge.SendAsync(HttpMethod.Get, $"v1/runs/{runId}", null, null, ct, null);
+            if (upstream.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                runs.Clear("hermes", sessionId, runId);
+                await Response.WriteAsJsonAsync(new { run_id = (string?)null }, ct);
+                return;
+            }
+            if (upstream.IsSuccessStatusCode)
+            {
+                using var doc = JsonDocument.Parse(await upstream.Content.ReadAsStringAsync(ct));
+                var status = doc.RootElement.TryGetProperty("status", out var s) ? s.GetString() : "";
+                if (status is "completed" or "failed" or "cancelled" or "interrupted")
+                {
+                    runs.Clear("hermes", sessionId, runId);
+                    await Response.WriteAsJsonAsync(new { run_id = (string?)null }, ct);
+                    return;
+                }
+            }
+        }
+        catch (Exception) when (!ct.IsCancellationRequested) { /* 校验失败保守保留登记 */ }
+        await Response.WriteAsJsonAsync(new { run_id = runId }, ct);
+    }
+    [HttpGet("runs/{id}")] public async Task Status(string id, CancellationToken ct) {
+        if (!Id(id).StartsWith("hcompact_")) { await Forward(HttpMethod.Get, $"v1/runs/{id}", null, null, ct); return; }
+        try { await Response.WriteAsJsonAsync(compaction.Status(id), ct); }
+        catch (KeyNotFoundException) { Response.StatusCode = 404; await Response.WriteAsJsonAsync(new { message = "压缩任务不存在" }, ct); }
+    }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
     [HttpPost("sessions/{id}/files")]
     [RequestSizeLimit(501L * 1024 * 1024)]
@@ -65,8 +135,13 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         try { var path = attachments.Resolve(Id(id), Id(fileId)); return PhysicalFile(path, HermesAttachments.Mime(path), enableRangeProcessing: true); }
         catch (FileNotFoundException) { return NotFound(new { message = "附件不存在" }); }
     }
-    [HttpGet("runs/{id}/events")] public Task Events(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"v1/runs/{Id(id)}/events", null, null, ct);
-    [HttpPost("runs/{id}/stop")] public Task Stop(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"v1/runs/{Id(id)}/stop", null, null, ct);
+    [HttpGet("runs/{id}/events")] public Task Events(string id, CancellationToken ct) => Id(id).StartsWith("hcompact_") ? compaction.Events(id, Response, ct) : Forward(HttpMethod.Get, $"v1/runs/{id}/events", null, null, ct);
+    [HttpPost("runs/{id}/stop")] public Task Stop(string id, CancellationToken ct) {
+        if (!Id(id).StartsWith("hcompact_")) return Forward(HttpMethod.Post, $"v1/runs/{id}/stop", null, null, ct);
+        try { compaction.Stop(id); return Response.WriteAsJsonAsync(new { stopped = true }, ct); }
+        catch (KeyNotFoundException) { Response.StatusCode = 404; return Response.WriteAsJsonAsync(new { message = "压缩任务不存在" }, ct); }
+    }
+    [HttpPost("runs/{id}/steer")] public Task Steer(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"v1/runs/{Id(id)}/steer", body, null, ct);
     [HttpPost("runs/{id}/approval")] public Task Approval(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"v1/runs/{Id(id)}/approval", body, null, ct);
     [HttpPost("responses")] public Task Responses([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "v1/responses", body, null, ct);
 

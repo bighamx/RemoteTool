@@ -11,6 +11,13 @@ namespace ChuckieHelper.WebApi.Services.RemoteControl;
 /// </summary>
 public static class InteractiveProcessLauncher
 {
+    public static string GetInteractiveUserSid() {
+        if (WTSQueryUserToken(WTSGetActiveConsoleSessionId(), out var token)) {
+            try { using var identity = new WindowsIdentity(token); return identity.User!.Value; }
+            finally { CloseHandle(token); }
+        }
+        return WindowsIdentity.GetCurrent().User!.Value;
+    }
     private static void Log(string message)
         => AgentStartupLogger.Log("InteractiveProcessLauncher", message);
 
