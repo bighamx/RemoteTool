@@ -364,6 +364,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         connectionEpoch++
         connectJob?.cancel()
         connecting = false
+        connectingDeviceId = null
         checkingChannels = false
         channelDevice = null
     }
@@ -377,6 +378,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         val epoch = ++connectionEpoch
         connectJob?.cancel()
         connecting = false
+        connectingDeviceId = null
         checkingChannels = true
         channelChecks = device.endpoints.map { ChannelCheck(it) }
         connectJob =
@@ -422,7 +424,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         val device = channelDevice ?: return
         if (checkingChannels || connecting || channelChecks.none { it.url == url && it.reachable })
             return
-        if (session?.device?.id == device.id && session?.api?.base == url) {
+        if (session?.device?.id == device.id && session?.api?.base == url && !loginNeeded) {
             browsingDevices = false
             closeChannels()
             return

@@ -517,6 +517,8 @@ private fun LoginScreen(api: NativeApi, savedUsername: String, onLogin: suspend 
                     try {
                         onLogin(username, password)
                         password = ""
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         onError(e.message ?: "登录失败")
                     } finally {
