@@ -87,7 +87,16 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpGet("runs/lookup")] public Task Lookup([FromQuery] string key, CancellationToken ct) => Forward(HttpMethod.Get, "runs/lookup?key=" + Uri.EscapeDataString(Id(key)), null, ct);
     [HttpGet("runs/{id}/events")] public Task Events(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"runs/{Id(id)}/events", null, ct);
     [HttpPost("runs/{id}/stop")] public Task Stop(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"runs/{Id(id)}/stop", JsonSerializer.SerializeToElement(new { }), ct);
-    [HttpPost("runs/{id}/steer")] public Task Steer(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"runs/{Id(id)}/steer", body, ct, Request.Headers["Idempotency-Key"].ToString());
+    [HttpPost("runs/{id}/steer")] public Task Steer(string id, [FromBody] JsonElement body, CancellationToken ct) {
+        var key = Request.Headers["Idempotency-Key"].ToString();
+        if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; return Response.WriteAsJsonAsync(new { message = "插话需要唯一请求标识" }, ct); }
+        try {
+            var prepared = body.TryGetProperty("attachment_ids", out _) ? attachments.PrepareCodexRun(body, key) : body;
+            return Forward(HttpMethod.Post, $"runs/{Id(id)}/steer", prepared, ct, key);
+        } catch (Exception error) when (error is ArgumentException or FileNotFoundException) {
+            Response.StatusCode = 400; return Response.WriteAsJsonAsync(new { message = error.Message }, ct);
+        }
+    }
     [HttpPost("runs/{id}/approval")] public Task Approve(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"runs/{Id(id)}/approval", body, ct);
     [HttpGet("accounts")] public Task Accounts(CancellationToken ct) => Forward(HttpMethod.Get, "accounts", null, ct);
     [HttpGet("usage")] public Task Usage(CancellationToken ct) => Forward(HttpMethod.Get, "usage", null, ct);

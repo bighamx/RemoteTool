@@ -395,15 +395,7 @@ internal sealed class CodexAgent : IAsyncDisposable
                 }
             }
             lock (gate) { if (!desktopOwner) loaded[session] = resumed; runs[run]!["model"] = resumed.S("model"); runs[run]!["provider"] = resumed.S("modelProvider"); }
-            var text = body.S("input", "请查看附件"); var inputs = new JsonArray(); var paths = body.A("attachment_paths");
-            var images = new List<JsonObject>();
-            foreach (var value in paths) {
-                var path = Path.GetFullPath(value!.ToString());
-                if (!path.StartsWith(Path.GetFullPath(settings.S("attachments")) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new CodexError("附件路径无效");
-                if (Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".webp" or ".gif") images.Add(Obj(("type", "localImage"), ("path", path)));
-            }
-            if (paths.Count > 0) text += "\n\n附件文件：\n" + string.Join('\n', paths.Select(p => "\"" + p!.ToString() + "\""));
-            inputs.Add(Obj(("type", "text"), ("text", text), ("text_elements", new JsonArray()))); foreach (var image in images) inputs.Add(image);
+            var inputs = CodexAttachmentInput.Build(body.S("input", "请查看附件"), body.A("attachment_paths"), settings.S("attachments"), session);
             lock (gate) { runs[run]!["status"] = "started"; runs[run]!["phase"] = "dispatching"; Persist(); }
             var context = Obj(("chuckie-attachments", Obj(("kind", "application"), ("value", "生成供手机下载的文件时保存到：" + body.S("outbox") + "。回复中每个文件使用独立一行 MEDIA:绝对路径。"))));
             JsonObject result;
@@ -476,7 +468,7 @@ internal sealed class CodexAgent : IAsyncDisposable
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
         if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("ready", rpc?.Running == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true));
         if (path == "model-options") return await Models();
         if (path == "projects" && method == "GET") return Obj(("data", await CodexProjects.List(rpc)));
         if (path == "usage") return await rpc.Call("account/rateLimits/read", new());
@@ -633,6 +625,8 @@ internal sealed class CodexAgent : IAsyncDisposable
                     if (state.S("status") != "started" || state.S("kind") == "compact") throw new CodexError("当前任务不能接收插话，请刷新状态", 409);
                     var key = context.Request.Headers["Idempotency-Key"].ToString();
                     if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) throw new CodexError("插话需要唯一请求标识");
+                    if (body.S("session_id").Length > 0 && body.S("session_id") != state.S("session_id")) throw new CodexError("附件不属于当前任务的会话");
+                    var input = CodexAttachmentInput.Build(body.S("input"), body.A("attachment_paths"), settings.S("attachments"), state.S("session_id"));
                     var fingerprint = Hash(body.ToJsonString());
                     JsonObject record;
                     lock (gate) {
@@ -645,7 +639,6 @@ internal sealed class CodexAgent : IAsyncDisposable
                         }
                         requests[key] = record = Obj(("fingerprint", fingerprint), ("status", "dispatching")); Persist();
                     }
-                    var input = new JsonArray(Obj(("type", "text"), ("text", body.S("input")), ("text_elements", new JsonArray())));
                     try {
                         if (state.S("owner") == "desktop") await CodexDesktopSync.SteerTurn(state.S("session_id"), input, key);
                         else await rpc.Call("turn/steer", Obj(("threadId", state.S("session_id")), ("expectedTurnId", state.S("turn_id")), ("input", input), ("clientUserMessageId", key)));

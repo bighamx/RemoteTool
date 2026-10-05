@@ -10,7 +10,17 @@ namespace ChuckieHelper.WebApi.Controllers;
 public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs) : ControllerBase
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效的会话或任务标识");
-    [HttpGet("capabilities")] public Task Capabilities(CancellationToken ct) => Forward(HttpMethod.Get, "v1/capabilities", null, null, ct);
+    [HttpGet("capabilities")] public async Task<IActionResult> Capabilities(CancellationToken ct) {
+        try {
+        using var upstream = await bridge.SendAsync(HttpMethod.Get, "v1/capabilities", null, null, ct);
+        if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 能力" });
+        var result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
+        result["chuckie_features"] = new System.Text.Json.Nodes.JsonObject { ["attachment_steering"] = true };
+        return Ok(result);
+        } catch (Exception error) when (error is InvalidOperationException or HttpRequestException or IOException) {
+            return StatusCode(503, new { message = error is InvalidOperationException ? error.Message : "无法访问本机 Hermes" });
+        }
+    }
     [HttpGet("sessions/{id}/context")] public async Task<IActionResult> SessionContext(string id, CancellationToken ct) {
         try { return Ok(await management.Invoke("session_context", JsonSerializer.SerializeToElement(new { session_id = Id(id) }), ct)); }
         catch (InvalidOperationException) { return Ok(new { available = false }); }
@@ -141,7 +151,26 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         try { compaction.Stop(id); return Response.WriteAsJsonAsync(new { stopped = true }, ct); }
         catch (KeyNotFoundException) { Response.StatusCode = 404; return Response.WriteAsJsonAsync(new { message = "压缩任务不存在" }, ct); }
     }
-    [HttpPost("runs/{id}/steer")] public Task Steer(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"v1/runs/{Id(id)}/steer", body, null, ct);
+    [HttpPost("runs/{id}/steer")] public async Task Steer(string id, [FromBody] JsonElement body, CancellationToken ct) {
+        var runId = Id(id);
+        if (body.TryGetProperty("attachment_ids", out var ids) && ids.GetArrayLength() > 0) {
+            var key = Request.Headers["Idempotency-Key"].ToString();
+            if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = "插话需要唯一请求标识" }, ct); return; }
+            try {
+                using var status = await bridge.SendAsync(HttpMethod.Get, $"v1/runs/{runId}", null, null, ct);
+                if (!status.IsSuccessStatusCode) { Response.StatusCode = (int)status.StatusCode; await Response.WriteAsJsonAsync(new { message = "无法核对当前 Hermes 任务" }, ct); return; }
+                using var doc = JsonDocument.Parse(await status.Content.ReadAsStringAsync(ct));
+                if (!doc.RootElement.TryGetProperty("session_id", out var field) || string.IsNullOrEmpty(field.GetString())) {
+                    Response.StatusCode = 409; await Response.WriteAsJsonAsync(new { message = "当前任务未返回会话标识，无法核对附件归属" }, ct); return;
+                }
+                var session = field.GetString()!;
+                body = attachments.PrepareHermesSteer(body, session, key);
+            } catch (Exception error) when (error is ArgumentException or FileNotFoundException) {
+                Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = error.Message }, ct); return;
+            }
+        }
+        await Forward(HttpMethod.Post, $"v1/runs/{runId}/steer", body, null, ct);
+    }
     [HttpPost("runs/{id}/approval")] public Task Approval(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"v1/runs/{Id(id)}/approval", body, null, ct);
     [HttpPost("responses")] public Task Responses([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "v1/responses", body, null, ct);
 

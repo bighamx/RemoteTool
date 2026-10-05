@@ -8,6 +8,7 @@ data class SteeringMessage(
     val anchor: Long,
     val delivery: String = "正在发送",
     val timestamp: Long? = null,
+    val attachments: List<org.json.JSONObject> = emptyList(),
 )
 
 fun steeringAppearsInHistory(message: SteeringMessage, history: List<HermesMessage>): Boolean =
@@ -17,11 +18,17 @@ fun steeringAppearsInHistory(message: SteeringMessage, history: List<HermesMessa
     }
 
 fun pendingSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): List<SteeringMessage> {
+    return reconcileSteeringMessages(history, steering).first
+}
+
+fun reconcileSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): Pair<List<SteeringMessage>, List<Pair<SteeringMessage, HermesMessage>>> {
     val consumed = mutableSetOf<Long>()
-    return steering.filter { message ->
+    val acknowledged = mutableListOf<Pair<SteeringMessage, HermesMessage>>()
+    val pending = steering.filter { message ->
         val match = history.firstOrNull { it.serverId !in consumed && steeringAppearsInHistory(message, listOf(it)) }
-        if (match == null) true else { consumed += match.serverId; false }
+        if (match == null) true else { consumed += match.serverId; acknowledged += message to match; false }
     }
+    return pending to acknowledged
 }
 
 fun mergeSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): List<HermesMessage> {
@@ -31,7 +38,7 @@ fun mergeSteeringMessages(history: List<HermesMessage>, steering: List<SteeringM
         val anchor = rows.indexOfLast { it.serverId == message.anchor && it.serverId > 0 }
         var index = if (anchor >= 0) anchor + 1 else rows.size
         while (index < rows.size && rows[index].localKey != null) index++
-        rows.add(index, HermesMessage("user", message.text, localKey = message.key, delivery = message.delivery, timestamp = message.timestamp))
+        rows.add(index, HermesMessage("user", message.text, attachments = message.attachments, localKey = message.key, delivery = message.delivery, timestamp = message.timestamp))
     }
     return rows
 }

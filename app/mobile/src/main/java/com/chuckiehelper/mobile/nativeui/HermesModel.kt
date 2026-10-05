@@ -183,7 +183,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         org.json.JSONArray(prefs.getString("steeringMessages", "[]")).objects().map { row ->
             val ids = row.array("existingIds")
             SteeringMessage(row.getString("key"), row.getString("session"), row.getString("text"),
-                (0 until ids.length()).map { ids.getLong(it) }.toSet(), row.optLong("anchor"), row.optString("delivery", "发送状态待核对"), parseMessageTimestamp(row.opt("timestamp")))
+                (0 until ids.length()).map { ids.getLong(it) }.toSet(), row.optLong("anchor"), row.optString("delivery", "发送状态待核对"), parseMessageTimestamp(row.opt("timestamp")), row.array("attachments").objects())
         }
     }.getOrDefault(emptyList())
     private var narrations = runCatching {
@@ -211,7 +211,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private fun saveSteering() {
         prefs.edit().putString("steeringMessages", org.json.JSONArray(steering.map { row ->
             obj("key" to row.key, "session" to row.session, "text" to row.text, "existingIds" to org.json.JSONArray(row.existingIds.toList()),
-                "anchor" to row.anchor, "delivery" to if (row.delivery == "正在发送") "发送状态待核对" else row.delivery, "timestamp" to row.timestamp)
+                "anchor" to row.anchor, "delivery" to if (row.delivery == "正在发送") "发送状态待核对" else row.delivery, "timestamp" to row.timestamp, "attachments" to org.json.JSONArray(row.attachments))
         }).toString()).apply()
     }
     private fun updateSteering(key: String, delivery: String) {
@@ -566,17 +566,23 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 val role = row.optString("role")
                 val text =
                     row.optString("content").let {
-                        if (role == "user") {
-                            val text = it.substringBefore("\n\n[ChuckieHelper 持久附件]")
-                            if (agent == "codex") text.substringBefore("\n\n附件文件：\n") else text
-                        } else it
+                        if (role == "user") agentUserMessageText(agent, it) else it
                     }
                 if (role in listOf("user", "assistant") && text.isNotBlank() && text != "null")
                     HermesMessage(role, text, row.optLong("id"), row.array("attachments").objects(), timestamp =
                         parseMessageTimestamp(row.opt("timestamp")) ?: parseMessageTimestamp(row.opt("created_at")))
                 else null
             }
-        steering = steering.filter { it.session != id } + pendingSteeringMessages(messages, steering.filter { it.session == id })
+        val reconciliation = reconcileSteeringMessages(messages, steering.filter { it.session == id })
+        for ((sent, confirmed) in reconciliation.second) {
+            if (sent.attachments.isNotEmpty()) {
+                connection.json("$root/sessions/$id/messages/${confirmed.serverId}/attachments",
+                    obj("ids" to org.json.JSONArray(sent.attachments.map { it.getString("id") })))
+                if (selectedId != id || api !== connection) return
+                messages = messages.map { if (it.serverId == confirmed.serverId) it.copy(attachments = sent.attachments) else it }
+            }
+        }
+        steering = steering.filter { it.session != id } + reconciliation.first
         saveSteering()
         messages = mergeSteeringMessages(messages, steering.filter { it.session == id })
         if (messages.isNotEmpty()) cachedHistory[id] = messages
@@ -676,25 +682,32 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (runId != null && runSession == session) {
             val id = runId!!
             if (id.startsWith("hcompact_") || state == "正在压缩上下文") { error = "请等待压缩完成后发送"; return false }
-            if (!isQuestion && pendingFiles.isNotEmpty()) { error = "请等待当前任务结束后发送附件"; return false }
+            val attached = if (isQuestion) emptyList() else pendingFiles.toList()
+            if (attached.isNotEmpty() && !(if (agent == "codex") capabilities.optBoolean("attachment_steering")
+                    else capabilities.optJSONObject("chuckie_features")?.optBoolean("attachment_steering") == true)) {
+                error = "当前服务端尚未更新附件插话接口，附件和文字已保留"
+                return false
+            }
             if (!isQuestion) draft = ""
             error = null
             setSubmitting(session, true)
             val steerKey = UUID.randomUUID().toString()
-            val record = SteeringMessage(steerKey, session, input, messages.map { it.serverId }.filter { it > 0 }.toSet(), messages.lastOrNull { it.serverId > 0 }?.serverId ?: 0, timestamp = System.currentTimeMillis())
+            val record = SteeringMessage(steerKey, session, input, messages.map { it.serverId }.filter { it > 0 }.toSet(), messages.lastOrNull { it.serverId > 0 }?.serverId ?: 0, timestamp = System.currentTimeMillis(), attachments = attached)
             steering = steering + record; saveSteering()
             if (pendingText.isNotBlank()) {
                 messages = messages + HermesMessage("assistant", pendingText, localKey = "stream-$steerKey", timestamp = pendingTextTimestamp)
                 flushedStreamPrefix += pendingText; pendingText = ""; pendingTextTimestamp = null
             }
-            messages = messages + HermesMessage("user", input, localKey = steerKey, delivery = "正在发送", timestamp = record.timestamp)
+            messages = messages + HermesMessage("user", input, attachments = attached, localKey = steerKey, delivery = "正在发送", timestamp = record.timestamp)
             scrollToLatestRequest++
             if (isQuestion) prefs.edit().putString("answeringQuestion:$session", questionId).apply()
             launch {
                 try {
-                    val request = api.request("$root/runs/$id/steer", obj("input" to input)).newBuilder().header("Idempotency-Key", steerKey).build()
+                    val request = api.request("$root/runs/$id/steer", obj("input" to input, "session_id" to session, "attachment_ids" to org.json.JSONArray(attached.map { it.getString("id") }))).newBuilder().header("Idempotency-Key", steerKey).build()
                     api.json(request)
                     questionAccepted(session); updateSteering(steerKey, "已送达")
+                    val ids = attached.map { it.getString("id") }.toSet()
+                    draftFiles = draftFiles + (session to draftFiles[session].orEmpty().filterNot { it.optString("id") in ids })
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     currentCoroutineContext().ensureActive()
