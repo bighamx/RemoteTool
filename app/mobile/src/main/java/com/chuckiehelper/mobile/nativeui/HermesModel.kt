@@ -6,6 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import java.util.UUID
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -31,6 +33,23 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private lateinit var api: NativeApi
     var sessions by mutableStateOf<List<JSONObject>>(emptyList())
         private set
+    private val sessionRefreshMutex = Mutex()
+    private var sessionActivities by mutableStateOf<Map<String, SessionActivityEvidence>>(emptyMap())
+    private var activityNow by mutableLongStateOf(activityClock())
+    private fun activityClock() = System.nanoTime() / 1_000_000
+    private fun noteSessionActivities(rows: List<JSONObject>, requestedAt: Long) {
+        rows.forEach { row ->
+            val id = row.optString("id")
+            val evidence = sessionActivityEvidence(row, requestedAt)
+            // Hermes history rows often omit status; absence is not an idle observation.
+            if (id.isNotBlank() && evidence.state != "unknown") sessionActivities = updateSessionActivity(sessionActivities, id, evidence)
+        }
+        activityNow = activityClock()
+    }
+    private fun noteRunActivity(session: String, result: JSONObject, requestedAt: Long) {
+        sessionActivities = updateSessionActivity(sessionActivities, session, runActivityEvidence(result, requestedAt))
+        activityNow = activityClock()
+    }
 
     var selectedId by mutableStateOf(prefs.getString("session", null))
         private set
@@ -316,6 +335,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             val request = api.request("$root/sessions/${q(id)}/compact", obj()).newBuilder().header("Idempotency-Key", UUID.randomUUID().toString()).build()
             val result = api.json(request)
             startRunTiming(result.getString("run_id"), result, started)
+            noteRunActivity(id, obj("status" to result.optString("status", "started")), activityClock())
             if (selectedId != id) {
                 backgroundRuns[id] = result.getString("run_id"); saveRuns()
                 return@launch
@@ -339,6 +359,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 readConnectionError = null
             }
         })
+        sessionActivities = emptyMap()
         watching?.cancel()
         streamJob?.cancel()
         launch {
@@ -375,15 +396,20 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         selectedId?.let { loadHistory(it) }
     }
 
-    private suspend fun refreshSessions(offset: Int = 0) {
+    private suspend fun refreshSessions(offset: Int = 0) = sessionRefreshMutex.withLock {
+        val connection = api
+        val requestedAt = activityClock()
         loading = true
         try {
-            val result = api.json(if (agent == "codex") "$root/sessions" +
+            val result = connection.json(if (agent == "codex") "$root/sessions" +
                 (if (offset > 0 && nextCursor != null) "?cursor=${q(nextCursor!!)}" else "")
                 else "$root/sessions?offset=$offset")
+            if (api !== connection) return@withLock
+            val rows = result.array("data").objects()
+            noteSessionActivities(rows, requestedAt)
             sessions = mergeSessionPage(
                 if (offset == 0) emptyList() else sessions,
-                result.array("data").objects(),
+                rows,
             ) { it.optString("id") }
             hasMore = result.optBoolean("has_more")
             nextCursor = result.optString("next_cursor").takeIf { it.isNotBlank() && it != "null" }
@@ -395,15 +421,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun moreSessions() = launch { refreshSessions(sessions.size) }
     fun sessionActivity(session: JSONObject): String? {
         val id = session.optString("id")
-        if ((runId != null && runSession == id) || backgroundRuns.containsKey(id)) return if (approval != null && runSession == id) "等待确认" else "运行中"
-        val status = session.optJSONObject("status")
-        val type = status?.optString("type") ?: session.optString("status")
-        if (type in listOf("active", "running", "started", "in_progress")) {
-            val flags = status?.array("activeFlags")?.let { (0 until it.length()).map { index -> it.optString(index) } }.orEmpty()
-            return if (flags.any { it in listOf("waitingOnApproval", "waitingOnUserInput") }) "等待确认" else "运行中"
-        }
-        if (hasPendingFor(id)) return "待核对"
-        return null
+        return sessionActivityLabel(sessionActivities[id], activityNow, hasPendingFor(id))
     }
     fun hasPendingFor(id: String) = pendingSubmissions.containsKey(id)
     fun clearPendingRecord(restoreDraft: Boolean = true) {
@@ -422,6 +440,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val pending = pendingSubmissions[session] ?: return
         val result = api.json("$root/runs/lookup?key=${q(pending.key)}")
         if (pendingSubmissions[session]?.key != pending.key || !result.optBoolean("found")) return
+        noteRunActivity(session, result, activityClock())
         when (result.optString("status")) {
             "started", "submitting" -> {
                 val id = result.getString("run_id")
@@ -443,10 +462,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
     fun pollSessionStates() = viewModelScope.launch {
+        activityNow = activityClock()
+        if (!sessionRefreshMutex.tryLock()) return@launch
         try {
                 val connection = api
+                val requestedAt = activityClock()
                 val latest = mergeSessionPage(emptyList(), connection.json("$root/sessions").array("data").objects()) { it.optString("id") }
                 if (api !== connection) return@launch
+                noteSessionActivities(latest, requestedAt)
                 val indexed = latest.associateBy { it.optString("id") }
                 val known = sessions.map { it.optString("id") }.toSet()
                 sessions = latest.filter { it.optString("id") !in known } + sessions.map { indexed[it.optString("id")] ?: it }
@@ -455,18 +478,26 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             }
             for ((session, id) in backgroundRuns.toMap()) {
                 try {
-                    val result = api.json("$root/runs/$id")
+                    val runRequestedAt = activityClock()
+                    val result = connection.json("$root/runs/$id")
+                    if (api !== connection) return@launch
+                    if (backgroundRuns[session] != id) continue
+                    noteRunActivity(session, result, runRequestedAt)
                     if (result.optString("status") in setOf("completed", "failed", "cancelled", "interrupted", "acceptance_unknown") && backgroundRuns[session] == id) {
                         recordCompactionCompletion(id, session, result)
                         backgroundRuns.remove(session); saveRuns()
                     }
                 } catch (e: CancellationException) { throw e }
                 catch (e: ApiRequestFailure) {
-                    if (e.status == 404 && backgroundRuns[session] == id) { backgroundRuns.remove(session); saveRuns() }
+                    if (e.status == 404 && backgroundRuns[session] == id && api === connection) {
+                        noteRunActivity(session, obj("status" to "missing"), activityClock())
+                        backgroundRuns.remove(session); saveRuns()
+                    }
                 } catch (_: Exception) { }
             }
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { }
+        finally { sessionRefreshMutex.unlock() }
     }
 
     private suspend fun fetchAccountsNow() {
@@ -515,6 +546,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             api.json("$root/${if (workspace) "workspaces" else "accounts"}/$id/use", obj())
             watching?.cancel(); streamJob?.cancel()
             runId = null; runSession = null; approval = null; usage = null
+            sessionActivities = emptyMap()
             backgroundRuns.clear(); saveRuns(); pendingSubmissions = emptyMap(); savePending(); conversationUi = ConversationUiState(); draftFiles = emptyMap(); localSubmissions.clear()
             prefs.edit().remove("run").remove("runSession").remove("pendingKey").remove("pendingInput").remove("pendingSession").apply()
             resetAccountView()
@@ -724,6 +756,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (!result.optBoolean("deleted")) throw java.io.IOException("$agentName 未删除该会话")
         sessions = sessions.filter { it.optString("id") != id }
         cachedHistory.remove(id)
+        sessionActivities = sessionActivities - id
         compactionNotices = compactionNotices.filterNot { it.session == id }; saveCompactionNotices()
         narrations = narrations.filterNot { it.session == id }; saveNarrations()
         localSubmissions.remove(id)
@@ -835,6 +868,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 val response = api.json(request)
                 val startedRun = response.getString("run_id")
                 startRunTiming(startedRun, response, pending.timestamp)
+                noteRunActivity(session, obj("status" to response.optString("status", "started")), activityClock())
                 questionAccepted(session); removePending(session)
                 if (selectedId == session) {
                     runId = startedRun; runSession = session
@@ -866,6 +900,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         watching?.cancel()
         streamJob?.cancel()
         val id = runId ?: return
+        val watchedSession = runSession ?: return
+        val connection = api
         streamJob =
             viewModelScope.launch {
                 while (isActive && runId == id) {
@@ -882,9 +918,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         watching = launch {
             while (isActive && runId == id) {
                 try {
-                    val result = api.json("$root/runs/$id")
+                    activityNow = activityClock()
+                    val requestedAt = activityNow
+                    val result = connection.json("$root/runs/$id")
                     currentCoroutineContext().ensureActive()
-                    if (runId != id) return@launch
+                    if (runId != id || api !== connection) return@launch
+                    noteRunActivity(watchedSession, result, requestedAt)
                     startRunTiming(id, result)
                     state = if (result.optString("kind") == "compact" && result.optString("status") == "started") "正在压缩上下文" else statusLabel(result.optString("status"))
                     approval = result.optJSONObject("approval")
@@ -945,6 +984,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     currentCoroutineContext().ensureActive()
                     // run 在服务端已不存在（404 run_not_found）：视为任务已终结，清除跟踪而不是无限重试刷错误。
                     if (e is ApiRequestFailure && e.status == 404) {
+                        noteRunActivity(watchedSession, obj("status" to "missing"), activityClock())
                         runId = null; approval = null
                         streamJob?.cancel()
                         backgroundRuns.values.remove(id); saveRuns()
