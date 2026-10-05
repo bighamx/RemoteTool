@@ -24,9 +24,18 @@ fun pendingSteeringMessages(history: List<HermesMessage>, steering: List<Steerin
 fun reconcileSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): Pair<List<SteeringMessage>, List<Pair<SteeringMessage, HermesMessage>>> {
     val consumed = mutableSetOf<Long>()
     val acknowledged = mutableListOf<Pair<SteeringMessage, HermesMessage>>()
+    // 历史窗口可能裁掉插话对应的真实记录（默认页 500 条）——窗口里最旧消息的时间戳早于插话时间戳时，
+    // 说明插话发出时它已在服务端（现在只是滑出窗口），视为已确认，不再作为 pending 重放。
+    val windowOldest = history.mapNotNull { it.timestamp }.minOrNull()
     val pending = steering.filter { message ->
-        val match = history.firstOrNull { it.serverId !in consumed && steeringAppearsInHistory(message, listOf(it)) }
-        if (match == null) true else { consumed += match.serverId; acknowledged += message to match; false }
+        val sentBeforeWindowStart = windowOldest != null && message.timestamp != null && message.timestamp < windowOldest
+        // 已投递且滑出窗口：不再 pending（调用方会把不在 pending 列表的记录从持久层清除）
+        if (sentBeforeWindowStart && message.delivery != "发送失败") {
+            false
+        } else {
+            val match = history.firstOrNull { it.serverId !in consumed && steeringAppearsInHistory(message, listOf(it)) }
+            if (match == null) true else { consumed += match.serverId; acknowledged += message to match; false }
+        }
     }
     return pending to acknowledged
 }
