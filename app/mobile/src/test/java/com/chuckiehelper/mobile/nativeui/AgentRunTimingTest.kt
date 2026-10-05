@@ -24,10 +24,11 @@ class AgentRunTimingTest {
         assertEquals(first.lastResponseAt, restored.event(obj("seq" to 6, "event" to "run.started"), start + 60000).lastResponseAt)
     }
 
-    @Test fun historicalEventTimestampNeverBecomesFreshOrMovesClockBackwards() {
+    @Test fun newResponsesUsePhoneReceiptTimeRatherThanServerTime() {
         val timing = AgentRunTiming(start).event(obj("seq" to 1, "event" to "message.delta", "timestamp" to start + 1000), start + 60000)
-        assertEquals(start + 1000, timing.lastResponseAt)
-        assertEquals(start + 1000, timing.event(obj("seq" to 2, "event" to "tool.started", "timestamp" to start), start + 60000).lastResponseAt)
+        assertEquals(start + 60000, timing.lastResponseAt)
+        assertEquals(start + 60000, timing.event(obj("seq" to 1, "event" to "message.delta", "timestamp" to start + 1000), start + 120000).lastResponseAt)
+        assertEquals(start + 120000, timing.event(obj("seq" to 2, "event" to "tool.started", "timestamp" to start), start + 120000).lastResponseAt)
     }
 
     @Test fun differentTasksKeepIndependentClocksAndUnknownStartIsHonest() {

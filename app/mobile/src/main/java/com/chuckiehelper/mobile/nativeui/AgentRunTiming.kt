@@ -12,14 +12,14 @@ data class AgentRunTiming(
     fun event(event: JSONObject, receivedAt: Long): AgentRunTiming {
         val n = event.optLong("seq", -1)
         if (n >= 0 && n <= sequence) return this
-        val identity = if (n < 0) event.toString() else null
+        val identity = if (n < 0) java.util.UUID.nameUUIDFromBytes(event.toString().toByteArray(Charsets.UTF_8)).toString() else null
         if (identity != null && identity == lastUnsequencedEvent) return this
         val type = event.optString("type", event.optString("event"))
         val response = type.startsWith("tool.") || type.startsWith("reasoning.") ||
             type in setOf("message.delta", "message.interim", "approval.request", "response.output_text.delta")
-        val eventTime = parseMessageTimestamp(event.opt("timestamp"))?.coerceAtMost(receivedAt) ?: receivedAt
         return copy(
-            lastResponseAt = if (response) maxOf(lastResponseAt ?: 0, eventTime) else lastResponseAt,
+            // This clock measures receipt on the phone, not the server's creation time.
+            lastResponseAt = if (response) maxOf(lastResponseAt ?: 0, receivedAt) else lastResponseAt,
             sequence = maxOf(sequence, n),
             lastUnsequencedEvent = identity ?: lastUnsequencedEvent,
         )

@@ -326,8 +326,20 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(model.messages) { message ->
+                    if (message.role == "system") {
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.CheckCircle, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(6.dp))
+                            Text(message.text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(8.dp))
+                            Text(formatMessageTimestamp(message.timestamp), style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f))
+                        }
+                    } else {
                     MessageBubble(message.role, message.text, message.attachments, api, model.files, agentName, message.delivery, message.timestamp,
                         narration = message.narration || message.localKey?.startsWith("narration-") == true, narrationTexts = model.narrationTexts)
+                    }
                 }
                 if (model.runId != null && model.runSession == model.selectedId) {
                     item {
@@ -729,8 +741,9 @@ private fun ComposerMenu(
 
 @Composable
 private fun RunTimers(runId: String?, timing: AgentRunTiming) {
-    val now by produceState(System.currentTimeMillis(), runId) {
-        while (true) { value = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) }
+    var now by remember(runId) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(runId) {
+        while (true) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) }
     }
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         listOf(

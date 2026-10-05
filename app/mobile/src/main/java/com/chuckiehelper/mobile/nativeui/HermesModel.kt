@@ -151,6 +151,22 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     // 每会话最近一次成功加载的消息列表（内存级，进程内有效），用于 select() 时先回放再刷新。
     private val cachedHistory = mutableMapOf<String, List<HermesMessage>>()
+    private var compactionNotices = runCatching {
+        org.json.JSONArray(prefs.getString("compactionNotices", "[]")).objects().mapNotNull { AgentCompactionNotice.restore(it) }
+    }.getOrDefault(emptyList())
+    private fun recordCompactionCompletion(run: String, session: String, result: JSONObject) {
+        if (!successfulCompaction(run, result) || compactionNotices.any { it.run == run }) return
+        val history = if (selectedId == session) messages else cachedHistory[session].orEmpty()
+        val time = parseMessageTimestamp(result.opt("completed_at")) ?: parseMessageTimestamp(result.opt("finished_at")) ?: System.currentTimeMillis()
+        compactionNotices = compactionNotices + AgentCompactionNotice(run, session, time, history.lastOrNull { it.serverId > 0 }?.serverId ?: 0)
+        saveCompactionNotices()
+        val merged = mergeCompactionNotices(history, compactionNotices.filter { it.session == session })
+        cachedHistory[session] = merged
+        if (selectedId == session) messages = merged
+    }
+    private fun saveCompactionNotices() {
+        prefs.edit().putString("compactionNotices", org.json.JSONArray(compactionNotices.map { it.json() }).toString()).apply()
+    }
     // 切走时挂到后台的 run（sessionId -> runId）。服务端继续执行，切回对应会话时恢复跟踪。
     private val backgroundRuns = mutableStateMapOf<String, String>().apply { putAll(runCatching {
         JSONObject(prefs.getString("trackedRuns", "{}").orEmpty()).let { rows -> rows.keys().asSequence().associateWith { rows.getString(it) }.toMutableMap() }
@@ -441,6 +457,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 try {
                     val result = api.json("$root/runs/$id")
                     if (result.optString("status") in setOf("completed", "failed", "cancelled", "interrupted", "acceptance_unknown") && backgroundRuns[session] == id) {
+                        recordCompactionCompletion(id, session, result)
                         backgroundRuns.remove(session); saveRuns()
                     }
                 } catch (e: CancellationException) { throw e }
@@ -657,6 +674,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 localKey = local.pending.key, delivery = if (hasPendingFor(id)) "正在发送" else "已送达", timestamp = local.pending.timestamp)
         }
         messages = mergeAssistantNarrations(messages, liveNarrations(id))
+        messages = mergeCompactionNotices(messages, compactionNotices.filter { it.session == id })
         if (messages.isNotEmpty()) cachedHistory[id] = messages
         sessions
             .find { it.optString("id") == id }
@@ -706,6 +724,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (!result.optBoolean("deleted")) throw java.io.IOException("$agentName 未删除该会话")
         sessions = sessions.filter { it.optString("id") != id }
         cachedHistory.remove(id)
+        compactionNotices = compactionNotices.filterNot { it.session == id }; saveCompactionNotices()
         narrations = narrations.filterNot { it.session == id }; saveNarrations()
         localSubmissions.remove(id)
         draftFiles = draftFiles - id
@@ -877,6 +896,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         result.optString("status") in
                             setOf("completed", "failed", "cancelled", "interrupted", "acceptance_unknown")
                     ) {
+                        runSession?.let { recordCompactionCompletion(id, it, result) }
                         if (result.optString("status") != "completed")
                             error = result.optString("error").ifBlank { state }
                         if (result.optString("output").isNotBlank())
