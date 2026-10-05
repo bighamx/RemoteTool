@@ -57,6 +57,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var busy by remember { mutableStateOf(false) }
     var input by remember { mutableStateOf<Triple<String, String, String>?>(null) }
+    var operationTargets by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var pending by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var document by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var media by remember { mutableStateOf<JSONObject?>(null) }
@@ -74,8 +75,9 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
         onDispose { directoryPositions = HashMap(directoryPositions).apply { put(directoryPositionKey(currentPath), arrayListOf(fileScroll.firstVisibleItemIndex, fileScroll.firstVisibleItemScrollOffset)) } }
     }
     fun task(action: suspend () -> Unit) {
+        if (busy) return
+        busy = true
         scope.launch {
-            busy = true
             try {
                 action()
             } catch (e: CancellationException) {
@@ -193,6 +195,8 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
             }
         }
     fun operation(name: String, targets: List<JSONObject>) {
+        if (targets.isEmpty() || busy) return
+        operationTargets = targets.toList()
         menuFile = null
         val file = targets.first()
         val target = file.optString("path")
@@ -235,6 +239,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
     }
     val uploader =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            val destination = path
             if (uris.isNotEmpty())
                 task {
                     for (uri in uris) {
@@ -266,7 +271,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                                 .build()
                         val request =
                             Request.Builder()
-                                .url(api.base + "/api/files/upload?path=${q(path)}")
+                                .url(api.base + "/api/files/upload?path=${q(destination)}")
                                 .header("Cookie", api.cookie())
                                 .post(body)
                                 .build()
@@ -460,12 +465,9 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
     }
     input?.let { (name, target, initial) ->
         val submit: (String) -> Unit = { dest ->
+            val targets = operationTargets.toList()
             input = null
             task {
-                val targets =
-                    if (selected.isNotEmpty())
-                        files.orEmpty().filter { it.optString("path") in selected }
-                    else files.orEmpty().filter { it.optString("path") == target }
                 when (name) {
                     "新建文件夹" -> api.json("/api/files/create-directory", obj("path" to dest))
                     "重命名" ->

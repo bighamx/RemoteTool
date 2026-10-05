@@ -44,7 +44,7 @@ public class FileService
 
             if (!Directory.Exists(fullPath))
             {
-                return new List<RemoteFileInfo>();
+                throw new DirectoryNotFoundException("目录不存在或无法访问");
             }
 
             var files = new List<RemoteFileInfo>();
@@ -96,7 +96,7 @@ public class FileService
         catch (Exception ex)
         {
             Console.WriteLine($"GetFiles error: {ex.Message}");
-            return new List<RemoteFileInfo>();
+            throw;
         }
     }
 
@@ -111,6 +111,7 @@ public class FileService
             var fullDest = ResolvePath(destPath);
             if (!Directory.Exists(fullSource))
                 return false;
+            FilePathPolicy.ValidateCopy(fullSource, fullDest);
             if (!Directory.Exists(fullDest))
                 Directory.CreateDirectory(fullDest);
             foreach (var file in Directory.GetFiles(fullSource))
@@ -121,7 +122,7 @@ public class FileService
             foreach (var dir in Directory.GetDirectories(fullSource))
             {
                 var destDir = Path.Combine(fullDest, Path.GetFileName(dir));
-                CopyDirectory(dir, destDir, overwrite);
+                if (!CopyDirectory(dir, destDir, overwrite)) return false;
             }
             return true;
         }
@@ -273,14 +274,14 @@ public class FileService
 
             if (!File.Exists(fullPath))
             {
-                return "";
+                throw new FileNotFoundException("文件不存在或无法访问", fullPath);
             }
 
             // 限制文件大小（防止读取过大的二进制文件）
             var fileInfo = new System.IO.FileInfo(fullPath);
             if (fileInfo.Length > 10 * 1024 * 1024) // 10MB
             {
-                return "[文件过大，无法在线编辑]";
+                throw new IOException("文件超过 10 MB，无法在线编辑，请下载后处理");
             }
 
             return await File.ReadAllTextAsync(fullPath);
@@ -288,7 +289,7 @@ public class FileService
         catch (Exception ex)
         {
             Console.WriteLine($"ReadFile error: {ex.Message}");
-            return "";
+            throw;
         }
     }
 
@@ -514,7 +515,7 @@ public class FileService
             var isFile = File.Exists(fullSource);
             if (isFile)
             {
-                File.Move(fullSource, fullDest, true);
+                File.Move(fullSource, fullDest, false);
                 return true;
             }                          
             {
@@ -547,7 +548,7 @@ public class FileService
             }
             if (File.Exists(fullOld))
             {
-                File.Move(fullOld, fullNew, true);
+                File.Move(fullOld, fullNew, false);
                 return true;
             }
             return false;
@@ -831,40 +832,7 @@ public class FileService
     /// </summary>
     private string ResolvePath(string? path)
     {
-        if (string.IsNullOrEmpty(path))
-        {
-            return _rootPath;
-        }
-
-        // 检查是否是 Windows 绝对路径（例如 D:\、C:\）
-        if (Path.IsPathRooted(path))
-        {
-            // 对于绝对路径，直接使用，但要规范化
-            try
-            {
-                return Path.GetFullPath(path);
-            }
-            catch
-            {
-                return _rootPath;
-            }
-        }
-
-        // 如果是相对路径，相对于根目录解析
-        var targetPath = path.StartsWith("/") ? path.Substring(1) : path;
-        var fullPath = Path.Combine(_rootPath, targetPath);
-
-        // 解析完整路径并检查是否仍在根目录内
-        var resolvedPath = Path.GetFullPath(fullPath);
-        var resolvedRoot = Path.GetFullPath(_rootPath);
-
-        if (!resolvedPath.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
-        {
-            // 拒绝目录遍历尝试
-            return _rootPath;
-        }
-
-        return resolvedPath;
+        return FilePathPolicy.Resolve(_rootPath, path);
     }
 
     /// <summary>

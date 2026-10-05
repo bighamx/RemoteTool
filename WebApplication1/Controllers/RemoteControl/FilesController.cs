@@ -383,7 +383,7 @@ public class FilesController : ControllerBase
 
             // 防止路径穿越：确保最终路径在目标目录之下
             var resolvedBase = Path.GetFullPath(basePath);
-            if (!fullPath.StartsWith(resolvedBase, StringComparison.OrdinalIgnoreCase))
+            if (!FilePathPolicy.IsWithin(resolvedBase, fullPath, includeRoot: false))
                 return ApiResult(null, "Invalid file path", false);
 
             var dirPath = Path.GetDirectoryName(fullPath);
