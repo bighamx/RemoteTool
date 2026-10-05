@@ -34,6 +34,10 @@ def main():
                 source = home / name
                 if source.exists(): shutil.copy2(source, backup / name)
         body = request.get("body") or {}
+        if action == "default_model" and "reasoning_effort" in body:
+            effort = body.get("reasoning_effort") or ""
+            if effort and effort not in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}:
+                raise ValueError("Invalid reasoning effort")
         if action == "compress_session":
             result = compress_session(body)
         elif action == "session_context":
@@ -69,11 +73,21 @@ def main():
                 result = {"available": bool(messages) or not estimated, "tokens": tokens, "limit": limit, "estimated": estimated, "model": row.get("model")}
             finally: db.close()
         elif action == "providers": result = list_custom_endpoints()
-        elif action == "model_info": result = get_model_info()
+        elif action == "model_info":
+            result = get_model_info()
+            from hermes_cli.config import load_config
+            result["reasoning_effort"] = (load_config().get("agent") or {}).get("reasoning_effort") or ""
         elif action == "save_provider": result = upsert_custom_endpoint(CustomEndpointUpdate.model_validate(body))
         else:
             body["scope"] = "main"
             result = asyncio.run(set_model_assignment(ModelAssignment.model_validate(body)))
+            # Hermes' main ModelAssignment currently ignores reasoning_effort (only auxiliary
+            # assignments apply it). Use the official partial config handler after model acceptance.
+            if not result.get("confirm_required") and result.get("ok") and "reasoning_effort" in body:
+                from hermes_cli.web_routers.config_env import update_config
+                from hermes_cli.web_models import ConfigUpdate
+                effort = body.get("reasoning_effort") or ""
+                asyncio.run(update_config(ConfigUpdate(config={"agent": {"reasoning_effort": effort}})))
     def scrub(value):
         if isinstance(value, dict):
             return {k: scrub(v) for k, v in value.items() if k.lower() not in {"api_key", "api_key_preview", "password", "secret", "access_token", "token"}}

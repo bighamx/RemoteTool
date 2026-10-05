@@ -32,7 +32,14 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         try { return Ok(compaction.Start(Id(id), key)); }
         catch (InvalidOperationException error) { return Conflict(new { message = error.Message }); }
     }
-    [HttpGet("model-options")] public Task ModelOptions(CancellationToken ct) => Forward(HttpMethod.Get, "api/model/options", null, null, ct);
+    [HttpGet("model-options")] public async Task<IActionResult> ModelOptions(CancellationToken ct) {
+        using var upstream = await bridge.SendAsync(HttpMethod.Get, "api/model/options", null, null, ct);
+        if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 模型目录" });
+        var result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
+        var info = await management.Invoke("model_info", null, ct);
+        if (info.TryGetProperty("reasoning_effort", out var effort)) result["reasoning_effort"] = System.Text.Json.Nodes.JsonValue.Create(effort.ToString());
+        return Ok(result);
+    }
     [HttpPost("sessions/{id}/model")] public Task SessionModel(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"api/sessions/{Id(id)}/model", body, null, ct);
     [HttpGet("providers")] public Task<IActionResult> Providers(CancellationToken ct) => Settings("providers", null, ct);
     [HttpGet("default-model")] public Task<IActionResult> DefaultModel(CancellationToken ct) => Settings("model_info", null, ct);

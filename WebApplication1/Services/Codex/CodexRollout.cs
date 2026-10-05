@@ -75,4 +75,23 @@ internal static class CodexRollout
         }
         return model;
     }
+    public static JsonObject LastSettings(string home, string path) {
+        var result = new JsonObject();
+        if (string.IsNullOrWhiteSpace(path)) return result;
+        try {
+            if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(home) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return result;
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            while (reader.ReadLine() is { } line) {
+                try {
+                    var record = JsonNode.Parse(line);
+                    if (record?["type"]?.ToString() != "turn_context" || record["payload"] is not JsonObject payload) continue;
+                    result["reasoningEffort"] = (payload["effort"] ?? payload["reasoning_effort"])?.DeepClone();
+                    result["serviceTier"] = payload["service_tier"]?.DeepClone();
+                    result["collaborationMode"] = payload["collaboration_mode"]?.DeepClone();
+                } catch (JsonException) { }
+            }
+        } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        return result;
+    }
 }

@@ -107,6 +107,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     var sessionModel by mutableStateOf("")
         private set
+    var sessionEffort by mutableStateOf("")
+        private set
+    var sessionTier by mutableStateOf("")
+        private set
+    var modelSaving by mutableStateOf(false)
+        private set
 
     var hasMore by mutableStateOf(false)
         private set
@@ -432,7 +438,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         historyJob?.cancel()
         selectedId = null
         contextInfo = null; asyncQuestion = null
-        sessionProvider = ""; sessionModel = ""
+        sessionProvider = ""; sessionModel = ""; sessionEffort = ""; sessionTier = ""
         messages = emptyList()
         files = emptyList()
         pendingFiles = emptyList()
@@ -550,11 +556,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val connection = api
         val result = connection.json("$root/sessions/$id").optJSONObject("session") ?: return
         if (selectedId != id || api !== connection) return
-        val config = result.optJSONObject("model_config")
-        sessionProvider = result.optString("provider").takeIf { it.isNotBlank() && it != "null" }
-            ?: config?.optString("requested_provider")?.takeIf { it.isNotBlank() && it != "null" }.orEmpty()
-        sessionModel = config?.optString("requested_model")?.takeIf { it.isNotBlank() && it != "null" }
-            ?: result.optString("model").takeIf { it.isNotBlank() && it != "null" }.orEmpty()
+        val selection = readAgentSelection(result)
+        sessionProvider = selection.provider; sessionModel = selection.model
+        sessionEffort = selection.effort; sessionTier = selection.tier
         contextInfo = result.optJSONObject("context")
         asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
         pollContext()
@@ -1061,25 +1065,41 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         global: Boolean,
         onDone: () -> Unit,
         confirm: Boolean = false,
-    ) = launch {
+        effort: String = "",
+        tier: String = "",
+    ) {
+        if (modelSaving) return
+        val session = selectedId; val connection = api
+        modelSaving = true
+        launch {
+        try {
         val body = obj("provider" to provider, "model" to model)
+        body.put("reasoning_effort", effort)
+        if (agent == "codex") body.put("service_tier", tier)
+        else if (!global) body.put("model_options", obj("reasoning" to hermesReasoning(effort)))
         if (global) {
             body.put("scope", "main")
             body.put("confirm_expensive_model", confirm)
-            val result = api.json("$root/default-model", body)
+            val result = connection.json("$root/default-model", body)
             if (result.optBoolean("confirm_required")) {
                 modelWarning = result.optString("confirm_message")
                 return@launch
             }
         } else {
-            val id = selectedId ?: throw java.io.IOException("请先选择会话")
-            api.json("$root/sessions/$id/model", body)
-            runtime = "$provider · $model"
-            sessionProvider = provider; sessionModel = model
+            val id = session ?: throw java.io.IOException("请先选择会话")
+            connection.json("$root/sessions/$id/model", body)
+            if (selectedId == id && api === connection) {
+                runtime = "$provider · $model"
+                sessionProvider = provider; sessionModel = model; sessionEffort = effort; sessionTier = tier
+            }
         }
-        fetchModels()
+        val options = connection.json("$root/model-options")
+        if (api !== connection) return@launch
+        modelOptions = options
         modelWarning = null
         onDone()
+        } finally { modelSaving = false }
+        }
     }
 
     fun saveProvider(body: JSONObject, onDone: () -> Unit) = launch {

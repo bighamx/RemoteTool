@@ -54,7 +54,7 @@ internal sealed class CodexAgent : IAsyncDisposable
             var project = (await rpc.Call("project/read", Obj(("projectId", thread.S("projectId")))))["project"]!;
             request["runtimeWorkspaceRoots"] = new JsonArray(project.A("roots").Select(root => (JsonNode)JsonValue.Create(root.S("path"))).ToArray());
         }
-        lock (gate) if (sessionOverrides.TryGetValue(id, out var selected)) { request["model"] = selected["model"]?.DeepClone(); request["modelProvider"] = selected["modelProvider"]?.DeepClone(); }
+        lock (gate) if (sessionOverrides.TryGetValue(id, out var selected)) CodexModelSettings.ApplyResume(request, selected);
         return request;
     }
     private async Task NotifyDesktop(IEnumerable<string> ids, bool force = false) {
@@ -92,6 +92,8 @@ internal sealed class CodexAgent : IAsyncDisposable
         settings = Read(config); folder = Path.GetDirectoryName(config)!; home = settings.S("home");
         journal = Path.Combine(folder, "runs.json");
         providers = Read(Path.Combine(folder, "providers.json")); runs = Read(journal);
+        foreach (var entry in Read(Path.Combine(folder, "model-selections.json")))
+            if (entry.Value is JsonObject selection) sessionOverrides[entry.Key] = selection.DeepClone().AsObject();
         accounts = new CodexAccountStore(home, settings.S("account_store", Path.Combine(Path.GetDirectoryName(home)!, ".codex-switch")));
     }
     private async Task Launch() {
@@ -117,6 +119,7 @@ internal sealed class CodexAgent : IAsyncDisposable
         } finally { settingsLock.Release(); }
     }
     private void Persist() { lock (gate) Atomic(journal, runs); }
+    private void PersistModels() { lock (gate) Atomic(Path.Combine(folder, "model-selections.json"), new JsonObject(sessionOverrides.Select(entry => new KeyValuePair<string, JsonNode>(entry.Key, entry.Value.DeepClone())))); }
     private void Emit(string run, string kind, params (string Key, object Value)[] values) {
         lock (gate) {
             var state = runs[run]!; var seq = state.L("seq") + 1; state["seq"] = seq;
@@ -280,16 +283,16 @@ internal sealed class CodexAgent : IAsyncDisposable
     private async Task<JsonObject> Config() => (await rpc.Call("config/read", Obj(("includeLayers", false))))["config"]!.AsObject();
     private async Task<JsonObject> Models() {
         var config = await Config(); var catalog = await rpc.Call("model/list", new());
-        var options = catalog.A("data").Select(m => m.S("model", m.S("id"))).Where(x => x.Length > 0).ToList();
+        var options = catalog.A("data").Where(m => !m.B("hidden")).ToArray();
         var current = config.S("model_provider", "openai"); var rows = new JsonArray();
         var known = config["model_providers"]?.DeepClone() as JsonObject ?? new();
         known["openai"] ??= Obj(("name", "OpenAI / ChatGPT"));
         foreach (var entry in known) {
-            var choices = new[] { providers[entry.Key].S("model"), entry.Key == current ? config.S("model") : "" }.Concat(options).Where(x => x.Length > 0).Distinct();
+            var choices = new[] { providers[entry.Key].S("model"), entry.Key == current ? config.S("model") : "" }.Concat(options.Select(m => m.S("model", m.S("id")))).Where(x => x.Length > 0).Distinct();
             rows.Add(Obj(("slug", entry.Key), ("name", entry.Value.S("name", entry.Key)), ("authenticated", true), ("is_current", entry.Key == current),
-                ("is_user_defined", entry.Key != "openai"), ("models", new JsonArray(choices.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()))));
+                ("is_user_defined", entry.Key != "openai"), ("models", new JsonArray(choices.Select(x => (JsonNode)(options.FirstOrDefault(m => m.S("model", m.S("id")) == x)?.DeepClone() ?? Obj(("id", x), ("model", x)))).ToArray()))));
         }
-        return Obj(("providers", rows), ("provider", current), ("model", config.S("model")));
+        return Obj(("providers", rows), ("provider", current), ("model", config.S("model")), ("reasoning_effort", config["model_reasoning_effort"]), ("service_tier", config["service_tier"]));
     }
     private async Task EditConfig(params (string Key, object Value)[] edits) {
         lock (gate) if (active.Count > 0) throw new CodexError("请先停止手机 Codex 任务再修改全局配置", 409);
@@ -391,21 +394,31 @@ internal sealed class CodexAgent : IAsyncDisposable
                     var thread = (await rpc.Call("thread/read", Obj(("threadId", session), ("includeTurns", false))))["thread"]!;
                     if (questionReply.Length == 0 && (thread["status"].S("type") == "active" || CodexRollout.IsRunning(home, thread.S("path")))) throw new CodexError("此会话正在另一端执行任务，请等待结束后发送", 409);
                     desktopOwner = true;
-                    resumed = Obj(("model", CodexRollout.LastModel(home, thread.S("path"))), ("modelProvider", thread.S("modelProvider")));
+                    resumed = Obj(("model", CodexRollout.LastModel(home, thread.S("path"))), ("modelProvider", thread.S("modelProvider")),
+                        ("collaborationMode", CodexRollout.LastSettings(home, thread.S("path"))["collaborationMode"]));
                 }
             }
             lock (gate) { if (!desktopOwner) loaded[session] = resumed; runs[run]!["model"] = resumed.S("model"); runs[run]!["provider"] = resumed.S("modelProvider"); }
             var inputs = CodexAttachmentInput.Build(body.S("input", "请查看附件"), body.A("attachment_paths"), settings.S("attachments"), session);
+            JsonObject selection = null;
+            lock (gate) if (sessionOverrides.TryGetValue(session, out var chosen)) selection = chosen.DeepClone().AsObject();
+            var turnRequest = Obj(("threadId", session), ("input", inputs), ("clientUserMessageId", key));
+            if (selection != null) {
+                var catalog = await rpc.Call("model/list", new());
+                var detail = catalog.A("data").FirstOrDefault(row => row.S("model", row.S("id")) == selection.S("model")) as JsonObject ?? new();
+                CodexModelSettings.ApplyTurn(turnRequest, selection, detail, resumed["collaborationMode"] as JsonObject);
+            }
             lock (gate) { runs[run]!["status"] = "started"; runs[run]!["phase"] = "dispatching"; Persist(); }
             var context = Obj(("chuckie-attachments", Obj(("kind", "application"), ("value", "生成供手机下载的文件时保存到：" + body.S("outbox") + "。回复中每个文件使用独立一行 MEDIA:绝对路径。"))));
+            turnRequest["additionalContext"] = context;
             JsonObject result;
             if (desktopOwner) {
                 lock (gate) { runs[run]!["owner"] = "desktop"; Persist(); }
                 if (steeringTurn.Length > 0) {
                     await CodexDesktopSync.SteerTurn(session, inputs, key);
                     result = Obj(("turn", Obj(("id", steeringTurn))));
-                } else result = (await CodexDesktopSync.StartTurn(session, Obj(("input", inputs), ("clientUserMessageId", key), ("additionalContext", context))))["result"] as JsonObject ?? new();
-            } else result = await rpc.Call("turn/start", Obj(("threadId", session), ("input", inputs), ("clientUserMessageId", key), ("additionalContext", context)));
+                } else { turnRequest.Remove("threadId"); result = (await CodexDesktopSync.StartTurn(session, turnRequest))["result"] as JsonObject ?? new(); }
+            } else result = await rpc.Call("turn/start", turnRequest);
             lock (gate) runs[run]!["turn_id"] = result["turn"].S("id"); Persist();
             if (desktopOwner) _ = ObserveDesktopRun(session, run, key);
             return Obj(("run_id", run), ("status", runs[run].S("status")), ("replayed", false));
@@ -510,7 +523,13 @@ internal sealed class CodexAgent : IAsyncDisposable
         if (path == "default-model") {
             if (method == "POST") {
                 await settingsLock.WaitAsync();
-                try { await EditConfig(("model_provider", body.S("provider")), ("model", body.S("model"))); return Obj(("saved", true)); }
+                try {
+                    var selected = CodexModelSettings.Validate(body, await rpc.Call("model/list", new()));
+                    var edits = new List<(string Key, object Value)> { ("model_provider", selected.S("modelProvider")), ("model", selected.S("model")) };
+                    if (selected.ContainsKey("reasoningEffort")) edits.Add(("model_reasoning_effort", selected["reasoningEffort"]));
+                    if (selected.ContainsKey("serviceTier")) edits.Add(("service_tier", selected["serviceTier"]));
+                    await EditConfig(edits.ToArray()); return Obj(("saved", true));
+                }
                 finally { settingsLock.Release(); }
             }
             return await Models();
@@ -549,6 +568,9 @@ internal sealed class CodexAgent : IAsyncDisposable
                 lock (gate) if (loaded.TryGetValue(session, out var current)) { model = current.S("model", model); provider = current.S("modelProvider", provider); }
                 lock (gate) if (sessionOverrides.TryGetValue(session, out var selected)) { model = selected.S("model", model); provider = selected.S("modelProvider", provider); }
                 var info = Session(thread); info["model"] = model; info["provider"] = provider;
+                var tuning = CodexRollout.LastSettings(home, thread.S("path"));
+                lock (gate) if (sessionOverrides.TryGetValue(session, out var chosen)) tuning = chosen.DeepClone().AsObject();
+                info["reasoning_effort"] = tuning["reasoningEffort"]?.DeepClone(); info["service_tier"] = tuning["serviceTier"]?.DeepClone();
                 var detail = CodexSessionDetails.Read(home, thread.S("path")); info["context"] = detail["context"]?.DeepClone(); info["question"] = detail["question"]?.DeepClone();
                 return Obj(("session", info));
             }
@@ -559,7 +581,7 @@ internal sealed class CodexAgent : IAsyncDisposable
                     lock (gate) if (active.ContainsKey(session)) throw new CodexError("运行中的会话不可删除", 409);
                     await ReleaseSessionCore(session);
                     await rpc.Call("thread/delete", Obj(("threadId", session)));
-                    lock (gate) sessionOverrides.Remove(session);
+                    lock (gate) { sessionOverrides.Remove(session); PersistModels(); }
                     await CodexDesktopSync.NotifyRemoved(new[] { session });
                     return Obj(("deleted", true));
                 } finally { settingsLock.Release(); }
@@ -568,11 +590,16 @@ internal sealed class CodexAgent : IAsyncDisposable
                 await settingsLock.WaitAsync();
                 try {
                     lock (gate) if (active.ContainsKey(session)) throw new CodexError("请先停止任务再切换模型", 409);
-                    var request = await ResumeSessionRequest(session); request["model"] = body.S("model"); request["modelProvider"] = body.S("provider");
-                    var result = await rpc.Call("thread/resume", request);
-                    lock (gate) sessionOverrides[session] = Obj(("model", result.S("model")), ("modelProvider", result.S("modelProvider")));
-                    await ReleaseSessionCore(session);
-                    return Obj(("model", result["model"]), ("provider", result["modelProvider"]));
+                    var selection = CodexModelSettings.Validate(body, await rpc.Call("model/list", new()));
+                    var request = await ResumeSessionRequest(session); CodexModelSettings.ApplyResume(request, selection);
+                    try { await rpc.Call("thread/resume", request); await ReleaseSessionCore(session); }
+                    catch (CodexError error) when (error.Message.Contains("already has an active writer", StringComparison.OrdinalIgnoreCase)) {
+                        var thread = (await rpc.Call("thread/read", Obj(("threadId", session), ("includeTurns", false))))["thread"]!;
+                        if (thread["status"].S("type") == "active" || CodexRollout.IsRunning(home, thread.S("path"))) throw new CodexError("请等待当前任务结束后修改模型设置", 409);
+                        if (thread.S("modelProvider") != selection.S("modelProvider")) throw new CodexError("该会话由桌面端管理，请在桌面切换 Provider；手机可修改模型、思考程度和速度", 409);
+                    }
+                    lock (gate) { sessionOverrides[session] = selection; PersistModels(); }
+                    return Obj(("model", selection["model"]), ("provider", selection["modelProvider"]), ("reasoning_effort", selection["reasoningEffort"]), ("service_tier", selection["serviceTier"]));
                 } finally { settingsLock.Release(); }
             }
             if (p.Length == 3 && p[2] == "messages") {

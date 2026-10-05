@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package com.chuckiehelper.mobile.nativeui
 
@@ -808,10 +808,21 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
     var provider by remember { mutableStateOf<JSONObject?>(null) }
     var selected by remember { mutableStateOf<String?>(null) }
     var filter by remember { mutableStateOf("") }
+    var effort by remember { mutableStateOf("") }
+    var tier by remember { mutableStateOf("") }
     val currentProvider = if (global) model.modelOptions.optString("provider") else model.sessionProvider.ifBlank { model.modelOptions.optString("provider") }
     val currentModel = if (global) model.modelOptions.optString("model") else model.sessionModel.ifBlank { model.modelOptions.optString("model") }
+    val currentEffort = if (global) model.modelOptions.cleanSetting("reasoning_effort") else model.sessionEffort
+    val currentTier = if (global) model.modelOptions.cleanSetting("service_tier") else model.sessionTier
     LaunchedEffect(provider?.optString("slug"), global, currentProvider, currentModel) {
         selected = if (provider?.optString("slug") == currentProvider) currentModel.takeIf { it.isNotBlank() } else null
+    }
+    LaunchedEffect(selected, provider?.optString("slug"), global) {
+        val isCurrent = selected == currentModel && provider?.optString("slug") == currentProvider
+        val choices = reasoningChoices(model.agent, provider, selected)
+        effort = if (isCurrent && currentEffort in choices) currentEffort else ""
+        tier = if (isCurrent) currentTier else ""
+        if (tier !in listOf("", "default", "standard", fastTier(provider, selected))) tier = ""
     }
     fun previous() {
         provider = null
@@ -854,7 +865,7 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                     "${if (global) "全局默认" else "当前会话"}：$currentProvider · $currentModel",
                     style = MaterialTheme.typography.labelSmall,
                 )
-                LazyColumn(Modifier.heightIn(max = 340.dp)) {
+                LazyColumn(Modifier.heightIn(max = 380.dp)) {
                     if (provider == null) {
                         items(
                             model.modelOptions.array("providers").objects().filter {
@@ -895,8 +906,8 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                                     val item = choices.opt(it)
                                     if (item is JSONObject)
                                         item.optString(
-                                            "id",
-                                            item.optString("model", item.optString("name")),
+                                            "model",
+                                            item.optString("id", item.optString("name")),
                                         )
                                     else item.toString()
                                 }
@@ -932,6 +943,32 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                                     Text("当前使用", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
                             }
                         }
+                        if (selected != null) item {
+                            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                            val efforts = reasoningChoices(model.agent, provider, selected)
+                            if (efforts.isNotEmpty()) {
+                                Text("思考程度", style = MaterialTheme.typography.labelLarge)
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    (listOf("") + efforts).forEach { value ->
+                                        FilterChip(effort == value, { effort = value; model.modelWarning = null },
+                                            label = { Text(effortLabel(value)) }, enabled = !model.modelSaving)
+                                    }
+                                }
+                            } else Text("该模型未提供可选思考档位", style = MaterialTheme.typography.labelSmall)
+                            if (model.agent == "codex") {
+                                Text("速度", style = MaterialTheme.typography.labelLarge)
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    FilterChip(tier.isBlank(), { tier = "" }, label = { Text("默认") }, enabled = !model.modelSaving)
+                                    FilterChip(tier in listOf("default", "standard"), { tier = "default" }, label = { Text("标准") }, enabled = !model.modelSaving)
+                                    fastTier(provider, selected)?.let { fast ->
+                                        FilterChip(tier == fast, { tier = fast }, label = { Text("快速") }, enabled = !model.modelSaving)
+                                    }
+                                }
+                                if (fastTier(provider, selected) != null)
+                                    Text("快速模式的可用性和用量以当前 Provider 为准", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text("保存后用于下一轮消息", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
                 model.modelWarning?.let {
@@ -961,10 +998,12 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                                 global,
                                 onClose,
                                 confirm = model.modelWarning != null,
+                                effort = effort,
+                                tier = tier,
                             )
                         }
                     },
-                    enabled = selected != null,
+                    enabled = selected != null && !model.modelSaving,
                 ) {
                     Text(
                         if (model.modelWarning != null) "确认并继续"
