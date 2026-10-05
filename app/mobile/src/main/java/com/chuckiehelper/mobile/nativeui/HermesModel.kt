@@ -1118,20 +1118,6 @@ fun newHermesChatName(): String =
         java.time.LocalDateTime.now()
             .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
 
-internal fun looksLikeCode(text: String): Boolean {
-    if (text.contains("```") || Regex("<<?'?EOF'?>?").containsMatchIn(text)) return true
-    val lines2 = text.lines().filter { it.isNotBlank() }
-    if (lines2.size < 3) return false
-    val markers = listOf(
-        Regex("^\\s*(import |from |def |class |return |with |try:|except|print\\()"),
-        Regex("^\\s*(const |let |var |function |async |await |export )"),
-        Regex("^[a-zA-Z_][A-Za-z0-9_]*\\s*=\\s*[^=]"),
-        Regex("^[{}]|^\\s*//"),
-    )
-    val hits = lines2.count { line -> markers.any { it.containsMatchIn(line) } }
-    return hits >= (lines2.size * 0.5).toInt().coerceAtLeast(3)
-}
-
 fun statusLabel(value: String) =
     when (value) {
         "completed" -> "已完成"

@@ -6,7 +6,7 @@ import org.json.JSONObject
 data class AssistantNarration(val key: String, val session: String, val text: String, val anchor: Long,
     val userText: String, val timestamp: Long)
 
-/** Extract leading explanatory comments, never shell commands or tool results. */
+/** Extract leading comments; a flattened preview may include command text in the same line. */
 fun terminalNarration(tool: String, preview: String): String? {
     if (tool.lowercase() !in setOf("terminal", "终端", "commandexecution", "powershell", "shell")) return null
     val comments = preview.replace("\r\n", "\n").trimStart().lineSequence()
