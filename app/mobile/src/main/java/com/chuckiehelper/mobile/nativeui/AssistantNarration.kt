@@ -1,5 +1,8 @@
 package com.chuckiehelper.mobile.nativeui
 
+import org.json.JSONArray
+import org.json.JSONObject
+
 data class AssistantNarration(val key: String, val session: String, val text: String, val anchor: Long,
     val userText: String, val timestamp: Long)
 
@@ -12,9 +15,48 @@ fun terminalNarration(tool: String, preview: String): String? {
         .filter { it.isNotBlank() && !it.matches(Regex("^(include|define|ifdef|ifndef|endif|pragma)\\b.*")) }
         .joinToString("\n")
     if (comments.isBlank()) return null
-    // Some servers flatten command previews. Stop before an actual CLI command.
-    return comments.split(Regex("\\s+(?=(?:ssh|pwsh|powershell|cmd|curl|wget|git|docker|dotnet|python|npm)\\s+(?:[\\\"'/-]|[A-Za-z0-9_@]))", RegexOption.IGNORE_CASE), limit = 2)
-        .first().trim().trimEnd(':', '：').take(2000).takeIf { it.isNotBlank() }
+    // Keep the original explanation for history reconciliation; display trimming is separate.
+    return comments
+}
+
+/** Count Unicode code points, so neither emoji nor supplementary Han characters are split. */
+fun truncateNarration(text: String): String {
+    val result = StringBuilder(text.length.coerceAtMost(2048))
+    var index = 0
+    var nonChinese = 0
+    while (index < text.length) {
+        val point = text.codePointAt(index)
+        if (Character.UnicodeScript.of(point) == Character.UnicodeScript.HAN) {
+            nonChinese = 0
+            result.appendCodePoint(point)
+        } else {
+            nonChinese++
+            if (nonChinese <= 30) result.appendCodePoint(point)
+            else if (nonChinese == 31) result.append('…')
+        }
+        index += Character.charCount(point)
+    }
+    return result.toString()
+}
+
+/** Alter only known narration spans; final answers, attachment parsing and raw history stay intact. */
+fun displayNarration(text: String, narration: Boolean, spans: List<String> = emptyList()): String {
+    if (narration) return truncateNarration(text)
+    var display = text
+    for (span in spans.filter { it.isNotBlank() }.distinct().sortedByDescending { it.length })
+        display = display.replace(span, truncateNarration(span))
+    return display
+}
+
+/** Hermes persists interim assistant text together with its tool calls. No code-content guessing. */
+fun isAssistantNarration(row: JSONObject): Boolean {
+    if (row.optString("role") != "assistant") return false
+    val calls = row.opt("tool_calls")
+    return when (calls) {
+        is JSONArray -> calls.length() > 0
+        is String -> runCatching { JSONArray(calls).length() > 0 }.getOrDefault(false)
+        else -> false
+    }
 }
 
 fun mergeAssistantNarrations(history: List<HermesMessage>, narrations: List<AssistantNarration>): List<HermesMessage> {

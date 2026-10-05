@@ -18,6 +18,7 @@ data class HermesMessage(
     val localKey: String? = null,
     val delivery: String? = null,
     val timestamp: Long? = null,
+    val narration: Boolean = false,
 )
 
 data class HermesEvent(val type: String, val text: String, val detail: String = "")
@@ -203,14 +204,18 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }).toString()).apply()
     }
     private fun showToolNarration(run: String, tool: String, preview: String, timestamp: Any?) {
-        val session = runSession ?: return
         val text = terminalNarration(tool, preview) ?: return
+        showAssistantNarration(run, text, timestamp)
+    }
+    val narrationTexts: List<String> get() = narrations.filter { it.session == selectedId }.map { it.text }
+    private fun showAssistantNarration(run: String, text: String, timestamp: Any?) {
+        val session = runSession ?: return
         if (narrations.any { it.session == session && it.key.startsWith("narration-$run-") && it.text == text }) return
-        if (pendingText.split("\n\n").any { it.trim() == text.trim() }) return
         val user = messages.lastOrNull { it.role == "user" } ?: return
         val note = AssistantNarration("narration-$run-${UUID.randomUUID()}", session, text, user.serverId, user.text,
             parseMessageTimestamp(timestamp) ?: System.currentTimeMillis())
         narrations = narrations + note; saveNarrations()
+        if (pendingText.contains(text) || flushedStreamPrefix.contains(text)) return
         messages = mergeAssistantNarrations(messages, listOf(note))
         cachedHistory[session] = messages
     }
@@ -579,7 +584,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     }
                 if (role in listOf("user", "assistant") && text.isNotBlank() && text != "null")
                     HermesMessage(role, text, row.optLong("id"), row.array("attachments").objects(), timestamp =
-                        parseMessageTimestamp(row.opt("timestamp")) ?: parseMessageTimestamp(row.opt("created_at")))
+                        parseMessageTimestamp(row.opt("timestamp")) ?: parseMessageTimestamp(row.opt("created_at")), narration = isAssistantNarration(row))
                 else null
             }
         val reconciliation = reconcileSteeringMessages(messages, steering.filter { it.session == id })
@@ -966,18 +971,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                                 }
                                     }
                                     "message.interim" -> {
-                                        if (pendingTextTimestamp == null) pendingTextTimestamp = parseMessageTimestamp(event.opt("timestamp")) ?: System.currentTimeMillis()
                                         val text = event.optString("text")
-                                        // 途中的旁白消息直接进聊天流（用户不再长时间看不到任何输出）；
-                                        // 进度区保留一份便于回看。
-                                        // 去重：同一段文本若已被 delta 流或已 flush 的前缀覆盖（旁白与正式输出
-                                        // 内容相同时网关会推两遍），只进进度区，不再追加聊天流。
                                         if (text.isNotBlank()) {
-                                            val alreadyShown = pendingText.contains(text) || flushedStreamPrefix.contains(text) ||
-                                                messages.lastOrNull { it.role == "assistant" }?.text?.contains(text) == true
-                                            if (!alreadyShown && !looksLikeCode(text))
-                                                pendingText += if (pendingText.isBlank()) text else "\n\n$text"
-                                            events = (events + HermesEvent("进度", text.take(100))).takeLast(30)
+                                            showAssistantNarration(id, text, event.opt("timestamp"))
+                                            events = (events + HermesEvent("进度", truncateNarration(text).take(100))).takeLast(30)
                                             eventCount++
                                         }
                                     }

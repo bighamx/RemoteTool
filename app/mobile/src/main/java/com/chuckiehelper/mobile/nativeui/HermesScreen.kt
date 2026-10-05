@@ -326,12 +326,13 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(model.messages) { message ->
-                    MessageBubble(message.role, message.text, message.attachments, api, model.files, agentName, message.delivery, message.timestamp)
+                    MessageBubble(message.role, message.text, message.attachments, api, model.files, agentName, message.delivery, message.timestamp,
+                        narration = message.narration || message.localKey?.startsWith("narration-") == true, narrationTexts = model.narrationTexts)
                 }
                 if (model.runId != null && model.runSession == model.selectedId) {
                     item {
                         if (model.pendingText.isNotBlank())
-                            MessageBubble("assistant", model.pendingText, api = api, availableFiles = model.files, agentName = agentName, timestamp = model.pendingTextTimestamp)
+                            MessageBubble("assistant", model.pendingText, api = api, availableFiles = model.files, agentName = agentName, timestamp = model.pendingTextTimestamp, narrationTexts = model.narrationTexts)
                     }
                     item {
                         var showTools by remember { mutableStateOf(false) }
@@ -735,6 +736,8 @@ private fun MessageBubble(
     agentName: String = "Hermes",
     delivery: String? = null,
     timestamp: Long? = null,
+    narration: Boolean = false,
+    narrationTexts: List<String> = emptyList(),
 ) {
     val context = LocalContext.current
     var preview by remember { mutableStateOf<JSONObject?>(null) }
@@ -766,7 +769,9 @@ private fun MessageBubble(
                         }
                     }
                     Spacer(Modifier.height(5.dp))
-                    if (presentation.text.isNotBlank()) HermesMarkdown(presentation.text)
+                    if (presentation.text.isNotBlank()) HermesMarkdown(
+                        if (role == "assistant") displayNarration(presentation.text, narration, narrationTexts) else presentation.text
+                    )
                     delivery?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     presentation.unavailable.forEach { name ->
                         Text("附件暂不可用：$name", style = MaterialTheme.typography.bodySmall)
