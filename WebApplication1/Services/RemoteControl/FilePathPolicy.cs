@@ -23,6 +23,9 @@ internal static class FilePathPolicy
         if (IsWithin(source, destination)) throw new IOException("不能把文件夹复制到自身或其子目录");
         // Never follow junctions while recursively copying: they can lead back to an ancestor.
         if ((File.GetAttributes(source) & FileAttributes.ReparsePoint) != 0) throw new IOException("递归复制暂不支持目录链接，请选择实际目录");
+        EnsureNoDirectoryLinks(destination);
+    }
+    public static void EnsureNoDirectoryLinks(string destination) {
         for (var parent = new DirectoryInfo(Path.GetFullPath(destination)); parent != null; parent = parent.Parent)
             if (parent.Exists && (parent.Attributes & FileAttributes.ReparsePoint) != 0) throw new IOException("复制目标不能经过目录链接，请选择实际目录");
     }

@@ -781,11 +781,18 @@ public class FileService
             if (!Directory.Exists(fullDest)) Directory.CreateDirectory(fullDest);
 
             using var archive = ArchiveFactory.OpenArchive(fullArchive);
+            // Validate every entry before writing any output, including directory and link entries.
+            foreach (var entry in archive.Entries) {
+                var target = Path.GetFullPath(Path.Combine(fullDest, (entry.Key ?? "").Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar)));
+                if (string.IsNullOrWhiteSpace(entry.Key) || !FilePathPolicy.IsWithin(fullDest, target, includeRoot: false) || entry.LinkTarget != null)
+                    throw new IOException("压缩包包含无效路径或目录链接");
+                FilePathPolicy.EnsureNoDirectoryLinks(Path.GetDirectoryName(target)!);
+            }
             foreach (var entry in archive.Entries)
             {
                 if (!entry.IsDirectory)
                 {
-                    entry.WriteToDirectory(fullDest);
+                    entry.WriteToDirectory(fullDest, new ExtractionOptions { ExtractFullPath = true, Overwrite = false });
                 }
             }
             return true;
