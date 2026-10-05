@@ -157,7 +157,10 @@ internal sealed class CodexAgent : IAsyncDisposable
         if (method == "turn/started") { lock (gate) runs[run]!["turn_id"] = p["turn"].S("id"); Persist(); }
         else if (method == "item/agentMessage/delta") {
             var delta = p.S("delta"); lock (gate) runs[run]!["output"] = runs[run].S("output") + delta;
-            Emit(run, "message.delta", ("delta", delta));
+            Emit(run, "message.delta", ("delta", delta), ("item_id", p.S("itemId")));
+        } else if (method is "item/started" or "item/completed" && item.S("type") == "agentMessage") {
+            Emit(run, method.EndsWith("/started") ? "message.started" : "message.completed", ("item_id", item.S("id")),
+                ("phase", item.S("phase")), ("text", item.S("text")), ("timestamp", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
         } else if (method is "item/started" or "item/completed" && item != null && item.S("type") is not ("userMessage" or "agentMessage" or "reasoning")) {
             var kind = item.S("type");
             var name = item.S("tool", item.S("name", kind switch { "commandExecution" => "终端", "fileChange" => "文件修改", "mcpToolCall" => "MCP", "webSearch" => "搜索", "imageView" => "查看图片", _ => kind }));
@@ -439,7 +442,8 @@ internal sealed class CodexAgent : IAsyncDisposable
     }
     private async Task ObserveDesktopRun(string session, string run, string key) {
         using var timeout = new CancellationTokenSource(TimeSpan.FromHours(2));
-        var seenTools = new Dictionary<string, string>(); var previousText = "";
+        var seenTools = new Dictionary<string, string>();
+        var assistantMessages = new CodexAssistantMessageStream();
         try {
             await foreach (var snapshot in CodexDesktopSync.Follow(session, timeout.Token)) {
                 string turnId; lock (gate) turnId = runs[run].S("turn_id");
@@ -447,8 +451,10 @@ internal sealed class CodexAgent : IAsyncDisposable
                 if (turn == null) continue;
                 var text = string.Join("\n\n", turn.A("items").Where(item => item.S("type") == "agentMessage").Select(item => item.S("text")));
                 lock (gate) { runs[run]!["output"] = text; runs[run]!["turn_id"] = turn.S("turnId"); }
-                if (text.StartsWith(previousText, StringComparison.Ordinal) && text.Length > previousText.Length) Emit(run, "message.delta", ("delta", text[previousText.Length..]));
-                previousText = text;
+                foreach (var change in assistantMessages.Update(turn)) {
+                    var kind = change.S("event"); change.Remove("event");
+                    Emit(run, kind, change.Select(pair => (pair.Key, (object)pair.Value)).ToArray());
+                }
                 foreach (var item in turn.A("items")) {
                     var kind = item.S("type");
                     if (kind is "userMessage" or "agentMessage" or "reasoning" or "contextCompaction" or "userInputResponse") continue;
@@ -612,7 +618,7 @@ internal sealed class CodexAgent : IAsyncDisposable
                     var fallback = turn.L(kind == "userMessage" ? "startedAt" : "completedAt");
                     object timestamp = times.TryGetValue(item.S("id"), out var exact) ? exact : fallback > 0 ? fallback * 1000 : null;
                     if (kind == "userMessage") rows.Add(Obj(("id", MessageId(item.S("id"))), ("role", "user"), ("timestamp", timestamp), ("content", string.Join('\n', item.A("content").Where(c => c.S("type") == "text").Select(c => c.S("text"))))));
-                    else if (kind == "agentMessage") rows.Add(Obj(("id", MessageId(item.S("id"))), ("role", "assistant"), ("timestamp", timestamp), ("content", item.S("text"))));
+                    else if (kind == "agentMessage") rows.Add(Obj(("id", MessageId(item.S("id"))), ("role", "assistant"), ("timestamp", timestamp), ("content", item.S("text")), ("phase", item.S("phase"))));
                 }
                 return Obj(("data", rows));
             }

@@ -16,7 +16,7 @@ data class AgentRunTiming(
         if (identity != null && identity == lastUnsequencedEvent) return this
         val type = event.optString("type", event.optString("event"))
         val response = type.startsWith("tool.") || type.startsWith("reasoning.") ||
-            type in setOf("message.delta", "message.interim", "approval.request", "response.output_text.delta")
+            type in setOf("message.delta", "message.interim", "message.snapshot", "message.completed", "approval.request", "response.output_text.delta")
         return copy(
             // This clock measures receipt on the phone, not the server's creation time.
             lastResponseAt = if (response) maxOf(lastResponseAt ?: 0, receivedAt) else lastResponseAt,

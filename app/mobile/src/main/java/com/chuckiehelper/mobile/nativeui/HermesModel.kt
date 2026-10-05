@@ -316,6 +316,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     private var readConnectionError: String? = null
     private var flushedStreamPrefix = ""
+    private var pendingItemId: String? = null
+    private var pendingPhase = ""
+    val visiblePendingText get() = if (pendingItemId?.let { id -> messages.any { it.role == "assistant" && it.serverId == narrationMessageId(id) } } == true) "" else pendingText
+    private fun syncPendingCanonical() {
+        val item = pendingItemId ?: return
+        val serverId = narrationMessageId(item)
+        messages = messages.map { row ->
+            if (row.role == "assistant" && row.serverId == serverId && pendingText.length > row.text.length && pendingText.startsWith(row.text)) row.copy(text = pendingText)
+            else row
+        }
+    }
     private var steering = runCatching {
         org.json.JSONArray(prefs.getString("steeringMessages", "[]")).objects().map { row ->
             val ids = row.array("existingIds")
@@ -330,7 +341,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         prefs.edit().putString("assistantNarrations", org.json.JSONArray(narrations.map {
             obj("key" to it.key, "session" to it.session, "text" to it.text, "anchor" to it.anchor,
                 "userText" to it.userText, "timestamp" to it.timestamp, "userTimestamp" to it.userTimestamp,
-                "sequence" to it.sequence, "positionVersion" to 1)
+                "sequence" to it.sequence, "positionVersion" to 1, "run" to it.run, "messageId" to it.messageId, "streamed" to it.streamed)
         }).toString()).apply()
     }
     private fun showToolNarration(run: String, tool: String, preview: String, timestamp: Any?, sequence: Long?) {
@@ -338,18 +349,31 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         showAssistantNarration(run, text, timestamp, sequence)
     }
     val narrationTexts: List<String> get() = narrations.filter { it.session == selectedId }.map { it.text }
-    private fun showAssistantNarration(run: String, text: String, timestamp: Any?, sequence: Long?) {
+    private fun showAssistantNarration(run: String, text: String, timestamp: Any?, sequence: Long?, messageId: String? = null, streamed: Boolean = false) {
         val session = runSession ?: return
         if (selectedId != session || runId != run) return
         val eventTime = parseMessageTimestamp(timestamp) ?: return
-        val identity = sequence?.toString() ?: UUID.nameUUIDFromBytes("$eventTime\n$text".toByteArray(Charsets.UTF_8)).toString()
+        val identity = messageId?.let { "item-$it" } ?: sequence?.toString() ?: UUID.nameUUIDFromBytes("$eventTime\n$text".toByteArray(Charsets.UTF_8)).toString()
         val key = "narration-$run-$identity"
-        if (narrations.any { it.session == session && it.key == key }) return
-        val note = assistantNarrationEvent(key, session, text, eventTime, messages, sequence) ?: return
-        narrations = narrations + note; saveNarrations()
-        if (pendingText.contains(text) || flushedStreamPrefix.contains(text)) return
+        val note = assistantNarrationEvent(key, session, text, eventTime, messages, sequence)?.copy(run = run, messageId = messageId, streamed = streamed) ?: return
+        narrations = upsertAssistantNarration(narrations, note, messages); saveNarrations()
         messages = mergeAssistantNarrations(messages, liveNarrations(session))
         cachedHistory[session] = messages
+    }
+    private fun flushPendingNarration(run: String, sequence: Long?, text: String = pendingText, eventTime: Any? = pendingTextTimestamp,
+        item: String? = pendingItemId) {
+        val raw = pendingText
+        pendingText = ""; pendingTextTimestamp = null
+        flushedStreamPrefix += raw
+        if (text.isNotBlank()) showAssistantNarration(run, text, eventTime, sequence, item, streamed = true)
+    }
+    private fun beginStreamItem(run: String, event: JSONObject, sequence: Long?) {
+        val item = event.optString("item_id").takeIf { it.isNotBlank() && it != "null" } ?: return
+        if (pendingItemId != item) {
+            if (pendingText.isNotBlank() && pendingPhase != "final_answer") flushPendingNarration(run, sequence)
+            pendingItemId = item; pendingPhase = ""
+        }
+        event.optString("phase").takeIf { it.isNotBlank() && it != "null" }?.let { pendingPhase = it }
     }
     /** 旁白气泡 24h 过期：过期后不再插入聊天列表，只在进度区可回看。 */
     private fun liveNarrations(id: String) = narrations.filter {
@@ -664,7 +688,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (runId != null && runSession != null && runSession != id) {
             backgroundRuns[runSession!!] = runId!!
             runId = null; runSession = null; approval = null
-            pendingText = ""; flushedStreamPrefix = ""; pendingTextTimestamp = null
+            pendingText = ""; flushedStreamPrefix = ""; pendingTextTimestamp = null; pendingItemId = null; pendingPhase = ""
             events = emptyList(); eventCount = 0
             watching?.cancel(); streamJob?.cancel()
         }
@@ -672,7 +696,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             externalActivity = null; externalHistoryRevision = null
             runSession = null
             seq = -1; events = emptyList(); eventCount = 0
-            pendingText = ""; pendingTextTimestamp = null; flushedStreamPrefix = ""
+            pendingText = ""; pendingTextTimestamp = null; flushedStreamPrefix = ""; pendingItemId = null; pendingPhase = ""
             state = "就绪"; readConnectionError = null; files = emptyList()
             prefs.edit().remove("run").remove("runSession").apply()
         }
@@ -951,7 +975,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     runId = startedRun; runSession = session
                     prefs.edit().putString("runMessageKey", key).putString("run", startedRun).putString("runSession", session).apply()
                     pendingFiles = pendingFiles.filterNot { it.optString("id") in pending.attachmentIds }
-                    pendingText = ""; flushedStreamPrefix = ""; pendingTextTimestamp = null
+                    pendingText = ""; flushedStreamPrefix = ""; pendingTextTimestamp = null; pendingItemId = null; pendingPhase = ""
                     events = emptyList(); eventCount = 0; approval = null; seq = -1; state = "执行中"
                     watch(); loadHistory(session)
                 } else backgroundRuns[session] = startedRun
@@ -1026,7 +1050,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         runSession?.let { recordCompactionCompletion(id, it, result) }
                         if (result.optString("status") != "completed")
                             error = result.optString("error").ifBlank { state }
-                        if (result.optString("output").isNotBlank())
+                        if (pendingItemId == null && result.optString("output").isNotBlank())
                             pendingText = result.optString("output").removePrefix(flushedStreamPrefix)
                         runId = null
                         backgroundRuns.values.remove(id); saveRuns()
@@ -1121,12 +1145,26 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                 recordRunResponse(id, event)
                                 if (event.optString("type", event.optString("event")) in setOf("approval.request", "run.completed", "run.failed", "run.cancelled", "run.interrupted")) statusWake?.trySend(Unit)
                                 when (event.optString("type", event.optString("event"))) {
+                                    "message.started" -> beginStreamItem(id, event, n.takeIf { it >= 0 })
                                     "message.delta" -> {
+                                        beginStreamItem(id, event, n.takeIf { it >= 0 })
                                         if (pendingTextTimestamp == null) pendingTextTimestamp = parseMessageTimestamp(event.opt("timestamp")) ?: System.currentTimeMillis()
                                         pendingText += event.optString("delta")
+                                        syncPendingCanonical()
+                                    }
+                                    "message.snapshot", "message.completed" -> {
+                                        beginStreamItem(id, event, n.takeIf { it >= 0 })
+                                        if (pendingTextTimestamp == null) pendingTextTimestamp = parseMessageTimestamp(event.opt("timestamp")) ?: System.currentTimeMillis()
+                                        pendingText = event.optString("text")
+                                        syncPendingCanonical()
+                                        if (event.optString("type", event.optString("event")) == "message.completed" && pendingPhase == "commentary")
+                                            flushPendingNarration(id, n.takeIf { it >= 0 })
                                     }
                                     "approval.request" -> approval = event
                                     "tool.started" -> {
+                                        // Legacy Hermes/Codex streams have no item ID: a tool starts only
+                                        // after the preceding assistant segment, so close that segment now.
+                                        if (pendingText.isNotBlank() && pendingPhase != "final_answer") flushPendingNarration(id, n.takeIf { it >= 0 })
                                         showToolNarration(id, event.optString("tool"), event.optString("preview"), event.opt("timestamp"), n.takeIf { it >= 0 })
                                         events =
                                             (events +
@@ -1168,7 +1206,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                     "message.interim" -> {
                                         val text = event.optString("text")
                                         if (text.isNotBlank()) {
-                                            showAssistantNarration(id, text, event.opt("timestamp"), n.takeIf { it >= 0 })
+                                            if (event.optBoolean("already_streamed") || pendingText.trim() == text.trim())
+                                                flushPendingNarration(id, n.takeIf { it >= 0 }, text,
+                                                    pendingTextTimestamp ?: event.opt("timestamp"))
+                                            else showAssistantNarration(id, text, event.opt("timestamp"), n.takeIf { it >= 0 }, streamed = true)
                                             events = (events + HermesEvent("进度", truncateNarration(text).take(100))).takeLast(30)
                                             eventCount++
                                         }

@@ -382,8 +382,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 }
                 if (model.hasExecution) {
                     item {
-                        if (model.runId != null && model.pendingText.isNotBlank())
-                            MessageBubble("assistant", model.pendingText, api = api, availableFiles = model.files, agentName = agentName, timestamp = model.pendingTextTimestamp, narrationTexts = model.narrationTexts)
+                        if (model.runId != null && model.visiblePendingText.isNotBlank())
+                            MessageBubble("assistant", model.visiblePendingText, api = api, availableFiles = model.files, agentName = agentName, timestamp = model.pendingTextTimestamp, narrationTexts = model.narrationTexts)
                     }
                     item {
                         var showTools by remember(model.executionKey) { mutableStateOf(false) }

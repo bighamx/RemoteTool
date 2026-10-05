@@ -4,6 +4,7 @@
     <Compile Include="../../WebApplication1/Services/Codex/CodexRpc.cs" Link="CodexRpc.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexDesktopSync.cs" Link="CodexDesktopSync.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexDesktopActivity.cs" Link="CodexDesktopActivity.cs" />
+    <Compile Include="../../WebApplication1/Services/Codex/CodexAssistantMessageStream.cs" Link="CodexAssistantMessageStream.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexModelSettings.cs" Link="CodexModelSettings.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexRollout.cs" Link="CodexRollout.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexSessionDetails.cs" Link="CodexSessionDetails.cs" />

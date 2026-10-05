@@ -1,0 +1,85 @@
+package com.chuckiehelper.mobile.nativeui
+
+import org.junit.Assert.*
+import org.junit.Test
+
+class NarrationReconciliationTest {
+    private val user = HermesMessage("user", "检查设备", serverId = 1, timestamp = 100)
+    private fun note(key: String, text: String, at: Long = 110) = AssistantNarration("narration-$key", "session", text, 1, user.text, at, run = "run")
+
+    @Test fun cumulativeInterimUpdatesKeepOneBubbleAndItsFirstKey() {
+        var rows = listOf(note("first", "先检查部署配置").copy(streamed = true))
+        rows = upsertAssistantNarration(rows, note("later", "先检查部署配置，再验证服务状态", 120).copy(streamed = true), listOf(user))
+        assertEquals(1, rows.size)
+        assertEquals("narration-first", rows.single().key)
+        assertEquals(110L, rows.single().timestamp)
+        assertEquals("先检查部署配置，再验证服务状态", rows.single().text)
+    }
+    @Test fun realAssistantTextWinsOverFlattenedCommandComment() {
+        val command = note("tool", "先检查部署配置，再验证服务状态：ssh office \"dir /b\"")
+        val actual = note("interim", "先检查部署配置，再验证服务状态", 120).copy(streamed = true)
+        val rows = upsertAssistantNarration(listOf(command), actual, listOf(user))
+        assertEquals(1, rows.size)
+        assertEquals(actual.text, rows.single().text)
+    }
+    @Test fun replayedAndContainedCopiesCollapseWithinTheirOwnUserWindow() {
+        val short = note("short", "先检查部署配置")
+        val full = note("full", "先检查部署配置，然后验证服务", 120)
+        val rows = mergeAssistantNarrations(listOf(user), listOf(short, full, full))
+        assertEquals(listOf(user.text, full.text), rows.map { it.text })
+        assertEquals(short.key, rows[1].localKey)
+    }
+    @Test fun whitespaceAndHeadingFormattingDoNotCreateAnotherBubble() {
+        val canonical = HermesMessage("assistant", "# 先检查部署配置\n\n然后验证服务", serverId = 2, timestamp = 120, narration = true)
+        assertEquals(2, mergeAssistantNarrations(listOf(user, canonical), listOf(note("copy", "先检查部署配置 然后验证服务"))).size)
+        assertTrue(narrationCovers("# 先看看配置，再验证", "先看看配置"))
+    }
+    @Test fun nativeCumulativeNarrationRowsCollapseButFinalAnswerStaysSeparate() {
+        val first = HermesMessage("assistant", "先检查部署配置", serverId = 2, timestamp = 110, narration = true)
+        val expanded = first.copy(serverId = 3, text = "先检查部署配置，然后验证服务", timestamp = 120)
+        val final = HermesMessage("assistant", "先检查部署配置，然后验证服务。结果：一切正常", serverId = 4, timestamp = 130)
+        val rows = mergeAssistantNarrations(listOf(user, first, expanded, final), emptyList())
+        assertEquals(3, rows.size)
+        assertEquals(2L, rows[1].serverId)
+        assertEquals(final, rows.last())
+    }
+    @Test fun completingAndLoadingCanonicalHistoryKeepTheSameNarrationKey() {
+        val note = note("live", "先检查部署配置").copy(streamed = true, messageId = "native-item")
+        val live = mergeAssistantNarrations(listOf(user), listOf(note))
+        val canonical = HermesMessage("assistant", note.text, serverId = narrationMessageId("native-item"), timestamp = 110, narration = true)
+        val loaded = mergeAssistantNarrations(listOf(user, canonical), listOf(note))
+        assertEquals(live[1].localKey, loaded[1].localKey)
+        assertEquals(live.map { it.text }, loaded.map { it.text })
+        assertEquals(loaded, mergeAssistantNarrations(loaded, listOf(note)))
+    }
+    @Test fun explicitItemRevisionsReplaceContentInsteadOfAppending() {
+        val first = note("a", "初始说法").copy(messageId = "item", streamed = true)
+        val revised = first.copy(text = "修改后的说法", timestamp = 120)
+        val rows = upsertAssistantNarration(listOf(first), revised, listOf(user))
+        assertEquals(1, rows.size)
+        assertEquals(revised.text, rows.single().text)
+    }
+    @Test fun repeatedNarrationInDifferentUserTurnsIsNotDropped() {
+        val next = user.copy(serverId = 3, timestamp = 200, text = "再检查另一台")
+        val first = note("a", "先检查部署配置")
+        val second = note("b", first.text, 210).copy(anchor = 3, userText = next.text)
+        val history = listOf(user, next)
+        val notes = upsertAssistantNarration(listOf(first), second, history)
+        assertEquals(2, notes.size)
+        assertEquals(listOf(user.text, first.text, next.text, second.text), mergeAssistantNarrations(history, notes).map { it.text })
+    }
+    @Test fun codexPhaseMarksNarrationWithoutChangingFinalAnswers() {
+        assertTrue(isAssistantNarration(obj("role" to "assistant", "phase" to "commentary")))
+        assertFalse(isAssistantNarration(obj("role" to "assistant", "phase" to "final_answer")))
+    }
+    @Test fun replayedNativeItemUsesItsExactOriginalPositionEvenAfterInterjection() {
+        val canonical = HermesMessage("assistant", "先检查部署配置", serverId = narrationMessageId("old-item"), timestamp = 110, narration = true)
+        val next = user.copy(serverId = 3, timestamp = 200, text = "稍后再检查")
+        val replay = note("replay", canonical.text, 250).copy(messageId = "old-item", streamed = true)
+        val history = listOf(user, canonical, next)
+        assertEquals(0, narrationAnchorIndex(history, replay))
+        val rows = mergeAssistantNarrations(history, listOf(replay))
+        assertEquals(listOf(user.text, canonical.text, next.text), rows.map { it.text })
+        assertEquals(110L, rows[1].timestamp)
+    }
+}

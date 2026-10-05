@@ -13,6 +13,21 @@ var catalog = JsonNode.Parse("""{"data":[{"model":"m","supportedReasoningEfforts
 var count = 0;
 void Check(bool valid, string name) { if (!valid) throw new Exception(name); count++; }
 var selection = CodexModelSettings.Validate(JsonNode.Parse("""{"model":"m","provider":"custom","reasoning_effort":"high","service_tier":"priority"}""")!.AsObject(), catalog);
+var streamed = new CodexAssistantMessageStream();
+var streamTurn = JsonNode.Parse("""{"status":"inProgress","items":[{"id":"first","type":"agentMessage","phase":"commentary","text":"先检查"}]}""")!.AsObject();
+var changes = streamed.Update(streamTurn).ToArray();
+Check(changes.Select(row => row["event"].ToString()).SequenceEqual(new[]{"message.started","message.delta"}) && changes.All(row => row["item_id"].ToString() == "first"), "desktop stream identifies its first assistant item");
+streamTurn["items"]![0]!["text"] = "先检查配置";
+changes = streamed.Update(streamTurn).ToArray();
+Check(changes.Length == 1 && changes[0]["delta"].ToString() == "配置", "same native item grows without adding another bubble");
+streamTurn["items"]!.AsArray().Add(new JsonObject { ["id"]="tool", ["type"]="commandExecution" });
+streamTurn["items"]!.AsArray().Add(new JsonObject { ["id"]="final", ["type"]="agentMessage", ["phase"]="final_answer", ["text"]="已完成" });
+changes = streamed.Update(streamTurn).ToArray();
+Check(changes.Any(row => row["event"].ToString() == "message.completed" && row["item_id"].ToString() == "first") && changes.Any(row => row["item_id"].ToString() == "final" && row["event"].ToString() == "message.started"), "tool boundary completes commentary before separate final item");
+streamTurn["items"]![2]!["text"] = "替换而非追加";
+changes = streamed.Update(streamTurn).ToArray();
+Check(changes.Any(row => row["event"].ToString() == "message.snapshot" && row["text"].ToString() == "替换而非追加"), "rewritten native message replaces its snapshot");
+Check(streamed.Update(streamTurn).Count() == 0, "unchanged desktop snapshot emits no duplicate messages");
 var resume = new JsonObject(); CodexModelSettings.ApplyResume(resume, selection);
 Check(resume["config"]?["model_reasoning_effort"]?.ToString() == "high", "resume effort");
 Check(resume["serviceTier"]?.ToString() == "priority", "resume native tier");
