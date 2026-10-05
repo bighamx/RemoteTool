@@ -20,20 +20,9 @@ public static class InputWebSocketHandler
         {
             while (webSocket.State == WebSocketState.Open && !ct.IsCancellationRequested)
             {
-                var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), ct).ConfigureAwait(false);
-                if (result.MessageType == WebSocketMessageType.Close)
-                {
-                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, ct).ConfigureAwait(false);
-                    break;
-                }
-
-                if (result.MessageType != WebSocketMessageType.Text || !result.EndOfMessage)
-                    continue;
-
-                var len = result.Count;
-                if (len == 0) continue;
-
-                var json = Encoding.UTF8.GetString(buffer.AsSpan(0, len));
+                var json = await WebSocketTextReader.Read(webSocket, buffer, ct).ConfigureAwait(false);
+                if (json == null) break;
+                if (json.Length == 0) continue;
                 try
                 {
                     await DispatchAsync(systemService, json);

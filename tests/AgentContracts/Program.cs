@@ -33,3 +33,9 @@ try {
     Check(CodexRollout.LastSettings(temp, Path.Combine(Path.GetTempPath(), "outside.jsonl")).Count == 0, "rollout path boundary");
 } finally { Directory.Delete(temp, true); }
 Console.WriteLine($"Agent contract checks: {count} passed");
+var input = "{\"type\":\"text\",\"text\":\"" + new string('汉', 2048) + "\"}";
+using var ws = new FragmentSocket(System.Text.Encoding.UTF8.GetBytes(input));
+Check(await ChuckieHelper.WebApi.Services.RemoteControl.WebSocketTextReader.Read(ws, new byte[4096], default) == input, "fragmented Chinese remote text");
+using var oversized = new FragmentSocket(new byte[17000]);
+Check(await ChuckieHelper.WebApi.Services.RemoteControl.WebSocketTextReader.Read(oversized, new byte[4096], default) == null && oversized.ClosedAs == System.Net.WebSockets.WebSocketCloseStatus.MessageTooBig, "oversized message bounded");
+Console.WriteLine($"Including remote WebSocket checks: {count} passed");
