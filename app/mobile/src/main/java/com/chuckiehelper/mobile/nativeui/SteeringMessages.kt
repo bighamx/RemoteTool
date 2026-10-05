@@ -24,13 +24,18 @@ fun pendingSteeringMessages(history: List<HermesMessage>, steering: List<Steerin
 fun reconcileSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): Pair<List<SteeringMessage>, List<Pair<SteeringMessage, HermesMessage>>> {
     val consumed = mutableSetOf<Long>()
     val acknowledged = mutableListOf<Pair<SteeringMessage, HermesMessage>>()
-    // 历史窗口可能裁掉插话对应的真实记录（默认页 500 条）——窗口里最旧消息的时间戳早于插话时间戳时，
-    // 说明插话发出时它已在服务端（现在只是滑出窗口），视为已确认，不再作为 pending 重放。
-    val windowOldest = history.mapNotNull { it.timestamp }.minOrNull()
+    // 历史窗口可能裁掉插话对应的真实记录（默认页 500 条）——插话发出时它在服务端，
+    // 现在只是滑出窗口。两种判据（旧记录无 timestamp，用 anchor；新记录用 timestamp）：
+    //   anchor < 窗口最小 serverId —— anchor 是发送时最后一条真实消息 id，已滑出窗口 ⇒ 插话本身更早滑出
+    //   timestamp < 窗口最旧时间戳
+    // 判定成立即视为已确认，不再作为 pending 重放（调用方会从持久层清除）。
+    val windowOldestId = history.mapNotNull { it.serverId.takeIf { id -> id > 0 } }.minOrNull()
+    val windowOldestTs = history.mapNotNull { it.timestamp }.minOrNull()
     val pending = steering.filter { message ->
-        val sentBeforeWindowStart = windowOldest != null && message.timestamp != null && message.timestamp < windowOldest
-        // 已投递且滑出窗口：不再 pending（调用方会把不在 pending 列表的记录从持久层清除）
-        if (sentBeforeWindowStart && message.delivery != "发送失败") {
+        val slidOutOfWindow =
+            (windowOldestId != null && message.anchor > 0 && message.anchor < windowOldestId) ||
+            (windowOldestTs != null && message.timestamp != null && message.timestamp < windowOldestTs)
+        if (slidOutOfWindow && message.delivery != "发送失败") {
             false
         } else {
             val match = history.firstOrNull { it.serverId !in consumed && steeringAppearsInHistory(message, listOf(it)) }
