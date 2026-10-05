@@ -42,13 +42,8 @@ fun reconcileSteeringMessages(history: List<HermesMessage>, steering: List<Steer
 }
 
 private fun outsideSteeringWindow(history: List<HermesMessage>, message: SteeringMessage): Boolean {
-    if (message.delivery != "已送达") return false
-    // 旧记录无 timestamp，用 anchor：发送时锚定的消息已滑出窗口 ⇒ 该插话必然滑出。
-    if (message.timestamp == null) {
-        if (message.anchor <= 0) return false
-        val oldestId = history.mapNotNull { it.serverId.takeIf { id -> id > 0 } }.minOrNull() ?: return false
-        return message.anchor < oldestId
-    }
+    // A short response is not evidence of a truncated history window. Codex IDs are hashes.
+    if (history.size < 500 || message.delivery != "已送达" || message.timestamp == null) return false
     val oldest = history.mapNotNull { it.timestamp }.minOrNull() ?: return false
     return message.timestamp < oldest
 }
