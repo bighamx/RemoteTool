@@ -158,6 +158,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     var files by mutableStateOf<List<JSONObject>>(emptyList())
         private set
+    private var filesReadJob: Job? = null
+    private var filesRefreshPending = false
+    private var filesReadEpoch = 0L
 
     private var draftFiles by mutableStateOf<Map<String?, List<JSONObject>>>(emptyMap())
     var pendingFiles: List<JSONObject>
@@ -373,6 +376,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         narrations = upsertAssistantNarration(narrations, note, messages); saveNarrations()
         messages = mergeAssistantNarrations(messages, liveNarrations(session))
         cachedHistory[session] = messages
+        if (needsMediaCatalogRefresh(text, files)) refreshFiles()
     }
     private fun flushPendingNarration(run: String, sequence: Long?, text: String = pendingText, eventTime: Any? = pendingTextTimestamp,
         item: String? = pendingItemId) {
@@ -460,6 +464,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     fun bind(value: NativeApi) {
         if (this::api.isInitialized && api.base == value.base) return
+        filesReadEpoch++; filesReadJob?.cancel(); filesReadJob = null; filesRefreshPending = false
         api = value.withReadPolicy(noRetry = true, onReadSuccess = {
             if (api.base == value.base) {
                 if (error == readConnectionError) error = null
@@ -1191,6 +1196,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                         if (pendingTextTimestamp == null) pendingTextTimestamp = parseMessageTimestamp(event.opt("timestamp")) ?: System.currentTimeMillis()
                                         pendingText = event.optString("text")
                                         syncPendingCanonical()
+                                        if (needsMediaCatalogRefresh(pendingText, files)) refreshFiles()
                                         if (event.optString("type", event.optString("event")) == "message.completed" && pendingPhase == "commentary")
                                             flushPendingNarration(id, n.takeIf { it >= 0 })
                                     }
@@ -1289,9 +1295,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     fun refreshFiles() {
         val session = selectedId ?: return; val connection = api
-        launch {
-            val result = connection.json("$root/sessions/$session/files").array("data").objects()
-            if (selectedId == session && api === connection) files = result
+        if (filesReadJob?.isActive == true) { filesRefreshPending = true; return }
+        val epoch = ++filesReadEpoch
+        filesReadJob = launch {
+            try {
+                do {
+                    filesRefreshPending = false
+                    val result = connection.json("$root/sessions/$session/files").array("data").objects()
+                    if (selectedId != session || api !== connection) return@launch
+                    files = result
+                } while (filesRefreshPending)
+            } finally { if (filesReadEpoch == epoch) filesReadJob = null }
         }
     }
 

@@ -23,16 +23,20 @@ fun presentHermesMessage(text: String, attached: List<JSONObject>, available: Li
         val candidates = (attached + available).distinctBy { it.optString("id") }.filter {
             it.optString("name") == name
         }
+        val expectedOutbox = Regex("/outbox/([^/]+)/").find(path)?.groupValues?.get(1)
         val file = candidates.firstOrNull {
             val key = it.optString("messageKey")
             key.isNotBlank() && path.contains("/outbox/$key/")
-        } ?: candidates.singleOrNull()
+        } ?: candidates.singleOrNull().takeIf { expectedOutbox == null }
         if (file != null) {
             if (files.none { it.optString("id") == file.optString("id") }) files += file
         } else unavailable += name
     }
     return HermesPresentation(parsed.text, files, unavailable.distinct())
 }
+
+fun needsMediaCatalogRefresh(text: String, available: List<JSONObject>): Boolean =
+    presentHermesMessage(text, emptyList(), available).unavailable.isNotEmpty()
 
 fun hermesFileKind(file: JSONObject): String {
     val mime = file.optString("mime")
