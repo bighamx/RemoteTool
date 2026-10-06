@@ -613,12 +613,16 @@ internal sealed class CodexAgent : IAsyncDisposable
             if (p.Length == 3 && p[2] == "messages") {
                 var result = await rpc.Call("thread/read", Obj(("threadId", session), ("includeTurns", true))); var rows = new JsonArray();
                 var times = CodexMessageTimes.Read(home, session);
+                var source = CodexRolloutMessageTimes.Read(home, RolloutPath(result["thread"]));
+                long position = 0;
                 foreach (var turn in result["thread"].A("turns")) foreach (var item in turn.A("items")) {
                     var kind = item.S("type");
-                    var fallback = turn.L(kind == "userMessage" ? "startedAt" : "completedAt");
-                    object timestamp = times.TryGetValue(item.S("id"), out var exact) ? exact : fallback > 0 ? fallback * 1000 : null;
-                    if (kind == "userMessage") rows.Add(Obj(("id", MessageId(item.S("id"))), ("role", "user"), ("timestamp", timestamp), ("content", string.Join('\n', item.A("content").Where(c => c.S("type") == "text").Select(c => c.S("text"))))));
-                    else if (kind == "agentMessage") rows.Add(Obj(("id", MessageId(item.S("id"))), ("role", "assistant"), ("timestamp", timestamp), ("content", item.S("text")), ("phase", item.S("phase"))));
+                    if(kind is not ("userMessage" or "agentMessage"))continue;
+                    var role=kind=="userMessage"?"user":"assistant";
+                    var text=role=="user"?string.Join('\n',item.A("content").Where(c=>c.S("type")=="text").Select(c=>c.S("text"))):item.S("text");
+                    object timestamp=source.Resolve(item.S("id"),role,text,ref position,out var nativeTime)?nativeTime:
+                        times.TryGetValue(item.S("id"),out var exact)?exact:null;
+                    rows.Add(Obj(("id",MessageId(item.S("id"))),("role",role),("timestamp",timestamp),("content",text),("phase",role=="assistant"?item.S("phase"):null)));
                 }
                 return Obj(("data", rows));
             }

@@ -8,6 +8,18 @@ if (args.Length == 3 && args[0] == "--probe") {
     Console.WriteLine($"Rollout read: {new FileInfo(args[2]).Length / 1024 / 1024} MiB; initial {first:F1} ms; cached average {watch.Elapsed.TotalMilliseconds / 100:F3} ms; context available {result["context"]?["available"]}");
     return;
 }
+if (args.Length == 3 && args[0] == "--message-times") {
+    var source=CodexRolloutMessageTimes.Read(args[1],args[2]);long position=0;var found=0;var missing=0;
+    var rows=JsonNode.Parse(Console.In.ReadToEnd())["data"].AsArray();
+    foreach(var row in rows) {
+        if(source.Resolve("",row["role"].ToString(),row["content"].ToString(),ref position,out var time)) {
+            found++;
+            if(found>rows.Count-20 || DateTimeOffset.FromUnixTimeMilliseconds(time)>DateTimeOffset.Parse("2026-10-06T01:00:00Z"))
+                Console.WriteLine($"{row["role"]} {DateTimeOffset.FromUnixTimeMilliseconds(time):HH:mm:ss} UTC (matched source)");
+        } else missing++;
+    }
+    Console.WriteLine($"Source text/time matches {found}; other/rewritten messages {missing}");return;
+}
 
 var catalog = JsonNode.Parse("""{"data":[{"model":"m","supportedReasoningEfforts":[{"reasoningEffort":"high"},{"reasoningEffort":"low"}],"serviceTiers":[{"id":"priority"}],"defaultReasoningEffort":"low","defaultServiceTier":"priority"}]}""")!.AsObject();
 var count = 0;
@@ -49,6 +61,31 @@ foreach (var bad in new[] { """{"model":"m","provider":"custom","reasoning_effor
 }
 var temp = Path.Combine(Path.GetTempPath(), "chuckie-model-settings-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(temp);
 try {
+    var messagePath=Path.Combine(temp,"message-times.jsonl");
+    string Timed(string time,string id,string role,string text)=>new JsonObject {
+        ["type"]="response_item",["timestamp"]=time,["payload"]=new JsonObject {
+            ["type"]="message",["id"]=id,["role"]=role,["content"]=new JsonArray(new JsonObject{["type"]=role=="user"?"input_text":"output_text",["text"]=text})
+        }
+    }.ToJsonString();
+    File.WriteAllText(messagePath,Timed("2026-10-06T01:03:00Z","raw-user-a","user","继续")+"\n"+
+        Timed("2026-10-06T01:04:00Z","assistant-a","assistant","先检查")+"\n"+
+        Timed("2026-10-06T01:19:00Z","raw-user-b","user","继续")+"\n");
+    var messageTimes=CodexRolloutMessageTimes.Read(temp,messagePath);long messagePosition=0;
+    Check(messageTimes.Resolve("synthetic-user-a","user","继续",ref messagePosition,out var atA) && atA==DateTimeOffset.Parse("2026-10-06T01:03:00Z").ToUnixTimeMilliseconds(),"synthetic user ID matches its ordered source message");
+    Check(messageTimes.Resolve("assistant-a","assistant","different snapshot text",ref messagePosition,out var atAssistant) && atAssistant>atA,"exact assistant item identity overrides text matching");
+    Check(messageTimes.Resolve("synthetic-user-b","user","继续",ref messagePosition,out var atB) && atB==DateTimeOffset.Parse("2026-10-06T01:19:00Z").ToUnixTimeMilliseconds(),"same-turn interjection retains its own 09:19 time rather than 09:03 turn start");
+    File.AppendAllText(messagePath,Timed("2026-10-06T01:20:00Z","later","assistant","新消息"));
+    messageTimes=CodexRolloutMessageTimes.Read(temp,messagePath);messagePosition=0;
+    Check(!messageTimes.Resolve("later","assistant","新消息",ref messagePosition,out _),"partial rollout line waits for completion");
+    File.AppendAllText(messagePath,"\n"+Timed("2026-10-06T01:30:00Z","assistant-a","assistant","重放")+"\n");
+    messageTimes=CodexRolloutMessageTimes.Read(temp,messagePath);messagePosition=0;
+    Check(messageTimes.Resolve("later","assistant","新消息",ref messagePosition,out var atLater) && atLater>atB,"incremental completion adds the new message");
+    Check(messageTimes.Resolve("assistant-a","assistant","重放",ref messagePosition,out var original) && original==atAssistant,"replayed item keeps its original creation time");
+    File.WriteAllText(messagePath,Timed("2026-10-06T01:31:00Z","replacement","user","新文件")+"\n");
+    messageTimes=CodexRolloutMessageTimes.Read(temp,messagePath);messagePosition=0;
+    Check(!messageTimes.Resolve("assistant-a","assistant","先检查",ref messagePosition,out _),"replaced rollout clears old timestamp cache");
+    messagePosition=0;
+    Check(!CodexRolloutMessageTimes.Read(temp,Path.Combine(Path.GetTempPath(),"outside.jsonl")).Resolve("replacement","user","新文件",ref messagePosition,out _),"timestamp reader respects home boundary");
     var path = Path.Combine(temp, "fixture.jsonl");
     File.WriteAllText(path, "{\"type\":\"turn_context\",\"payload\":{\"effort\":\"high\",\"service_tier\":\"priority\"}}\n{\"type\":\"turn_context\",\"payload\":{\"effort\":\"low\",\"service_tier\":\"default\"}}\n{unfinished");
     var actual = CodexRollout.LastSettings(temp, path);
