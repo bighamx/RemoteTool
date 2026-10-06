@@ -55,4 +55,47 @@ class AgentCompactionNoticeTest {
         val merged = mergeCompactionNotices(history, listOf(AgentCompactionNotice("a", "s", time, 90)))
         assertEquals(listOf("user", "system", "user"), merged.map { it.role })
     }
+
+    @Test fun taskAndRolloutWithSameNativeIdentityProduceOneStableNoticeInEitherArrivalOrder() {
+        val task = AgentCompactionNotice("task", "s", time + 30_000, 90, "native-a", time - 60_000)
+        val native = AgentCompactionNotice("external-native-a", "s", time, 90, "native-a")
+        for (input in listOf(listOf(task, native), listOf(native, task))) {
+            val merged = mergeCompactionNotices(listOf(row(90, time - 60_000)), input)
+            assertEquals(1, merged.count { it.role == "system" })
+            assertEquals(merged, mergeCompactionNotices(merged, input))
+            val normalized = coalesceCompactionNotices(input)
+            assertEquals(1, normalized.size)
+            assertEquals("native-a", normalized.single().compactionId)
+            assertEquals(time, normalized.single().timestamp)
+            assertEquals(normalized, coalesceCompactionNotices(normalized))
+        }
+    }
+    @Test fun delayedTaskCheckReconcilesNativeCompletionInsideItsObservedRunWindow() {
+        val task = AgentCompactionNotice("task", "s", time + 120_000, 90, startedAt = time - 60_000)
+        val native = AgentCompactionNotice("external-native-a", "s", time, 90, "native-a")
+        val rows = coalesceCompactionNotices(listOf(task, native))
+        assertEquals(1, rows.size)
+        assertEquals(time, rows.single().timestamp)
+        assertEquals("native-a", rows.single().compactionId)
+        assertEquals(task.run, rows.single().run)
+    }
+    @Test fun twoNativeOperationsStaySeparateEvenWithinFiveSeconds() {
+        val a = AgentCompactionNotice("external-a", "s", time, 90, "a")
+        val b = AgentCompactionNotice("external-b", "s", time + 1000, 90, "b")
+        assertEquals(2, coalesceCompactionNotices(listOf(a, b)).size)
+        assertEquals(2, mergeCompactionNotices(listOf(row(90, time - 1000)), listOf(a, b)).count { it.role == "system" })
+        val appA = a.copy(run = "task-a")
+        assertEquals(2, coalesceCompactionNotices(listOf(appA, b)).size)
+    }
+    @Test fun oldCachesAreReconciledWithoutMergingDifferentSessionsOrDistinctTasks() {
+        val task = AgentCompactionNotice("task", "s", time, 90)
+        val legacy = AgentCompactionNotice("external-native-a", "s", time + 1000, 90)
+        val native = AgentCompactionNotice.restore(legacy.json())!!
+        assertEquals("native-a", native.compactionId)
+        assertEquals(1, coalesceCompactionNotices(listOf(task, native)).size)
+        assertEquals(2, coalesceCompactionNotices(listOf(task, native.copy(session = "other"))).size)
+        assertEquals(2, coalesceCompactionNotices(listOf(task, task.copy(run = "another-task"))).size)
+        val outside = native.copy(timestamp = time - 120_000)
+        assertEquals(2, coalesceCompactionNotices(listOf(task.copy(startedAt = time - 60_000), outside)).size)
+    }
 }

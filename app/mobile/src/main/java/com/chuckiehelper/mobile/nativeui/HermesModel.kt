@@ -233,25 +233,38 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var compactionNotices = runCatching {
         org.json.JSONArray(prefs.getString("compactionNotices", "[]")).objects().mapNotNull { AgentCompactionNotice.restore(it) }
     }.getOrDefault(emptyList())
-    private fun recordCompactionCompletion(run: String, session: String, result: JSONObject) {
+    private suspend fun recordCompactionCompletion(run: String, session: String, result: JSONObject) {
         if (!successfulCompaction(run, result) || compactionNotices.any { it.run == run }) return
-        val history = if (selectedId == session) messages else cachedHistory[session].orEmpty()
         val time = parseMessageTimestamp(result.opt("completed_at")) ?: parseMessageTimestamp(result.opt("finished_at")) ?: System.currentTimeMillis()
-        compactionNotices = compactionNotices + AgentCompactionNotice(run, session, time, history.lastOrNull { it.serverId > 0 }?.serverId ?: 0)
+        val started = runTimings[run]?.startedAt
+        val connection = api
+        val observed = if (agent == "codex") try {
+            withTimeout(4_000) { connection.json("$root/sessions/${q(session)}/activity") }
+        } catch (e: CancellationException) { if (!currentCoroutineContext().isActive) throw e else null }
+        catch (_: Exception) { null } else null
+        if (api !== connection) return
+        val nativeTime = parseMessageTimestamp(observed?.opt("compacted_at"))
+        val nativeId = observed?.optString("compaction_id")?.takeIf { it.isNotBlank() && it != "null" &&
+            started != null && nativeTime != null && nativeTime >= started && nativeTime <= time + 5_000 }
+        val history = if (selectedId == session) messages else cachedHistory[session].orEmpty()
+        compactionNotices = coalesceCompactionNotices(compactionNotices + AgentCompactionNotice(run, session,
+            if (nativeId != null) nativeTime!! else time, history.lastOrNull { it.serverId > 0 }?.serverId ?: 0, nativeId, started))
         saveCompactionNotices()
         val merged = mergeCompactionNotices(history, compactionNotices.filter { it.session == session })
         cachedHistory[session] = merged
         if (selectedId == session) messages = merged
     }
     private fun saveCompactionNotices() {
+        compactionNotices = coalesceCompactionNotices(compactionNotices)
         prefs.edit().putString("compactionNotices", org.json.JSONArray(compactionNotices.map { it.json() }).toString()).apply()
     }
     private fun recordExternalCompaction(session: String, compactedId: String, time: Long) {
         val key = "external-$compactedId"
-        if (compactionNotices.any { it.run == key || it.session == session && kotlin.math.abs(it.timestamp - time) < 5_000 }) return
+        if (compactionNotices.any { it.session == session && (it.run == key || it.compactionId == compactedId) }) return
         val history = if (selectedId == session) messages else cachedHistory[session].orEmpty()
         val anchor = history.lastOrNull { it.serverId > 0 && it.timestamp?.let { at -> at <= time } == true }?.serverId ?: 0
-        compactionNotices = compactionNotices + AgentCompactionNotice(key, session, time, anchor)
+        val known = compactionNotices.map { note -> note.copy(startedAt = note.startedAt ?: runTimings[note.run]?.startedAt) }
+        compactionNotices = coalesceCompactionNotices(known + AgentCompactionNotice(key, session, time, anchor, compactedId))
         saveCompactionNotices()
         val merged = mergeCompactionNotices(history, compactionNotices.filter { it.session == session })
         cachedHistory[session] = merged
