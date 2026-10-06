@@ -100,7 +100,8 @@ namespace ChuckieHelper.WebApi.Extensions
                 .UseConsole()
                 .UseSQLiteStorage("hangfire.db"));
 
-            services.AddHangfireServer();
+            // 任务均为低频定时批处理，固定 4 个 worker 即可，默认按 CPU 核数开太多
+            services.AddHangfireServer(options => options.WorkerCount = 4);
             services.AddExampleTask();
             services.AddQBittorrentTask();
             services.AddDdnsTask();

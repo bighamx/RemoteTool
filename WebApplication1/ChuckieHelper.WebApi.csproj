@@ -5,6 +5,8 @@
     <Nullable>disable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <EnableShadowCopying>true</EnableShadowCopying>
+    <!-- 低流量常驻站点：Workstation GC 比 Server GC 省一半以上内存 -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
     <!-- 发布时保留引用程序集，供 Razor 运行时编译（如部署后改 .cshtml 实时生效）使用 -->
     <PreserveCompilationContext>true</PreserveCompilationContext>
     <!-- 发布时只保留英文、中文卫星程序集，去掉其他语言文件夹以减小体积 -->
