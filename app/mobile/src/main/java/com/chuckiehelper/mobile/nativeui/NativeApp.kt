@@ -171,8 +171,8 @@ fun NativeApp(model: NativeModel) {
                                 NavigationBarItem(
                                     selected = route == name,
                                     onClick = { route = name },
-                                    icon = { if (name == "Hermes") Image(painterResource(R.drawable.ic_hermes_official), name, Modifier.size(24.dp)) else Icon(icon, name) },
-                                    label = { Text(name) },
+                                    icon = { if (name == "Hermes") Image(painterResource(R.drawable.ic_hermes_official), name, Modifier.size(32.dp)) else Icon(icon, name) },
+                                    label = if (name == "Hermes") null else { { Text(name) } },
                                 )
                             }
                     }
