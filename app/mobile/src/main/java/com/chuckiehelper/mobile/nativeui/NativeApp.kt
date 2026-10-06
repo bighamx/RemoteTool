@@ -12,6 +12,9 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -20,6 +23,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -159,7 +164,7 @@ fun NativeApp(model: NativeModel) {
             },
             bottomBar = {
                 if (session != null && !model.loginNeeded && detail == null && !keyboardVisible)
-                    NavigationBar {
+                    NavigationBar(modifier = Modifier.selectableGroup()) {
                         listOf(
                                 "系统" to Icons.Outlined.Speed,
                                 "远程" to Icons.Outlined.DesktopWindows,
@@ -168,16 +173,26 @@ fun NativeApp(model: NativeModel) {
                                 "更多" to Icons.Outlined.MoreHoriz,
                             )
                             .forEach { (name, icon) ->
-                                NavigationBarItem(
-                                    selected = route == name,
-                                    onClick = { route = name },
-                                    icon = { when (name) {
+                                val selected = route == name
+                                val color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                Column(
+                                    Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 6.dp)
+                                        .height(68.dp).clip(RoundedCornerShape(20.dp))
+                                        .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                                        .selectable(selected, role = Role.Tab, onClick = { route = name }),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center,
+                                ) {
+                                    CompositionLocalProvider(LocalContentColor provides color) { when (name) {
                                         "Hermes" -> HermesOfficialIcon(Modifier.size(40.dp))
                                         "Codex" -> Icon(painterResource(R.drawable.ic_codex_official), name, Modifier.size(40.dp))
                                         else -> Icon(icon, name)
-                                    } },
-                                    label = if (name in listOf("Hermes", "Codex")) null else { { Text(name) } },
-                                )
+                                    } }
+                                    if (name !in listOf("Hermes", "Codex")) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(name, color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                                    }
+                                }
                             }
                     }
             },
