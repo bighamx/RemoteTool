@@ -18,7 +18,11 @@ public class NativeJobsController : ControllerBase
     {
         var monitor=JobStorage.Current.GetMonitoringApi();
         using var connection=JobStorage.Current.GetConnection();
-        return Ok(new { stats=monitor.GetStatistics(), servers=monitor.Servers(), queues=monitor.Queues(),
+        // Queue DTOs contain Job.Type/Method reflection objects whenever jobs are queued.
+        // Expose JSON-safe summaries, not Hangfire's internal invocation representation.
+        return Ok(new { stats=monitor.GetStatistics(), servers=monitor.Servers(),
+            queues=monitor.Queues().Select(queue=>new {queue.Name,queue.Length,queue.Fetched,
+                firstJobs=queue.FirstJobs?.Select(job=>Describe(job.Key,job.Value?.Job)).ToArray()}),
             recurring=connection.GetRecurringJobs().Select(x=>new {x.Id,x.Cron,x.TimeZoneId,x.Queue,x.LastJobState,x.LastExecution,x.NextExecution,x.Error}) });
     }
     [HttpGet("jobs")]
