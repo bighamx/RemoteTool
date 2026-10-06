@@ -3,6 +3,10 @@
 package com.chuckiehelper.mobile.nativeui
 
 import android.content.Intent
+import android.app.Activity
+import android.content.ContextWrapper
+import android.os.SystemClock
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -66,6 +70,14 @@ fun NativeApp(model: NativeModel) {
             androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current
                 ?.onBackPressedDispatcher
         val session = model.session.takeUnless { model.browsingDevices }
+        val context = LocalContext.current
+        val activity = remember(context) {
+            generateSequence(context) { (it as? ContextWrapper)?.baseContext }
+                .filterIsInstance<Activity>().firstOrNull()
+        }
+        val exitToast = remember(context) { Toast.makeText(context, "再次返回退出 App", Toast.LENGTH_SHORT) }
+        var exitDeadline by remember { mutableLongStateOf(0L) }
+        DisposableEffect(exitToast) { onDispose { exitToast.cancel() } }
         val pages = rememberSaveableStateHolder()
         var route by rememberSaveable { mutableStateOf("系统") }
         LaunchedEffect(route) { if (route == "文件") route = "Codex" }
@@ -80,9 +92,21 @@ fun NativeApp(model: NativeModel) {
             }
         }
         LaunchedEffect(model.session) { detail = null }
+        LaunchedEffect(route, detail, model.browsingDevices, model.loginNeeded) { exitDeadline = 0L }
         BackHandler(enabled = model.session != null) {
             if (model.browsingDevices) model.returnToDevice()
-            else if (detail != null) detail = null else model.showDevices()
+            else if (detail != null) detail = null
+            else if (model.loginNeeded) model.showDevices()
+            else {
+                val now = SystemClock.elapsedRealtime()
+                if (now < exitDeadline) {
+                    exitToast.cancel()
+                    activity?.finish()
+                } else {
+                    exitDeadline = now + 2_000L
+                    exitToast.show()
+                }
+            }
         }
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },
