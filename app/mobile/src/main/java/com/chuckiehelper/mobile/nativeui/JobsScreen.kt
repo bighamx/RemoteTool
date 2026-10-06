@@ -25,7 +25,7 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
     var offset by remember { mutableIntStateOf(0) }
     var pending by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var cron by remember { mutableStateOf<JSONObject?>(null) }
-    var detail by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var detail by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val tabs =
         listOf(
@@ -145,6 +145,9 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
                                 )
                             }
                         FlowRowCompat {
+                            job.optString("lastJobId").takeIf { it.isNotBlank() && it != "null" }?.let { lastId ->
+                                TextButton(onClick = { detail = lastId }) { Text("上次执行 / 日志") }
+                            }
                             TextButton(
                                 onClick = {
                                     pending = "立即触发 $id？" to { action("/api/job/${q(id)}/trigger") }
@@ -204,21 +207,9 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
                         )
                         Row {
                             TextButton(
-                                onClick = {
-                                    scope.launch {
-                                        try {
-                                            detail =
-                                                "任务 $id" to
-                                                    api.json("/api/native-jobs/jobs/${q(id)}")
-                                                        .toString(2)
-                                        } catch (e: Exception) {
-                                            if (e is kotlinx.coroutines.CancellationException) throw e
-                                            onError(e.message ?: "读取失败")
-                                        }
-                                    }
-                                }
+                                onClick = { detail = id }
                             ) {
-                                Text("详情")
+                                Text("详情 / 日志")
                             }
                             TextButton(
                                 onClick = {
@@ -281,5 +272,5 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
             cron = null
         }
     }
-    detail?.let { (title, text) -> TextDocument(title, text, false, { detail = null }) {} }
+    detail?.let { jobId -> JobDetailsDialog(api, jobId) { detail = null; refresh++ } }
 }

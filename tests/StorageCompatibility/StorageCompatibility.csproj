@@ -3,6 +3,8 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <Compile Include="../../WebApplication1/Controllers/NativeJobsController.cs" Link="NativeJobsController.cs" />
+    <Compile Include="../../WebApplication1/Services/HangfireConsoleReader.cs" Link="HangfireConsoleReader.cs" />
+    <PackageReference Include="Hangfire.Console" Version="1.4.3" />
     <PackageReference Include="Hangfire.Storage.SQLite" Version="0.4.2" />
     <PackageReference Include="Hangfire.Core" Version="1.8.23" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />

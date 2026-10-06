@@ -5,6 +5,8 @@ using Hangfire.Common;
 using ChuckieHelper.WebApi.Controllers;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
+using Hangfire.Console;
+using Hangfire.Server;
 
 var root = Path.Combine(Path.GetTempPath(), "chuckie-storage-check-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
 try {
@@ -55,6 +57,33 @@ try {
     }
     manager.RemoveIfExists("trigger-fixture");
     client.ChangeState(triggered, new DeletedState());
+    GlobalConfiguration.Configuration.UseConsole();
+    var logJob = client.Create(Job.FromExpression<ConsoleFixture>(job=>job.Run(null)),new EnqueuedState("console-fixture"));
+    using (var server = new BackgroundJobServer(new BackgroundJobServerOptions { WorkerCount=1, Queues=new[]{"console-fixture"} },storage)) {
+        try {
+            if(!ConsoleFixture.Ready.Wait(TimeSpan.FromSeconds(15)))throw new Exception("console fixture did not start");
+            using var current=JsonDocument.Parse(Json(controller.Detail(logJob)));
+            if(current.RootElement.GetProperty("state").GetString()!="Processing")throw new Exception("running detail state");
+            var attempt=current.RootElement.GetProperty("attempts")[0].GetProperty("id").GetString();
+            using var page1=JsonDocument.Parse(Json(controller.ConsoleLog(logJob,attempt,0,2)));
+            var data1=page1.RootElement.GetProperty("data");
+            if(data1.GetArrayLength()!=2 || !page1.RootElement.GetProperty("hasMore").GetBoolean() ||
+                data1[0].GetProperty("text").GetString()!="你好，运行时日志" || data1[1].GetProperty("text").GetString()!=ConsoleFixture.LongText)
+                throw new Exception("console pagination/Unicode/reference decoding: "+page1.RootElement);
+            using var page2=JsonDocument.Parse(Json(controller.ConsoleLog(logJob,attempt,page1.RootElement.GetProperty("nextOffset").GetInt32(),2)));
+            if(page2.RootElement.GetProperty("data")[1].GetProperty("progress").GetDouble()!=85)
+                throw new Exception("console progress updates");
+            if(controller.ConsoleLog(logJob,"unknown") is not NotFoundObjectResult)throw new Exception("attempt boundary");
+            using var reset=JsonDocument.Parse(Json(controller.ConsoleLog(logJob,attempt,int.MaxValue,200)));
+            if(!reset.RootElement.GetProperty("reset").GetBoolean())throw new Exception("expired/stale cursor reset");
+            ConsoleFixture.Release.Set();
+            var deadline=DateTime.UtcNow.AddSeconds(10);
+            while(DateTime.UtcNow<deadline) { using var check=storage.GetConnection();if(check.GetJobData(logJob).State=="Succeeded")break;Thread.Sleep(50); }
+            using var ended=JsonDocument.Parse(Json(controller.ConsoleLog(logJob,attempt)));
+            if(ended.RootElement.GetProperty("total").GetInt32()<4)throw new Exception("completed logs retention");
+            Console.WriteLine("Live console fixture: running logs, Unicode/long references, paged cursor, progress, invalid attempt, reset and completed history passed");
+        } finally { ConsoleFixture.Release.Set(); }
+    }
     using var db = new SQLite.SQLiteConnection(path, SQLite.SQLiteOpenFlags.ReadOnly);
     var version = db.ExecuteScalar<string>("select sqlite_version()");
     if (Version.Parse(version) < new Version(3, 50, 2)) throw new Exception("unpatched native engine");
@@ -63,4 +92,16 @@ try {
     SQLite.SQLiteAsyncConnection.ResetPool();
     try { Directory.Delete(root, true); }
     catch (IOException) { Console.WriteLine("Storage provider retains the temporary fixture handle until this process exits."); }
+}
+
+public sealed class ConsoleFixture {
+    public static readonly ManualResetEventSlim Ready=new(false),Release=new(false);
+    public static readonly string LongText=new('测',400);
+    public void Run(PerformContext context) {
+        context.WriteLine("你好，运行时日志");
+        context.WriteLine(ConsoleTextColor.Red,LongText);
+        var bar=context.WriteProgressBar("测试进度",5);bar.SetValue(85);
+        Ready.Set();
+        if(!Release.Wait(TimeSpan.FromSeconds(25)))throw new TimeoutException("Fixture release timeout");
+    }
 }

@@ -3,6 +3,8 @@ using Hangfire.Common;
 using Hangfire.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ChuckieHelper.WebApi.Services;
+using System.Text.Json;
 
 namespace ChuckieHelper.WebApi.Controllers;
 
@@ -23,7 +25,7 @@ public class NativeJobsController : ControllerBase
         return Ok(new { stats=monitor.GetStatistics(), servers=monitor.Servers(),
             queues=monitor.Queues().Select(queue=>new {queue.Name,queue.Length,queue.Fetched,
                 firstJobs=queue.FirstJobs?.Select(job=>Describe(job.Key,job.Value?.Job)).ToArray()}),
-            recurring=connection.GetRecurringJobs().Select(x=>new {x.Id,x.Cron,x.TimeZoneId,x.Queue,x.LastJobState,x.LastExecution,x.NextExecution,x.Error}) });
+            recurring=connection.GetRecurringJobs().Select(x=>new {x.Id,x.Cron,x.TimeZoneId,x.Queue,x.LastJobId,x.LastJobState,x.LastExecution,x.NextExecution,x.Error}) });
     }
     [HttpGet("jobs")]
     public IActionResult Jobs([FromQuery]string state="failed",[FromQuery]string queue="default",[FromQuery]int offset=0,[FromQuery]int count=30)
@@ -45,8 +47,33 @@ public class NativeJobsController : ControllerBase
     {
         var detail=JobStorage.Current.GetMonitoringApi().JobDetails(id);
         if(detail==null)return NotFound(new{message="Job not found"});
+        using var connection=JobStorage.Current.GetConnection();
+        var state=connection.GetStateData(id);
+        var queue=state!=null && state.Data.TryGetValue("Queue",out var queueName)?queueName:null;
+        var parameters=detail.Job?.Method.GetParameters();
         return Ok(new {id,detail.CreatedAt,detail.ExpireAt,type=detail.Job?.Type.FullName,method=detail.Job?.Method.Name,
-            arguments=detail.Job?.Args.Select(x=>x?.ToString()),history=detail.History,properties=detail.Properties});
+            state=state?.Name,queue,
+            arguments=detail.Job?.Args.Select(x=>x?.ToString()),
+            parameters=detail.Job?.Args.Select((value,index)=>new {name=parameters?.ElementAtOrDefault(index)?.Name ?? $"arg{index}",
+                type=parameters?.ElementAtOrDefault(index)?.ParameterType.Name,value=ParameterValue(value)}),
+            attempts=detail.History.Where(x=>x.StateName=="Processing").OrderByDescending(x=>x.CreatedAt).Select(x=>new {id=HangfireConsoleReader.AttemptId(HangfireConsoleReader.AttemptStarted(x)),startedAt=HangfireConsoleReader.AttemptStarted(x)}).DistinctBy(x=>x.id),
+            history=detail.History.OrderBy(x=>x.CreatedAt),properties=detail.Properties});
+    }
+    private static object ParameterValue(object value) {
+        if(value==null)return null;
+        try{return JsonSerializer.SerializeToElement(value,value.GetType(),new JsonSerializerOptions{MaxDepth=16});}
+        catch(Exception error) when(error is JsonException or NotSupportedException){return value.ToString();}
+    }
+    [HttpGet("jobs/{id}/console")]
+    public IActionResult ConsoleLog(string id,[FromQuery]string attempt=null,[FromQuery]int? offset=null,[FromQuery]int count=200)
+    {
+        var detail=JobStorage.Current.GetMonitoringApi().JobDetails(id);
+        if(detail==null)return NotFound(new{message="Job not found"});
+        var attempts=detail.History.Where(x=>x.StateName=="Processing").OrderByDescending(x=>x.CreatedAt).ToList();
+        var selected=attempt==null?attempts.FirstOrDefault():attempts.FirstOrDefault(x=>HangfireConsoleReader.AttemptId(HangfireConsoleReader.AttemptStarted(x))==attempt);
+        if(selected==null) return attempt!=null?NotFound(new{message="Execution attempt not found"}):Ok(new{attempt=(string)null,offset=0,nextOffset=0,total=0,hasMore=false,reset=false,data=Array.Empty<object>(),progress=(double?)null});
+        using var connection=JobStorage.Current.GetConnection();
+        return Ok(HangfireConsoleReader.Read(connection,id,HangfireConsoleReader.AttemptStarted(selected),offset,count));
     }
     [HttpPost("jobs/{id}/retry")]
     public IActionResult Retry(string id)=>BackgroundJob.Requeue(id)?Ok(new{message="Job requeued"}):BadRequest(new{message="Cannot requeue job"});
