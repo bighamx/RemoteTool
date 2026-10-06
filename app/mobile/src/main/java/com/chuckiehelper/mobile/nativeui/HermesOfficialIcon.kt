@@ -25,6 +25,10 @@ fun HermesOfficialIcon(modifier: Modifier = Modifier) {
             asAndroidPath().transform(android.graphics.Matrix().apply {
                 setValues(floatArrayOf(0.16893308f, 0f, 50.12227f, 0f, 0.16893308f, -328.54902f, 0f, 0f, 1f))
             })
+            // The official artwork is bottom aligned and extends beyond its square viewport.
+            // Center the mark itself so the hair/shoulders are visible and align with other tabs.
+            val bounds = getBounds()
+            translate(Offset(512f - bounds.center.x, 512f - bounds.center.y))
         }
     }
     val color = LocalContentColor.current
