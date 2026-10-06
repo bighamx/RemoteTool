@@ -35,6 +35,14 @@ internal sealed class CodexAccountStore
         var workspace = claims.S("chatgpt_account_id"); var email = payload.S("email");
         if (workspace.Length == 0 || email.Length == 0 || tokens.S("refresh_token").Length == 0) throw new CodexError("登录记录缺少邮箱、工作空间或刷新令牌");
         if (tokens.S("account_id").Length > 0 && tokens.S("account_id") != workspace) throw new CodexError("凭据的工作空间标识不一致");
+        var access = tokens.S("access_token").Split('.');
+        if (access.Length == 3) {
+            try {
+                var encoded = access[1].Replace('-', '+').Replace('_', '/');
+                var routed = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(encoded.PadRight((encoded.Length + 3) / 4 * 4, '='))))?["https://api.openai.com/auth"].S("chatgpt_account_id");
+                if (!string.IsNullOrEmpty(routed) && routed != workspace) throw new CodexError("访问令牌与目标工作空间不一致，请重新保存登录", 409);
+            } catch (Exception error) when (error is FormatException or System.Text.Json.JsonException) { throw new CodexError("访问令牌格式无效", 409); }
+        }
         var plan = claims.S("chatgpt_plan_type");
         return CodexJson.Obj(("email", email), ("workspace_id", workspace), ("subject", payload.S("sub")), ("plan_type", plan),
             ("workspace_name", plan is "business" or "team" or "enterprise" or "edu" ? "团队工作空间" : "个人工作空间"));
@@ -55,7 +63,17 @@ internal sealed class CodexAccountStore
     public JsonObject List() {
         JsonObject current = null;
         try { current = Identity(CurrentAuth()); } catch (CodexError) { }
-        if (!File.Exists(path) && current != null) Capture(CurrentAuth());
+        // Recover the current workspace's newer credentials after an external switch/refresh.
+        // Do not mutate auth.json or rotate a token during this read.
+        if (current != null) {
+            using var sync = Lock();
+            var currentAuth = CurrentAuth(); var syncedData = Read();
+            var row = syncedData["accounts"]!.AsObject().FirstOrDefault(x => Same(x.Value!, current)).Value as JsonObject;
+            var writtenAt = new DateTimeOffset(File.GetLastWriteTimeUtc(Path.Combine(home, "auth.json"))).ToUnixTimeMilliseconds();
+            if (row != null && writtenAt >= row.L("token_updated_at_ms") && row["auth"]?.ToJsonString() != currentAuth.ToJsonString()) {
+                row["auth"] = currentAuth.DeepClone(); row["token_updated_at_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); CodexJson.Atomic(path, syncedData);
+            } else if (!File.Exists(path)) Capture(currentAuth);
+        }
         using var guard = Lock();
         var data = Read(); var rows = new JsonArray(); string selected = null;
         foreach (var entry in data["accounts"]!.AsObject()) {
@@ -116,6 +134,7 @@ internal sealed class CodexAccountStore
         // Do not overwrite a newer login or recreate a record removed during the query.
         if (row == null || row["auth"]?.ToJsonString() != original.ToJsonString()) return;
         row["auth"] = refreshed.DeepClone(); row["token_updated_at_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (CurrentAuth().ToJsonString() == original.ToJsonString()) CodexJson.Atomic(Path.Combine(home, "auth.json"), refreshed);
         CodexJson.Atomic(path, data);
     }
     public void Restore(JsonObject auth) {

@@ -2,6 +2,8 @@
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
   <ItemGroup>
     <Compile Include="../../WebApplication1/Services/Codex/CodexRpc.cs" Link="CodexRpc.cs" />
+    <Compile Include="../../WebApplication1/Services/Codex/CodexAccountStore.cs" Link="CodexAccountStore.cs" />
+    <Compile Include="../../WebApplication1/Services/Codex/CodexWorkspaceUsage.cs" Link="CodexWorkspaceUsage.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexDesktopSync.cs" Link="CodexDesktopSync.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexDesktopActivity.cs" Link="CodexDesktopActivity.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexAssistantMessageStream.cs" Link="CodexAssistantMessageStream.cs" />

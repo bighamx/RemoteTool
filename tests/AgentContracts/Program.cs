@@ -1,6 +1,33 @@
 using System.Text.Json.Nodes;
 using ChuckieHelper.WebApi.Services.Codex;
 
+if (args.Length == 3 && args[0] == "--workspace-probe") {
+    var config = CodexJson.Read(args[1]); var saved = CodexJson.Read(args[2]);
+    foreach (var row in saved["accounts"]!.AsObject()) {
+        var original = row.Value!["auth"]!.AsObject();
+        var probe = await CodexWorkspaceUsage.Read(config.S("executable"), Path.GetDirectoryName(args[1])!, original, default);
+        var limits = probe.Usage["rateLimits"]!;
+        Console.WriteLine($"Verified {limits.S("planType")}: 5h used {limits["primary"].S("usedPercent")}%, week used {limits["secondary"].S("usedPercent")}%; token unchanged {original.ToJsonString() == probe.Auth.ToJsonString()}");
+    }
+    return;
+}
+if (args.Length == 3 && args[0] == "--workspace-rpc-probe") {
+    var config=CodexJson.Read(args[1]);var saved=CodexJson.Read(args[2]);
+    foreach(var row in saved["accounts"]!.AsObject()) {
+        var auth=row.Value!["auth"]!.AsObject();var identity=CodexAccountStore.Identity(auth);
+        var probe=Path.Combine(Path.GetDirectoryName(args[1])!,"usage-probes",Guid.NewGuid().ToString("N"));
+        try {
+            CodexJson.Atomic(Path.Combine(probe,"auth.json"),auth);
+            await using var client=new CodexRpc(config.S("executable"),probe,new Dictionary<string,string>(),_=>Task.CompletedTask,"cli_auth_credentials_store=\"file\"","forced_chatgpt_workspace_id="+JsonValue.Create(identity.S("workspace_id"))!.ToJsonString());
+            using var limit=new CancellationTokenSource(TimeSpan.FromSeconds(15));await client.Initialize(limit.Token);
+            var read=await client.Call("account/read",new JsonObject{["refreshToken"]=false},limit.Token);
+            Console.WriteLine($"Native login {identity.S("plan_type")}: account present {read["account"]!=null}; routed workspace matches {read["workspaceRouting"].S("chatgptAccountId")==identity.S("workspace_id")}; credentials unchanged {CodexJson.Read(Path.Combine(probe,"auth.json")).ToJsonString()==auth.ToJsonString()}");
+            if(read["account"]==null) throw new Exception("Native login missing");
+        } finally { if(Directory.Exists(probe))Directory.Delete(probe,true); }
+    }
+    return;
+}
+
 if (args.Length == 3 && args[0] == "--probe") {
     var watch = System.Diagnostics.Stopwatch.StartNew();
     var result = CodexRolloutSnapshot.Read(args[1], args[2]); var first = watch.Elapsed.TotalMilliseconds;
@@ -24,6 +51,41 @@ if (args.Length == 3 && args[0] == "--message-times") {
 var catalog = JsonNode.Parse("""{"data":[{"model":"m","supportedReasoningEfforts":[{"reasoningEffort":"high"},{"reasoningEffort":"low"}],"serviceTiers":[{"id":"priority"}],"defaultReasoningEffort":"low","defaultServiceTier":"priority"}]}""")!.AsObject();
 var count = 0;
 void Check(bool valid, string name) { if (!valid) throw new Exception(name); count++; }
+var authTest = Path.Combine(Path.GetTempPath(), "chuckie-workspace-contract-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(authTest);
+try {
+    JsonObject Auth(string workspace, string plan, string version) {
+        var claims = new JsonObject { ["email"]="test@example.invalid", ["sub"]="fixture", ["https://api.openai.com/auth"]=new JsonObject { ["chatgpt_account_id"]=workspace, ["chatgpt_plan_type"]=plan } };
+        var encoded=Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(claims.ToJsonString())).TrimEnd('=').Replace('+','-').Replace('/','_');
+        var jwt="e30."+encoded+".signature";
+        return new JsonObject { ["tokens"]=new JsonObject { ["id_token"]=jwt, ["access_token"]=jwt, ["refresh_token"]=version, ["account_id"]=workspace } };
+    }
+    var homeTest=Path.Combine(authTest,"home");var authPath=Path.Combine(homeTest,"auth.json");
+    var store=new CodexAccountStore(homeTest,Path.Combine(authTest,"store"));
+    var teamAuth=Auth("team-id","team","team-original");var personalAuth=Auth("personal-id","plus","personal-original");
+    CodexJson.Atomic(authPath,teamAuth);
+    var teamId=store.Capture(teamAuth);var personalId=store.Capture(personalAuth);
+    Check(store.List().S("current")==teamId,"workspace current identity comes from disk");
+    Check(store.WorkspaceAuth(personalId).ToJsonString()==personalAuth.ToJsonString(),"personal usage never reuses current team token");
+    var nextTeam=Auth("team-id","team","team-rotated");CodexJson.Atomic(authPath,nextTeam);store.List();
+    var saved=CodexJson.Read(Path.Combine(authTest,"store","accounts.json"));
+    Check(saved["accounts"]![teamId]!["auth"]!.ToJsonString()==nextTeam.ToJsonString(),"external token rotation recovered before later switch");
+    store.ValidateWorkspaceSwitch(personalId);store.Use(personalId);
+    Check(CodexAccountStore.Identity(store.CurrentAuth()).S("workspace_id")=="personal-id","workspace switch restores target identity");
+    Check(store.WorkspaceAuth(teamId).ToJsonString()==nextTeam.ToJsonString(),"switch preserved latest source token");
+    var nextPersonal=Auth("personal-id","plus","personal-rotated");store.RecoverWorkspaceAuth(personalId,personalAuth,nextPersonal);
+    Check(store.CurrentAuth().ToJsonString()==nextPersonal.ToJsonString(),"isolated refresh updates still matching live auth");
+    var newer=Auth("personal-id","plus","newer-login");store.Capture(newer);
+    store.RecoverWorkspaceAuth(personalId,personalAuth,Auth("personal-id","plus","stale-probe"));
+    Check(CodexJson.Read(Path.Combine(authTest,"store","accounts.json"))["accounts"]![personalId]!["auth"]!.ToJsonString()==newer.ToJsonString(),"stale probe cannot overwrite newer captured login");
+    var crossed=Auth("team-id","team","x");crossed["tokens"]!["access_token"]=personalAuth["tokens"]!["access_token"]!.DeepClone();
+    try { CodexAccountStore.Identity(crossed);Check(false,"crossed credentials rejected"); } catch(CodexError) { Check(true,"crossed credentials rejected"); }
+    var quota=CodexWorkspaceUsage.Normalize(JsonNode.Parse("""{"plan_type":"team","rate_limit":{"primary_window":{"used_percent":12.5,"limit_window_seconds":18000,"reset_at":100},"secondary_window":{"used_percent":54,"limit_window_seconds":604800,"reset_at":200}}}""")!.AsObject());
+    Check(quota["rateLimits"]!["primary"]!.L("windowDurationMins")==300 && quota["rateLimits"]!["secondary"]!.L("windowDurationMins")==10080,"workspace quota time windows normalized");
+    Check(quota["rateLimits"]!["primary"]!.S("usedPercent")=="12.5" && quota["rateLimits"]!["secondary"]!.L("resetsAt")==200,"workspace quota values retain precision and reset times");
+    CodexWorkspaceUsage.Verify(new JsonObject { ["plan_type"]="business" },quota);Check(true,"business and team plan names normalized");
+    try { CodexWorkspaceUsage.Verify(new JsonObject { ["plan_type"]="plus" },quota);Check(false,"wrong subscription quota rejected"); } catch(CodexError) { Check(true,"wrong subscription quota rejected"); }
+} finally { Directory.Delete(authTest,true); }
 var selection = CodexModelSettings.Validate(JsonNode.Parse("""{"model":"m","provider":"custom","reasoning_effort":"high","service_tier":"priority"}""")!.AsObject(), catalog);
 var streamed = new CodexAssistantMessageStream();
 var streamTurn = JsonNode.Parse("""{"status":"inProgress","items":[{"id":"first","type":"agentMessage","phase":"commentary","text":"先检查"}]}""")!.AsObject();

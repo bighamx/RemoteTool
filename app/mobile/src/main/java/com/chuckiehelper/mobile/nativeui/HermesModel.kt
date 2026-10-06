@@ -215,6 +215,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     var loginVisible by mutableStateOf(false)
         private set
+    var loginStarting by mutableStateOf(false)
+        private set
+    var loginError by mutableStateOf<String?>(null)
+        private set
+    private var loginJob: Job? = null
     var usage by mutableStateOf<JSONObject?>(null)
         private set
     var switchingAccount by mutableStateOf(false)
@@ -223,6 +228,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     var workspaceUsageLoading by mutableStateOf<Set<String>>(emptySet())
         private set
+    private var workspaceReadEpoch = 0L
     var projects by mutableStateOf<List<JSONObject>>(emptyList())
         private set
     var projectsLoading by mutableStateOf(false)
@@ -465,6 +471,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun bind(value: NativeApi) {
         if (this::api.isInitialized && api.base == value.base) return
         filesReadEpoch++; filesReadJob?.cancel(); filesReadJob = null; filesRefreshPending = false
+        loginJob?.cancel(); loginJob = null; loginInfo = null; loginVisible = false; loginStarting = false; loginError = null
+        workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
         api = value.withReadPolicy(noRetry = true, onReadSuccess = {
             if (api.base == value.base) {
                 if (error == readConnectionError) error = null
@@ -616,8 +624,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     private suspend fun fetchAccountsNow() {
-        accounts = api.json("$root/accounts")
-        workspaces = api.json("$root/workspaces")
+        val connection = api
+        val loadedAccounts = connection.json("$root/accounts")
+        val loadedWorkspaces = connection.json("$root/workspaces")
+        if (api !== connection) return
+        if (workspaces.optString("current") != loadedWorkspaces.optString("current")) {
+            workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
+        }
+        accounts = loadedAccounts; workspaces = loadedWorkspaces
+        workspaceUsages = workspaceUsages.filterKeys { id -> workspaces.array("data").objects().any { it.optString("id") == id } }
         fetchWorkspaceUsages()
     }
     fun fetchWorkspaceUsages(force: Boolean = false) {
@@ -626,13 +641,20 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             val id = row.optString("id")
             if (id.isBlank() || id in workspaceUsageLoading) return@forEach
             workspaceUsageLoading = workspaceUsageLoading + id
+            val connection = api
+            val epoch = workspaceReadEpoch
+            val expectedWorkspace = row.optString("workspace_id")
             viewModelScope.launch {
                 try {
-                    val result = api.json("$root/workspaces/${q(id)}/usage" + if (force) "?refresh=true" else "")
-                    if (result.optString("workspace_id") == id) workspaceUsages = workspaceUsages + (id to result)
+                    val result = connection.json("$root/workspaces/${q(id)}/usage" + if (force) "?refresh=1" else "")
+                    if (api === connection && epoch == workspaceReadEpoch && result.optString("workspace_id") == id) {
+                        val receivedWorkspace = result.optString("chatgpt_account_id")
+                        workspaceUsages = workspaceUsages + (id to if (result.optBoolean("available") && receivedWorkspace.isNotBlank() && receivedWorkspace != expectedWorkspace)
+                            obj("available" to false, "error" to "返回的工作空间身份不匹配，请刷新") else result)
+                    }
                 } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { workspaceUsages = workspaceUsages + (id to obj("available" to false, "error" to "暂时无法读取用量，请刷新重试")) }
-                finally { workspaceUsageLoading = workspaceUsageLoading - id }
+                catch (_: Exception) { if (api === connection && epoch == workspaceReadEpoch) workspaceUsages = workspaceUsages + (id to obj("available" to false, "error" to "暂时无法读取用量，请刷新重试")) }
+                finally { if (api === connection && epoch == workspaceReadEpoch) workspaceUsageLoading = workspaceUsageLoading - id }
             }
         }
     }
@@ -664,22 +686,39 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             sessionActivities = emptyMap()
             backgroundRuns.clear(); saveRuns(); pendingSubmissions = emptyMap(); savePending(); conversationUi = ConversationUiState(); draftFiles = emptyMap(); localSubmissions.clear()
             runNarrationUsers.clear()
+            workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
             prefs.edit().remove("run").remove("runSession").remove("pendingKey").remove("pendingInput").remove("pendingSession").apply()
             resetAccountView()
             fetchUsage()
             onDone()
         } finally { switchingAccount = false }
     }
-    fun beginAccountLogin(name: String, workspace: Boolean, onStarted: () -> Unit) = launch {
-        if (runId != null || hasPendingSubmission) throw java.io.IOException("请先停止或核对当前任务再登录")
-        loginInfo = api.json(if (workspace) "$root/workspaces" else "$root/accounts/login", obj("name" to name))
-        onStarted()
-        while (loginInfo?.optBoolean("completed") != true) {
-            delay(2000)
-            loginInfo = api.json("$root/accounts/login-status")
+    fun beginAccountLogin(name: String, workspace: Boolean, onStarted: () -> Unit) {
+        loginVisible = true
+        if (loginJob?.isActive == true) return
+        loginStarting = true; loginError = null; loginInfo = null
+        val connection = api
+        loginJob = viewModelScope.launch {
+            try {
+                withTimeout(15 * 60 * 1000L) {
+                    val info = connection.json(if (workspace) "$root/workspaces" else "$root/accounts/login", obj("name" to name))
+                    if (api !== connection) return@withTimeout
+                    loginInfo = info; loginStarting = false; onStarted()
+                    while (loginInfo?.optBoolean("completed") != true && api === connection) {
+                        delay(2000)
+                        val status = connection.json("$root/accounts/login-status")
+                        if (api === connection) loginInfo = status
+                    }
+                    if (api !== connection) return@withTimeout
+                    if (loginInfo?.optBoolean("success") == true) fetchAccountsNow()
+                    else loginError = loginInfo?.optString("error").orEmpty().ifBlank { "登录未完成，请重新尝试" }
+                }
+            } catch (_: TimeoutCancellationException) {
+                if (api === connection) loginError = "登录等待超时，请重新打开登录页面"
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (api === connection) loginError = connectionFailureMessage(e) }
+            finally { if (api === connection) loginStarting = false }
         }
-        if (loginInfo?.optBoolean("success") == true) fetchAccountsNow()
-        else error = loginInfo?.optString("error").orEmpty().ifBlank { "登录未完成" }
     }
     fun dismissLogin() { loginVisible = false }
     fun showLogin() { loginVisible = true }

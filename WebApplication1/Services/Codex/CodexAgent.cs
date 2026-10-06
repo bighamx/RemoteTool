@@ -28,6 +28,8 @@ internal sealed class CodexAgent : IAsyncDisposable
     private string loginFolder, loginName;
     private JsonObject login;
     private readonly Dictionary<string, JsonObject> workspaceUsage = new();
+    private string runtimeWorkspace = "";
+    private string CurrentWorkspace() { try { return CodexAccountStore.Identity(accounts.CurrentAuth()).S("workspace_id"); } catch (CodexError) { return ""; } }
     private readonly HashSet<string> desktopAnnounced = new();
     private readonly Dictionary<string, JsonObject> sessionOverrides = new();
     private readonly Dictionary<string, JsonObject> contexts = new();
@@ -67,23 +69,20 @@ internal sealed class CodexAgent : IAsyncDisposable
         await settingsLock.WaitAsync(ct);
         try {
             var auth = accounts.WorkspaceAuth(id);
-            if (!refresh && workspaceUsage.TryGetValue(id, out var cached) && cached.L("checked_at") > DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 30) return cached.DeepClone().AsObject();
+            var fingerprint = Hash(auth.ToJsonString());
+            if (!refresh && workspaceUsage.TryGetValue(id, out var cached) && cached.S("auth_fingerprint") == fingerprint && cached.L("checked_at") > DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 30) { var copy = cached.DeepClone().AsObject(); copy.Remove("auth_fingerprint"); return copy; }
             JsonObject result;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(20));
             try {
-                JsonObject usage;
-                if (accounts.List().S("current") == id) usage = await rpc.Call("account/rateLimits/read", new(), timeout.Token);
-                else {
-                    var probe = await CodexWorkspaceUsage.Read(settings.S("executable"), folder, auth, timeout.Token);
-                    usage = probe.Usage; accounts.RecoverWorkspaceAuth(id, auth, probe.Auth);
-                }
-                result = Obj(("workspace_id", id), ("available", true), ("usage", usage), ("checked_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+                var probe = await CodexWorkspaceUsage.Read(settings.S("executable"), folder, auth, timeout.Token);
+                accounts.RecoverWorkspaceAuth(id, auth, probe.Auth);
+                result = Obj(("workspace_id", id), ("chatgpt_account_id", CodexAccountStore.Identity(probe.Auth).S("workspace_id")), ("available", true), ("usage", probe.Usage), ("checked_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
             } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
                 result = Obj(("workspace_id", id), ("available", false), ("error", "查询超时，请重试"));
-            } catch (Exception error) when (error is CodexError or IOException) {
-                result = Obj(("workspace_id", id), ("available", false), ("error", "暂时无法读取用量，请刷新；登录失效时请重新授权"));
+            } catch (Exception error) when (error is CodexError or IOException or HttpRequestException) {
+                result = Obj(("workspace_id", id), ("available", false), ("error", error is CodexError known ? known.Message : "暂时无法读取用量，请刷新重试"));
             }
-            if (result.B("available")) workspaceUsage[id] = result.DeepClone().AsObject();
+            if (result.B("available")) { var cachedResult = result.DeepClone().AsObject(); cachedResult["auth_fingerprint"] = Hash(accounts.WorkspaceAuth(id).ToJsonString()); workspaceUsage[id] = cachedResult; }
             return result;
         } finally { settingsLock.Release(); }
     }
@@ -99,14 +98,16 @@ internal sealed class CodexAgent : IAsyncDisposable
     private async Task Launch() {
         var environment = new Dictionary<string, string>();
         foreach (var entry in providers) if (entry.Value.S("api_key").Length > 0) environment["CHUCKIE_CODEX_" + entry.Key.ToUpperInvariant() + "_KEY"] = entry.Value.S("api_key");
-        rpc = new CodexRpc(settings.S("executable"), home, environment, Notification);
-        await rpc.Initialize(); loaded.Clear();
+        runtimeWorkspace = CurrentWorkspace();
+        rpc = new CodexRpc(settings.S("executable"), home, environment, Notification, "cli_auth_credentials_store=\"file\"");
+        await rpc.Initialize(); loaded.Clear(); workspaceUsage.Clear();
     }
     private async Task EnsureConnection() {
-        if (rpc?.Running == true) return;
+        if (rpc?.Running == true && runtimeWorkspace == CurrentWorkspace()) return;
         await settingsLock.WaitAsync();
         try {
-            if (rpc?.Running == true) return;
+            if (rpc?.Running == true && runtimeWorkspace == CurrentWorkspace()) return;
+            lock (gate) if (rpc?.Running == true && active.Count > 0) throw new CodexError("电脑登录身份已切换，请先停止原工作空间的手机任务，再恢复连接", 409);
             lock (gate) {
                 foreach (var run in active.Values) {
                     runs[run]!["status"] = "acceptance_unknown";
@@ -312,6 +313,12 @@ internal sealed class CodexAgent : IAsyncDisposable
         try {
             accounts.ValidateWorkspaceSwitch(id);
             if (accounts.List().S("current") == id) return;
+            // Verify the target before stopping processes; failed validation leaves the
+            // running desktop and its current credentials intact.
+            var targetAuth = accounts.WorkspaceAuth(id);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+            var target = await CodexWorkspaceUsage.Read(settings.S("executable"), folder, targetAuth, timeout.Token);
+            accounts.RecoverWorkspaceAuth(id, targetAuth, target.Auth);
             var desktop = CodexDesktopRestart.Capture(loginRpc?.Running == true ? new[] { rpc.ProcessId, loginRpc.ProcessId } : new[] { rpc.ProcessId });
             JsonObject previous = null;
             try {
@@ -323,8 +330,10 @@ internal sealed class CodexAgent : IAsyncDisposable
                 await desktop.Stop();
                 previous = accounts.CurrentAuth();
                 accounts.Use(id); await Launch();
-                var current = await rpc.Call("account/read", Obj(("refreshToken", true)));
+                var current = await rpc.Call("account/read", Obj(("refreshToken", false)));
                 if (current["account"] == null) throw new CodexError("目标登录已失效，请重新授权", 409);
+                var routed = current["workspaceRouting"].S("chatgptAccountId");
+                if (routed.Length > 0 && routed != CurrentWorkspace()) throw new CodexError("Codex 后台工作空间不匹配，已取消切换", 409);
                 accounts.Capture(accounts.CurrentAuth());
             } catch {
                 if (rpc != null) await rpc.DisposeAsync();
@@ -334,13 +343,20 @@ internal sealed class CodexAgent : IAsyncDisposable
         } finally { settingsLock.Release(); }
     }
     private async Task<JsonObject> BeginLogin(JsonObject body) {
-        if (loginRpc != null && login != null && !login.B("completed")) throw new CodexError("已有登录正在等待授权", 409);
+        await settingsLock.WaitAsync();
+        try { return await BeginLoginCore(body); }
+        finally { settingsLock.Release(); }
+    }
+    private async Task<JsonObject> BeginLoginCore(JsonObject body) {
+        if (loginRpc?.Running == true && login != null && !login.B("completed")) return login.DeepClone().AsObject();
+        if (loginRpc != null) { await loginRpc.DisposeAsync(); loginRpc = null; }
         loginFolder = Path.Combine(folder, "login-capture", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(loginFolder);
         loginName = body.S("name"); login = Obj(("completed", false), ("success", false));
         var overrides = new List<string> { "cli_auth_credentials_store=\"file\"" };
         if (body.S("workspace_id").Length > 0) overrides.Add("forced_chatgpt_workspace_id=" + JsonValue.Create(body.S("workspace_id"))!.ToJsonString());
+        var loginRecord = login;
         loginRpc = new CodexRpc(settings.S("executable"), loginFolder, new Dictionary<string, string>(), message => {
-            if (message.S("method") == "account/login/completed") lock (gate) { login["completed"] = true; login["success"] = message["params"].B("success"); login["error"] = message["params"].S("error"); }
+            if (message.S("method") == "account/login/completed") lock (gate) { loginRecord["completed"] = true; loginRecord["success"] = message["params"].B("success"); loginRecord["error"] = message["params"].S("error"); }
             return Task.CompletedTask;
         }, overrides.ToArray());
         try {
@@ -351,6 +367,11 @@ internal sealed class CodexAgent : IAsyncDisposable
         } catch { await loginRpc.DisposeAsync(); loginRpc = null; login = null; throw; }
     }
     private async Task<JsonObject> LoginStatus() {
+        await settingsLock.WaitAsync();
+        try { return await LoginStatusCore(); }
+        finally { settingsLock.Release(); }
+    }
+    private async Task<JsonObject> LoginStatusCore() {
         if (login == null) return Obj(("completed", true), ("success", false));
         if (login.B("completed") && login.B("success") && !login.B("saved")) {
             var auth = Read(Path.Combine(loginFolder, "auth.json"));
@@ -491,8 +512,14 @@ internal sealed class CodexAgent : IAsyncDisposable
         if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true));
         if (path == "model-options") return await Models();
         if (path == "projects" && method == "GET") return Obj(("data", await CodexProjects.List(rpc)));
-        if (path == "usage") return await rpc.Call("account/rateLimits/read", new());
-        if (p.Length == 3 && p[0] == "workspaces" && p[2] == "usage" && method == "GET") return await WorkspaceUsage(p[1], context.Request.Query["refresh"] == "1", context.RequestAborted);
+        if (path == "usage") {
+            var current = accounts.List().S("current");
+            if (current.Length == 0) return (await CodexWorkspaceUsage.Read(settings.S("executable"), folder, accounts.CurrentAuth(), context.RequestAborted)).Usage;
+            var quota = await WorkspaceUsage(current, false, context.RequestAborted);
+            if (!quota.B("available")) throw new CodexError(quota.S("error"), 502);
+            return quota["usage"]!.DeepClone().AsObject();
+        }
+        if (p.Length == 3 && p[0] == "workspaces" && p[2] == "usage" && method == "GET") return await WorkspaceUsage(p[1], context.Request.Query["refresh"].ToString() is "1" or "true", context.RequestAborted);
         if (path == "accounts") { var result = accounts.List(); result["desktop_running"] = DesktopBusy(); return result; }
         if (path == "accounts/import") { accounts.Capture(accounts.CurrentAuth()); return Obj(("saved", true)); }
         if (path == "accounts/login") return await BeginLogin(body);
@@ -721,7 +748,9 @@ internal sealed class CodexAgent : IAsyncDisposable
         if (!CryptographicOperations.FixedTimeEquals(supplied, expected)) { context.Response.StatusCode = 401; return; }
         try {
             var path = context.Request.Path.Value!.Trim('/');
-            if (path != "health") await EnsureConnection();
+            // Account reads and login capture use isolated credentials; they must not
+            // stop or depend on a task owned by the current inference app-server.
+            if (path != "health" && path != "usage" && !path.StartsWith("accounts", StringComparison.Ordinal) && !path.StartsWith("workspaces", StringComparison.Ordinal)) await EnsureConnection();
             if (Regex.IsMatch(path, "^runs/[a-zA-Z0-9_-]+/events$")) { await Stream(context, path.Split('/')[1]); return; }
             if (context.Request.ContentLength > 2 * 1024 * 1024) throw new CodexError("请求过大", 413);
             var body = context.Request.ContentLength is > 0 ? (await JsonNode.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted))!.AsObject() : new JsonObject();

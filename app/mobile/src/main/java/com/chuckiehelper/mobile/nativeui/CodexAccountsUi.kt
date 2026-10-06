@@ -63,7 +63,6 @@ private fun CodexUsageValues(usage: JSONObject?, compact: Boolean, onClick: () -
 
 @Composable
 fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: () -> Unit) {
-    var adding by remember { mutableStateOf(false) }
     var remove by remember { mutableStateOf<JSONObject?>(null) }
     val source = model.workspaces
     AlertDialog(
@@ -110,18 +109,14 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: (
                         }
                     }
                 }
-                TextButton(onClick = { model.importCurrentAccount() }) { Text("保存电脑当前登录") }
+                TextButton(onClick = { model.importCurrentAccount() }, enabled = !model.switchingAccount) { Text("同步电脑当前登录") }
                 if (model.loginInfo != null && !model.loginInfo!!.optBoolean("completed")) TextButton(onClick = { model.showLogin() }) { Text("查看登录验证码") }
                 model.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },
-        confirmButton = { TextButton(onClick = { adding = true }, enabled = !model.switchingAccount) { Text("添加工作空间登录") } },
+        confirmButton = { TextButton(onClick = { model.beginAccountLogin("", true) {}; close() }, enabled = !model.switchingAccount && !model.loginStarting) { Text("登录其他工作空间") } },
         dismissButton = { TextButton(onClick = close) { Text("关闭") } },
     )
-    if (adding) InputDialog("添加工作空间登录", "备注名称", "工作空间", { adding = false }) { name ->
-        model.beginAccountLogin(name, true) { model.showLogin() }
-        adding = false
-    }
     remove?.let { account ->
         ConfirmDialog("移除登录记录", "仅移除保存的登录记录。电脑当前 auth.json、配置和会话历史保持原样。", { remove = null }) {
             model.removeAccount(account.getString("id")); remove = null
@@ -145,22 +140,32 @@ fun CodexSwitchingDialog(model: HermesModel) {
 
 @Composable
 fun CodexLoginDialog(model: HermesModel) {
-    val info = model.loginInfo ?: return
     if (!model.loginVisible) return
+    val info = model.loginInfo
     val context = LocalContext.current
     AlertDialog(
         onDismissRequest = { model.dismissLogin() },
-        title = { Text(if (info.optBoolean("completed")) "登录结果" else "授权 Codex") },
+        title = { Text(if (info?.optBoolean("completed") == true) "登录结果" else "登录工作空间") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (!info.optBoolean("completed")) {
-                    Text("在官方登录页选择目标个人账户及个人／团队工作空间。电脑现有登录不会被覆盖。")
-                    SelectionContainer { Text(info.optString("userCode"), style = MaterialTheme.typography.headlineSmall) }
-                } else Text(if (info.optBoolean("success")) "登录记录已保存，可在账户与工作空间中切换。" else info.optString("error", "登录未完成"))
+                when {
+                    model.loginStarting -> {
+                        CircularProgressIndicator(Modifier.size(28.dp))
+                        Text("正在获取官方登录验证码…")
+                    }
+                    model.loginError != null -> Text(model.loginError!!, color = MaterialTheme.colorScheme.error)
+                    info != null && !info.optBoolean("completed") -> {
+                        Text("打开官方登录页，输入下方验证码，并选择需要保存的个人或团队工作空间。这里只保存登录，切换时才会重启电脑 Codex。")
+                        SelectionContainer { Text(info.optString("userCode"), style = MaterialTheme.typography.headlineSmall) }
+                        Text("如官方页面不允许设备验证码登录，请先在电脑或 CC Switch 登录目标空间，再使用“同步电脑当前登录”。", style = MaterialTheme.typography.bodySmall)
+                    }
+                    info?.optBoolean("success") == true -> Text("工作空间登录已保存，可返回工作空间列表切换。")
+                }
             }
         },
         confirmButton = {
-            if (!info.optBoolean("completed")) TextButton(onClick = {
+            if (model.loginError != null) TextButton(onClick = { model.beginAccountLogin("", true) {} }) { Text("重试") }
+            else if (info != null && !info.optBoolean("completed")) TextButton(onClick = {
                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.getString("verificationUrl"))))
             }) { Text("打开官方登录页") }
         },
