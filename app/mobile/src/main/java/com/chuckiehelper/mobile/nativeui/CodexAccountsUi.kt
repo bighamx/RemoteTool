@@ -39,7 +39,7 @@ fun CodexUsage(model: HermesModel, compact: Boolean, onClick: () -> Unit = {}) {
 
 @Composable
 private fun CodexUsageValues(usage: JSONObject?, compact: Boolean, onClick: () -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = if (compact) 12.dp else 0.dp, vertical = 6.dp)
+    Row(Modifier.fillMaxWidth().padding(horizontal = if (compact) 12.dp else 0.dp, vertical = if (compact) 3.dp else 6.dp)
         .clickable(enabled = compact, onClick = onClick), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         listOf("5 小时" to 300, "周额度" to 10080).forEach { (label, duration) ->
             val window = quotaWindow(usage, duration)
@@ -48,7 +48,7 @@ private fun CodexUsageValues(usage: JSONObject?, compact: Boolean, onClick: () -
             Column(Modifier.weight(1f)) {
                 Text("$label · ${remaining?.let { "剩余 ${it.toInt()}%" } ?: "暂无数据"}", style = MaterialTheme.typography.labelSmall)
                 if (remaining != null) LinearProgressIndicator(progress = { remaining.toFloat() / 100f },
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp).height(3.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = if (compact) 2.dp else 4.dp).height(if (compact) 2.dp else 3.dp),
                     color = if (remaining < 20) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     drawStopIndicator = {})
                 if (!compact && window != null && window.optLong("resetsAt") > 0) {

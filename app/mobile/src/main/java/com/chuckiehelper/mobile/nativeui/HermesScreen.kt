@@ -227,11 +227,13 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 Text(
                     if (list) "$agentName 会话" else model.title,
                     style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
-                Text(
-                    model.runtime + if (!list && model.sessionEffort.isNotBlank()) " · 思考${effortLabel(model.sessionEffort)}" else "",
+                if (list) Text(
+                    model.runtime,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
             }
             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
@@ -265,7 +267,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             }
         }
         if (agent == "codex") CodexUsage(model, compact = true) { accountsPanel = true; model.fetchAccounts() }
-        if (!list && model.selectedId != null) AgentContextInfo(model.contextInfo)
+        if (!list && model.selectedId != null) AgentContextInfo(model.contextInfo,
+            model.runtime + if (model.sessionEffort.isNotBlank()) " · 思考${effortLabel(model.sessionEffort)}" else "")
         model.error?.let { error ->
             Surface(color = MaterialTheme.colorScheme.errorContainer) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
