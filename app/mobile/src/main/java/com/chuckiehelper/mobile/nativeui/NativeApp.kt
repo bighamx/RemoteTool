@@ -87,7 +87,7 @@ fun NativeApp(model: NativeModel) {
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },
             topBar = {
-                TopAppBar(
+                if (session == null || model.loginNeeded || (detail ?: route) !in listOf("Codex", "Hermes")) TopAppBar(
                     title = {
                         Column {
                             Text(
