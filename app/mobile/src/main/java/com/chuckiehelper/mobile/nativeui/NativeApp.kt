@@ -23,6 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import com.chuckiehelper.mobile.R
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.chuckiehelper.mobile.RemoteActivity
@@ -169,7 +171,7 @@ fun NativeApp(model: NativeModel) {
                                 NavigationBarItem(
                                     selected = route == name,
                                     onClick = { route = name },
-                                    icon = { Icon(icon, name) },
+                                    icon = { if (name == "Hermes") Image(painterResource(R.drawable.ic_hermes_official), name, Modifier.size(24.dp)) else Icon(icon, name) },
                                     label = { Text(name) },
                                 )
                             }
