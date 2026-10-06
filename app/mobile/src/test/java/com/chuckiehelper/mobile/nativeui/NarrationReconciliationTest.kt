@@ -7,6 +7,49 @@ class NarrationReconciliationTest {
     private val user = HermesMessage("user", "检查设备", serverId = 1, timestamp = 100)
     private fun note(key: String, text: String, at: Long = 110) = AssistantNarration("narration-$key", "session", text, 1, user.text, at, run = "run")
 
+    @Test fun hermesInterimRemainsVisibleBeforeTheUserIsPersistedAndAfterAcknowledgement() {
+        val optimistic = HermesMessage("user", "检查设备", localKey = "submission", timestamp = 100)
+        val interim = assistantNarrationEvent("narration-interim", "session", "先检查部署配置", 110,
+            listOf(optimistic), 22, "submission")!!.copy(run = "run", streamed = true)
+        val live = mergeAssistantNarrations(listOf(optimistic), listOf(interim))
+        assertEquals(listOf(optimistic.text, interim.text), live.map { it.text })
+        // The tool clears pendingText, but its finished commentary stays in the list.
+        assertEquals(live, mergeAssistantNarrations(live, listOf(interim)))
+        val acknowledged = user.copy(serverId = 42)
+        val bound = acknowledgeNarrationUser(listOf(interim), "session", "submission", acknowledged)
+        val refreshed = mergeAssistantNarrations(listOf(acknowledged), bound)
+        assertEquals(live.map { it.text }, refreshed.map { it.text })
+        assertEquals(live[1].localKey, refreshed[1].localKey)
+    }
+    @Test fun explicitRunUserBoundarySurvivesClockSkewAndDoesNotAttachToAnotherOptimisticUser() {
+        val optimistic = user.copy(serverId = 0, localKey = "send-a", timestamp = 500)
+        val next = optimistic.copy(localKey = "send-b", text = "另一个问题", timestamp = 600)
+        val interim = assistantNarrationEvent("narration-live", "session", "正在检查", 110,
+            listOf(optimistic, next), userKey = "send-a")!!
+        assertEquals(listOf(user.text, interim.text, next.text),
+            mergeAssistantNarrations(listOf(optimistic, next), listOf(interim)).map { it.text })
+        assertEquals(listOf(next), mergeAssistantNarrations(listOf(next), listOf(interim)))
+    }
+    @Test fun slowerHistoryDoesNotEraseAnInFlightNativeItemOrSuppressItsText() {
+        val native = HermesMessage("assistant", "先检查", serverId = narrationMessageId("item"), narration = true)
+        val text = "先检查部署配置，再验证服务"
+        assertEquals(text, visiblePendingAssistant(listOf(user, native), "item", text))
+        val reconciled = reconcilePendingAssistant(listOf(user, native), "item", text)
+        assertEquals(text, reconciled.last().text)
+        assertEquals("", visiblePendingAssistant(reconciled, "item", text))
+        assertEquals(native.serverId, reconciled.last().serverId)
+    }
+    @Test fun streamNarrationArrivingDuringHistoryEnrichmentSurvivesPublication() {
+        val snapshot = listOf(user)
+        // A GET starts; two interim/tool boundaries arrive while its attachments are fetched.
+        val first = note("first-live", "先检查部署配置").copy(streamed = true)
+        val second = note("second-live", "接着验证服务状态", 120).copy(streamed = true)
+        val notesAtPublication = listOf(first, second)
+        val published = mergeAssistantNarrations(snapshot, notesAtPublication)
+        assertEquals(listOf(user.text, first.text, second.text), published.map { it.text })
+        assertEquals(published, mergeAssistantNarrations(snapshot, notesAtPublication))
+    }
+
     @Test fun cumulativeInterimUpdatesKeepOneBubbleAndItsFirstKey() {
         var rows = listOf(note("first", "先检查部署配置").copy(streamed = true))
         rows = upsertAssistantNarration(rows, note("later", "先检查部署配置，再验证服务状态", 120).copy(streamed = true), listOf(user))

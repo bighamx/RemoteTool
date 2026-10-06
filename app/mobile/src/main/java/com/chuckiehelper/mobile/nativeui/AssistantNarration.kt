@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 data class AssistantNarration(val key: String, val session: String, val text: String, val anchor: Long,
     val userText: String, val timestamp: Long, val userTimestamp: Long? = null, val sequence: Long? = null,
-    val run: String? = null, val messageId: String? = null, val streamed: Boolean = false)
+    val run: String? = null, val messageId: String? = null, val streamed: Boolean = false, val userKey: String? = null)
 
 /** Earlier caches inferred an anchor from the latest visible user and sometimes invented the time. */
 fun restoreAssistantNarrations(rows: JSONArray): List<AssistantNarration> = rows.objects().mapNotNull { row ->
@@ -15,7 +15,8 @@ fun restoreAssistantNarrations(rows: JSONArray): List<AssistantNarration> = rows
             row.optLong("anchor"), row.optString("userText"), row.getLong("timestamp"),
             row.optLong("userTimestamp").takeIf { it > 0 }, row.optLong("sequence", -1).takeIf { it >= 0 },
             row.optString("run").takeIf { it.isNotBlank() && it != "null" },
-            row.optString("messageId").takeIf { it.isNotBlank() && it != "null" }, row.optBoolean("streamed"))
+            row.optString("messageId").takeIf { it.isNotBlank() && it != "null" }, row.optBoolean("streamed"),
+            row.optString("userKey").takeIf { it.isNotBlank() && it != "null" })
     }.getOrNull()?.takeIf { it.timestamp > 0 }
 }
 
@@ -24,6 +25,13 @@ fun narrationAnchorIndex(history: List<HermesMessage>, note: AssistantNarration)
     note.messageId?.let { id ->
         val message = history.indexOfFirst { it.role == "assistant" && it.serverId == narrationMessageId(id) }
         if (message >= 0) return (message - 1 downTo 0).firstOrNull { history[it].role == "user" } ?: -1
+    }
+    // The active run is explicitly bound to this submitted user message. Hermes may
+    // stream before that user row is available in its history API; no latest-row guess.
+    note.userKey?.let { key ->
+        val explicit = history.indexOfFirst { it.role == "user" && (it.localKey == key ||
+            note.anchor > 0 && it.serverId == note.anchor && it.text == note.userText) }
+        if (explicit >= 0) return explicit
     }
     val users = history.indices.filter { history[it].role == "user" }
     val candidates = users.filter {
@@ -50,13 +58,20 @@ fun narrationAnchorIndex(history: List<HermesMessage>, note: AssistantNarration)
 }
 
 fun assistantNarrationEvent(key: String, session: String, text: String, timestamp: Long?,
-    history: List<HermesMessage>, sequence: Long? = null): AssistantNarration? {
+    history: List<HermesMessage>, sequence: Long? = null, userKey: String? = null): AssistantNarration? {
     if (timestamp == null || timestamp <= 0 || text.isBlank()) return null
-    val note = AssistantNarration(key, session, text, 0, "", timestamp, sequence = sequence)
+    val note = AssistantNarration(key, session, text, 0, "", timestamp, sequence = sequence, userKey = userKey)
     val anchor = narrationAnchorIndex(history, note)
     if (anchor < 0) return note // Re-evaluate after history arrives, never attach to the latest row.
     val user = history[anchor]
     return note.copy(anchor = user.serverId, userText = user.text, userTimestamp = user.timestamp)
+}
+
+internal fun acknowledgeNarrationUser(notes: List<AssistantNarration>, session: String, userKey: String,
+    canonical: HermesMessage): List<AssistantNarration> = notes.map { note ->
+    if (note.session == session && note.userKey == userKey && canonical.role == "user" && canonical.serverId > 0)
+        note.copy(anchor = canonical.serverId, userText = canonical.text, userTimestamp = canonical.timestamp)
+    else note
 }
 
 /** Extract leading comments; a flattened preview may include command text in the same line. */
@@ -125,6 +140,20 @@ internal fun narrationCovers(text: String, part: String): Boolean {
 
 internal fun narrationMessageId(id: String): Long = java.security.MessageDigest.getInstance("SHA-256")
     .digest(id.toByteArray(Charsets.UTF_8)).take(7).fold(0L) { value, byte -> (value shl 8) or (byte.toLong() and 255) } + 1
+
+/** A history GET may lag the stream; never replace a growing native item with its older prefix. */
+internal fun reconcilePendingAssistant(history: List<HermesMessage>, item: String?, text: String): List<HermesMessage> {
+    if (item == null || text.isBlank()) return history
+    val id = narrationMessageId(item)
+    return history.map { row ->
+        if (row.role == "assistant" && row.serverId == id && text.length > row.text.length && text.startsWith(row.text))
+            row.copy(text = text)
+        else row
+    }
+}
+
+internal fun visiblePendingAssistant(history: List<HermesMessage>, item: String?, text: String): String =
+    if (item != null && history.any { it.role == "assistant" && it.serverId == narrationMessageId(item) && narrationCovers(it.text, text) }) "" else text
 
 internal fun upsertAssistantNarration(existing: List<AssistantNarration>, incoming: AssistantNarration,
     history: List<HermesMessage>): List<AssistantNarration> {
