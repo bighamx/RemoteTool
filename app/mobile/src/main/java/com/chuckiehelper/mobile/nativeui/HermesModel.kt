@@ -646,7 +646,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             val expectedWorkspace = row.optString("workspace_id")
             viewModelScope.launch {
                 try {
-                    val result = connection.json("$root/workspaces/${q(id)}/usage" + if (force) "?refresh=1" else "")
+                    val result = connection.json("$root/workspaces/${q(id)}/usage" + if (force) "?refresh=true" else "")
                     if (api === connection && epoch == workspaceReadEpoch && result.optString("workspace_id") == id) {
                         val receivedWorkspace = result.optString("chatgpt_account_id")
                         workspaceUsages = workspaceUsages + (id to if (result.optBoolean("available") && receivedWorkspace.isNotBlank() && receivedWorkspace != expectedWorkspace)
