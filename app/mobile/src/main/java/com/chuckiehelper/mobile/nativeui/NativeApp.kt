@@ -23,6 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import com.chuckiehelper.mobile.R
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.chuckiehelper.mobile.RemoteActivity
@@ -171,7 +173,7 @@ fun NativeApp(model: NativeModel) {
                                     onClick = { route = name },
                                     icon = { when (name) {
                                         "Hermes" -> HermesOfficialIcon(Modifier.size(40.dp))
-                                        "Codex" -> Icon(icon, name, Modifier.size(40.dp))
+                                        "Codex" -> Icon(painterResource(R.drawable.ic_codex_official), name, Modifier.size(40.dp))
                                         else -> Icon(icon, name)
                                     } },
                                     label = if (name in listOf("Hermes", "Codex")) null else { { Text(name) } },
