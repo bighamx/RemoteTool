@@ -36,6 +36,15 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
         return Ok(attachments.AddMessageAttachments(id, await upstream.Content.ReadAsStringAsync(ct)));
     }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
+    [HttpGet("sessions/{id}/queue")] public Task Queue(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"sessions/{Id(id)}/queue", null, ct);
+    [HttpPost("sessions/{id}/queue")] public Task QueueAction(string id, [FromBody] JsonElement body, CancellationToken ct) {
+        var normalized = System.Text.Json.Nodes.JsonNode.Parse(body.GetRawText())!.AsObject();
+        normalized["session_id"] = Id(id);
+        var prepared = JsonSerializer.SerializeToElement(normalized);
+        if (body.TryGetProperty("action", out var action) && action.GetString() is "add" or "update")
+            prepared = attachments.PrepareCodexRun(prepared, body.TryGetProperty("key", out var key) ? key.GetString() : Guid.NewGuid().ToString());
+        return Forward(HttpMethod.Post, $"sessions/{Id(id)}/queue", prepared, ct);
+    }
     [HttpGet("sessions/{id}/activity")] public async Task<IActionResult> SessionActivity(string id, CancellationToken ct) {
         Response.Headers.CacheControl = "no-store";
         var result = activity.Read(Id(id));

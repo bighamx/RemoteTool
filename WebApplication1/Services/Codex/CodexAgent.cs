@@ -10,7 +10,7 @@ using static ChuckieHelper.WebApi.Services.Codex.CodexJson;
 
 namespace ChuckieHelper.WebApi.Services.Codex;
 
-internal sealed class CodexAgent : IAsyncDisposable
+internal sealed partial class CodexAgent : IAsyncDisposable
 {
     private readonly JsonObject settings;
     private readonly string folder, home, journal;
@@ -39,6 +39,8 @@ internal sealed class CodexAgent : IAsyncDisposable
     private async Task ReleaseSession(string id) {
         await settingsLock.WaitAsync();
         try {
+            lock (gate) if (active.ContainsKey(id)) return;
+            if (await NativeQueueStillOwns(id)) return;
             lock (gate) if (active.ContainsKey(id)) return;
             await ReleaseSessionCore(id);
         } catch (Exception error) when (error is CodexError or IOException or InvalidOperationException or OperationCanceledException) { }
@@ -310,6 +312,7 @@ internal sealed class CodexAgent : IAsyncDisposable
     }
     private async Task Notification(JsonObject message, CodexRpc origin = null) {
         var method = message.S("method"); var p = message["params"] as JsonObject ?? new JsonObject();
+        if (method == "turn/started") await BindQueuedNativeTurn(p.S("threadId"), p["turn"].S("id"), origin);
         if (method == "thread/closed") {
             lock (gate) {
                 var session = p.S("threadId"); loaded.Remove(session);
@@ -359,6 +362,7 @@ internal sealed class CodexAgent : IAsyncDisposable
                 state["error"] = turn?["error"].S("message"); state.Remove("approval"); active.Remove(p.S("threadId"));
             }
             Emit(run, status == "completed" ? "run.completed" : "run.failed"); Persist();
+            if (status == "completed") _ = StartQueuedIfIdle(p.S("threadId"), completedTurn: true);
             _ = ReleaseAndNotify(p.S("threadId"));
         } else if (method == "serverRequest/resolved") { lock (gate) runs[run]!.AsObject().Remove("approval"); }
     }
@@ -799,6 +803,7 @@ internal sealed class CodexAgent : IAsyncDisposable
             return await Models();
         }
         if (p[0] == "sessions") {
+            if (p.Length == 3 && p[2] == "queue") return await Queue(p[1], method, body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "takeover" && method == "POST") return await TakeoverSession(p[1], body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "active-run" && method == "GET") return await FindActiveRun(p[1], context.RequestAborted);
             if (p.Length == 3 && p[2] == "desktop-activity" && method == "GET") return await CodexDesktopActivity.Read(p[1], context.RequestAborted);

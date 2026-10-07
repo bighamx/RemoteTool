@@ -1030,6 +1030,44 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         onDone()
     }
 
+    internal val messageQueue: DeferredChatQueue by lazy {
+        DeferredChatQueue(prefs, viewModelScope, agent, { api }, { selectedId },
+            { queueMayDispatch(runId != null || externalRunning, submitting, hasPendingSubmission, false, false) },
+            { row, result -> dispatchQueuedMessage(row, result) })
+    }
+    fun enqueueDraft(): Boolean {
+        if (submitting || uploading || selectedId == null) return false
+        if (draft.trim().startsWith("/")) { error = "斜杠命令请直接执行，消息队列用于对话内容"; return false }
+        val files = pendingFiles.toList()
+        if (!messageQueue.enqueue(draft.trim(), files)) return false
+        draft = ""; pendingFiles = emptyList()
+        return true
+    }
+    fun pollMessageQueue() = viewModelScope.launch {
+        if (agent == "codex" && hasPendingSubmission && messageQueue.visible.any { it.key == pendingSubmissions[selectedId]?.key })
+            try { reconcilePendingNow() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        messageQueue.tick()
+    }
+    private fun dispatchQueuedMessage(row: QueuedChatMessage, response: JSONObject?) {
+        if (selectedId != row.session || runId != null || submitting || hasPendingSubmission) return
+        val pending = PendingAgentSubmission(row.key, row.text, row.files.map { it.getString("id") }, System.currentTimeMillis())
+        if (response == null) {
+            pendingSubmissions = pendingSubmissions + (row.session to pending); savePending()
+            submit(pending, row.session, row.files, clearDraft = false)
+        } else {
+            localSubmissions[row.session] = LocalSubmission(pending, messages.map { it.serverId }.toSet(), messages.maxOfOrNull { it.serverId } ?: 0, row.files)
+            messages = messages + HermesMessage("user", row.text, attachments = row.files, localKey = row.key, delivery = "已送达", timestamp = pending.timestamp)
+            scrollToLatestRequest++
+            val run = response.getString("run_id")
+            runId = run; runSession = row.session; startRunTiming(run, response, pending.timestamp)
+            runNarrationUsers[run] = messages.last()
+            prefs.edit().putString("run", run).putString("runSession", row.session).putString("runMessageKey", row.key).apply()
+            seq = -1; events = emptyList(); eventCount = 0; pendingText = ""; approval = null; state = "执行中"
+            runVerifiedAt = activityClock(); activityNow = runVerifiedAt; saveRuns(); watch()
+            launch { loadHistory(row.session) }
+        }
+    }
+
     fun send(): Boolean = sendInput(draft.trim().ifBlank { if (pendingFiles.isNotEmpty()) "请查看附件" else "" })
 
     private fun sendInput(input: String, questionId: String? = null): Boolean {
@@ -1140,6 +1178,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     val hasPendingSubmission get() = selectedId?.let { hasPendingFor(it) } == true && runId == null
 
     private fun markSubmissionAccepted(session: String, key: String) {
+        messageQueue.accepted(key)
         if (selectedId == session) messages = messages.map {
             if (it.role == "user" && it.localKey == key) it.copy(delivery = "已送达") else it
         }
@@ -1148,10 +1187,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         } }
     }
 
-    private fun submit(pending: PendingAgentSubmission, session: String) {
+    private fun submit(pending: PendingAgentSubmission, session: String, queuedFiles: List<JSONObject>? = null, clearDraft: Boolean = true) {
         val key = pending.key; val input = pending.input
         val provider = sessionProvider; val model = sessionModel
-        val attached = pendingFiles.filter { it.optString("id") in pending.attachmentIds }
+        val attached = queuedFiles ?: pendingFiles.filter { it.optString("id") in pending.attachmentIds }
         setSubmitting(session, true); setError(session, null)
         if (localSubmissions[session]?.pending?.key != key) {
             localSubmissions[session] = LocalSubmission(pending, messages.map { it.serverId }.toSet(), messages.maxOfOrNull { it.serverId } ?: 0, attached)
@@ -1160,7 +1199,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 scrollToLatestRequest++
             }
         }
-        if (pending.questionId == null) setDraft(session, "")
+        if (clearDraft && pending.questionId == null) setDraft(session, "")
         launch {
             var accepted = false
             try {
@@ -1199,10 +1238,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 if (accepted) { setError(session, "消息已送达，暂时无法刷新历史。${connectionFailureMessage(e)}"); return@launch }
+                messageQueue.failed(key, writeWasRejected(e))
                 if (writeWasRejected(e)) {
                     removePending(session)
                     prefs.edit().remove("answeringQuestion:$session").apply()
-                    if (pending.questionId == null && conversationUi.entry(session).draft.isBlank()) setDraft(session, input)
+                    if (clearDraft && pending.questionId == null && conversationUi.entry(session).draft.isBlank()) setDraft(session, input)
                     localSubmissions.remove(session)
                     if (selectedId == session) {
                         messages = messages.filterNot { it.localKey == key }; cachedHistory[session] = messages

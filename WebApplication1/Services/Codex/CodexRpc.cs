@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
 
 namespace ChuckieHelper.WebApi.Services.Codex;
 
@@ -43,6 +44,7 @@ internal sealed class CodexRpc : IAsyncDisposable
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonObject>> requests = new();
     private readonly SemaphoreSlim writeLock = new(1, 1);
     private readonly Func<JsonObject, Task> notification;
+    private readonly Channel<JsonObject> notifications = Channel.CreateUnbounded<JsonObject>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private long counter;
     private int disposed;
     private readonly int processId;
@@ -59,6 +61,7 @@ internal sealed class CodexRpc : IAsyncDisposable
         foreach (var entry in environment) info.Environment[entry.Key] = entry.Value;
         process = Process.Start(info) ?? throw new CodexError("无法启动本机 Codex", 503);
         processId = process.Id;
+        _ = DispatchNotifications();
         _ = ReadAsync();
         // Drain diagnostics without logging prompts, keys or private tool output.
         _ = Task.Run(async () => { while (await process.StandardError.ReadLineAsync() != null) { } });
@@ -93,10 +96,17 @@ internal sealed class CodexRpc : IAsyncDisposable
                 if (!message.ContainsKey("method") && long.TryParse(message.S("id"), out var id) && requests.TryGetValue(id, out var completion)) {
                     if (message["error"] is { } error) completion.TrySetException(new CodexError(error.S("message", "Codex 请求失败"), 409));
                     else completion.TrySetResult(message["result"]?.DeepClone() as JsonObject ?? new JsonObject());
-                } else if (message.ContainsKey("method")) await notification(message);
+                } else if (message.ContainsKey("method")) notifications.Writer.TryWrite(message);
             }
         } catch (Exception) { }
-        finally { foreach (var pending in requests.Values) pending.TrySetException(new CodexError("Codex 进程退出，任务不会自动重发", 503)); }
+        finally { notifications.Writer.TryComplete(); foreach (var pending in requests.Values) pending.TrySetException(new CodexError("Codex 进程退出，任务不会自动重发", 503)); }
+    }
+    private async Task DispatchNotifications() {
+        // Preserve notification order while allowing handlers to await RPC responses.
+        await foreach (var message in notifications.Reader.ReadAllAsync()) {
+            try { await notification(message); }
+            catch (Exception error) when (error is CodexError or IOException or InvalidOperationException or OperationCanceledException) { }
+        }
     }
     public async ValueTask DisposeAsync() {
         if (Interlocked.Exchange(ref disposed, 1) != 0) return;

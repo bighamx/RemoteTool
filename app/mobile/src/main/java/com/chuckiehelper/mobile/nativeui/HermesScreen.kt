@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 
 package com.chuckiehelper.mobile.nativeui
 
@@ -97,6 +97,14 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             }
         }
     }
+    LaunchedEffect(model, list, model.selectedId, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            if (!list) while (true) {
+                model.pollMessageQueue().join()
+                kotlinx.coroutines.delay(4000)
+            }
+        }
+    }
     LaunchedEffect(model.asyncQuestion?.optString("request_id"), list) { if (!list && model.asyncQuestion != null) questionPanel = true }
     LaunchedEffect(api.base, list, agent, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -104,6 +112,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         }
     }
     androidx.activity.compose.BackHandler(enabled = !list) { list = true }
+    var queueDialog by remember { mutableStateOf(false) }
     var filesDialog by remember { mutableStateOf(false) }
     var attachMenu by remember { mutableStateOf(false) }
     var commands by remember { mutableStateOf(false) }
@@ -482,6 +491,13 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 Text("上传附件中…", style = MaterialTheme.typography.labelSmall)
             }
             if (model.asyncQuestion != null) TextButton(onClick = { questionPanel = true }, modifier = Modifier.fillMaxWidth()) { Text("有问题需要你回答 · 查看选项") }
+            if (model.messageQueue.visible.isNotEmpty()) TextButton(
+                onClick = { queueDialog = true }, modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Outlined.PlaylistPlay, null, Modifier.size(20.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("待发送 · ${model.messageQueue.visible.size} 条 · ${if (model.messageQueue.paused) "已暂停" else "任务结束后发送"}")
+            }
             if (model.pendingFiles.isNotEmpty())
                 androidx.compose.foundation.lazy.LazyRow(
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -644,16 +660,20 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                             else MaterialTheme.colorScheme.surfaceContainerHighest,
                         modifier = Modifier.size(40.dp),
                     ) {
-                        IconButton(
-                            onClick = {
-                                if (model.runId != null && !canSend) stop = true
-                                else if (model.draft.trim().startsWith("/")) {
-                                    command(model.draft)
-                                    model.draft = ""
-                                } else model.send()
-                            },
-                            enabled = canSend || model.runId != null,
-                            modifier = Modifier.size(40.dp),
+                        Box(
+                            modifier = Modifier.size(40.dp).focusProperties { canFocus = false }
+                                .combinedClickable(
+                                    enabled = canSend || model.runId != null,
+                                    onLongClickLabel = "加入消息队列",
+                                    onLongClick = { if (canSend && model.enqueueDraft()) queueDialog = true else if (!canSend) queueDialog = true },
+                                    onClick = {
+                                        if (model.runId != null && !canSend) stop = true
+                                        else if (model.draft.trim().startsWith("/")) {
+                                            command(model.draft); model.draft = ""
+                                        } else model.send()
+                                    },
+                                ),
+                            contentAlignment = Alignment.Center,
                         ) {
                             ComposerActionGlyph(
                                 stopping = model.runId != null && !canSend,
@@ -666,6 +686,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             }
         }
     }
+    if (queueDialog) MessageQueueDialog(model.messageQueue) { queueDialog = false }
     renameChat?.let { chat ->
         InputDialog(
             "修改会话名称",
