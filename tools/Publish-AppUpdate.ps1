@@ -52,7 +52,7 @@ if ($PreviousApkPath) {
     $oldCode = [long][regex]::Match($oldBadging, "versionCode='(\d+)'").Groups[1].Value
     if ($versionCode -le $oldCode) { throw 'versionCode must be greater than the previous APK.' }
 }
-$notes = if ($NotesPath) { Get-Content -LiteralPath $NotesPath -Encoding UTF8 -Raw } else { "RemoteTool Android v$versionName" }
+$notes = if ($NotesPath) { [IO.File]::ReadAllText((Resolve-Path -LiteralPath $NotesPath).Path, [Text.Encoding]::UTF8) } else { "RemoteTool Android v$versionName" }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskRepo "artifacts\app-updates\$versionCode" }
 $destination = [IO.Path]::GetFullPath($OutputDirectory)
 $apkName = "RemoteTool-$versionName.apk"
