@@ -74,19 +74,6 @@ internal fun acknowledgeNarrationUser(notes: List<AssistantNarration>, session: 
     else note
 }
 
-/** Extract leading comments; a flattened preview may include command text in the same line. */
-fun terminalNarration(tool: String, preview: String): String? {
-    if (tool.lowercase() !in setOf("terminal", "终端", "commandexecution", "powershell", "shell")) return null
-    val comments = preview.replace("\r\n", "\n").trimStart().lineSequence()
-        .takeWhile { it.trimStart().startsWith("#") && !it.trimStart().startsWith("#!") }
-        .map { it.trim().removePrefix("#").trim() }
-        .filter { it.isNotBlank() && !it.matches(Regex("^(include|define|ifdef|ifndef|endif|pragma)\\b.*")) }
-        .joinToString("\n")
-    if (comments.isBlank()) return null
-    // Keep the original explanation for history reconciliation; display trimming is separate.
-    return comments
-}
-
 /** Count Unicode code points, so neither emoji nor supplementary Han characters are split. */
 fun truncateNarration(text: String): String {
     val result = StringBuilder(text.length.coerceAtMost(2048))
@@ -204,7 +191,7 @@ fun mergeAssistantNarrations(history: List<HermesMessage>, narrations: List<Assi
         val match = exact ?: (anchor + 1 until end).firstOrNull { index -> rows[index].role == "assistant" &&
             (narrationCovers(rows[index].text, note.text) || rows[index].serverId > 0 && rows[index].narration && narrationCovers(note.text, rows[index].text)) }
         if (match != null) {
-            if (note.streamed && (rows[match].narration || normalizedNarration(rows[match].text) == normalizedNarration(note.text)))
+            if (rows[match].narration || note.streamed && normalizedNarration(rows[match].text) == normalizedNarration(note.text))
                 rows[match] = rows[match].copy(localKey = rows[match].localKey?.takeIf { it.startsWith("narration-") } ?: note.key, narration = true,
                     text = if (note.messageId != null && rows[match].serverId == narrationMessageId(note.messageId) &&
                         narrationCovers(note.text, rows[match].text) && note.text.length > rows[match].text.length) note.text else rows[match].text)

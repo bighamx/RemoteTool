@@ -825,18 +825,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         // SSE can add narration during those requests; merge the latest local state only
         // at publication, rather than exposing a bare/stale server snapshot to Compose.
         var history =
-            response.array("data").objects().mapNotNull { row ->
-                val role = row.optString("role")
-                val text =
-                    row.optString("content").let {
-                        if (role == "user") agentUserMessageText(agent, it) else it
-                    }
-                val attached = row.array("attachments").objects()
-                if (visibleAgentMessage(role, text, attached.size))
-                    HermesMessage(role, text.takeUnless { it == "null" }.orEmpty(), row.optLong("id"), attached, timestamp =
-                        parseMessageTimestamp(row.opt("timestamp")) ?: parseMessageTimestamp(row.opt("created_at")), narration = isAssistantNarration(row))
-                else null
-            }
+            response.array("data").objects().mapNotNull { row -> agentHistoryMessage(agent, row) }
         val sessionSteering = steering.filter { it.session == id }
         val reconciliation = reconcileSteeringMessages(history, sessionSteering)
         for ((sent, confirmed) in reconciliation.second) {
