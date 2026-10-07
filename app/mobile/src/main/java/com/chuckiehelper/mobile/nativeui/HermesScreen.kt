@@ -650,14 +650,9 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                             enabled = canSend || model.runId != null,
                             modifier = Modifier.size(40.dp),
                         ) {
-                            Icon(
-                                if (model.runId != null && !canSend) Icons.Outlined.Stop
-                                else Icons.Outlined.Send,
-                                if (model.runId != null && !canSend) "停止任务" else "发送消息",
-                                modifier = Modifier.size(21.dp),
-                                tint =
-                                    if (canSend || model.runId != null)
-                                        MaterialTheme.colorScheme.onPrimary
+                            ComposerActionGlyph(
+                                stopping = model.runId != null && !canSend,
+                                tint = if (canSend || model.runId != null) MaterialTheme.colorScheme.onPrimary
                                     else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
