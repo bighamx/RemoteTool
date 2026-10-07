@@ -555,7 +555,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (agent == "hermes" && capabilities.optJSONObject("features")?.optBoolean("run_submission") != true)
                 throw java.io.IOException("当前 $agentName 不支持可恢复任务接口")
             refreshSessions()
-            if (agent == "codex") reconcilePendingNow()
+            reconcilePendingNow()
             fetchModels()
             if (agent == "codex") fetchAccountsNow()
             selectedId?.let { loadHistory(it); loadSelection(it) }
@@ -624,11 +624,46 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     fun reconcilePending() = launch { reconcilePendingNow() }
     private suspend fun reconcilePendingNow(session: String? = selectedId) {
-        if (agent != "codex" || session == null) return
+        if (session == null) return
         val pending = pendingSubmissions[session] ?: return
-        val result = api.json("$root/runs/lookup?key=${q(pending.key)}")
+        val connection = api
+        val result = if (agent == "hermes") {
+            try { connection.json("$root/runs/lookup?key=${q(pending.key)}&session_id=${q(session)}") }
+            catch (e: ApiRequestFailure) {
+                if (e.status != 404) throw e
+                if (selectedId == session) loadHistory(session)
+                return
+            }
+        } else connection.json("$root/runs/lookup?key=${q(pending.key)}")
+        if (api !== connection) return
+        if (agent == "hermes" && !result.optBoolean("found")) {
+            if (selectedId == session) loadHistory(session)
+            if (hasPendingFor(session)) setError(session, "未能确认上一条消息。请核对历史，或清除本机待核对记录后继续；不会自动重发。")
+            return
+        }
         if (pendingSubmissions[session]?.key != pending.key || !result.optBoolean("found")) return
         noteRunActivity(session, result, activityClock())
+        if (agent == "hermes") {
+            if (result.optString("status") !in setOf("started", "submitting", "running", "queued", "completed", "failed", "cancelled", "interrupted")) {
+                setError(session, "Hermes 尚未确认上次任务状态，请稍后核对；不会重复发送。")
+                return
+            }
+            markSubmissionAccepted(session, pending.key); removePending(session); questionAccepted(session)
+            setError(session, null)
+            if (result.optString("status") in setOf("started", "submitting", "running", "queued")) {
+                val id = result.getString("run_id")
+                startRunTiming(id, result, pending.timestamp)
+                if (selectedId == session) {
+                    runId = id; runSession = session; seq = -1; events = emptyList(); eventCount = 0; approval = null; pendingText = ""
+                    runVerifiedAt = activityClock(); activityNow = runVerifiedAt; state = "执行中"
+                    prefs.edit().putString("run", id).putString("runSession", session).putString("runMessageKey", pending.key).apply()
+                    watch()
+                } else backgroundRuns[session] = id
+                saveRuns()
+            }
+            if (selectedId == session) loadHistory(session)
+            return
+        }
         when (result.optString("status")) {
             "started", "submitting" -> {
                 val id = result.getString("run_id")
@@ -669,9 +704,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 val indexed = latest.associateBy { it.optString("id") }
                 val known = sessions.map { it.optString("id") }.toSet()
                 sessions = latest.filter { it.optString("id") !in known } + sessions.map { indexed[it.optString("id")] ?: it }
-            if (agent == "codex") {
-                reconcilePendingNow()
-            }
+            reconcilePendingNow()
             for ((session, id) in backgroundRuns.toMap()) {
                 try {
                     val runRequestedAt = activityClock()
@@ -1274,7 +1307,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     }
                 } else {
                     if (selectedId == session) messages = messages.map { if (it.localKey == key) it.copy(delivery = "发送状态待核对") else it }
-                    if (agent == "codex") try { reconcilePendingNow(session) } catch (_: Exception) { }
+                    try { reconcilePendingNow(session) } catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { }
+                    if (!hasPendingFor(session)) return@launch
                 }
                 setError(session, if (writeWasRejected(e)) connectionFailureMessage(e)
                     else "消息发送结果尚未确认，请核对会话历史；不要重复发送。${connectionFailureMessage(e)}")

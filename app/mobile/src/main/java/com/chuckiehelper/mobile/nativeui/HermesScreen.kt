@@ -84,6 +84,9 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     var filter by rememberSaveable { mutableStateOf("") }
     var pendingInfo by remember { mutableStateOf(false) }
     var questionPanel by remember { mutableStateOf(false) }
+    LaunchedEffect(pendingInfo, model.selectedId, model.hasPendingSubmission) {
+        if (pendingInfo && !model.hasPendingSubmission) pendingInfo = false
+    }
     LaunchedEffect(model.selectedId, model.controlMessage) {
         val message = model.controlMessage ?: return@LaunchedEffect
         kotlinx.coroutines.delay(5000)
@@ -262,7 +265,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     FlowRow {
                         TextButton(onClick = { model.reconnect() }) { Text("重新连接") }
                         if (model.hasPendingSubmission)
-                            TextButton(onClick = { model.reconcilePending() }) { Text("核对发送结果") }
+                            TextButton(onClick = { pendingInfo = true; model.reconcilePending() }) { Text("核对发送结果") }
                         if (model.canTakeover) TextButton(onClick = { takeover = true }) { Text("中断并接管") }
                         TextButton(onClick = { model.error = null }) { Text("收起") }
                     }

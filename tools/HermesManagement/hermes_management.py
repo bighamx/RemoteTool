@@ -19,8 +19,14 @@ import hermes_bootstrap
 def main():
     request = json.load(sys.stdin)
     action = request.get("action")
-    if action not in {"providers", "save_provider", "default_model", "model_info", "model_reasoning", "session_context", "compress_session"}:
+    if action not in {"providers", "save_provider", "default_model", "model_info", "model_reasoning", "session_context", "compress_session", "run_lookup"}:
         raise ValueError("Unsupported settings operation")
+    if action == "run_lookup":
+        with contextlib.redirect_stdout(io.StringIO()):
+            from hermes_constants import get_hermes_home
+            result = lookup_run(get_hermes_home() / "runs_idempotency.db", request.get("body") or {})
+        print(json.dumps(result, ensure_ascii=True))
+        return
     if action == "session_context":
         # Context reads use their own server gate and resolve the actual resume
         # target. Import model catalog handlers only when a cached limit is absent.
@@ -134,6 +140,18 @@ def main():
         if isinstance(value, list): return [scrub(v) for v in value]
         return value
     print(json.dumps(scrub(result), ensure_ascii=True))
+
+def lookup_run(path, body):
+    import re
+    key, session = str(body.get("key") or ""), str(body.get("session_id") or "")
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{16,120}", key) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", session):
+        raise ValueError("Invalid run lookup")
+    if not path.is_file(): return {"found": False}
+    with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
+        rows = db.execute("SELECT run_id,status_json FROM run_idempotency WHERE idempotency_key=? LIMIT 2", (key,)).fetchall()
+    if len(rows) != 1 or json.loads(rows[0][1]).get("session_id") != session: return {"found": False}
+    # Only the native run ID is returned; the HTTP handler must verify its auth scope.
+    return {"found": True, "run_id": rows[0][0]}
 
 def compress_session(body):
     from hermes_state import SessionDB

@@ -125,6 +125,23 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     }
     [HttpPost("sessions/{id}/messages/{messageId}/attachments")] public IActionResult BindAttachments(string id, string messageId, [FromBody] JsonElement body)
     { attachments.Bind(Id(id), messageId, body.GetProperty("ids").EnumerateArray().Select(value => value.GetString()!).ToArray()); return Ok(new { success = true }); }
+    [HttpGet("runs/lookup")] public async Task<IActionResult> LookupRun(string key, string session_id, CancellationToken ct) {
+        if (!Regex.IsMatch(key ?? "", "^[a-zA-Z0-9_-]{16,120}$")) return BadRequest(new { message = "无效的请求标识" });
+        if (!Regex.IsMatch(session_id ?? "", "^[a-zA-Z0-9_-]{1,160}$")) return BadRequest(new { message = "无效的会话标识" });
+        var session = Id(session_id ?? "");
+        var stored = await management.Invoke("run_lookup", JsonSerializer.SerializeToElement(new { key, session_id = session }), ct);
+        if (!stored.TryGetProperty("found", out var found) || !found.GetBoolean()) return Ok(new { found = false });
+        // Hermes itself authorizes the run using the configured Bearer principal.
+        // Reading a reservation is not sufficient to expose or confirm another scope's run.
+        using var upstream = await bridge.SendAsync(HttpMethod.Get, "v1/runs/" + Id(stored.GetProperty("run_id").GetString()!), null, null, ct);
+        if (upstream.StatusCode == System.Net.HttpStatusCode.NotFound || upstream.StatusCode == System.Net.HttpStatusCode.Unauthorized || upstream.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            return Ok(new { found = false });
+        if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法核对 Hermes 任务状态" });
+        var result = JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
+        if (result["session_id"]?.ToString() != session) return Ok(new { found = false });
+        result["found"] = true;
+        return Ok(result);
+    }
     [HttpPost("runs")] public async Task Run([FromBody] JsonElement body, CancellationToken ct)
     {
         var key = Request.Headers["Idempotency-Key"].ToString();
