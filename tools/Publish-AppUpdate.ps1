@@ -77,14 +77,16 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText($notesTarget, $notes, $utf8)
 if ((Get-ApkSha256 $targetApk) -ne $manifest.sha256) { throw 'Copied APK hash mismatch.' }
 if ($Publish) {
-    $repository = 'bighamx/chuckieTool'
-    $releasesRaw = & rtk proxy gh api "repos/$repository/releases?per_page=30"
+    $repository = 'bighamx/RemoteTool'
+    $repositoryId = 368781353
+    $releasesRaw = & rtk proxy gh api "repositories/$repositoryId/releases?per_page=30"
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read current releases; refusing to publish without version verification.' }
     foreach ($release in ($releasesRaw -join "`n" | ConvertFrom-Json)) {
         if ($release.draft -or $release.prerelease) { continue }
         $asset = $release.assets | Where-Object { $_.name -eq 'chuckiehelper-update.json' } | Select-Object -First 1
         if ($asset) {
-            if (-not $asset.browser_download_url.StartsWith("https://github.com/$repository/releases/download/")) { throw 'Unexpected manifest URL.' }
+            if (-not ($asset.browser_download_url.StartsWith("https://github.com/$repository/releases/download/") -or
+                $asset.browser_download_url.StartsWith('https://github.com/bighamx/chuckieTool/releases/download/'))) { throw 'Unexpected manifest URL.' }
             $published = Invoke-RestMethod -Uri $asset.browser_download_url
             if ($versionCode -le [long]$published.versionCode) { throw 'versionCode must exceed every published stable Android version.' }
         }

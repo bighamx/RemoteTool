@@ -102,8 +102,9 @@ internal class AppUpdateModel(app: Application) : AndroidViewModel(app) {
         if (busy) return
         val now = System.currentTimeMillis()
         val elapsed = now - prefs.getLong("attempt_at", 0)
-        if (!manual && elapsed in 0 until TimeUnit.HOURS.toMillis(6)) return
-        prefs.edit().putLong("attempt_at", now).apply()
+        if (!manual && prefs.getInt("attempt_version", 0) == BuildConfig.VERSION_CODE &&
+            elapsed in 0 until TimeUnit.HOURS.toMillis(6)) return
+        prefs.edit().putLong("attempt_at", now).putInt("attempt_version", BuildConfig.VERSION_CODE).apply()
         val previous = phase
         work {
             phase = UpdatePhase.Checking; error = null
@@ -243,7 +244,7 @@ internal class AppUpdateModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun findLatest(): AppRelease? {
-        val releases = JSONArray(fetchText("https://api.github.com/repos/$UPDATE_REPOSITORY/releases?per_page=30"))
+        val releases = JSONArray(fetchText(UPDATE_RELEASES_URL))
         return appReleaseCandidates(releases).map { candidate ->
             val assets = candidate.getJSONArray("assets")
             val manifest = (0 until assets.length()).map { assets.getJSONObject(it) }.first { it.optString("name") == UPDATE_MANIFEST }

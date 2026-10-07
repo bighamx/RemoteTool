@@ -38,6 +38,18 @@ class AppUpdatePolicyTest {
             "https://api.github.com/repos/other/repo/releases", "https://user@release-assets.githubusercontent.com/a")
             .forEach { assertFalse(it, isUpdateTransportUrl(it)) }
     }
+    @Test fun followsObservedRepositoryRenameWithoutAllowingOtherRepositoryIds() {
+        // Actual GitHub 301 Location returned for bighamx/chuckieTool/releases.
+        val moved = "https://api.github.com/repositories/368781353/releases?per_page=30"
+        assertEquals(moved, UPDATE_RELEASES_URL)
+        assertTrue(isUpdateTransportUrl(moved))
+        assertTrue(isUpdateTransportUrl("https://api.github.com/repos/bighamx/chuckieTool/releases?per_page=30"))
+        assertTrue(isUpdateAssetUrl("https://github.com/bighamx/RemoteTool/releases/download/v4/a.apk"))
+        assertTrue(isUpdateAssetUrl("https://github.com/bighamx/chuckieTool/releases/download/v4/a.apk"))
+        assertFalse(isUpdateTransportUrl("https://api.github.com/repositories/368781354/releases?per_page=30"))
+        assertFalse(isUpdateTransportUrl("https://api.github.com/repositories/368781353/releases-other"))
+        assertFalse(isUpdateTransportUrl("https://api.github.com/repos/bighamx/RemoteTool/releases-other"))
+    }
     @Test fun rejectsDowngradeWrongVersionAndUnsignedOrForeignApk() {
         val value = parseAppRelease(manifest(), release())
         validateUpdateIdentity(UPDATE_PACKAGE, 4, setOf("installed"), 3, setOf("installed"), value)

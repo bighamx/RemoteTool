@@ -4,7 +4,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 
-internal const val UPDATE_REPOSITORY = "bighamx/chuckieTool"
+internal const val UPDATE_REPOSITORY = "bighamx/RemoteTool"
+internal const val UPDATE_REPOSITORY_ID = 368781353L
+internal const val UPDATE_RELEASES_URL = "https://api.github.com/repositories/368781353/releases?per_page=30"
+private val updateRepositoryAliases = setOf(UPDATE_REPOSITORY, "bighamx/chuckieTool")
 internal const val UPDATE_MANIFEST = "chuckiehelper-update.json"
 internal const val UPDATE_PACKAGE = "com.chuckiehelper.mobile"
 internal const val MAX_UPDATE_SIZE = 256L * 1024 * 1024
@@ -24,14 +27,15 @@ internal data class AppRelease(
 internal fun isUpdateAssetUrl(url: String): Boolean = runCatching {
     val uri = URI(url)
     uri.scheme == "https" && uri.host == "github.com" && uri.port in setOf(-1, 443) &&
-        uri.userInfo == null && uri.rawPath.startsWith("/$UPDATE_REPOSITORY/releases/download/")
+        uri.userInfo == null && updateRepositoryAliases.any { uri.rawPath.startsWith("/$it/releases/download/", ignoreCase = true) }
 }.getOrDefault(false)
 
 internal fun isUpdateTransportUrl(url: String): Boolean = runCatching {
     val uri = URI(url)
     uri.scheme == "https" && uri.port in setOf(-1, 443) && uri.userInfo == null &&
         (isUpdateAssetUrl(url) ||
-            (uri.host == "api.github.com" && uri.path.startsWith("/repos/$UPDATE_REPOSITORY/releases")) ||
+            (uri.host == "api.github.com" && (uri.path == "/repositories/$UPDATE_REPOSITORY_ID/releases" ||
+                updateRepositoryAliases.any { uri.path.equals("/repos/$it/releases", ignoreCase = true) })) ||
             uri.host in setOf("release-assets.githubusercontent.com", "objects.githubusercontent.com"))
 }.getOrDefault(false)
 
