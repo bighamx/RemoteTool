@@ -84,6 +84,11 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     var filter by rememberSaveable { mutableStateOf("") }
     var pendingInfo by remember { mutableStateOf(false) }
     var questionPanel by remember { mutableStateOf(false) }
+    LaunchedEffect(model.selectedId, model.controlMessage) {
+        val message = model.controlMessage ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(5000)
+        model.dismissControlMessage(message)
+    }
     LaunchedEffect(model.selectedId, list, api.base, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             if (!list && model.selectedId != null) while (true) { awaitUiRead(model.pollContext()); kotlinx.coroutines.delay(agentContextPollDelay(model.hasExecution)) }
