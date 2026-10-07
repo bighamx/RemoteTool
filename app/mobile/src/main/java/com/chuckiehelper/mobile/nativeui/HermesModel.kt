@@ -825,11 +825,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         // SSE can add narration during those requests; merge the latest local state only
         // at publication, rather than exposing a bare/stale server snapshot to Compose.
         var history =
-            response.array("data").objects().mapNotNull { row -> agentHistoryMessage(agent, row) }
+            retainUserMessageMetadata(
+                response.array("data").objects().mapNotNull { row -> agentHistoryMessage(agent, row) }, messages,
+            )
         val sessionSteering = steering.filter { it.session == id }
         val reconciliation = reconcileSteeringMessages(history, sessionSteering)
         for ((sent, confirmed) in reconciliation.second) {
-            narrations = acknowledgeNarrationUser(narrations, id, sent.key, confirmed)
+            val canonical = confirmed.copy(timestamp = confirmed.timestamp ?: sent.timestamp, localKey = sent.key)
+            history = history.map { if (it.serverId == confirmed.serverId) canonical else it }
+            narrations = acknowledgeNarrationUser(narrations, id, sent.key, canonical)
             if (sent.attachments.isNotEmpty()) {
                 connection.json("$root/sessions/$id/messages/${confirmed.serverId}/attachments",
                     obj("ids" to org.json.JSONArray(sent.attachments.map { it.getString("id") })))
@@ -848,6 +852,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     it.text.replace("\r\n", "\n").trim() == local.pending.input.replace("\r\n", "\n").trim()
             }
             if (acknowledged != null) {
+                val canonical = acknowledged.copy(timestamp = acknowledged.timestamp ?: local.pending.timestamp, localKey = local.pending.key)
+                history = history.map { if (it.serverId == acknowledged.serverId) canonical else it }
                 if (local.files.isNotEmpty()) {
                     connection.json("$root/sessions/$id/messages/${acknowledged.serverId}/attachments",
                         obj("ids" to org.json.JSONArray(local.files.map { it.getString("id") })))
@@ -855,9 +861,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     history = history.map { if (it.serverId == acknowledged.serverId) it.copy(attachments = local.files) else it }
                 }
                 if (localSubmissions[id]?.pending?.key == local.pending.key) localSubmissions.remove(id)
-                narrations = acknowledgeNarrationUser(narrations, id, local.pending.key, acknowledged)
+                narrations = acknowledgeNarrationUser(narrations, id, local.pending.key, canonical)
                 runNarrationUsers.entries.forEach { entry ->
-                    if (entry.value.localKey == local.pending.key) entry.setValue(acknowledged.copy(localKey = local.pending.key))
+                    if (entry.value.localKey == local.pending.key) entry.setValue(canonical)
                 }
             }
         }

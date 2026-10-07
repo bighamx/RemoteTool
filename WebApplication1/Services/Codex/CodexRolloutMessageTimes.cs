@@ -78,8 +78,11 @@ internal static class CodexRolloutMessageTimes
             var id=payload.TryGetProperty("id",out var item)?item.GetString():null;
             if(id!=null && state.Ids.ContainsKey(id))return;
             if(record.TryGetProperty("timestamp",out var timestamp) && DateTimeOffset.TryParse(timestamp.GetString(),out var time)) {
+                var hasImages=payload.TryGetProperty("content",out var imageContent) && imageContent.ValueKind==JsonValueKind.Array &&
+                    imageContent.EnumerateArray().Any(part=>part.TryGetProperty("type",out var imageType) && imageType.GetString()=="input_image");
                 var text=payload.TryGetProperty("content",out var content) && content.ValueKind==JsonValueKind.Array
                     ? string.Join('\n',content.EnumerateArray().Where(part=>part.TryGetProperty("type",out var type) && type.GetString() is "input_text" or "output_text" or "text")
+                        .Where(part=>role!="user" || !hasImages || !ImageFrame(part))
                         .Select(part=>part.TryGetProperty("text",out var value)?value.GetString():"")) : "";
                 var entry=new Entry(state.Position++,time.ToUnixTimeMilliseconds());
                 if(!string.IsNullOrWhiteSpace(id))state.Ids[id]=entry;
@@ -92,5 +95,11 @@ internal static class CodexRolloutMessageTimes
                 }
             }
         } catch(Exception error) when(error is JsonException or InvalidOperationException) { }
+    }
+    private static bool ImageFrame(JsonElement part) {
+        if(!part.TryGetProperty("text",out var value) || value.ValueKind!=JsonValueKind.String)return false;
+        var text=value.GetString().Trim();
+        return text=="</image>" || text.StartsWith("<image name=[Image #",StringComparison.Ordinal) &&
+            text.EndsWith(">",StringComparison.Ordinal) && !text.Contains('\n') && !text.Contains('\r');
     }
 }
