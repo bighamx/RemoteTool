@@ -65,10 +65,10 @@ fun mergeSteeringMessages(history: List<HermesMessage>, steering: List<SteeringM
         if (rejectedSteering(message)) return@forEach
         if (outsideSteeringWindow(history, message)) return@forEach
         if (rows.any { it.localKey == message.key }) return@forEach
-        val anchor = rows.indexOfLast { it.serverId == message.anchor && it.serverId > 0 }
-        var index = if (anchor >= 0) anchor + 1 else rows.size
-        while (index < rows.size && rows[index].localKey != null) index++
-        rows.add(index, HermesMessage("user", message.text, attachments = message.attachments, localKey = message.key, delivery = message.delivery, timestamp = message.timestamp))
+        val merged = insertLocalMessage(rows,
+            HermesMessage("user", message.text, attachments = message.attachments, localKey = message.key, delivery = message.delivery, timestamp = message.timestamp),
+            message.existingIds, message.anchor)
+        rows.clear(); rows.addAll(merged)
     }
     return rows
 }

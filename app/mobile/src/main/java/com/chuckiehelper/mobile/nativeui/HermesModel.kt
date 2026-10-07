@@ -629,6 +629,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             "started", "submitting" -> {
                 val id = result.getString("run_id")
                 startRunTiming(id, result, pending.timestamp)
+                markSubmissionAccepted(session, pending.key)
                 removePending(session)
                 if (selectedId == session) {
                     runId = id; runSession = session
@@ -949,10 +950,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         saveNarrations()
         history = mergeSteeringMessages(history, steering.filter { it.session == id })
         localSubmissions[id]?.let { local ->
-            history = history + HermesMessage("user", local.pending.input, attachments = local.files,
+            history = insertLocalMessage(history, HermesMessage("user", local.pending.input, attachments = local.files,
                 localKey = local.pending.key, delivery = if (hasPendingFor(id)) {
                     if (submitting) "正在发送" else "发送状态待核对"
-                } else "已送达", timestamp = local.pending.timestamp)
+                } else "已送达", timestamp = local.pending.timestamp), local.existing, local.after)
         }
         history = mergeAssistantNarrations(history, liveNarrations(id))
         history = reconcilePendingAssistant(history, pendingItemId, pendingText)
@@ -1090,11 +1091,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             scrollToLatestRequest++
             if (isQuestion) prefs.edit().putString("answeringQuestion:$session", questionId).apply()
             launch {
+                var accepted = false
                 try {
                     val live = connection.json("$root/runs/$id")
                     if (live.optString("status") != "started") throw ApiRequestFailure("原任务已结束，本次插话未写入。草稿已保留，请作为新消息发送。", 409, "run_stale", "rejected")
                     val request = connection.request("$root/runs/$id/steer", obj("input" to input, "session_id" to session, "attachment_ids" to org.json.JSONArray(attached.map { it.getString("id") }))).newBuilder().header("Idempotency-Key", steerKey).build()
                     connection.json(request)
+                    accepted = true
                     questionAccepted(session); updateSteering(steerKey, "已送达")
                     if (selectedId == session && runId == id && api === connection)
                         messages.firstOrNull { it.role == "user" && it.localKey == steerKey }?.let { runNarrationUsers[id] = it }
@@ -1104,6 +1107,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     currentCoroutineContext().ensureActive()
+                    if (accepted) { setError(session, "插话已送达，暂时无法刷新历史。${connectionFailureMessage(e)}"); return@launch }
                     setError(session, if (writeWasRejected(e)) connectionFailureMessage(e)
                         else "插话发送结果尚未确认，请核对会话历史后再决定是否重发。${connectionFailureMessage(e)}")
                     updateSteering(steerKey, steeringFailureDelivery(e))
@@ -1135,6 +1139,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     val hasPendingSubmission get() = selectedId?.let { hasPendingFor(it) } == true && runId == null
 
+    private fun markSubmissionAccepted(session: String, key: String) {
+        if (selectedId == session) messages = messages.map {
+            if (it.role == "user" && it.localKey == key) it.copy(delivery = "已送达") else it
+        }
+        cachedHistory[session]?.let { rows -> cachedHistory[session] = rows.map {
+            if (it.role == "user" && it.localKey == key) it.copy(delivery = "已送达") else it
+        } }
+    }
+
     private fun submit(pending: PendingAgentSubmission, session: String) {
         val key = pending.key; val input = pending.input
         val provider = sessionProvider; val model = sessionModel
@@ -1149,6 +1162,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
         if (pending.questionId == null) setDraft(session, "")
         launch {
+            var accepted = false
             try {
                 val payload = obj("input" to input, "session_id" to session,
                     "account_id" to if (agent == "codex") accounts.optString("current").takeIf { it.isNotBlank() && it != "null" } else null,
@@ -1164,10 +1178,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 when (response.optString("status")) {
                     "acceptance_unknown" -> throw ApiRequestFailure("上次发送结果尚未确认，请核对会话历史；不会重复发送", 409, "delivery_unknown", "unknown")
                     "failed", "interrupted" -> throw ApiRequestFailure("原请求已结束，本次没有再次写入。草稿已保留，请核对后重新发送。", 409, "run_stale", "rejected")
-                    "completed" -> { removePending(session); if (selectedId == session) loadHistory(session); return@launch }
+                    "completed" -> { accepted = true; markSubmissionAccepted(session, key); removePending(session); if (selectedId == session) loadHistory(session); return@launch }
                 }
                 startRunTiming(startedRun, response, pending.timestamp)
                 noteRunActivity(session, obj("status" to response.optString("status", "started")), activityClock())
+                accepted = true
+                markSubmissionAccepted(session, key)
                 questionAccepted(session); removePending(session)
                 if (selectedId == session) {
                     runId = startedRun; runSession = session
@@ -1182,6 +1198,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 saveRuns()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
+                if (accepted) { setError(session, "消息已送达，暂时无法刷新历史。${connectionFailureMessage(e)}"); return@launch }
                 if (writeWasRejected(e)) {
                     removePending(session)
                     prefs.edit().remove("answeringQuestion:$session").apply()
