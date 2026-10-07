@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application android:label="ChuckieHelper" android:icon="@mipmap/ic_launcher" android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="true" android:allowBackup="false">
         <activity android:name=".NativeActivity" android:exported="true" android:windowSoftInputMode="adjustResize"
@@ -13,6 +14,9 @@
         <activity android:name=".RemoteActivity" android:exported="false" android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden"/>
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.hermes.files" android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/hermes_file_paths"/>
+        </provider>
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/app_update_paths"/>
         </provider>
     </application>
 </manifest>

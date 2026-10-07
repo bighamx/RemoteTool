@@ -38,6 +38,7 @@ import org.json.JSONObject
 
 @Composable
 fun NativeApp(model: NativeModel) {
+    val updates: AppUpdateModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val savedScreens = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val dark = isSystemInDarkTheme()
     val colors =
@@ -151,6 +152,9 @@ fun NativeApp(model: NativeModel) {
                             }
                     },
                     actions = {
+                        if (session == null) IconButton(onClick = { updates.open() }) {
+                            Icon(Icons.Outlined.SystemUpdate, "应用更新")
+                        }
                         if (session != null)
                             IconButton(onClick = { model.openChannels(session.device) }) {
                                 Icon(Icons.Outlined.Route, "连接通道")
@@ -246,7 +250,7 @@ fun NativeApp(model: NativeModel) {
                                     "Codex" -> savedScreens.SaveableStateProvider("codex-${session.device.id}") { HermesScreen(api, session.device.id, "codex") }
                                     else ->
                                         Column(
-                                            Modifier.padding(16.dp),
+                                            Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
                                             verticalArrangement = Arrangement.spacedBy(12.dp),
                                         ) {
                                             ToolRow("文件管理", "浏览 · 传输 · 图片与视频预览", Icons.Outlined.Folder) { detail = "文件" }
@@ -281,6 +285,7 @@ fun NativeApp(model: NativeModel) {
                                             ) {
                                                 model.openChannels(session.device)
                                             }
+                                            ToolRow("应用更新", updates.subtitle, Icons.Outlined.SystemUpdate) { updates.open() }
                                         }
                                 }
                             }
@@ -289,6 +294,7 @@ fun NativeApp(model: NativeModel) {
             }
         }
         model.channelDevice?.let { ChannelDialog(model, it) }
+        AppUpdateHost(updates)
     }
 }
 

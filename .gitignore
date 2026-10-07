@@ -140,6 +140,7 @@ node_modules/
 **/node_modules/
 # codex: end local build artifacts
 .tmp-mobile-build/
+/artifacts/app-updates/
 screenshots/android-*.png
 screenshots/web-performance-*.png
 
