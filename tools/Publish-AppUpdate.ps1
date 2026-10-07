@@ -52,10 +52,10 @@ if ($PreviousApkPath) {
     $oldCode = [long][regex]::Match($oldBadging, "versionCode='(\d+)'").Groups[1].Value
     if ($versionCode -le $oldCode) { throw 'versionCode must be greater than the previous APK.' }
 }
-$notes = if ($NotesPath) { Get-Content -LiteralPath $NotesPath -Encoding UTF8 -Raw } else { "ChuckieHelper Android v$versionName" }
+$notes = if ($NotesPath) { Get-Content -LiteralPath $NotesPath -Encoding UTF8 -Raw } else { "RemoteTool Android v$versionName" }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskRepo "artifacts\app-updates\$versionCode" }
 $destination = [IO.Path]::GetFullPath($OutputDirectory)
-$apkName = "ChuckieHelper-$versionName.apk"
+$apkName = "RemoteTool-$versionName.apk"
 $targetApk = Join-Path $destination $apkName
 $manifestPath = Join-Path $destination 'chuckiehelper-update.json'
 $notesTarget = Join-Path $destination 'release-notes.txt'
@@ -91,7 +91,7 @@ if ($Publish) {
             if ($versionCode -le [long]$published.versionCode) { throw 'versionCode must exceed every published stable Android version.' }
         }
     }
-    & rtk proxy gh release create "android-v$versionName-build$versionCode" $targetApk $manifestPath --repo $repository --title "ChuckieHelper Android v$versionName" --notes-file $notesTarget
+    & rtk proxy gh release create "android-v$versionName-build$versionCode" $targetApk $manifestPath --repo $repository --title "RemoteTool Android v$versionName" --notes-file $notesTarget
     if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
 } else { Write-Output 'Prepared locally. Add -Publish to publish these assets as an Android GitHub release.' }
 Write-Output "APK: $targetApk"

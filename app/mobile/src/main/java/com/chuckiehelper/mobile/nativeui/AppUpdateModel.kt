@@ -272,7 +272,7 @@ internal class AppUpdateModel(app: Application) : AndroidViewModel(app) {
     private suspend fun <T> fetch(url: String, redirects: Int = 0, action: suspend (Response) -> T): T {
         require(isUpdateTransportUrl(url) && redirects <= 5) { "更新服务地址无效" }
         val call = http.newCall(Request.Builder().url(url).header("Accept", "application/vnd.github+json, application/octet-stream")
-            .header("User-Agent", "ChuckieHelper-Android/${BuildConfig.VERSION_NAME}").build())
+            .header("User-Agent", "RemoteTool-Android/${BuildConfig.VERSION_NAME}").build())
         return withStreamingCallCancellation(call) {
             call.execute().use { response ->
                 if (response.code in setOf(301, 302, 303, 307, 308)) {

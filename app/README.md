@@ -1,4 +1,4 @@
-# ChuckieHelper Android
+# RemoteTool Android
 
 安卓项目位于本目录，应用包名为 `com.chuckiehelper.mobile`。Android 8.0（API 26）及以上。0.2.0 起管理页面使用 Kotlin / Jetpack Compose / Material 3，已移除 WebView 页面和 HTML 资源；原生远程模块继续复用。
 
