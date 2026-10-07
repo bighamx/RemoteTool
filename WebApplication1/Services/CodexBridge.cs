@@ -109,15 +109,20 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             var profile = OperatingSystem.IsWindows()
                 ? Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}", "ProfileImagePath", null)?.ToString()
                 : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(profile)) profile = Environment.ExpandEnvironmentVariables(profile);
             // The console session may have no logged-on user (RDP-only machine); sid then
             // resolves to the service account whose profile cannot host the desktop app.
             // Fall back to the newest interactive user profile that actually has Codex installed.
-            if (OperatingSystem.IsWindows() && (string.IsNullOrWhiteSpace(profile) || profile.Contains("systemprofile", StringComparison.OrdinalIgnoreCase) || !File.Exists(Path.Combine(profile, "AppData", "Local", "OpenAI", "Codex"))))
+            if (OperatingSystem.IsWindows() && (string.IsNullOrWhiteSpace(profile) || profile.Contains("systemprofile", StringComparison.OrdinalIgnoreCase) || !Directory.Exists(Path.Combine(profile, "AppData", "Local", "OpenAI", "Codex"))))
                 profile = Registry.Users.GetSubKeyNames()
                     .Select(sub => Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sub}", "ProfileImagePath", null)?.ToString())
-                    .Where(path => path != null && File.Exists(Path.Combine(path!, "AppData", "Local", "OpenAI", "Codex", "bin")))
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Select(path => Environment.ExpandEnvironmentVariables(path!))
+                    .Where(path => Directory.Exists(Path.Combine(path, "AppData", "Local", "OpenAI", "Codex", "bin")))
                     .OrderByDescending(path => Directory.GetLastWriteTimeUtc(Path.Combine(path!, "AppData", "Local", "OpenAI", "Codex")))
                     .FirstOrDefault() ?? profile;
+            if (string.IsNullOrWhiteSpace(profile)) profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(profile)) throw new InvalidOperationException("无法确定 Codex 用户目录，请检查电脑登录状态");
             var accountStore = Path.Combine(profile, ".codex-switch");
             Directory.CreateDirectory(accountStore);
             if (OperatingSystem.IsWindows()) {
