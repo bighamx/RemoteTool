@@ -91,15 +91,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var externalVerifiedAt by mutableLongStateOf(0L)
     private var externalHistoryRevision: String? = null
     private var sessionControl by mutableStateOf<JSONObject?>(null)
+    private var sessionControlVerifiedAt by mutableLongStateOf(0L)
     var controlMessage by mutableStateOf<String?>(null)
         private set
     private var runVerifiedAt by mutableLongStateOf(0L)
     private var runTurnId: String? = null
     val runStateVerified get() = runId != null && activityNow - runVerifiedAt < 30_000L
     val canTakeover get() = agent == "codex" && selectedId != null && capabilities.optBoolean("session_takeover") &&
-        runId == null && !submitting && !hasPendingSubmission && (externalRunning || sessionControl?.optString("state") in setOf("busy", "writer_held") ||
+        runId == null && !submitting && !hasPendingSubmission && (showWriteInterruption(externalRunning, sessionControl?.optString("state"), sessionControlVerifiedAt, activityNow) ||
             error.orEmpty().let { "写入权限" in it || "所有者" in it || "接管" in it })
-    val writeAccessMessage get() = sessionControl?.takeIf { it.optString("state") in setOf("busy", "writer_held") }?.optString("message")
+    val writeAccessMessage get() = sessionControl?.takeIf { showWriteInterruption(externalRunning, it.optString("state"), sessionControlVerifiedAt, activityNow) && it.optString("state") == "busy" }?.optString("message")
+    fun dismissControlMessage(expected: String?) { if (controlMessage == expected) controlMessage = null }
     private val observation = ForegroundObservation(::watch, ::pauseWatching)
     private var streamConnected = false
     private var observationEpoch = 0L
@@ -465,6 +467,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (!result.optBoolean("ready")) throw java.io.IOException("尚未确认会话可写入，请刷新后重试")
             runId?.let { clearRunTracking(session, it) }
             externalActivity = null; externalHistoryRevision = null
+            sessionControl = null; sessionControlVerifiedAt = 0
             state = "就绪"; controlMessage = result.optString("message")
             loadHistory(session); loadSelection(session)
         } finally { setSubmitting(session, false) }
@@ -479,7 +482,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             contextInfo = result.optJSONObject("context") ?: result
             if (contextInfo?.optBoolean("available") == true) contextCache[id] = contextInfo!!
             if (agent == "codex") asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
-            result.optJSONObject("control")?.let { sessionControl = it }
+            sessionControl = result.optJSONObject("control")
+            sessionControlVerifiedAt = activityClock()
             result.optString("title").takeIf { it.isNotBlank() && it != "null" }?.let { title = it }
         } catch (e: CancellationException) { throw e }
         catch (error: Exception) {
@@ -887,6 +891,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         result.optJSONObject("context")?.let { contextInfo = it; if (it.optBoolean("available")) contextCache[id] = it }
         asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
         sessionControl = result.optJSONObject("control")
+        sessionControlVerifiedAt = activityClock()
         pollContext()
         attachServerActiveRun(id)
     }
@@ -905,6 +910,22 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             retainUserMessageMetadata(
                 response.array("data").objects().mapNotNull { row -> agentHistoryMessage(agent, row) }, messages,
             )
+        // Hermes has no request-key lookup. After an App restart the in-memory
+        // pre-send boundary is gone, so reconcile persisted submissions using
+        // unambiguous timestamped history rather than leaving them pending forever.
+        pendingSubmissions[id]?.takeIf { localSubmissions[id] == null }?.let { pending ->
+            restoredPendingHistoryMatch(agent, pending, history)?.let { confirmed ->
+                markSubmissionAccepted(id, pending.key)
+                removePending(id)
+                questionAccepted(id)
+                history = history.map { if (it.serverId == confirmed.serverId) it.copy(localKey = pending.key, delivery = "已送达") else it }
+                if (error.orEmpty().contains("尚未确认")) setError(id, null)
+                if (pending.attachmentIds.isNotEmpty()) {
+                    connection.json("$root/sessions/$id/messages/${confirmed.serverId}/attachments", obj("ids" to org.json.JSONArray(pending.attachmentIds)))
+                    if (selectedId != id || api !== connection) return
+                }
+            }
+        }
         val sessionSteering = steering.filter { it.session == id }
         val reconciliation = reconcileSteeringMessages(history, sessionSteering)
         for ((sent, confirmed) in reconciliation.second) {
@@ -932,7 +953,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (acknowledged != null) {
                 val canonical = acknowledged.copy(timestamp = acknowledged.timestamp ?: local.pending.timestamp, localKey = local.pending.key)
                 history = history.map { if (it.serverId == acknowledged.serverId) canonical else it }
-                if (pendingSubmissions[id]?.key == local.pending.key) removePending(id)
+                if (pendingSubmissions[id]?.key == local.pending.key) {
+                    markSubmissionAccepted(id, local.pending.key); removePending(id); questionAccepted(id)
+                    if (error.orEmpty().contains("尚未确认")) setError(id, null)
+                }
                 if (local.files.isNotEmpty()) {
                     connection.json("$root/sessions/$id/messages/${acknowledged.serverId}/attachments",
                         obj("ids" to org.json.JSONArray(local.files.map { it.getString("id") })))
