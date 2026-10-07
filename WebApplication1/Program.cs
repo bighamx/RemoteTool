@@ -86,6 +86,7 @@ namespace ChuckieHelper.WebApi
             builder.Services.AddRemoteControlServices();
             builder.Services.AddSingleton<DeviceIdentity>();
             builder.Services.AddSingleton<HermesBridge>();
+            builder.Services.AddSingleton<HermesTitleService>();
             builder.Services.AddSingleton<RunRegistry>();
 builder.Services.AddSingleton<HermesManagement>();
 builder.Services.AddSingleton<HermesSessionActivity>();
@@ -93,6 +94,7 @@ builder.Services.AddSingleton<CodexSessionActivity>();
 builder.Services.AddSingleton<HermesCompaction>();
             builder.Services.AddSingleton<HermesAttachments>();
             builder.Services.AddSingleton<CodexBridge>();
+            builder.Services.AddSingleton<ITitleModelGateway>(services => services.GetRequiredService<CodexBridge>());
             builder.Services.AddKeyedSingleton("codex", new HermesAttachments("codex"));
             builder.Services.AddHttpClient("codex", client => client.Timeout = Timeout.InfiniteTimeSpan)
                 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });

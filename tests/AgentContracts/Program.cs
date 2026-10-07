@@ -1,6 +1,18 @@
 using System.Text.Json.Nodes;
 using ChuckieHelper.WebApi.Services.Codex;
 
+{
+    var orphan = new JsonObject { ["status"] = "started", ["approval"] = new JsonObject() };
+    if (!CodexRunRecovery.Recover(orphan, false) || orphan.S("status") != "acceptance_unknown" || orphan.ContainsKey("approval"))
+        throw new Exception("An old journal entry must not prove a running task or retain an approval");
+    var live = new JsonObject { ["status"] = "started" };
+    if (CodexRunRecovery.Recover(live, true) || live.S("status") != "started") throw new Exception("Live ownership must remain active");
+    var finished = new JsonObject { ["status"] = "started" };
+    if (!CodexRunRecovery.Recover(finished, false, "interrupted") || finished.S("status") != "interrupted") throw new Exception("Actual history confirms terminal status");
+    if (new CodexError("Rejected", 409).Delivery != "rejected" || new CodexError("No acknowledgement", 504).Delivery != "unknown")
+        throw new Exception("A timeout cannot prove a message was rejected");
+}
+
 if (args.Length == 3 && args[0] == "--workspace-probe") {
     var config = CodexJson.Read(args[1]); var saved = CodexJson.Read(args[2]);
     foreach (var row in saved["accounts"]!.AsObject()) {
@@ -233,3 +245,5 @@ Check(await ChuckieHelper.WebApi.Services.RemoteControl.WebSocketTextReader.Read
 using var oversized = new FragmentSocket(new byte[17000]);
 Check(await ChuckieHelper.WebApi.Services.RemoteControl.WebSocketTextReader.Read(oversized, new byte[4096], default) == null && oversized.ClosedAs == System.Net.WebSockets.WebSocketCloseStatus.MessageTooBig, "oversized message bounded");
 Console.WriteLine($"Including remote WebSocket checks: {count} passed");
+await TitleModelChecks.Run();
+await HermesTitleChecks.Run();

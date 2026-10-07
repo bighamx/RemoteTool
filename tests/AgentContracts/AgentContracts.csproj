@@ -1,7 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Using Include="Microsoft.Extensions.Configuration" />
+    <Compile Include="../../WebApplication1/Services/HermesBridge.cs" Link="HermesBridge.cs" />
+    <Compile Include="../../WebApplication1/Services/HermesTitleService.cs" Link="HermesTitleService.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexRpc.cs" Link="CodexRpc.cs" />
+    <Compile Include="../../WebApplication1/Services/Codex/CodexTitleGenerator.cs" Link="CodexTitleGenerator.cs" />
+    <Compile Include="../../WebApplication1/Services/Codex/CodexRunRecovery.cs" Link="CodexRunRecovery.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexAccountStore.cs" Link="CodexAccountStore.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexWorkspaceUsage.cs" Link="CodexWorkspaceUsage.cs" />
     <Compile Include="../../WebApplication1/Services/Codex/CodexDesktopSync.cs" Link="CodexDesktopSync.cs" />

@@ -25,9 +25,18 @@ internal static class CodexRollout
         return "";
     }
     public static bool IsRunning(string home, string path) {
+        return WriterLocked(home, path) && CodexRolloutSnapshot.Read(home, path).B("running");
+    }
+    public static bool WriterLocked(string home, string path) {
         if (string.IsNullOrWhiteSpace(path) || !OperatingSystem.IsWindows()) return false;
-        try { using var probe = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); return false; }
-        catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33) { return CodexRolloutSnapshot.Read(home, path).B("running"); }
+        if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(home) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
+        var locks = Path.Combine(home, "thread-writer-locks");
+        var id = System.Text.RegularExpressions.Regex.Match(Path.GetFileName(path), "[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}").Value;
+        var nativeLock = Directory.Exists(locks) && id.Length > 0;
+        var target = nativeLock ? Path.Combine(locks, id + ".lock") : path;
+        if (!File.Exists(target)) return false;
+        try { using var probe = new FileStream(target, FileMode.Open, FileAccess.Read, nativeLock ? FileShare.None : FileShare.Read); return false; }
+        catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33) { return true; }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
     }
     public static string LastModel(string home, string path) => LastSettings(home, path).S("model");

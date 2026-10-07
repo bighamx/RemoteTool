@@ -191,7 +191,8 @@ class NativeApi(
                         if (res.code == 401) throw LoginRequired()
                         val raw = res.body?.string().orEmpty()
                         val value = runCatching { JSONObject(raw) }.getOrNull()
-                        if (!res.isSuccessful) throw ApiRequestFailure(value?.optString("message")?.takeIf { it.isNotBlank() } ?: "请求失败 HTTP ${res.code}", res.code)
+                        if (!res.isSuccessful) throw ApiRequestFailure(value?.optString("message")?.takeIf { it.isNotBlank() } ?: "请求失败 HTTP ${res.code}", res.code,
+                            value?.optString("code").orEmpty(), value?.optString("delivery").orEmpty())
                         if (value == null) throw ApiRequestFailure("服务返回了非 JSON 响应", res.code)
                         if (value.has("success") && !value.optBoolean("success")) throw ApiRequestFailure(value.optString("message", "操作失败"), res.code)
                         if (value.optJSONObject("data")?.optInt("fail", 0)?.let { it > 0 } == true) throw ApiRequestFailure(value.optString("message", "部分项目操作失败"), res.code)
@@ -368,7 +369,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         channelDevice = null
         checkingChannels = false
         channelChecks = emptyList()
-        startConnection(current, url)
+        startConnection(current, url, allowFallback = true)
     }
 
     fun openChannels(device: Device) {
@@ -448,7 +449,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         startConnection(device, url)
     }
 
-    private fun startConnection(device: Device, url: String) {
+    private fun startConnection(device: Device, url: String, allowFallback: Boolean = false) {
         val epoch = ++connectionEpoch
         connectJob?.cancel()
         connecting = true
@@ -457,7 +458,8 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
             viewModelScope.launch {
                 try {
                     // Verify identity again before sharing this device's authentication token.
-                    val (id, selected) = probe(url)
+                    val candidates = if (allowFallback) deviceAddressCandidates(device.endpoints, url) else listOf(url)
+                    val (id, selected) = selectVerifiedDeviceAddress(candidates, device.id, ::probe)
                     if (id != device.id) throw IOException("设备标识不匹配，属于另一台电脑")
                     val reachable =
                         channelChecks.filter { it.reachable }.map { Endpoint(it.url, it.ms!!) }
@@ -495,7 +497,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
                                 (reachable.filter { it.url != selected.url } + selected),
                                 api,
                             )
-                        prefs.edit().putString("channel_${device.id}", url)
+                        prefs.edit().putString("channel_${device.id}", selected.url)
                             .putString("last_device", device.id).apply()
                         browsingDevices = false
                         channelDevice = null

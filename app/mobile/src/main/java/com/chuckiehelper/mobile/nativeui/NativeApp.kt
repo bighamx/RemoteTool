@@ -367,7 +367,7 @@ private fun DeviceScreen(model: NativeModel) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item { Text("连接时使用上次的通道，可在设备内手动切换。", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item { Text("优先连接上次通道，不可达时尝试其他地址；可在设备内手动切换。", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(model.devices, key = { it.id }) { device ->
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

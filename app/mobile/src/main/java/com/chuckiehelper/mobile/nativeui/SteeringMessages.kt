@@ -11,8 +11,19 @@ data class SteeringMessage(
     val attachments: List<org.json.JSONObject> = emptyList(),
 )
 
+const val BUSY_STEERING_DELIVERY = "会话忙，待会话空闲后可重发"
+
+fun steeringFailureDelivery(error: Exception): String =
+    if (writeWasRejected(error) && error is ApiRequestFailure &&
+        listOf("正在桌面端", "正在另一端", "正在运行", "已有手机任务", "占用")
+            .any { it in error.message.orEmpty() })
+        BUSY_STEERING_DELIVERY
+    else if (writeWasRejected(error)) "发送失败" else "发送状态待核对"
+
+fun rejectedSteering(message: SteeringMessage): Boolean = message.delivery in setOf("发送失败", BUSY_STEERING_DELIVERY)
+
 fun steeringAppearsInHistory(message: SteeringMessage, history: List<HermesMessage>): Boolean =
-    message.delivery != "发送失败" && history.any {
+    message.delivery != "发送失败" && message.delivery != BUSY_STEERING_DELIVERY && history.any {
         it.role == "user" && it.serverId > 0 && it.serverId !in message.existingIds &&
             it.text.replace("\r\n", "\n").trim() == message.text.replace("\r\n", "\n").trim()
     }
@@ -23,7 +34,7 @@ fun pendingSteeringMessages(history: List<HermesMessage>, steering: List<Steerin
 
 /** 发送失败的记录超过 10 分钟即视为放弃：不再重放（失败重试应由用户主动操作，而不是每次进会话重发旧文）。 */
 fun isAbandonedSteering(message: SteeringMessage, now: Long = System.currentTimeMillis()): Boolean =
-    message.delivery == "发送失败" && message.timestamp != null && now - message.timestamp > 10 * 60 * 1000L
+    message.delivery in setOf("发送失败", BUSY_STEERING_DELIVERY) && message.timestamp != null && now - message.timestamp > 10 * 60 * 1000L
 
 fun reconcileSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): Pair<List<SteeringMessage>, List<Pair<SteeringMessage, HermesMessage>>> {
     val consumed = mutableSetOf<Long>()
@@ -51,6 +62,7 @@ private fun outsideSteeringWindow(history: List<HermesMessage>, message: Steerin
 fun mergeSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): List<HermesMessage> {
     val rows = history.toMutableList()
     pendingSteeringMessages(history, steering).forEach { message ->
+        if (rejectedSteering(message)) return@forEach
         if (outsideSteeringWindow(history, message)) return@forEach
         if (rows.any { it.localKey == message.key }) return@forEach
         val anchor = rows.indexOfLast { it.serverId == message.anchor && it.serverId > 0 }

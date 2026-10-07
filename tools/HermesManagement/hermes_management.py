@@ -21,6 +21,40 @@ def main():
     action = request.get("action")
     if action not in {"providers", "save_provider", "default_model", "model_info", "model_reasoning", "session_context", "compress_session"}:
         raise ValueError("Unsupported settings operation")
+    if action == "session_context":
+        # Context reads use their own server gate and resolve the actual resume
+        # target. Import model catalog handlers only when a cached limit is absent.
+        with contextlib.redirect_stdout(io.StringIO()):
+            from hermes_state import SessionDB
+            from agent.usage_anchor import persisted_anchor_tokens
+            from agent.model_metadata import estimate_messages_tokens_rough, get_cached_context_length
+            db = SessionDB()
+            try:
+                session_id = db.resolve_resume_session_id(str((request.get("body") or {}).get("session_id") or ""))
+                row = db.get_session(session_id)
+                if not row: raise ValueError("Session not found")
+                messages = db.get_messages_as_conversation(session_id)
+                config = row.get("model_config") or {}
+                if isinstance(config, str): config = json.loads(config)
+                tokens = persisted_anchor_tokens(db, session_id, messages)
+                estimated = tokens is None
+                if estimated: tokens = estimate_messages_tokens_rough(messages)
+                model = row.get("model") or ""
+                limit = config.get("context_length") or get_cached_context_length(model, config.get("base_url") or "")
+                if not limit:
+                    from hermes_cli.web_routers.models import get_model_info
+                    info = get_model_info()
+                    if info.get("model") == model: limit = info.get("effective_context_length")
+                if not limit:
+                    try:
+                        from agent.model_metadata import get_model_context_length
+                        limit = get_model_context_length(model, config.get("base_url") or "")
+                    except Exception:
+                        limit = None
+                result = {"available": bool(messages) or not estimated, "tokens": tokens, "limit": limit, "estimated": estimated, "model": model}
+            finally: db.close()
+        print(json.dumps(result, ensure_ascii=True))
+        return
     if action == "model_reasoning":
         with contextlib.redirect_stdout(io.StringIO()):
             from hermes_cli.config import load_config

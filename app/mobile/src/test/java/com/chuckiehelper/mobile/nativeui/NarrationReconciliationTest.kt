@@ -4,6 +4,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NarrationReconciliationTest {
+    @Test fun interjectionCommentaryCannotMoveBeforeAnEarlierInstructionWhenTheRunBindingIsOld() {
+        val initial = HermesMessage("user", "停止报错", serverId = 10, localKey = "initial", timestamp = 100)
+        val context = HermesMessage("user", "Hermes上下文", serverId = 20, timestamp = 200)
+        val layout = HermesMessage("user", "工具最多两行", serverId = 30, timestamp = 300)
+        val stale = AssistantNarration("narration-layout", "session", "会合并工具名和参数", 10, initial.text, 310,
+            run = "same-run", streamed = true, userKey = "initial")
+        val rows = mergeAssistantNarrations(listOf(initial, context, layout), listOf(stale))
+        assertEquals(listOf(initial.text, context.text, layout.text, stale.text), rows.map { it.text })
+        assertEquals(rows, mergeAssistantNarrations(rows, listOf(stale)))
+    }
+    @Test fun commentaryBeforeSteerAcknowledgementWaitsForItsRealUserRowInsteadOfJumpingBack() {
+        val initial = HermesMessage("user", "停止报错", serverId = 10, localKey = "initial", timestamp = 100)
+        val context = HermesMessage("user", "Hermes上下文", serverId = 20, timestamp = 200)
+        val pending = HermesMessage("user", "工具最多两行", localKey = "steer", timestamp = 300)
+        val stale = AssistantNarration("narration-layout", "session", "会合并工具名和参数", 10, initial.text, 310,
+            run = "same-run", streamed = true, userKey = "initial")
+        assertEquals(listOf(initial, context, pending), mergeAssistantNarrations(listOf(initial, context, pending), listOf(stale)))
+        val canonical = pending.copy(serverId = 30)
+        assertEquals(listOf(initial.text, context.text, canonical.text, stale.text),
+            mergeAssistantNarrations(listOf(initial, context, canonical), listOf(stale)).map { it.text })
+    }
     private val user = HermesMessage("user", "检查设备", serverId = 1, timestamp = 100)
     private fun note(key: String, text: String, at: Long = 110) = AssistantNarration("narration-$key", "session", text, 1, user.text, at, run = "run")
 

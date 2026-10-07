@@ -6,7 +6,11 @@ using System.Text.Json.Nodes;
 
 namespace ChuckieHelper.WebApi.Services.Codex;
 
-internal sealed class CodexError(string message, int status = 400) : Exception(message) { public int Status { get; } = status; }
+internal sealed class CodexError(string message, int status = 400, string code = "", string delivery = "") : Exception(message) {
+    public int Status { get; } = status;
+    public string Code { get; } = code;
+    public string Delivery { get; } = delivery.Length > 0 ? delivery : status >= 500 ? "unknown" : "rejected";
+}
 
 internal static class CodexJson
 {

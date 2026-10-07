@@ -8,6 +8,7 @@ public sealed class HermesManagement(IConfiguration configuration)
 {
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly SemaphoreSlim compressionGate = new(1, 1);
+    private readonly SemaphoreSlim contextGate = new(1, 1);
     public async Task<JsonElement> Invoke(string action, JsonElement? body, CancellationToken ct)
     {
         var keyFile = configuration["Hermes:KeyFile"] ?? Environment.GetEnvironmentVariable("HERMES_API_KEY_FILE")
@@ -18,7 +19,7 @@ public sealed class HermesManagement(IConfiguration configuration)
         var python = Path.Combine(source, "venv", "Scripts", "python.exe");
         var script = Path.Combine(Path.GetDirectoryName(RemoteControl.InteractiveProcessLauncher.GetApplicationDllPath())!, "hermes", "hermes_management.py");
         if (!File.Exists(python) || !File.Exists(script)) throw new InvalidOperationException("服务端尚未安装 Hermes 模型管理组件");
-        var operationGate = action == "compress_session" ? compressionGate : gate;
+        var operationGate = action == "compress_session" ? compressionGate : action == "session_context" ? contextGate : gate;
         await operationGate.WaitAsync(ct);
         try
         {

@@ -31,7 +31,14 @@ fun narrationAnchorIndex(history: List<HermesMessage>, note: AssistantNarration)
     note.userKey?.let { key ->
         val explicit = history.indexOfFirst { it.role == "user" && (it.localKey == key ||
             note.anchor > 0 && it.serverId == note.anchor && it.text == note.userText) }
-        if (explicit >= 0) return explicit
+        if (explicit >= 0) {
+            // A run can accept several interjections. Its original user binding
+            // must not pull later commentary ahead of newer accepted instructions.
+            val newer = (explicit + 1 until history.size).any {
+                history[it].role == "user" && history[it].timestamp?.let { at -> at <= note.timestamp } == true
+            }
+            if (!newer) return explicit
+        }
     }
     val users = history.indices.filter { history[it].role == "user" }
     val candidates = users.filter {

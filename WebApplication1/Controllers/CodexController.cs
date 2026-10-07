@@ -14,6 +14,10 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpGet("projects")] public Task Projects(CancellationToken ct) => Forward(HttpMethod.Get, "projects", null, ct);
     [HttpGet("model-options")] public Task Models(CancellationToken ct) => Forward(HttpMethod.Get, "model-options", null, ct);
     [HttpGet("providers")] public Task Providers(CancellationToken ct) => Forward(HttpMethod.Get, "providers", null, ct);
+    [HttpGet("title-model")] public Task TitleModel(CancellationToken ct) => Forward(HttpMethod.Get, "title-model", null, ct);
+    [HttpPost("title-model")] public Task SaveTitleModel([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "title-model", body, ct);
+    [HttpPost("title-model/test")] public Task TestTitleModel(CancellationToken ct) => Forward(HttpMethod.Post, "title-model/test", JsonSerializer.SerializeToElement(new { }), ct);
+    [HttpPost("title-model/models")] public Task TitleModels([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "title-model/models", body, ct);
     [HttpPost("providers")] public Task SaveProvider([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "providers", body, ct);
     [HttpGet("default-model")] public Task Default(CancellationToken ct) => Forward(HttpMethod.Get, "default-model", null, ct);
     [HttpPost("default-model")] public Task SetDefault([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "default-model", body, ct);
@@ -21,13 +25,14 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpPost("sessions")] public Task Create([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "sessions", body, ct);
     [HttpGet("sessions/{id}")] public Task SessionInfo(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"sessions/{Id(id)}", null, ct);
     [HttpGet("sessions/{id}/context")] public Task Context(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"sessions/{Id(id)}/context", null, ct);
+    [HttpPost("sessions/{id}/takeover")] public Task Takeover(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/takeover", body, ct);
     [HttpPost("sessions/{id}/compact")] public Task Compact(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/compact", JsonSerializer.SerializeToElement(new { }), ct, Request.Headers["Idempotency-Key"].ToString());
     [HttpPatch("sessions/{id}")] public Task Rename(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Patch, $"sessions/{Id(id)}", body, ct);
     [HttpPost("sessions/{id}/delete")] public Task Delete(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/delete", JsonSerializer.SerializeToElement(new { }), ct);
     [HttpPost("sessions/{id}/model")] public Task SetModel(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/model", body, ct);
     [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, CancellationToken ct) {
         using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{Id(id)}/messages", null, ct);
-        if (!upstream.IsSuccessStatusCode) return StatusCode((int)upstream.StatusCode, new { message = "无法读取 Codex 会话历史" });
+        if (!upstream.IsSuccessStatusCode) return StatusCode((int)upstream.StatusCode, System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)));
         return Ok(attachments.AddMessageAttachments(id, await upstream.Content.ReadAsStringAsync(ct)));
     }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
@@ -113,6 +118,7 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpPost("workspaces/{id}/use")] public Task Workspace(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"workspaces/{Id(id)}/use", JsonSerializer.SerializeToElement(new { }), ct);
 
     private async Task Forward(HttpMethod method, string path, JsonElement? body, CancellationToken ct, string key = null) {
+        Response.Headers.CacheControl = "no-store";
         try {
             using var upstream = await bridge.SendAsync(method, path, body, ct, key, Request.Headers["Last-Event-ID"].ToString());
             Response.StatusCode = (int)upstream.StatusCode;
@@ -124,6 +130,7 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
             } else if (path == "capabilities" && upstream.IsSuccessStatusCode) {
                 var payload = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
                 payload["chuckie_features"] = new System.Text.Json.Nodes.JsonObject { ["external_session_activity"] = true };
+                payload["web_state_version"] = 3;
                 await Response.WriteAsJsonAsync(payload, ct);
             } else await upstream.Content.CopyToAsync(Response.Body, ct);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) { }

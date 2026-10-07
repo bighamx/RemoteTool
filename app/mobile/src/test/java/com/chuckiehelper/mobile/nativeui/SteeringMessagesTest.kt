@@ -4,6 +4,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SteeringMessagesTest {
+    @Test fun rejectedSteeringNeverReappearsAsRealHistory() {
+        val busy = SteeringMessage("busy", "session", "插话", emptySet(), 0,
+            BUSY_STEERING_DELIVERY, 1_000L)
+        assertEquals(BUSY_STEERING_DELIVERY,
+            steeringFailureDelivery(ApiRequestFailure("会话正在桌面端执行", 503, delivery = "rejected")))
+        assertEquals("发送失败", steeringFailureDelivery(ApiRequestFailure("请求无效", 409)))
+        assertFalse(steeringAppearsInHistory(busy, listOf(HermesMessage("user", "插话", 1))))
+        assertFalse(isAbandonedSteering(busy, 601_000L))
+        assertTrue(isAbandonedSteering(busy, 601_001L))
+        assertTrue(mergeSteeringMessages(emptyList(), listOf(busy)).isEmpty())
+        assertTrue(mergeSteeringMessages(emptyList(), listOf(busy.copy(delivery = "发送失败"))).isEmpty())
+        assertEquals("发送状态待核对", steeringFailureDelivery(ApiRequestFailure("未确认", 504)))
+    }
     @Test fun hashIdOrderAndAnUnconfirmedOldTimestampDoNotAcknowledgeMessages() {
         val note = SteeringMessage("key", "session", "插话", setOf(100), 100, "发送状态待核对", 1)
         val history = (0 until 500).map { HermesMessage("assistant", "output", 1000L + it, timestamp = 2000L + it) }

@@ -42,11 +42,15 @@ internal static class CodexDesktopSync
         if (!OperatingSystem.IsWindows()) throw new CodexError("桌面会话被其他客户端占用，当前系统不支持桌面协作", 409);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         using var pipe = new NamedPipeClientStream(".", "codex-ipc", PipeDirection.InOut, PipeOptions.Asynchronous);
+        var dispatched = false;
         try {
-            await pipe.ConnectAsync(timeout.Token);
+            using var connect = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
+            connect.CancelAfter(TimeSpan.FromSeconds(2));
+            await pipe.ConnectAsync(connect.Token);
             if (!Trusted(pipe)) throw new CodexError("无法验证桌面 Codex 连接", 409);
             var clientId = await Initialize(pipe, timeout.Token);
             var requestId = Guid.NewGuid().ToString();
+            dispatched = true;
             await Write(pipe, Obj(("type", "request"), ("requestId", requestId), ("sourceClientId", clientId),
                 ("method", method), ("version", version), ("params", parameters), ("timeoutMs", 25000)), timeout.Token);
             for (var i = 0; i < 128; i++) {
@@ -58,7 +62,8 @@ internal static class CodexDesktopSync
             throw new IOException("Desktop response missing");
         } catch (Exception error) when (error is IOException or OperationCanceledException) {
             // A sent operation can have succeeded despite losing the acknowledgement.
-            throw new CodexError("桌面操作结果尚未确认，请核对会话状态；不会自动重发", 504);
+            if (!dispatched) throw new CodexError("持有会话的桌面客户端无法访问，本次消息未写入。请退出原客户端后重试。", 409, "session_owner_unavailable");
+            throw new CodexError("桌面操作结果尚未确认，请核对会话状态；不会自动重发", 504, "delivery_unknown");
         }
     }
     public static async IAsyncEnumerable<JsonObject> Follow(string id, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct) {

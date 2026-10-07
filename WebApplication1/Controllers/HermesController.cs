@@ -3,11 +3,13 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Text.Json.Nodes;
+using ChuckieHelper.WebApi.Services.Codex;
 
 namespace ChuckieHelper.WebApi.Controllers;
 
 [ApiController, Authorize, Route("api/hermes")]
-public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, IConfiguration configuration, HermesSessionActivity activity) : ControllerBase
+public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, IConfiguration configuration, HermesSessionActivity activity, HermesTitleService titles) : ControllerBase
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效的会话或任务标识");
     [HttpGet("capabilities")] public async Task<IActionResult> Capabilities(CancellationToken ct) {
@@ -22,12 +24,31 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         }
     }
     [HttpGet("sessions/{id}/context")] public async Task<IActionResult> SessionContext(string id, CancellationToken ct) {
-        try { return Ok(await management.Invoke("session_context", JsonSerializer.SerializeToElement(new { session_id = Id(id) }), ct)); }
+        try {
+            var result = JsonNode.Parse((await management.Invoke("session_context", JsonSerializer.SerializeToElement(new { session_id = Id(id) }), ct)).GetRawText())!.AsObject();
+            try {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(2));
+                using var info = await bridge.SendAsync(HttpMethod.Get, "api/sessions/" + Id(id), null, null, timeout.Token);
+                if (info.IsSuccessStatusCode) {
+                    var session = JsonNode.Parse(await info.Content.ReadAsStringAsync(timeout.Token));
+                    result["title"] = (session?["session"] ?? session)?["title"]?.DeepClone();
+                }
+            } catch (Exception error) when (!ct.IsCancellationRequested && error is HttpRequestException or OperationCanceledException or JsonException or InvalidOperationException) { }
+            return Ok(result);
+        }
         catch (InvalidOperationException error) { return Ok(new { available = false, message = error.Message }); }
     }
     [HttpGet("sessions/{id}/activity")] public IActionResult SessionActivity(string id) {
         Response.Headers.CacheControl = "no-store";
         return Ok(activity.Read(Id(id)));
+    }
+    [HttpGet("title-model")] public IActionResult TitleModel() => Ok(titles.Config());
+    [HttpPost("title-model")] public Task<IActionResult> SaveTitleModel([FromBody] JsonElement body) => TitleSettings(() => Task.FromResult(titles.Save(JsonNode.Parse(body.GetRawText())!.AsObject())));
+    [HttpPost("title-model/test")] public Task<IActionResult> TestTitleModel(CancellationToken ct) => TitleSettings(() => titles.Test(ct));
+    [HttpPost("title-model/models")] public Task<IActionResult> TitleModels([FromBody] JsonElement body, CancellationToken ct) => TitleSettings(() => titles.Models(JsonNode.Parse(body.GetRawText())!.AsObject(), ct));
+    private async Task<IActionResult> TitleSettings(Func<Task<JsonObject>> action) {
+        try { return Ok(await action()); }
+        catch (CodexError error) { return StatusCode(error.Status, new { message = error.Message, code = error.Code }); }
     }
     [HttpGet("models")] public Task Models(CancellationToken ct) => Forward(HttpMethod.Get, "v1/models", null, null, ct);
     [HttpPost("sessions/{id}/compact")] public IActionResult Compact(string id) {
@@ -70,7 +91,16 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         }
         return Ok(result);
     }
-    [HttpPost("sessions")] public Task CreateSession([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "api/sessions", body, null, ct);
+    [HttpPost("sessions")] public async Task CreateSession([FromBody] JsonElement body, CancellationToken ct) {
+        var nativeBody = JsonNode.Parse(body.GetRawText())!.AsObject(); nativeBody.Remove("auto_title");
+        using var response = await bridge.SendAsync(HttpMethod.Post, "api/sessions", JsonSerializer.SerializeToElement(nativeBody), null, ct);
+        var payload = await response.Content.ReadAsStringAsync(ct);
+        if (response.IsSuccessStatusCode) {
+            var value = JsonNode.Parse(payload); var session = value?["session"] ?? value;
+            if (session?["id"] != null) titles.Register(session["id"]!.ToString(), session["title"]?.ToString() ?? "", body.TryGetProperty("auto_title", out var automatic) && automatic.ValueKind == JsonValueKind.True);
+        }
+        Response.StatusCode = (int)response.StatusCode; Response.ContentType = "application/json"; await Response.WriteAsync(payload, ct);
+    }
     [HttpGet("sessions/{id}")] public Task SessionInfo(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"api/sessions/{Id(id)}", null, null, ct);
     [HttpPatch("sessions/{id}")] public Task RenameSession(string id, [FromBody] JsonElement body, CancellationToken ct)
     {
@@ -79,7 +109,12 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             Response.StatusCode = 400;
             return Response.WriteAsJsonAsync(new { message = "会话名称应为 1–160 个字符" }, ct);
         }
-        return Forward(HttpMethod.Patch, $"api/sessions/{Id(id)}", JsonSerializer.SerializeToElement(new { title }), null, ct);
+        return RenameTitle(Id(id), title, ct);
+    }
+    private async Task RenameTitle(string id, string title, CancellationToken ct) {
+        using var response = await titles.Rename(id, JsonSerializer.SerializeToElement(new { title }), ct);
+        Response.StatusCode = (int)response.StatusCode; Response.ContentType = "application/json";
+        await Response.WriteAsync(await response.Content.ReadAsStringAsync(ct), ct);
     }
     [HttpDelete("sessions/{id}"), HttpPost("sessions/{id}/delete")] public Task DeleteSession(string id, CancellationToken ct) => Forward(HttpMethod.Delete, $"api/sessions/{Id(id)}", null, null, ct);
     [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, CancellationToken ct)
@@ -111,7 +146,10 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 using var doc = JsonDocument.Parse(payload);
                 var runId = doc.RootElement.TryGetProperty("run_id", out var r) ? r.GetString() : null;
                 var sessionId = body.TryGetProperty("session_id", out var s) ? s.GetString() : null;
-                if (!string.IsNullOrEmpty(runId) && !string.IsNullOrEmpty(sessionId)) runs.Register("hermes", sessionId, runId);
+                if (!string.IsNullOrEmpty(runId) && !string.IsNullOrEmpty(sessionId)) {
+                    runs.Register("hermes", sessionId, runId);
+                    titles.Accepted(sessionId, body.TryGetProperty("input", out var input) ? input.ToString() : "");
+                }
             }
             catch (JsonException) { }
             Response.StatusCode = (int)upstream.StatusCode;

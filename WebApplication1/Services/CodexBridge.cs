@@ -5,13 +5,21 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using static ChuckieHelper.WebApi.Services.Codex.CodexJson;
 using Microsoft.Win32;
 using ChuckieHelper.WebApi.Services.RemoteControl;
 
 namespace ChuckieHelper.WebApi.Services;
 
-public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration configuration)
+public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration configuration) : ITitleModelGateway
 {
+    public async Task<JsonObject> TitleRequest(string path, JsonObject body, CancellationToken ct) {
+        using var response = await SendAsync(HttpMethod.Post, path, JsonSerializer.SerializeToElement(body), ct);
+        var value = JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))!.AsObject();
+        if (!response.IsSuccessStatusCode) throw new Codex.CodexError(value.S("message", "标题模型请求失败"), (int)response.StatusCode, value.S("code"));
+        return value;
+    }
     private readonly SemaphoreSlim startup = new(1, 1);
     private readonly string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ChuckieHelper", "codex-bridge");
     private string token;
@@ -27,10 +35,44 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             using var response = await clients.CreateClient("codex").SendAsync(request, timeout.Token);
             if (!response.IsSuccessStatusCode) return false;
             using var status = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
-            return status.RootElement.TryGetProperty("implementation", out var implementation) && implementation.GetString() == "dotnet-v2";
+            return status.RootElement.TryGetProperty("implementation", out var implementation) && implementation.GetString() == "dotnet-v2" &&
+                status.RootElement.TryGetProperty("state_version", out var version) && version.GetInt32() >= 10;
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
         catch (HttpRequestException) { return false; }
         catch (JsonException) { return false; }
+    }
+    private async Task<JsonObject> CaptureHandoff(string statusPath, CancellationToken ct) {
+        if (port <= 0 || token == null || !File.Exists(statusPath)) return null;
+        try {
+            async Task<JsonObject> Get(string path) {
+                using var request = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}/{path}");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(5));
+                using var response = await clients.CreateClient("codex").SendAsync(request, timeout.Token);
+                response.EnsureSuccessStatusCode();
+                return JsonNode.Parse(await response.Content.ReadAsStringAsync(timeout.Token))!.AsObject();
+            }
+            var health = await Get("health");
+            if (health.S("implementation") != "dotnet-v2" || health.L("state_version") >= 10) return null;
+            var saved = Read(statusPath);
+            using var worker = Process.GetProcessById((int)saved.L("pid"));
+            using var cli = Process.GetProcessById((int)health.L("cli_pid"));
+            if (worker.ProcessName != "dotnet" || cli.ProcessName != "codex") return null;
+            var active = new JsonObject();
+            var prior = Read(Path.Combine(folder, "connection.json"));
+            var journal = Read(Path.Combine(prior.S("state_folder", folder), "runs.json"));
+            var candidates = journal.Where(entry => entry.Value.S("status") is "started" or "submitting").Select(entry => entry.Key)
+                .Concat((prior["handoff"]?["runs"] as JsonObject ?? new()).Select(entry => entry.Key)).Distinct();
+            foreach (var run in candidates) {
+                var state = await Get("runs/" + run);
+                if (state.S("status") is not ("started" or "submitting")) continue;
+                var id = state.S("session_id");
+                var info = await Get("sessions/" + id);
+                if (info["session"]?["status"].S("type") == "active") active[run] = id;
+            }
+            return Obj(("port", port), ("pid", worker.Id), ("process_started_ticks", worker.StartTime.ToUniversalTime().Ticks),
+                ("cli_pid", cli.Id), ("cli_started_ticks", cli.StartTime.ToUniversalTime().Ticks), ("runs", active));
+        } catch (Exception error) when (!ct.IsCancellationRequested && error is IOException or HttpRequestException or OperationCanceledException or JsonException or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return null; }
     }
     private async Task Ensure(CancellationToken ct) {
         if (await Ready(ct)) return;
@@ -55,6 +97,14 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             if (File.Exists(statusPath)) {
                 try { using var saved = JsonDocument.Parse(await File.ReadAllTextAsync(statusPath, ct)); port = saved.RootElement.GetProperty("port").GetInt32(); } catch (JsonException) { }
                 if (await Ready(ct)) return;
+            }
+            var handoff = await CaptureHandoff(statusPath, ct);
+            var priorState = Read(configPath).S("state_folder", folder);
+            var stateFolder = Path.Combine(folder, "state-v10");
+            if (!Directory.Exists(stateFolder)) {
+                Directory.CreateDirectory(stateFolder);
+                foreach (var name in new[] { "runs.json", "providers.json", "model-selections.json" })
+                    if (File.Exists(Path.Combine(priorState, name))) File.Copy(Path.Combine(priorState, name), Path.Combine(stateFolder, name));
             }
             var profile = OperatingSystem.IsWindows()
                 ? Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}", "ProfileImagePath", null)?.ToString()
@@ -86,7 +136,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             if (executable == null || !File.Exists(executable)) throw new InvalidOperationException("未找到本机 Codex，请安装 Codex 或配置 Codex:Executable");
             var dll = InteractiveProcessLauncher.GetApplicationDllPath();
             token ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-            await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new { token, executable, home, account_store = accountStore,
+            await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new { token, executable, home, account_store = accountStore, state_folder = stateFolder, handoff,
                 working_directory = configuration["Codex:WorkingDirectory"] ?? Path.Combine(profile, "Documents", "Codex", "Mobile"),
                 attachments = Path.Combine(Path.GetDirectoryName(folder)!, "codex-attachments") }), ct);
             var command = $"dotnet \"{dll}\" --codex-bridge \"{configPath}\"";

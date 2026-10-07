@@ -22,7 +22,7 @@ fun AgentContextInfo(info: JSONObject?, runtime: String = "") {
     val limit = info?.optLong("limit") ?: 0
     val ratio = if (available && limit > 0) tokens.toDouble() / limit else null
     val estimate = if (info?.optBoolean("estimated") == true) "约 " else ""
-    val context = if (!available) "上下文 · 暂无数据" else
+    val context = if (!available) "上下文 · " + (info?.optString("message")?.takeIf { it.isNotBlank() } ?: "暂无数据") else
         "上下文 · $estimate${contextTokens(tokens)}" + if (ratio != null) " / ${contextTokens(limit)} · ${(ratio * 100).toInt()}%" else " · 未返回上限"
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp)) {
         Text(context + runtime.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),

@@ -75,10 +75,12 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     var deleteChat by remember { mutableStateOf<JSONObject?>(null) }
     var models by remember { mutableStateOf(false) }
     var providers by remember { mutableStateOf(false) }
+    var titleModelDialog by remember { mutableStateOf(false) }
     var accountsPanel by remember { mutableStateOf(false) }
     var createCodex by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var stop by remember { mutableStateOf(false) }
+    var takeover by remember { mutableStateOf(false) }
     var filter by rememberSaveable { mutableStateOf("") }
     var pendingInfo by remember { mutableStateOf(false) }
     var questionPanel by remember { mutableStateOf(false) }
@@ -214,6 +216,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.MoreVert, "$agentName 菜单") }
                 DropdownMenu(menu, { menu = false }) {
                     if (agent == "codex") DropdownMenuItem(text = { Text("账户与工作空间") }, onClick = { menu = false; accountsPanel = true; model.fetchAccounts() })
+                    DropdownMenuItem(text = { Text("标题生成模型") }, onClick = { menu = false; titleModelDialog = true; model.fetchTitleModel() })
                     listOf("模型选择" to "/model", "Provider 管理" to "/providers", "刷新与重连" to "/status")
                         .forEach { (name, value) ->
                             DropdownMenuItem(
@@ -232,17 +235,31 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         if (agent == "codex") CodexUsage(model, compact = true) { accountsPanel = true; model.fetchAccounts() }
         if (!list && model.selectedId != null) AgentContextInfo(model.contextInfo,
             model.runtime + if (model.sessionEffort.isNotBlank()) " · 思考${effortLabel(model.sessionEffort)}" else "")
+        if (!list && model.error == null && model.canTakeover) model.writeAccessMessage?.let { message ->
+            FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.Center) {
+                Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth())
+                TextButton(onClick = { takeover = true }) { Text("中断并接管") }
+            }
+        }
         model.error?.let { error ->
             Surface(color = MaterialTheme.colorScheme.errorContainer) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
                     Text(error, style = MaterialTheme.typography.bodySmall)
-                    Row {
+                    FlowRow {
                         TextButton(onClick = { model.reconnect() }) { Text("重新连接") }
                         if (model.hasPendingSubmission)
-                            TextButton(onClick = { model.retryPending() }) { Text("核对并重试原任务") }
+                            TextButton(onClick = { model.reconcilePending() }) { Text("核对发送结果") }
+                        if (model.canTakeover) TextButton(onClick = { takeover = true }) { Text("中断并接管") }
                         TextButton(onClick = { model.error = null }) { Text("收起") }
                     }
                 }
+            }
+        }
+        if (!list) model.controlMessage?.let { Text(it, Modifier.fillMaxWidth().padding(12.dp), style = MaterialTheme.typography.bodySmall) }
+        if (!list && model.runId != null && !model.runStateVerified) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("任务状态尚未确认，计时已暂停", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { model.reconnect() }) { Text("核对状态") }
             }
         }
         if (model.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -374,6 +391,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         style = MaterialTheme.typography.titleSmall,
                                     )
                                     if (model.runId != null) TextButton(onClick = { stop = true }) { Text("停止") }
+                                    else if (model.canTakeover) TextButton(onClick = { takeover = true }) { Text("中断并接管") }
                                 }
                                 RunTimers(model.executionKey, model.executionTiming,
                                     responseLabel = if (model.runId == null) "距上次已保存响应" else "距上次响应", compacting = model.executionCompacting)
@@ -393,26 +411,13 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                             Modifier.fillMaxWidth(),
                                             verticalAlignment = Alignment.CenterVertically,
                                         ) {
-                                            Column(Modifier.weight(1f)) {
-                                                Text(
-                                                    it.text,
-                                                    maxLines = 1,
-                                                    overflow =
-                                                        androidx.compose.ui.text.style.TextOverflow
-                                                            .Ellipsis,
-                                                    style = MaterialTheme.typography.labelLarge,
-                                                )
-                                                if (it.detail.isNotBlank())
-                                                    Text(
-                                                        it.detail,
-                                                        maxLines = 1,
-                                                        overflow =
-                                                            androidx.compose.ui.text.style
-                                                                .TextOverflow
-                                                                .Ellipsis,
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                    )
-                                            }
+                                            Text(
+                                                listOf(it.text, it.detail.replace(Regex("\\s+"), " ").trim()).filter { part -> part.isNotBlank() }.joinToString(" · "),
+                                                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                                                maxLines = 2,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                style = MaterialTheme.typography.bodySmall,
+                                            )
                                             Text(
                                                 it.type,
                                                 style = MaterialTheme.typography.labelSmall,
@@ -683,8 +688,12 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             model.stop()
             stop = false
         }
+    if (takeover) ConfirmDialog("中断并接管当前会话", "请求中断此会话在其他端的任务，已执行的操作不会撤销。确认原任务结束且会话可写入后，再由你发送保留的草稿。其他端已启动新任务时会取消接管。", { takeover = false }) {
+        takeover = false; model.takeover()
+    }
     if (models) HermesModelPicker(model) { models = false }
     if (providers) HermesProviderDialog(model) { providers = false }
+    if (titleModelDialog) CodexTitleModelDialog(model) { titleModelDialog = false }
     if (accountsPanel) CodexAccountsDialog(model, { accountsPanel = false }) { list = true }
     if (questionPanel && model.asyncQuestion != null && !list) AlertDialog(
         onDismissRequest = { questionPanel = false }, title = { Text("需要你的回答") },
