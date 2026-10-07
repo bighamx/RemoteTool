@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -34,7 +33,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import org.json.JSONObject
-import kotlinx.coroutines.launch
 
 @Composable
 fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
@@ -127,51 +125,16 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         }
     val context = LocalContext.current
     val scroll = rememberLazyListState()
-    val uiScope = rememberCoroutineScope()
     // LazyColumn evaluates its content later, potentially after history/SSE updates.
     // Capture the row and key together; never index keys using a newer model list.
     val messageRows = model.messages
     val messageItems = remember(messageRows) { chatMessageItems(messageRows) }
     val sessionsScroll = rememberLazyListState()
-    var openedChat by remember { mutableStateOf<String?>(null) }
-    var followLatest by remember(model.selectedId, list) { mutableStateOf(true) }
-    var autoScrolling by remember { mutableStateOf(false) }
-    var userScrolling by remember { mutableStateOf(false) }
-    // Remember the user's intent before the list grows. Measuring proximity after
-    // insertion wrongly treats a newly appended long bubble as reading old history.
-    LaunchedEffect(scroll, model.selectedId, list) {
-        snapshotFlow { scroll.isScrollInProgress }.collect { active ->
-            if (active && !autoScrolling) userScrolling = true
-            if (!active && userScrolling) {
-                followLatest = !scroll.canScrollForward
-                userScrolling = false
-            }
-        }
-    }
-    var followedSendRequest by remember { mutableStateOf(model.scrollToLatestRequest) }
-    LaunchedEffect(model.selectedId, list, model.messages, model.pendingText,
-        model.events.size, model.approval, model.runId, model.executionKey, model.executionEventCount, model.scrollToLatestRequest) {
-        if (list) { openedChat = null; return@LaunchedEffect }
-        val opening = openedChat != model.selectedId
-        val sending = followedSendRequest != model.scrollToLatestRequest
-        followedSendRequest = model.scrollToLatestRequest
-        if (opening || sending) followLatest = true
-        if (model.messages.isEmpty() && model.pendingText.isEmpty()) return@LaunchedEffect
-        if (!shouldScrollChatToLatest(opening, followLatest, sending) || userScrolling && !opening && !sending) return@LaunchedEffect
-        openedChat = model.selectedId
-        autoScrolling = true
-        try {
-            // Allow Compose to measure the new bubble/footer before choosing the tail.
-            repeat(2) {
-                withFrameNanos {}
-                val last = scroll.layoutInfo.totalItemsCount - 1
-                if (last >= 0) {
-                    scroll.scrollToItem(last)
-                    scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.let { tail -> scroll.scrollBy(tail.size.toFloat()) }
-                }
-            }
-        } finally { autoScrolling = false }
-    }
+    var latestRequest by remember(model.selectedId, list) { mutableStateOf(0L) }
+    var followLatest by rememberChatFollowing(
+        scroll, model.selectedId, list,
+        model.messages.isNotEmpty() || model.pendingText.isNotEmpty(), model.scrollToLatestRequest, latestRequest,
+    )
     fun createChat() {
         if (agent == "codex") { createCodex = true; model.fetchProjects() }
         else model.newSession(newHermesChatName(), { list = false })
@@ -503,14 +466,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             }
             if (!followLatest && scroll.canScrollForward) SmallFloatingActionButton(
                 onClick = {
-                    followLatest = true
-                    uiScope.launch {
-                        autoScrolling = true
-                        try {
-                            val last = scroll.layoutInfo.totalItemsCount - 1
-                            if (last >= 0) { scroll.scrollToItem(last); scroll.scrollBy(scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.size?.toFloat() ?: 0f) }
-                        } finally { autoScrolling = false }
-                    }
+                    latestRequest++
                 },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
