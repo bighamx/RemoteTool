@@ -314,36 +314,45 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Column(
-                            Modifier.padding(14.dp),
+                            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                             verticalArrangement = Arrangement.spacedBy(5.dp),
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                session.optString("title").ifBlank { "未命名会话" },
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.titleSmall,
-                            )
-                            model.sessionActivity(session)?.let { activity ->
-                                Surface(modifier = Modifier.clickable(enabled = activity == "待核对") { pendingInfo = true }, color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
-                                    Text(activity, Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall)
+                            Row(verticalAlignment = Alignment.Top) {
+                                Column(
+                                    Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            session.optString("title").ifBlank { "未命名会话" },
+                                            modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.titleSmall,
+                                            maxLines = 2,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        )
+                                        model.sessionActivity(session)?.let { activity ->
+                                            Surface(modifier = Modifier.clickable(enabled = activity == "待核对") { pendingInfo = true }, color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
+                                                Text(activity, Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                    }
+                                    Text(
+                                        session.optString("latest_user_message", session.optString("preview")),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 2,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    )
+                                }
+                                var actions by remember { mutableStateOf(false) }
+                                Box {
+                                    IconButton(onClick = { actions = true }) { Icon(Icons.Outlined.MoreVert, "会话操作") }
+                                    DropdownMenu(actions, { actions = false }) {
+                                        DropdownMenuItem(text = { Text("修改名称") }, onClick = { actions = false; renameChat = session })
+                                        if (model.hasPendingFor(session.getString("id"))) DropdownMenuItem(text = { Text("核对上次提交") }, onClick = { actions = false; pendingInfo = true })
+                                        DropdownMenuItem(text = { Text("删除会话", color = MaterialTheme.colorScheme.error) }, onClick = { actions = false; deleteChat = session })
+                                    }
                                 }
                             }
-                            var actions by remember { mutableStateOf(false) }
-                            Box {
-                                IconButton(onClick = { actions = true }) { Icon(Icons.Outlined.MoreVert, "会话操作") }
-                                DropdownMenu(actions, { actions = false }) {
-                                    DropdownMenuItem(text = { Text("修改名称") }, onClick = { actions = false; renameChat = session })
-                                    if (model.hasPendingFor(session.getString("id"))) DropdownMenuItem(text = { Text("核对上次提交") }, onClick = { actions = false; pendingInfo = true })
-                                    DropdownMenuItem(text = { Text("删除会话", color = MaterialTheme.colorScheme.error) }, onClick = { actions = false; deleteChat = session })
-                                }
-                            }
-                            }
-                            Text(
-                                session.optString("latest_user_message", session.optString("preview")),
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 2,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            )
                             Text(
                                 if (agent == "codex") session.optString("cwd").ifBlank { "Codex 会话" }
                                 else "${session.optString("source")} · ${session.optInt("message_count")} 条消息",
