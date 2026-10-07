@@ -413,12 +413,16 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                                     file.optString("name"),
                                     style = MaterialTheme.typography.titleSmall,
                                 )
+                                val modified = formatFileModifiedTime(file.optString("modified"))
                                 Text(
-                                    if (isDir)
+                                    (if (isDir)
                                         if (file.has("totalBytes"))
                                             "可用 ${bytes(file.optDouble("freeBytes"))} / ${bytes(file.optDouble("totalBytes"))}"
                                         else "文件夹"
-                                    else bytes(file.optDouble("size")),
+                                    else bytes(file.optDouble("size"))) +
+                                        if (modified.isNotEmpty()) " · $modified" else "",
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
