@@ -12,11 +12,11 @@ namespace ChuckieHelper.WebApi.Services.RemoteControl;
 public static class InteractiveProcessLauncher
 {
     public static string GetInteractiveUserSid() {
-        if (WTSQueryUserToken(WTSGetActiveConsoleSessionId(), out var token)) {
+        if (TryResolveInteractiveUserToken(WTSGetActiveConsoleSessionId(), out var token, out _, out var detail)) {
             try { using var identity = new WindowsIdentity(token); return identity.User!.Value; }
             finally { CloseHandle(token); }
         }
-        return WindowsIdentity.GetCurrent().User!.Value;
+        throw new InvalidOperationException("No logged-on interactive user was found: " + detail);
     }
     private static void Log(string message)
         => AgentStartupLogger.Log("InteractiveProcessLauncher", message);

@@ -119,6 +119,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
 
     private CodexAgent(string config) {
         settings = Read(config); folder = settings.S("state_folder", Path.GetDirectoryName(config)!); home = settings.S("home");
+        if (string.IsNullOrWhiteSpace(home) || !Path.IsPathFullyQualified(home))
+            throw new InvalidOperationException("Codex bridge home must be a non-empty absolute path; regenerate connection.json through the web service.");
         titles = new CodexTitleGenerator(Path.GetDirectoryName(config)!);
         journal = Path.Combine(folder, "runs.json");
         providers = Read(Path.Combine(folder, "providers.json")); runs = Read(journal);
@@ -137,7 +139,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         if (recovered) Persist();
         foreach (var entry in Read(Path.Combine(folder, "model-selections.json")))
             if (entry.Value is JsonObject selection) sessionOverrides[entry.Key] = selection.DeepClone().AsObject();
-        accounts = new CodexAccountStore(home, settings.S("account_store", Path.Combine(Path.GetDirectoryName(home)!, ".codex-switch")));
+        var accountStore = settings.S("account_store");
+        if (string.IsNullOrWhiteSpace(accountStore)) accountStore = Path.Combine(Path.GetDirectoryName(home) ?? home, ".codex-switch");
+        accounts = new CodexAccountStore(home, accountStore);
     }
     private async Task Launch() {
         var environment = new Dictionary<string, string>();

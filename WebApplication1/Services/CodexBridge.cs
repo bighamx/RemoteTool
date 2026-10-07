@@ -106,14 +106,16 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
                 foreach (var name in new[] { "runs.json", "providers.json", "model-selections.json" })
                     if (File.Exists(Path.Combine(priorState, name))) File.Copy(Path.Combine(priorState, name), Path.Combine(stateFolder, name));
             }
-            var profile = OperatingSystem.IsWindows()
+            var configuredHome = configuration["Codex:Home"];
+            var profile = !string.IsNullOrWhiteSpace(configuredHome)
+                ? Path.GetDirectoryName(Path.GetFullPath(Environment.ExpandEnvironmentVariables(configuredHome)).TrimEnd(Path.DirectorySeparatorChar))
+                : OperatingSystem.IsWindows()
                 ? Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}", "ProfileImagePath", null)?.ToString()
                 : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             if (!string.IsNullOrWhiteSpace(profile)) profile = Environment.ExpandEnvironmentVariables(profile);
-            // The console session may have no logged-on user (RDP-only machine); sid then
-            // resolves to the service account whose profile cannot host the desktop app.
-            // Fall back to the newest interactive user profile that actually has Codex installed.
-            if (OperatingSystem.IsWindows() && (string.IsNullOrWhiteSpace(profile) || profile.Contains("systemprofile", StringComparison.OrdinalIgnoreCase) || !Directory.Exists(Path.Combine(profile, "AppData", "Local", "OpenAI", "Codex"))))
+            // Only recover a missing/service profile. A valid RDP user's CLI installation
+            // must not cause us to select another logged-on user's desktop profile.
+            if (string.IsNullOrWhiteSpace(configuredHome) && OperatingSystem.IsWindows() && (string.IsNullOrWhiteSpace(profile) || profile.Contains("systemprofile", StringComparison.OrdinalIgnoreCase)))
                 profile = Registry.Users.GetSubKeyNames()
                     .Select(sub => Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sub}", "ProfileImagePath", null)?.ToString())
                     .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -123,7 +125,9 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
                     .FirstOrDefault() ?? profile;
             if (string.IsNullOrWhiteSpace(profile)) profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             if (string.IsNullOrWhiteSpace(profile)) throw new InvalidOperationException("无法确定 Codex 用户目录，请检查电脑登录状态");
-            var accountStore = Path.Combine(profile, ".codex-switch");
+            string ConfiguredPath(string key, string fallback) => Path.GetFullPath(Environment.ExpandEnvironmentVariables(
+                string.IsNullOrWhiteSpace(configuration[key]) ? fallback : configuration[key]!));
+            var accountStore = ConfiguredPath("Codex:AccountStore", Path.Combine(profile, ".codex-switch"));
             Directory.CreateDirectory(accountStore);
             if (OperatingSystem.IsWindows()) {
                 var accountAcl = new DirectorySecurity();
@@ -132,7 +136,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
                     InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
                 new DirectoryInfo(accountStore).SetAccessControl(accountAcl);
             }
-            var home = configuration["Codex:Home"] ?? Path.Combine(profile, ".codex");
+            var home = ConfiguredPath("Codex:Home", Path.Combine(profile, ".codex"));
             var executable = configuration["Codex:Executable"];
             if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable)) {
                 // The desktop app rotates bin/<hash> directories on update; a fresh download may
@@ -150,7 +154,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             var dll = InteractiveProcessLauncher.GetApplicationDllPath();
             token ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new { token, executable, home, account_store = accountStore, state_folder = stateFolder, handoff,
-                working_directory = configuration["Codex:WorkingDirectory"] ?? Path.Combine(profile, "Documents", "Codex", "Mobile"),
+                working_directory = ConfiguredPath("Codex:WorkingDirectory", Path.Combine(profile, "Documents", "Codex", "Mobile")),
                 attachments = Path.Combine(Path.GetDirectoryName(folder)!, "codex-attachments") }), ct);
             var command = $"dotnet \"{dll}\" --codex-bridge \"{configPath}\"";
             var launch = InteractiveProcessLauncher.LaunchInInteractiveSession(command, Path.GetDirectoryName(dll));
