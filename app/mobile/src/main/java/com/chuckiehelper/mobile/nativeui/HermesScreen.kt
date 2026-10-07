@@ -817,21 +817,15 @@ private fun MessageBubble(
         ) {
             SelectionContainer {
                 Column(Modifier.padding(14.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        Text(if (role == "user") "你" else agentName,
-                            modifier = Modifier.alignByBaseline(), style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary)
-                        formatMessageTimestamp(timestamp).takeIf { it.isNotBlank() }?.let { time ->
-                            Text(time, modifier = Modifier.alignByBaseline(),
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f), maxLines = 1)
-                        }
-                    }
-                    Spacer(Modifier.height(5.dp))
+                    val time = formatMessageTimestamp(timestamp)
+                    val inlineTime = presentation.text.isNotBlank() && presentation.files.isEmpty() &&
+                        presentation.unavailable.isEmpty()
+                    val metadata = listOfNotNull(delivery, time.takeIf { it.isNotBlank() }).joinToString(" · ")
                     if (presentation.text.isNotBlank()) HermesMarkdown(
-                        if (role == "assistant") displayNarration(presentation.text, narration, narrationTexts) else presentation.text
+                        if (role == "assistant") displayNarration(presentation.text, narration, narrationTexts) else presentation.text,
+                        footer = if (inlineTime) metadata else "",
                     )
-                    delivery?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    if (!inlineTime) delivery?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     presentation.unavailable.forEach { name ->
                         Text("附件暂不可用：$name", style = MaterialTheme.typography.bodySmall)
                     }
@@ -856,6 +850,13 @@ private fun MessageBubble(
                             } else if (hermesFileKind(file) == "视频") HermesVideoThumbnail(api, file, { preview = file })
                             else HermesAttachmentCard(file, { preview = file })
                         }
+                    if (!inlineTime && time.isNotBlank()) Text(
+                        time,
+                        modifier = Modifier.align(Alignment.End).padding(top = 4.dp),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                        maxLines = 1,
+                    )
                 }
             }
         }

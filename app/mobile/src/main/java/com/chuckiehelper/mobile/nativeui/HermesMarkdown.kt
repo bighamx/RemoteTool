@@ -1,6 +1,5 @@
 package com.chuckiehelper.mobile.nativeui
 
-import android.widget.TextView
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -14,7 +13,7 @@ import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
 
 @Composable
-fun HermesMarkdown(text: String, modifier: Modifier = Modifier) {
+fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String = "") {
     val context = LocalContext.current
     val markwon =
         remember(context) {
@@ -26,16 +25,19 @@ fun HermesMarkdown(text: String, modifier: Modifier = Modifier) {
         }
     val color = MaterialTheme.colorScheme.onSurface.toArgb()
     val link = MaterialTheme.colorScheme.primary.toArgb()
+    val footerColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f).toArgb()
     AndroidView(
         modifier = modifier,
         factory = {
-            TextView(it).apply {
+            MessageTextView(it).apply {
                 textSize = 15f
+                includeFontPadding = false
                 setTextIsSelectable(true)
                 setPadding(0, 0, 0, 0)
             }
         },
         update = { view ->
+            view.setFooter(footer, footerColor)
             view.setTextColor(color)
             view.setLinkTextColor(link)
             if (view.tag != text) {
