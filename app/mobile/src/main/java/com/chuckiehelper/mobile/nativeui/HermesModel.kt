@@ -107,6 +107,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val requestedAt = activityClock()
         activityNow = requestedAt
         try {
+            // An IIS/bridge restart can drop the local run subscription while its
+            // desktop transport still executes a turn originally submitted here.
+            attachServerActiveRun(id)
+            if (selectedId != id || api !== connection || runId != null) return@launch
             val result = withTimeout(8_000) { connection.json("$root/sessions/${q(id)}/activity") }
             if (selectedId != id || api !== connection || runId != null) return@launch
             if (!result.optBoolean("available")) return@launch
@@ -784,8 +788,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     /** 多端共享：本地没有跟踪时，向服务端查询该会话是否有其它设备发起的活跃 run，有则以观察者身份挂载。 */
-    private suspend fun attachServerActiveRun(id: String) {
-        if (runId != null || submitting) return
+    private suspend fun attachServerActiveRun(id: String, allowSubmitting: Boolean = false) {
+        if (runId != null || submitting && !allowSubmitting) return
         val connection = api
         try {
             val result = connection.json("$root/sessions/${q(id)}/active-run")
@@ -954,7 +958,36 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val session = selectedId ?: return false
         if (hasPendingSubmission) { error = "请先核对上一次提交结果，避免重复创建任务"; return false }
         if (input.isBlank() || submitting) return false
-        if (externalRunning && !(agent == "codex" && questionId != null)) { error = "当前任务由其他渠道执行，请在发起端插话；消息和附件已保留"; return false }
+        if (externalRunning && !(agent == "codex" && questionId != null)) {
+            if (agent != "codex") { error = "其他端正在执行，本次消息未写入；可等待结束或中断并接管。文字和附件已保留。"; return false }
+            val connection = api
+            val originalDraft = draft
+            val originalFiles = pendingFiles.map { it.optString("id") }
+            setSubmitting(session, true)
+            viewModelScope.launch {
+                var dispatched = false
+                try {
+                    withTimeout(8_000) { attachServerActiveRun(session, allowSubmitting = true) }
+                    if (selectedId != session || api !== connection) return@launch
+                    if (runId == null) {
+                        val current = withTimeout(8_000) { connection.json("$root/sessions/${q(session)}/activity") }
+                        if (selectedId != session || api !== connection) return@launch
+                        if (!current.optBoolean("available")) { setError(session, "暂时无法核对任务归属，文字和附件已保留"); return@launch }
+                        externalActivity = current; externalVerifiedAt = activityClock(); activityNow = externalVerifiedAt
+                        if (current.optBoolean("running")) { setError(session, "其他端正在执行，本次消息未写入；文字和附件已保留。"); return@launch }
+                    }
+                    // Dispatch this explicit click once, after verifying its original draft/attachments.
+                    if (draft == originalDraft && pendingFiles.map { it.optString("id") } == originalFiles) {
+                        setSubmitting(session, false)
+                        dispatched = sendInput(input, questionId)
+                    }
+                } catch (_: kotlinx.coroutines.TimeoutCancellationException) { setError(session, "核对任务归属超时，文字和附件已保留，请重新连接")
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { setError(session, "无法核对任务归属，文字和附件已保留，请重新连接") }
+                finally { if (!dispatched) setSubmitting(session, false) }
+            }
+            return true
+        }
         val isQuestion = questionId != null
         if (runId != null && runSession == session) {
             val id = runId!!

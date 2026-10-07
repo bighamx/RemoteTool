@@ -1,6 +1,19 @@
 using System.Text.Json.Nodes;
 using ChuckieHelper.WebApi.Services.Codex;
 
+var lost=new JsonObject{["session_id"]="session",["owner"]="desktop",["turn_id"]="turn",
+    ["status"]="acceptance_unknown",["error_code"]="run_tracking_lost"};
+var observation=new JsonObject{["session_id"]="session",["available"]=true,["running"]=true,["activity_id"]="turn"};
+if(!CodexDesktopRunResume.CanResume(lost,"session",observation))throw new Exception("Matching live mobile submission must reconnect");
+foreach(var field in new[]{"session_id","activity_id","available","running"}) {
+    var other=observation.DeepClone().AsObject();
+    other[field]=field is "available" or "running"?JsonValue.Create(false):JsonValue.Create("other");
+    if(CodexDesktopRunResume.CanResume(lost,"session",other))throw new Exception("Unrelated/completed desktop turn must never be adopted");
+}
+CodexDesktopRunResume.Restore(lost);
+if(lost["status"]!.ToString()!="started" || lost.ContainsKey("error_code"))throw new Exception("Restore must reset tracking state");
+Console.WriteLine("6 run ownership recovery contracts passed");
+
 if(args.Length==3) {
     var snapshot=CodexRolloutMessageTimes.Read(args[0],args[1]); long position=0;
     foreach(var row in JsonNode.Parse(File.ReadAllText(args[2]))!.AsArray()) {

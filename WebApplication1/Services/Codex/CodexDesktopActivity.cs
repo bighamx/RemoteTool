@@ -20,7 +20,9 @@ internal static class CodexDesktopActivity
             }
             task = entry.Pending;
         }
-        return (await task.WaitAsync(ct)).DeepClone().AsObject();
+        var result = (await task.WaitAsync(ct)).DeepClone().AsObject();
+        result["session_id"] = session;
+        return result;
     }
     private static async Task<JsonObject> Capture(string session) {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));

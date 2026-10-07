@@ -83,27 +83,8 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     }
 
     /// <summary>多端共享：该会话当前是否有活跃 run。终态自动清除。</summary>
-    [HttpGet("sessions/{id}/active-run")] public async Task ActiveRun(string id, CancellationToken ct) {
-        var sessionId = Id(id);
-        var runId = runs.Query("codex", sessionId);
-        if (runId == null) { await Response.WriteAsJsonAsync(new { run_id = (string?)null }, ct); return; }
-        try {
-            using var upstream = await bridge.SendAsync(HttpMethod.Get, $"runs/{runId}", null, ct, null);
-            if (upstream.StatusCode == System.Net.HttpStatusCode.NotFound) {
-                runs.Clear("codex", sessionId, runId);
-                await Response.WriteAsJsonAsync(new { run_id = (string?)null }, ct); return;
-            }
-            if (upstream.IsSuccessStatusCode) {
-                using var doc = JsonDocument.Parse(await upstream.Content.ReadAsStringAsync(ct));
-                var status = doc.RootElement.TryGetProperty("status", out var s) ? s.GetString() : "";
-                if (status is "completed" or "failed" or "cancelled" or "interrupted" or "acceptance_unknown") {
-                    runs.Clear("codex", sessionId, runId);
-                    await Response.WriteAsJsonAsync(new { run_id = (string?)null }, ct); return;
-                }
-            }
-        } catch (Exception) when (!ct.IsCancellationRequested) { }
-        await Response.WriteAsJsonAsync(new { run_id = runId }, ct);
-    }
+    [HttpGet("sessions/{id}/active-run")] public Task ActiveRun(string id, CancellationToken ct) =>
+        Forward(HttpMethod.Get, $"sessions/{Id(id)}/active-run", null, ct);
     [HttpGet("runs/{id}")] public Task Status(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"runs/{Id(id)}", null, ct);
     [HttpGet("runs/lookup")] public Task Lookup([FromQuery] string key, CancellationToken ct) => Forward(HttpMethod.Get, "runs/lookup?key=" + Uri.EscapeDataString(Id(key)), null, ct);
     [HttpGet("runs/{id}/events")] public Task Events(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"runs/{Id(id)}/events", null, ct);

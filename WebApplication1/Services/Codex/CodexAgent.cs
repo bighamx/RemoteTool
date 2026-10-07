@@ -88,9 +88,15 @@ internal sealed class CodexAgent : IAsyncDisposable
     }
 
     private CodexAgent(string config) {
-        settings = Read(config); folder = Path.GetDirectoryName(config)!; home = settings.S("home");
+        settings = Read(config); folder = settings.S("state_folder", Path.GetDirectoryName(config)!); home = settings.S("home");
         journal = Path.Combine(folder, "runs.json");
         providers = Read(Path.Combine(folder, "providers.json")); runs = Read(journal);
+        // An IIS recycle loses the RPC subscription and desktop follow task. A persisted
+        // "started" run cannot still be observed by this process; do not advertise it forever.
+        var recovered = false;
+        foreach (var entry in runs) if (entry.Value is JsonObject state)
+            recovered |= CodexRunRecovery.Recover(state, tracked: false);
+        if (recovered) Persist();
         foreach (var entry in Read(Path.Combine(folder, "model-selections.json")))
             if (entry.Value is JsonObject selection) sessionOverrides[entry.Key] = selection.DeepClone().AsObject();
         accounts = new CodexAccountStore(home, settings.S("account_store", Path.Combine(Path.GetDirectoryName(home)!, ".codex-switch")));
@@ -286,6 +292,33 @@ internal sealed class CodexAgent : IAsyncDisposable
         Emit(run, "run.failed");
     }
     private async Task<JsonObject> Config() => (await rpc.Call("config/read", Obj(("includeLayers", false))))["config"]!.AsObject();
+    private async Task<JsonObject> FindActiveRun(string session, CancellationToken ct = default) {
+        string owned; JsonObject[] candidates;
+        lock (gate) {
+            owned = active.GetValueOrDefault(session);
+            candidates = runs.Select(entry => entry.Value as JsonObject).Where(row => row != null &&
+                row.S("session_id") == session && row.S("owner") == "desktop" && row.S("status") == "acceptance_unknown" &&
+                row.S("error_code") == "run_tracking_lost" && row.S("turn_id").Length > 0).ToArray();
+        }
+        if (owned != null) { lock (gate) return runs[owned]?.DeepClone().AsObject() ?? Obj(("run_id", null)); }
+        if (candidates.Length == 0) return Obj(("run_id", null));
+        var observed = await CodexDesktopActivity.Read(session, ct);
+        string restored = null, key = null;
+        lock (gate) {
+            if (active.TryGetValue(session, out owned)) restored = owned;
+            else {
+                var matches = candidates.Where(row => CodexDesktopRunResume.CanResume(row, session, observed)).ToArray();
+                // Ambiguous journals must not grant control to an unrelated task.
+                if (matches.Length == 1) {
+                    restored = matches[0].S("run_id"); key = matches[0].S("key");
+                    CodexDesktopRunResume.Restore(runs[restored]!.AsObject());
+                    active[session] = restored; Persist();
+                }
+            }
+        }
+        if (key != null) _ = ObserveDesktopRun(session, restored, key);
+        lock (gate) return restored != null ? runs[restored]!.DeepClone().AsObject() : Obj(("run_id", null));
+    }
     private async Task<JsonObject> Models() {
         var config = await Config(); var catalog = await rpc.Call("model/list", new());
         var options = catalog.A("data").Where(m => !m.B("hidden")).ToArray();
@@ -569,6 +602,7 @@ internal sealed class CodexAgent : IAsyncDisposable
             return await Models();
         }
         if (p[0] == "sessions") {
+            if (p.Length == 3 && p[2] == "active-run" && method == "GET") return await FindActiveRun(p[1], context.RequestAborted);
             if (p.Length == 3 && p[2] == "desktop-activity" && method == "GET") return await CodexDesktopActivity.Read(p[1], context.RequestAborted);
             if (p.Length == 1 && method == "GET") {
                 var request = Obj(("limit", 50), ("sortKey", "updated_at"), ("sourceKinds", new JsonArray("cli", "vscode", "appServer")));

@@ -3,5 +3,6 @@
   <ItemGroup>
     <Compile Include="../../WebApplication1/Services/Codex/CodexRolloutMessageTimes.cs" Link="CodexRolloutMessageTimes.cs" />
     <Compile Include="../../WebApplication1/Services/RemoteControl/FilePathPolicy.cs" Link="FilePathPolicy.cs" />
+    <Compile Include="../../WebApplication1/Services/Codex/CodexDesktopRunResume.cs" Link="CodexDesktopRunResume.cs" />
   </ItemGroup>
 </Project>
