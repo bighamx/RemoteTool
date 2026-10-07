@@ -93,8 +93,8 @@ fun truncateNarration(text: String): String {
             result.appendCodePoint(point)
         } else {
             nonChinese++
-            if (nonChinese <= 30) result.appendCodePoint(point)
-            else if (nonChinese == 31) result.append('…')
+            if (nonChinese <= 100) result.appendCodePoint(point)
+            else if (nonChinese == 101) result.append('…')
         }
         index += Character.charCount(point)
     }
