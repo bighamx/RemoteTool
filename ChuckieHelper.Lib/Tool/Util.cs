@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using SharpCompress.Archives;
-using SharpCompress.Archives.Rar;
 using SharpCompress.Common;
 using System.Linq;
 
@@ -131,7 +130,7 @@ namespace ChuckieHelper.Lib.Tool
         private static List<string> ExtractRarArchive(string filePath, string extractDir)
         {
             var result = new List<string>();
-            using var archive = RarArchive.Open(filePath);
+            using var archive = ArchiveFactory.OpenArchive(filePath);
             
             // 提取条目信息
             var entryInfos = archive.Entries
