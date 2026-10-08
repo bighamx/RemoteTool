@@ -113,17 +113,29 @@ internal sealed class CodexAccountStore
         var data = Read(); var rows = data["accounts"]!.AsObject();
         var target = rows[id] as JsonObject ?? throw new CodexError("工作空间登录记录不存在", 404);
         var targetAuth = target["auth"] as JsonObject ?? throw new CodexError("该工作空间需要重新登录");
-        var targetIdentity = Identity(targetAuth); var sourceIdentity = Identity(CurrentAuth());
-        if (sourceIdentity.S("email") != targetIdentity.S("email")) throw new CodexError("此操作只切换当前邮箱的个人／团队工作空间", 409);
-        if (!rows.Any(x => Same(x.Value!, sourceIdentity))) throw new CodexError("请先保存当前工作空间登录；未结束进程或修改凭据", 409);
+        var targetIdentity = Identity(targetAuth);
+        // No current auth.json (custom provider active or logged out) means there is no
+        // live session to protect: switching back to a saved workspace must be allowed.
+        JsonObject sourceIdentity = null;
+        try { sourceIdentity = Identity(CurrentAuth()); } catch (CodexError) { }
+        if (sourceIdentity != null) {
+            if (sourceIdentity.S("email") != targetIdentity.S("email")) throw new CodexError("此操作只切换当前邮箱的个人／团队工作空间", 409);
+            if (!rows.Any(x => Same(x.Value!, sourceIdentity))) throw new CodexError("请先保存当前工作空间登录；未结束进程或修改凭据", 409);
+        }
     }
     public JsonObject WorkspaceAuth(string id) {
         using var guard = Lock();
         var row = Read()["accounts"]![id] as JsonObject ?? throw new CodexError("工作空间登录记录不存在", 404);
         var saved = row["auth"]?.DeepClone() as JsonObject ?? throw new CodexError("该工作空间需要重新登录");
-        var identity = Identity(saved); var current = CurrentAuth(); var source = Identity(current);
-        if (identity.S("email") != source.S("email")) throw new CodexError("只能查询当前账户的工作空间", 403);
-        return identity.S("workspace_id") == source.S("workspace_id") ? current : saved;
+        var identity = Identity(saved); var current = CurrentAuth();
+        // Missing current login (custom provider or logged out) has no email to match;
+        // serve the saved workspace credentials so usage and switching still work.
+        if (current.Count > 0) {
+            var source = Identity(current);
+            if (identity.S("email") != source.S("email")) throw new CodexError("只能查询当前账户的工作空间", 403);
+            return identity.S("workspace_id") == source.S("workspace_id") ? current : saved;
+        }
+        return saved;
     }
     public void RecoverWorkspaceAuth(string id, JsonObject original, JsonObject refreshed) {
         var identity = Identity(refreshed); var previous = Identity(original);

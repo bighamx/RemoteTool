@@ -799,7 +799,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         if (p.Length == 4 && p[0] == "workspaces" && p[2] == "rate-limit-resets" && p[3] == "consume" && method == "POST")
             return await ConsumeWorkspaceResetCredit(p[1], body.S("creditId"), body.B("useNextAvailable"), context.Request.Headers["Idempotency-Key"].ToString(), context.RequestAborted);
         if (path == "accounts") { var result = accounts.List(); result["desktop_running"] = DesktopBusy(); return result; }
-        if (path == "accounts/import") { accounts.Capture(accounts.CurrentAuth()); return Obj(("saved", true)); }
+        if (path == "accounts/import") {
+            var imported = accounts.CurrentAuth();
+            if (imported.Count == 0) throw new CodexError("电脑当前没有官方登录记录；请先在电脑登录 Codex，或使用“登录其他工作空间”", 409, "not_logged_in");
+            accounts.Capture(imported); return Obj(("saved", true));
+        }
         if (path == "accounts/login") return await BeginLogin(body);
         if (path == "accounts/login-status") return await LoginStatus();
         if (p.Length == 3 && p[0] == "accounts" && p[2] == "remove") { accounts.Remove(p[1]); return Obj(("removed", true)); }
