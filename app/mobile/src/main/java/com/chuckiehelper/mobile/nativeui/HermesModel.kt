@@ -257,6 +257,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     var workspaceUsageLoading by mutableStateOf<Set<String>>(emptySet())
         private set
+    var workspaceResetCredits by mutableStateOf<Map<String, JSONObject>>(emptyMap())
+        private set
+    var workspaceResetLoading by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var workspaceResetUsing by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var workspaceResetErrors by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
     private var workspaceReadEpoch = 0L
     var projects by mutableStateOf<List<JSONObject>>(emptyList())
         private set
@@ -539,6 +547,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         filesReadEpoch++; filesReadJob?.cancel(); filesReadJob = null; filesRefreshPending = false
         loginJob?.cancel(); loginJob = null; loginInfo = null; loginVisible = false; loginStarting = false; loginError = null
         workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
+        workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetUsing = emptySet(); workspaceResetErrors = emptyMap()
         api = value.withReadPolicy(noRetry = true, onReadSuccess = {
             if (api.base == value.base) {
                 if (error == readConnectionError) error = null
@@ -738,9 +747,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (api !== connection) return
         if (workspaces.optString("current") != loadedWorkspaces.optString("current")) {
             workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
+            workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetUsing = emptySet(); workspaceResetErrors = emptyMap()
         }
         accounts = loadedAccounts; workspaces = loadedWorkspaces
         workspaceUsages = workspaceUsages.filterKeys { id -> workspaces.array("data").objects().any { it.optString("id") == id } }
+        workspaceResetCredits = workspaceResetCredits.filterKeys { id -> workspaces.array("data").objects().any { it.optString("id") == id } }
+        workspaceResetErrors = workspaceResetErrors.filterKeys { id -> workspaces.array("data").objects().any { it.optString("id") == id } }
         fetchWorkspaceUsages()
     }
     fun fetchWorkspaceUsages(force: Boolean = false) {
@@ -767,6 +779,67 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
     fun fetchAccounts() = launch { error = null; fetchAccountsNow() }
+
+    fun fetchWorkspaceResetCredits(id: String) {
+        if (agent != "codex" || id.isBlank() || id in workspaceResetLoading || id in workspaceResetUsing) return
+        workspaceResetLoading = workspaceResetLoading + id
+        workspaceResetErrors = workspaceResetErrors - id
+        val connection = api
+        val epoch = workspaceReadEpoch
+        val expectedWorkspace = workspaces.array("data").objects().firstOrNull { it.optString("id") == id }?.optString("workspace_id").orEmpty()
+        viewModelScope.launch {
+            try {
+                val result = connection.json("$root/workspaces/${q(id)}/rate-limit-resets")
+                if (api === connection && epoch == workspaceReadEpoch) {
+                    val receivedWorkspace = result.optString("chatgpt_account_id")
+                    if (!result.optBoolean("available") || expectedWorkspace.isBlank() || receivedWorkspace != expectedWorkspace)
+                        throw java.io.IOException("返回的工作空间身份不匹配，请刷新")
+                    workspaceResetCredits = workspaceResetCredits + (id to result)
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (api === connection && epoch == workspaceReadEpoch) workspaceResetErrors = workspaceResetErrors + (id to connectionFailureMessage(e))
+            } finally {
+                if (api === connection && epoch == workspaceReadEpoch) workspaceResetLoading = workspaceResetLoading - id
+            }
+        }
+    }
+
+    fun consumeWorkspaceResetCredit(id: String, creditId: String?) {
+        if (agent != "codex" || id.isBlank() || id in workspaceResetUsing || id in workspaceResetLoading) return
+        workspaceResetUsing = workspaceResetUsing + id
+        workspaceResetErrors = workspaceResetErrors - id
+        val connection = api
+        val epoch = workspaceReadEpoch
+        val expectedWorkspace = workspaces.array("data").objects().firstOrNull { it.optString("id") == id }?.optString("workspace_id").orEmpty()
+        viewModelScope.launch {
+            try {
+                val body = JSONObject().apply {
+                    if (!creditId.isNullOrBlank()) put("creditId", creditId) else put("useNextAvailable", true)
+                }
+                val request = connection.request("$root/workspaces/${q(id)}/rate-limit-resets/consume", body).newBuilder()
+                    .header("Idempotency-Key", UUID.randomUUID().toString()).build()
+                val result = connection.json(request)
+                if (api === connection && epoch == workspaceReadEpoch) {
+                    val receivedWorkspace = result.optString("chatgpt_account_id")
+                    if (!result.optBoolean("available") || expectedWorkspace.isBlank() || receivedWorkspace != expectedWorkspace)
+                        throw java.io.IOException("返回的工作空间身份不匹配，请刷新")
+                    workspaceResetCredits = workspaceResetCredits + (id to result)
+                    result.optJSONObject("usage")?.let { refreshed ->
+                        val wrapper = workspaceUsages[id]?.let { JSONObject(it.toString()) }
+                            ?: obj("workspace_id" to id, "chatgpt_account_id" to receivedWorkspace, "available" to true)
+                        wrapper.put("usage", refreshed).put("checked_at", result.optLong("checked_at"))
+                        workspaceUsages = workspaceUsages + (id to wrapper)
+                    }
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (api === connection && epoch == workspaceReadEpoch) workspaceResetErrors = workspaceResetErrors + (id to connectionFailureMessage(e))
+            } finally {
+                if (api === connection && epoch == workspaceReadEpoch) workspaceResetUsing = workspaceResetUsing - id
+            }
+        }
+    }
 
     private suspend fun resetAccountView() {
         historyJob?.cancel()
@@ -795,6 +868,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             backgroundRuns.clear(); saveRuns(); pendingSubmissions = emptyMap(); savePending(); conversationUi = ConversationUiState(); draftFiles = emptyMap(); localSubmissions.clear()
             runNarrationUsers.clear()
             workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
+            workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetUsing = emptySet(); workspaceResetErrors = emptyMap()
             prefs.edit().remove("run").remove("runSession").remove("pendingKey").remove("pendingInput").remove("pendingSession").apply()
             resetAccountView()
             fetchUsage()

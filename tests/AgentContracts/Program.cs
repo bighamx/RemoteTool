@@ -17,9 +17,10 @@ if (args.Length == 3 && args[0] == "--workspace-probe") {
     var config = CodexJson.Read(args[1]); var saved = CodexJson.Read(args[2]);
     foreach (var row in saved["accounts"]!.AsObject()) {
         var original = row.Value!["auth"]!.AsObject();
-        var probe = await CodexWorkspaceUsage.Read(config.S("executable"), Path.GetDirectoryName(args[1])!, original, default);
+        var probe = await CodexWorkspaceUsage.ReadResetCredits(config.S("executable"), Path.GetDirectoryName(args[1])!, original, default);
         var limits = probe.Usage["rateLimits"]!;
-        Console.WriteLine($"Verified {limits.S("planType")}: 5h used {limits["primary"].S("usedPercent")}%, week used {limits["secondary"].S("usedPercent")}%; token unchanged {original.ToJsonString() == probe.Auth.ToJsonString()}");
+        var resetCounts = probe.Usage["rateLimitResetCredits"];
+        Console.WriteLine($"Verified {limits.S("planType")}: 5h used {limits["primary"].S("usedPercent")}%, week used {limits["secondary"].S("usedPercent")}%; resets available {resetCounts.L("availableCount")}, applicable {resetCounts.L("applicableCount")}; token unchanged {original.ToJsonString() == probe.Auth.ToJsonString()}");
     }
     return;
 }
@@ -92,11 +93,21 @@ try {
     Check(CodexJson.Read(Path.Combine(authTest,"store","accounts.json"))["accounts"]![personalId]!["auth"]!.ToJsonString()==newer.ToJsonString(),"stale probe cannot overwrite newer captured login");
     var crossed=Auth("team-id","team","x");crossed["tokens"]!["access_token"]=personalAuth["tokens"]!["access_token"]!.DeepClone();
     try { CodexAccountStore.Identity(crossed);Check(false,"crossed credentials rejected"); } catch(CodexError) { Check(true,"crossed credentials rejected"); }
-    var quota=CodexWorkspaceUsage.Normalize(JsonNode.Parse("""{"plan_type":"team","rate_limit":{"primary_window":{"used_percent":12.5,"limit_window_seconds":18000,"reset_at":100},"secondary_window":{"used_percent":54,"limit_window_seconds":604800,"reset_at":200}}}""")!.AsObject());
+    var quota=CodexWorkspaceUsage.Normalize(JsonNode.Parse("""{"plan_type":"team","rate_limit":{"primary_window":{"used_percent":12.5,"limit_window_seconds":18000,"reset_at":100},"secondary_window":{"used_percent":54,"limit_window_seconds":604800,"reset_at":200}},"rate_limit_reset_credits":{"available_count":2,"applicable_available_count":1}}""")!.AsObject());
     Check(quota["rateLimits"]!["primary"]!.L("windowDurationMins")==300 && quota["rateLimits"]!["secondary"]!.L("windowDurationMins")==10080,"workspace quota time windows normalized");
     Check(quota["rateLimits"]!["primary"]!.S("usedPercent")=="12.5" && quota["rateLimits"]!["secondary"]!.L("resetsAt")==200,"workspace quota values retain precision and reset times");
+    Check(quota["rateLimitResetCredits"]!.L("availableCount")==2 && quota["rateLimitResetCredits"]!.L("applicableCount")==1,"workspace reset credit counts normalized");
     CodexWorkspaceUsage.Verify(new JsonObject { ["plan_type"]="business" },quota);Check(true,"business and team plan names normalized");
     try { CodexWorkspaceUsage.Verify(new JsonObject { ["plan_type"]="plus" },quota);Check(false,"wrong subscription quota rejected"); } catch(CodexError) { Check(true,"wrong subscription quota rejected"); }
+    var resetUsage=JsonNode.Parse("""{"rateLimits":{"planType":"team"},"rateLimitResetCredits":{"availableCount":1,"credits":[{"id":"reset-1","status":"available","resetType":"codexRateLimits","grantedAt":100}]}}""")!.AsObject();
+    CodexWorkspaceUsage.Verify(new JsonObject { ["plan_type"]="business" },resetUsage);
+    CodexWorkspaceUsage.EnsureResetCreditAvailable(resetUsage,"reset-1");Check(true,"available reset credit accepted");
+    try { CodexWorkspaceUsage.EnsureResetCreditAvailable(resetUsage,"missing");Check(false,"unknown reset credit rejected"); } catch(CodexError) { Check(true,"unknown reset credit rejected"); }
+    CodexWorkspaceUsage.EnsureResetCreditAvailable(JsonNode.Parse("""{"rateLimitResetCredits":{"availableCount":2,"credits":null}}""")!.AsObject(),"");Check(true,"count-only reset credit accepted for backend selection");
+    try { CodexWorkspaceUsage.EnsureResetCreditAvailable(JsonNode.Parse("""{"rateLimitResetCredits":{"availableCount":0,"credits":[]}}""")!.AsObject(),"");Check(false,"empty reset credit rejected"); } catch(CodexError) { Check(true,"empty reset credit rejected"); }
+    CodexWorkspaceUsage.ValidateResetSelection("reset-1",false);CodexWorkspaceUsage.ValidateResetSelection("",true);Check(true,"reset selection requires one explicit mode");
+    try { CodexWorkspaceUsage.ValidateResetSelection("",false);Check(false,"implicit next reset rejected"); } catch(CodexError) { Check(true,"implicit next reset rejected"); }
+    try { CodexWorkspaceUsage.ValidateResetSelection("reset-1",true);Check(false,"conflicting reset selection rejected"); } catch(CodexError) { Check(true,"conflicting reset selection rejected"); }
 } finally { Directory.Delete(authTest,true); }
 var selection = CodexModelSettings.Validate(JsonNode.Parse("""{"model":"m","provider":"custom","reasoning_effort":"high","service_tier":"priority"}""")!.AsObject(), catalog);
 var streamed = new CodexAssistantMessageStream();

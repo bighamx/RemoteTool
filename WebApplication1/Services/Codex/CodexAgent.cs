@@ -116,6 +116,43 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             return result;
         } finally { settingsLock.Release(); }
     }
+    private async Task<JsonObject> WorkspaceResetCredits(string id, CancellationToken ct) {
+        await settingsLock.WaitAsync(ct);
+        try {
+            var auth = accounts.WorkspaceAuth(id);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(25));
+            try {
+                var probe = await CodexWorkspaceUsage.ReadResetCredits(settings.S("executable"), folder, auth, timeout.Token);
+                accounts.RecoverWorkspaceAuth(id, auth, probe.Auth);
+                return Obj(("workspace_id", id), ("chatgpt_account_id", CodexAccountStore.Identity(probe.Auth).S("workspace_id")),
+                    ("available", true), ("usage", probe.Usage), ("checked_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+                throw new CodexError("额度重置查询超时，请重试", 504);
+            }
+        } finally { settingsLock.Release(); }
+    }
+    private async Task<JsonObject> ConsumeWorkspaceResetCredit(string id, string creditId, bool useNextAvailable, string idempotencyKey, CancellationToken ct) {
+        if (!Regex.IsMatch(idempotencyKey ?? "", "^[a-zA-Z0-9_-]{16,120}$"))
+            throw new CodexError("额度重置需要唯一请求标识", 400);
+        await settingsLock.WaitAsync(ct);
+        try {
+            var auth = accounts.WorkspaceAuth(id);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(35));
+            try {
+                var probe = await CodexWorkspaceUsage.ConsumeResetCredit(settings.S("executable"), folder, auth, creditId, useNextAvailable, idempotencyKey, timeout.Token);
+                accounts.RecoverWorkspaceAuth(id, auth, probe.Auth);
+                var usage = probe.Result["usage"]?.DeepClone() as JsonObject ?? new JsonObject();
+                var cached = Obj(("workspace_id", id), ("chatgpt_account_id", CodexAccountStore.Identity(probe.Auth).S("workspace_id")),
+                    ("available", true), ("usage", usage.DeepClone()), ("checked_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+                    ("auth_fingerprint", Hash(accounts.WorkspaceAuth(id).ToJsonString())));
+                workspaceUsage[id] = cached;
+                return Obj(("workspace_id", id), ("chatgpt_account_id", CodexAccountStore.Identity(probe.Auth).S("workspace_id")),
+                    ("available", true), ("outcome", probe.Result["outcome"]), ("usage", usage), ("checked_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+                throw new CodexError("额度重置操作超时；请先刷新状态，系统不会自动重试", 504);
+            }
+        } finally { settingsLock.Release(); }
+    }
 
     private CodexAgent(string config) {
         settings = Read(config); folder = settings.S("state_folder", Path.GetDirectoryName(config)!); home = settings.S("home");
@@ -758,6 +795,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             return quota["usage"]!.DeepClone().AsObject();
         }
         if (p.Length == 3 && p[0] == "workspaces" && p[2] == "usage" && method == "GET") return await WorkspaceUsage(p[1], context.Request.Query["refresh"].ToString() is "1" or "true", context.RequestAborted);
+        if (p.Length == 3 && p[0] == "workspaces" && p[2] == "rate-limit-resets" && method == "GET") return await WorkspaceResetCredits(p[1], context.RequestAborted);
+        if (p.Length == 4 && p[0] == "workspaces" && p[2] == "rate-limit-resets" && p[3] == "consume" && method == "POST")
+            return await ConsumeWorkspaceResetCredit(p[1], body.S("creditId"), body.B("useNextAvailable"), context.Request.Headers["Idempotency-Key"].ToString(), context.RequestAborted);
         if (path == "accounts") { var result = accounts.List(); result["desktop_running"] = DesktopBusy(); return result; }
         if (path == "accounts/import") { accounts.Capture(accounts.CurrentAuth()); return Obj(("saved", true)); }
         if (path == "accounts/login") return await BeginLogin(body);

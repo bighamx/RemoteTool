@@ -7,7 +7,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,6 +23,19 @@ import org.json.JSONObject
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+
+private data class ResetCreditChoice(val id: String?, val title: String)
+
+private fun resetCreditTime(value: Long): String = DateTimeFormatter.ofPattern("yyyy年M月d日 HH:mm")
+    .withZone(ZoneId.systemDefault()).format(Instant.ofEpochSecond(value))
+
+private fun resetOutcomeText(value: String): String? = when (value) {
+    "reset" -> "额度已重置，最新用量已刷新。"
+    "nothingToReset" -> "当前没有符合条件的额度窗口，未执行重置。"
+    "noCredit" -> "没有可用的额度重置。"
+    "alreadyRedeemed" -> "该请求已成功处理，没有重复消耗。"
+    else -> null
+}
 
 private fun quotaWindow(usage: JSONObject?, minutes: Int): JSONObject? {
     val limits = mutableListOf<JSONObject>()
@@ -64,6 +79,7 @@ private fun CodexUsageValues(usage: JSONObject?, compact: Boolean, onClick: () -
 @Composable
 fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: () -> Unit) {
     var remove by remember { mutableStateOf<JSONObject?>(null) }
+    var resetWorkspace by remember { mutableStateOf<JSONObject?>(null) }
     val source = model.workspaces
     AlertDialog(
         onDismissRequest = close,
@@ -93,7 +109,12 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: (
                                 var menu by remember { mutableStateOf(false) }
                                 Box {
                                     IconButton(onClick = { menu = true }, enabled = !model.switchingAccount) { Icon(Icons.Outlined.MoreVert, "管理工作空间") }
-                                    DropdownMenu(menu, { menu = false }) { DropdownMenuItem(text = { Text("移除保存的登录") }, onClick = { menu = false; remove = account }) }
+                                    DropdownMenu(menu, { menu = false }) {
+                                        DropdownMenuItem(text = { Text("查看和使用额度重置") }, onClick = {
+                                            menu = false; resetWorkspace = account; model.fetchWorkspaceResetCredits(account.getString("id"))
+                                        })
+                                        DropdownMenuItem(text = { Text("移除保存的登录") }, onClick = { menu = false; remove = account })
+                                    }
                                 }
                             }
                             HorizontalDivider(Modifier.padding(vertical = 4.dp))
@@ -120,6 +141,94 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: (
     remove?.let { account ->
         ConfirmDialog("移除登录记录", "仅移除保存的登录记录。电脑当前 auth.json、配置和会话历史保持原样。", { remove = null }) {
             model.removeAccount(account.getString("id")); remove = null
+        }
+    }
+    resetWorkspace?.let { account -> CodexResetCreditsDialog(model, account) { resetWorkspace = null } }
+}
+
+@Composable
+private fun CodexResetCreditsDialog(model: HermesModel, workspace: JSONObject, close: () -> Unit) {
+    val id = workspace.getString("id")
+    val result = model.workspaceResetCredits[id]
+    val summary = result?.optJSONObject("usage")?.optJSONObject("rateLimitResetCredits")
+    val credits = summary?.optJSONArray("credits")?.objects().orEmpty()
+    val count = summary?.optLong("availableCount", 0) ?: 0
+    val applicableCount = summary?.let { if (it.has("applicableCount")) it.optLong("applicableCount") else count } ?: 0
+    val loading = id in model.workspaceResetLoading
+    val using = id in model.workspaceResetUsing
+    val error = model.workspaceResetErrors[id]
+    var confirm by remember(id) { mutableStateOf<ResetCreditChoice?>(null) }
+    AlertDialog(
+        onDismissRequest = { if (!using) close() },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("额度重置")
+                    Text(workspace.optString("workspace_name"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                IconButton(onClick = { model.fetchWorkspaceResetCredits(id) }, enabled = !loading && !using) {
+                    Icon(Icons.Outlined.Refresh, "刷新额度重置")
+                }
+            }
+        },
+        text = {
+            Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                when {
+                    loading && result == null -> {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Text("正在读取可用额度重置…")
+                        }
+                    }
+                    error != null && result == null -> {
+                        Text(error, color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { model.fetchWorkspaceResetCredits(id) }, enabled = !loading) { Text("重试") }
+                    }
+                    summary == null -> Text("Codex 没有返回额度重置数据。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    else -> {
+                        Text("可用数量：$count · 当前可使用：$applicableCount", style = MaterialTheme.typography.titleMedium)
+                        Text("执行成功后会立即重置后端判定为符合条件的 Codex 额度窗口，并消耗一次可用重置。", style = MaterialTheme.typography.bodySmall)
+                        resetOutcomeText(result.optString("outcome"))?.let {
+                            Text(it, color = if (result.optString("outcome") == "reset") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        credits.forEach { credit ->
+                            val available = credit.optString("status") == "available"
+                            val title = credit.optString("title").ifBlank { "Codex 额度重置" }
+                            OutlinedCard(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                                        Text(if (available) "可用" else credit.optString("status", "状态未知"), style = MaterialTheme.typography.labelMedium,
+                                            color = if (available) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    credit.optString("description").takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                                    credit.optLong("grantedAt").takeIf { it > 0 }?.let { Text("获得：${resetCreditTime(it)}", style = MaterialTheme.typography.labelSmall) }
+                                    credit.optLong("expiresAt").takeIf { it > 0 }?.let { Text("有效期至：${resetCreditTime(it)}", style = MaterialTheme.typography.labelSmall) }
+                                    if (available) Button(onClick = { confirm = ResetCreditChoice(credit.getString("id"), title) }, enabled = !using && applicableCount > 0) {
+                                        Text(if (using) "正在使用…" else "使用")
+                                    }
+                                }
+                            }
+                        }
+                        if (count > 0 && credits.none { it.optString("status") == "available" }) {
+                            Text("服务端只返回了可用数量，没有返回具体条目。可以让 Codex 选择下一次可用重置。", style = MaterialTheme.typography.bodySmall)
+                            Button(onClick = { confirm = ResetCreditChoice(null, "下一次可用额度重置") }, enabled = !using && applicableCount > 0) {
+                                Text(if (using) "正在使用…" else "使用一次额度重置")
+                            }
+                        }
+                        if (count == 0L) Text("当前没有可用的额度重置。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        else if (applicableCount == 0L) Text("当前额度窗口暂不符合重置条件。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (error != null && result != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = close, enabled = !using) { Text("关闭") } },
+    )
+    confirm?.let { choice ->
+        ConfirmDialog("使用额度重置", "将使用“${choice.title}”。此操作会立即消耗一次可用重置，不能撤销；如果当前没有符合条件的额度窗口，Codex 会拒绝重置。", { confirm = null }) {
+            model.consumeWorkspaceResetCredit(id, choice.id); confirm = null
         }
     }
 }

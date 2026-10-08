@@ -123,6 +123,9 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpGet("accounts/login-status")] public Task LoginStatus(CancellationToken ct) => Forward(HttpMethod.Get, "accounts/login-status", null, ct);
     [HttpGet("workspaces")] public Task Workspaces(CancellationToken ct) => Forward(HttpMethod.Get, "workspaces", null, ct);
     [HttpGet("workspaces/{id}/usage")] public Task WorkspaceUsage(string id, [FromQuery] bool refresh, CancellationToken ct) => Forward(HttpMethod.Get, $"workspaces/{Id(id)}/usage" + (refresh ? "?refresh=1" : ""), null, ct);
+    [HttpGet("workspaces/{id}/rate-limit-resets")] public Task WorkspaceRateLimitResets(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"workspaces/{Id(id)}/rate-limit-resets", null, ct);
+    [HttpPost("workspaces/{id}/rate-limit-resets/consume")] public Task ConsumeWorkspaceRateLimitReset(string id, [FromBody] JsonElement body, CancellationToken ct) =>
+        Forward(HttpMethod.Post, $"workspaces/{Id(id)}/rate-limit-resets/consume", body, ct, Request.Headers["Idempotency-Key"].ToString());
     [HttpPost("workspaces")] public Task SaveWorkspace([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "workspaces", body, ct);
     [HttpPost("workspaces/{id}/use")] public Task Workspace(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"workspaces/{Id(id)}/use", JsonSerializer.SerializeToElement(new { }), ct);
 
