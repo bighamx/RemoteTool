@@ -971,7 +971,10 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     if (observed.B("available") && (observed.S("activity_id") != state.S("turn_id") || !observed.B("running"))) {
                         // The tracked desktop turn ended or a newer one replaced it. Never keep its old timer alive.
                         var known = observed["turn_statuses"].S(state.S("turn_id"));
-                        var finished = known is "completed" or "failed" or "interrupted" ? known : "acceptance_unknown";
+                        // A still-running tracked turn only means the snapshot ordering has not
+                        // caught up yet; treat a missing status as unknown only when idle.
+                        var finished = known is "completed" or "failed" or "interrupted" ? known
+                            : known == "inProgress" || observed.B("running") ? "started" : "acceptance_unknown";
                         lock (gate) {
                             if (runs[p[1]].S("status") == "started") {
                                 runs[p[1]]!["status"] = finished;

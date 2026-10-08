@@ -34,9 +34,12 @@ internal static class CodexDesktopActivity
     internal static JsonObject Project(JsonObject snapshot) {
         var turns = snapshot.A("turns").ToList();
         if (snapshot["turnHistory"]?["history"]?["entitiesByKey"] is JsonObject entities) turns.AddRange(entities.Select(pair => pair.Value));
+        // History entities may lack turnStartedAtMs; an inProgress turn is always the
+        // live one under the single-writer desktop, so prioritize it over timestamps.
         var turn = turns.Where(t => t != null && t.S("turnId").Length > 0)
             .GroupBy(t => t.S("turnId")).Select(group => group.First())
-            .OrderBy(t => t.L("turnStartedAtMs")).LastOrDefault();
+            .OrderBy(t => t.S("status") == "inProgress" ? 1 : 0)
+            .ThenBy(t => t.L("turnStartedAtMs")).LastOrDefault();
         // An incomplete desktop snapshot is not proof of idle state.
         if (turn == null) return Obj(("available", false));
         var status = turn.S("status");
