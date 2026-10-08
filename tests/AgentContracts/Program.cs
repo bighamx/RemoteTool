@@ -108,6 +108,12 @@ try {
     CodexWorkspaceUsage.ValidateResetSelection("reset-1",false);CodexWorkspaceUsage.ValidateResetSelection("",true);Check(true,"reset selection requires one explicit mode");
     try { CodexWorkspaceUsage.ValidateResetSelection("",false);Check(false,"implicit next reset rejected"); } catch(CodexError) { Check(true,"implicit next reset rejected"); }
     try { CodexWorkspaceUsage.ValidateResetSelection("reset-1",true);Check(false,"conflicting reset selection rejected"); } catch(CodexError) { Check(true,"conflicting reset selection rejected"); }
+    var baselineReset=JsonNode.Parse("""{"rateLimitResetCredits":{"availableCount":3,"applicableCount":0,"credits":null}}""")!.AsObject();
+    var detailedReset=JsonNode.Parse("""{"rateLimits":{"planType":"team"},"rateLimitResetCredits":{"availableCount":3,"credits":[{"id":"reset-1","status":"available"}]}}""")!.AsObject();
+    var mergedReset=CodexWorkspaceUsage.MergeResetCreditApplicability(detailedReset,baselineReset);
+    Check(mergedReset["rateLimitResetCredits"]!.L("applicableCount")==0 && mergedReset["rateLimitResetCredits"]!["credits"]!.AsArray().Count==1,"reset details remain visible while baseline applicability stays disabled");
+    var missingReset=CodexWorkspaceUsage.MergeResetCreditApplicability(new JsonObject(),baselineReset);
+    Check(missingReset["rateLimitResetCredits"]!.L("availableCount")==3,"missing reset details fall back to baseline counts");
 } finally { Directory.Delete(authTest,true); }
 var selection = CodexModelSettings.Validate(JsonNode.Parse("""{"model":"m","provider":"custom","reasoning_effort":"high","service_tier":"priority"}""")!.AsObject(), catalog);
 var streamed = new CodexAssistantMessageStream();

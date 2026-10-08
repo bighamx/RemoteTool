@@ -91,9 +91,15 @@ internal static class CodexWorkspaceUsage
         if (!string.IsNullOrWhiteSpace(creditId) && useNextAvailable)
             throw new CodexError("额度重置选择冲突", 400);
     }
+    internal static JsonObject MergeResetCreditApplicability(JsonObject detailedUsage, JsonObject baselineUsage) {
+        if (detailedUsage["rateLimitResetCredits"] is not JsonObject detailed || baselineUsage["rateLimitResetCredits"] is not JsonObject baseline)
+            return baselineUsage.DeepClone().AsObject();
+        detailed["applicableCount"] = baseline.L("applicableCount");
+        return detailedUsage;
+    }
     public static async Task<(JsonObject Usage, JsonObject Auth)> ReadResetCredits(string executable, string privateRoot, JsonObject auth, CancellationToken ct) {
         var baseline = await Read(executable, privateRoot, auth, ct);
-        if (baseline.Usage["rateLimitResetCredits"].L("availableCount") < 1 || baseline.Usage["rateLimitResetCredits"].L("applicableCount") < 1) return baseline;
+        if (baseline.Usage["rateLimitResetCredits"].L("availableCount") < 1) return baseline;
         var identity = CodexAccountStore.Identity(baseline.Auth);
         using var detailTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         detailTimeout.CancelAfter(TimeSpan.FromSeconds(8));
@@ -103,7 +109,7 @@ internal static class CodexWorkspaceUsage
                 Verify(identity, usage);
                 return usage;
             }, detailTimeout.Token);
-            return (probe.Result, probe.Auth);
+            return (MergeResetCreditApplicability(probe.Result, baseline.Usage), probe.Auth);
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
             return baseline;
         } catch (Exception error) when (error is CodexError or IOException or HttpRequestException) {
