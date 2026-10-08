@@ -105,12 +105,12 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             }
         }
     }
-    LaunchedEffect(model, list, model.selectedId, lifecycle) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            if (!list) while (true) {
-                model.pollMessageQueue().join()
-                kotlinx.coroutines.delay(4000)
-            }
+    LaunchedEffect(model, list, model.selectedId, model.hasKnownActivity) {
+        // The watch service keeps CPU/network alive; this loop keeps draining the queue
+        // even when the screen is off or the app is backgrounded.
+        if (!list && (model.hasKnownActivity || model.messageQueue.entries.isNotEmpty())) while (true) {
+            model.pollMessageQueue().join()
+            kotlinx.coroutines.delay(4000)
         }
     }
     LaunchedEffect(model.asyncQuestion?.optString("request_id"), list) { if (!list && model.asyncQuestion != null) questionPanel = true }

@@ -31,6 +31,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     val agentName = if (agent == "codex") "Codex" else "Hermes"
     private val root = "/api/$agent"
     private val prefs = application.getSharedPreferences("$agent-$deviceId", 0)
+    private val appContext = application.applicationContext
     private lateinit var api: NativeApi
     var sessions by mutableStateOf<List<JSONObject>>(emptyList())
         private set
@@ -107,6 +108,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var observationEpoch = 0L
     private var statusWake: Channel<Unit>? = null
     fun setObserving(value: Boolean) { observation.setActive(value) }
+    fun syncWatchService() {
+        val needed = hasKnownActivity || messageQueue.entries.isNotEmpty()
+        if (needed) AgentWatchService.start(appContext) else AgentWatchService.stop(appContext)
+    }
     private fun pauseWatching() {
         observationEpoch++
         watching?.cancel(); watching = null
@@ -360,6 +365,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (runId != null && runSession != null) tracked[runSession!!] = runId!!
         prefs.edit().putString("trackedRuns", JSONObject(tracked as Map<*, *>).toString()).apply()
         saveRunTimings()
+        viewModelScope.launch { syncWatchService() }
     }
     private var pendingSubmissions by mutableStateOf(runCatching {
         val rows = JSONObject(prefs.getString("pendingSubmissions", "{}").orEmpty())
@@ -377,7 +383,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         pendingSubmissions.forEach { (id, pending) -> rows.put(id, obj("key" to pending.key, "input" to pending.input, "attachments" to org.json.JSONArray(pending.attachmentIds), "timestamp" to pending.timestamp, "questionId" to pending.questionId)) }
         prefs.edit().putString("pendingSubmissions", rows.toString()).remove("pendingKey").remove("pendingInput").remove("pendingSession").remove("pendingAttachments").remove("pendingTimestamp").apply()
     }
-    private fun removePending(session: String) { pendingSubmissions = pendingSubmissions - session; savePending() }
+    private fun removePending(session: String) { pendingSubmissions = pendingSubmissions - session; savePending(); syncWatchService() }
     var scrollToLatestRequest by mutableStateOf(0L)
         private set
     private var readConnectionError: String? = null
@@ -573,6 +579,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             selectedId?.let { loadHistory(it); loadSelection(it) }
             if (runId != null) watch()
             else if (hasPendingSubmission && agent == "hermes") error = "上次任务提交结果尚未确认，请使用原标识核对并重试"
+            syncWatchService()
         }
     }
 
@@ -1181,6 +1188,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val files = pendingFiles.toList()
         if (!messageQueue.enqueue(draft.trim(), files)) return false
         draft = ""; pendingFiles = emptyList()
+        syncWatchService()
         return true
     }
     fun pollMessageQueue() = viewModelScope.launch {
