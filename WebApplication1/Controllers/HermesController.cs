@@ -77,19 +77,27 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     }
     [HttpGet("sessions")] public async Task<IActionResult> Sessions([FromQuery] int offset = 0, CancellationToken ct = default) {
         Response.Headers.CacheControl = "no-store";
-        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions?limit=50&offset={Math.Max(0, offset)}", null, null, ct);
-        if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 会话列表" });
-        var result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!;
-        if (result["data"] is System.Text.Json.Nodes.JsonArray rows) {
-            var activities = activity.ReadMany(rows.Select(row => row?["id"]?.ToString()));
-            var previews = LatestSessionPreview.Read(activity.DatabasePath, rows.Select(row => row?["id"]?.ToString()), false);
-            foreach (var row in rows.OfType<System.Text.Json.Nodes.JsonObject>()) {
-                if (previews.TryGetValue(row["id"]!.ToString(), out var text)) { row["latest_user_message"] = text; row["preview"] = text; }
-                if (activities.TryGetValue(row["id"]!.ToString(), out var state) && state["available"]?.GetValue<bool>() == true)
-                    row["status"] = state["running"]?.GetValue<bool>() == true ? "running" : "idle";
+        try {
+            using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions?limit=50&offset={Math.Max(0, offset)}", null, null, ct);
+            if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 会话列表" });
+            var result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!;
+            if (result["data"] is System.Text.Json.Nodes.JsonArray rows) {
+                var ids = rows.Select(row => row?["id"]?.ToString()).ToArray();
+                var activities = activity.ReadMany(ids);
+                var previews = LatestSessionPreview.Read(activity.DatabasePath, ids, false);
+                foreach (var row in rows.OfType<System.Text.Json.Nodes.JsonObject>()) {
+                    if (row["id"]?.ToString() is not string id) continue;
+                    if (previews.TryGetValue(id, out var text)) { row["latest_user_message"] = text; row["preview"] = text; }
+                    if (activities.TryGetValue(id, out var state) && state["available"]?.GetValue<bool>() == true)
+                        row["status"] = state["running"]?.GetValue<bool>() == true ? "running" : "idle";
+                }
             }
+            return Ok(result);
         }
-        return Ok(result);
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception error) when (error is InvalidOperationException or IOException or HttpRequestException or UnauthorizedAccessException) {
+            return StatusCode(503, new { message = error is InvalidOperationException ? error.Message : "无法访问本机 Hermes，请检查 API Server 和服务端密钥文件权限" });
+        }
     }
     [HttpPost("sessions")] public async Task CreateSession([FromBody] JsonElement body, CancellationToken ct) {
         var nativeBody = JsonNode.Parse(body.GetRawText())!.AsObject(); nativeBody.Remove("auto_title");

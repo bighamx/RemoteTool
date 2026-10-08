@@ -125,13 +125,16 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     val executionCompacting get() = executionState == "正在压缩上下文"
 
     fun pollExternalActivity() = viewModelScope.launch {
-        if (capabilities.optJSONObject("chuckie_features")?.optBoolean("external_session_activity") != true) return@launch
         val id = selectedId ?: return@launch
         if (runId != null || submitting) { externalActivity = null; return@launch }
         val connection = api
         val requestedAt = activityClock()
         activityNow = requestedAt
         try {
+            // Gateway may have recovered after startup; capabilities are safe to retry.
+            ensureCapabilities()
+            if (api !== connection || selectedId != id) return@launch
+            if (capabilities.optJSONObject("chuckie_features")?.optBoolean("external_session_activity") != true) return@launch
             // An IIS/bridge restart can drop the local run subscription while its
             // desktop transport still executes a turn originally submitted here.
             attachServerActiveRun(id)
@@ -571,6 +574,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (runId != null) watch()
             else if (hasPendingSubmission && agent == "hermes") error = "上次任务提交结果尚未确认，请使用原标识核对并重试"
         }
+    }
+
+    private suspend fun ensureCapabilities() {
+        if (!this::api.isInitialized || capabilities.optJSONObject("chuckie_features")?.optBoolean("external_session_activity") == true) return
+        capabilities = api.json("$root/capabilities")
     }
 
     private fun launch(block: suspend CoroutineScope.() -> Unit): Job {
