@@ -580,6 +580,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 accounts.Capture(accounts.CurrentAuth());
             } catch {
                 if (rpc != null) await rpc.DisposeAsync();
+                if (previous?.Count > 0) await CodexOfficialRouting.Restore(settings.S("executable"), home);
+                CodexDesktopRestart.RestoreOwned(desktop.targets);
                 if (previous?.Count > 0) accounts.Restore(previous);
                 await Launch(); throw;
             } finally { desktop.Restart(); }

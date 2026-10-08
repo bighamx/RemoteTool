@@ -116,6 +116,14 @@ try {
     Check(missingReset["rateLimitResetCredits"]!.L("availableCount")==3,"missing reset details fall back to baseline counts");
 } finally { Directory.Delete(authTest,true); }
 var selection = CodexModelSettings.Validate(JsonNode.Parse("""{"model":"m","provider":"custom","reasoning_effort":"high","service_tier":"priority"}""")!.AsObject(), catalog);
+var tomlTest = Path.Combine(Path.GetTempPath(), "chuckie-codex-routing-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(tomlTest);
+try {
+    File.WriteAllText(Path.Combine(tomlTest, "config.toml"), "model = \"m\"\r\nmodel_provider = \"custom\"\r\nmodel_context_window = 1000\r\n\r\n[model_providers.custom]\r\nname = \"Relay\"\r\nbase_url = \"http://127.0.0.1:9/v1\"\r\n\r\n[model_providers.other]\r\nname = \"Other\"\r\n");
+    await CodexOfficialRouting.Restore(Path.Combine(tomlTest, "missing-codex.exe"), tomlTest);
+    var restored = await File.ReadAllTextAsync(Path.Combine(tomlTest, "config.toml"));
+    Check(!restored.Contains("model_provider =") && restored.Contains("model = \"m\"") && restored.Contains("[model_providers.custom]"), "official routing clears only the top-level provider selector");
+    Check(Directory.GetFiles(Path.Combine(tomlTest, "backups", "chuckie-helper"), "*", SearchOption.AllDirectories).Length > 0, "routing restoration keeps a config backup");
+} finally { Directory.Delete(tomlTest, true); }
 var streamed = new CodexAssistantMessageStream();
 var streamTurn = JsonNode.Parse("""{"status":"inProgress","items":[{"id":"first","type":"agentMessage","phase":"commentary","text":"先检查"}]}""")!.AsObject();
 var changes = streamed.Update(streamTurn).ToArray();

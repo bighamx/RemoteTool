@@ -6,7 +6,7 @@ namespace ChuckieHelper.WebApi.Services.Codex;
 internal sealed class CodexDesktopRestart
 {
     internal sealed record Target(int Id, DateTime Started, string Path, bool Desktop);
-    private readonly List<Target> targets;
+    internal readonly List<Target> targets;
     private CodexDesktopRestart(List<Target> targets) { this.targets = targets; }
     public static CodexDesktopRestart Capture(IEnumerable<int> excluded) {
         var skip = excluded.ToHashSet(); var ownSession = Process.GetCurrentProcess().SessionId;
@@ -47,6 +47,29 @@ internal sealed class CodexDesktopRestart
                 info.ArgumentList.Add("shell:AppsFolder\\" + application); Process.Start(info);
             } else Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         }
+    }
+    internal static void RestoreOwned(IEnumerable<Target> captured) {
+        if (!OperatingSystem.IsWindows()) return;
+        foreach (var target in captured) {
+            try {
+                using var process = Process.GetProcessById(target.Id);
+                if (process.HasExited) continue;
+                var path = process.MainModule?.FileName;
+                if (string.IsNullOrEmpty(path)) continue;
+                if (!string.Equals(path, target.Path, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!IsCodexExecutable(path)) continue;
+                if (process.StartTime.ToUniversalTime() != target.Started) continue;
+                process.Kill(entireProcessTree: true);
+            } catch (ArgumentException) { }
+            catch (InvalidOperationException) { }
+        }
+    }
+    internal static bool IsCodexExecutable(string path) {
+        var name = Path.GetFileName(path);
+        if (!name.Equals("codex.exe", StringComparison.OrdinalIgnoreCase) && !name.Equals("ChatGPT.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.Equals("ChatGPT.exe", StringComparison.OrdinalIgnoreCase))
+            return path.Contains("OpenAI.Codex_", StringComparison.OrdinalIgnoreCase);
+        return !path.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase);
     }
     private static string ApplicationId(string executable) {
         for (var folder = Directory.GetParent(executable); folder != null; folder = folder.Parent) {
