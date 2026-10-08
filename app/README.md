@@ -37,10 +37,10 @@ Windows 桌面代理在专用线程上绑定当前输入桌面，并保留服务
 需要 JDK 17+ 和 Android SDK 34。设置 `ANDROID_HOME`，或在不提交的 `local.properties` 中配置 `sdk.dir`。
 
 ```powershell
-rtk proxy .\gradlew.bat :mobile:assembleDebug
-rtk proxy .\gradlew.bat :mobile:testDebugUnitTest
-rtk proxy adb connect 192.168.1.219:5555
-rtk proxy adb -s 192.168.1.219:5555 install -r .\mobile\build\outputs\apk\debug\mobile-debug.apk
+.\gradlew.bat :mobile:assembleDebug
+.\gradlew.bat :mobile:testDebugUnitTest
+adb connect 192.168.1.219:5555
+adb -s 192.168.1.219:5555 install -r .\mobile\build\outputs\apk\debug\mobile-debug.apk
 ```
 
 App 原生绘制性能面板，Web 使用网页组件，两端共享性能 API。远程原生解码使用 `/api/stream?format=h264`，浏览器保持 MP4 分片流。双指上下滑动产生滚轮，双指张合缩放，放大后单指平移；手势锁定避免误点击。
