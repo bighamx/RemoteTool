@@ -1,4 +1,4 @@
-# ChuckieHelper
+# RemoteTool
 
 <div align="center">
 
@@ -252,6 +252,8 @@ cd publish
 ChuckieHelper.WebApi.exe
 ```
 
+> `ChuckieHelper.WebApi` 是当前服务端项目和程序集的兼容名称，因此项目文件、发布命令及可执行文件仍使用该名称。
+
 ### 方式二：IIS 部署（推荐用于生产环境）<sup>🪟 仅Windows</sup>
 #### 步骤 1：安装必要组件
 1. **启用 IIS**
@@ -259,24 +261,28 @@ ChuckieHelper.WebApi.exe
    - 勾选以下项目：
      - ✅ **Internet Information Services**
      - ✅ **Web 管理工具** → **IIS 管理控制台**
-     - ✅ **万维网服务** → **应用程序开发功能** → **ASP.NET 4.8**
-     - ✅ **万维网服务** → **常见 HTTP 功能**（全部勾选）
+     - ✅ **万维网服务**（保留 Windows 默认启用的角色服务即可）
+     - ✅ **万维网服务** → **应用程序开发功能** → **WebSocket 协议**（终端和远程输入功能需要）
 
-2. **安装 ASP.NET Core Hosting Bundle**
+   > 本项目是 **.NET 8 / ASP.NET Core** 应用，不依赖传统的 **ASP.NET 4.8**、**.NET Extensibility 4.8** 或 ASP.NET 4.x 托管模块，无需为本项目启用这些组件。也不建议勾选“常见 HTTP 功能”下的全部项目，例如生产环境通常不应启用“目录浏览”。
+
+2. **安装 .NET 8 Hosting Bundle**
    - 下载 [.NET 8 Hosting Bundle](https://dotnet.microsoft.com/download/dotnet/8.0)
-   - 运行安装程序，安装完成后**重启 IIS**（或重启电脑）
+   - Hosting Bundle 会安装 .NET 运行时和 IIS 所需的 ASP.NET Core Module（ANCM）
+   - 请先启用 IIS，再安装 Hosting Bundle；如果安装顺序相反，请在启用 IIS 后重新运行安装程序并选择“修复”
+   - 安装完成后**重启 IIS**（或重启电脑）
 
 #### 步骤 2：发布应用
 ```bash
-dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inetpub\ChuckieHelper
+dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inetpub\RemoteTool
 ```
 
-> 📁 发布后，将你的 `appsettings.json` 复制到 `C:\inetpub\ChuckieHelper` 目录
+> 📁 发布后，将你的 `appsettings.json` 复制到 `C:\inetpub\RemoteTool` 目录
 
 #### 步骤 3：创建应用程序池
 1. 打开「IIS 管理器」（运行 `inetmgr`）
 2. 右键「应用程序池」→「添加应用程序池」
-   - **名称**：`ChuckieHelperPool`
+   - **名称**：`RemoteToolPool`
    - **.NET CLR 版本**：`无托管代码`
    - **托管管道模式**：`集成`
 3. 点击「确定」创建
@@ -284,7 +290,7 @@ dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inet
 #### 步骤 4：配置 LocalSystem 身份（重要！）
 > ⚠️ **仅在需要远程控制功能时配置**。LocalSystem 具有最高权限，请谨慎使用。
 
-1. 在「应用程序池」中找到 `ChuckieHelperPool`
+1. 在「应用程序池」中找到 `RemoteToolPool`
 2. 右键 →「高级设置」
 3. 找到「进程模型」→「标识」，点击右侧的 `...` 按钮
 4. 选择「内置帐户」→ 下拉选择 **LocalSystem**
@@ -295,9 +301,9 @@ dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inet
 #### 步骤 5：创建网站
 1. 在 IIS 管理器中，右键「网站」→「添加网站」
 2. 配置如下：
-   - **站点名称**：`ChuckieHelper`
-   - **应用程序池**：选择 `ChuckieHelperPool`
-   - **物理路径**：`C:\inetpub\ChuckieHelper`
+   - **站点名称**：`RemoteTool`
+   - **应用程序池**：选择 `RemoteToolPool`
+   - **物理路径**：`C:\inetpub\RemoteTool`
    - **绑定**：
      - 类型：`http`（或 `https`）
      - IP 地址：`全部未分配`

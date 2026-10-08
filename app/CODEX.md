@@ -4,7 +4,7 @@
 
 ## 接入方式
 
-手机经当前设备的 `/api/codex/*` 接口连接，沿用 ChuckieHelper 登录和所选连接通道。服务端以桌面登录用户身份启动同一 WebApi 程序的 `--codex-bridge` 模式，再以 stdio JSON-RPC 连接本机 `codex app-server`。桥接只监听随机本机回环端口，用私有随机令牌认证。Codex 模块的运行代码全部是 C# 和 Kotlin，不需要 Python。
+手机经当前设备的 `/api/codex/*` 接口连接，沿用 RemoteTool 登录和所选连接通道。服务端以桌面登录用户身份启动同一 WebApi 程序的 `--codex-bridge` 模式，再以 stdio JSON-RPC 连接本机 `codex app-server`。桥接只监听随机本机回环端口，用私有随机令牌认证。Codex 模块的运行代码全部是 C# 和 Kotlin，不需要 Python。
 
 本机已验证 Codex CLI 0.160.0。初始化启用实际协议的 experimentalApi；能力以安装版本为准。模型目录是可选目录，不能作为账号已获得全部模型权限的证明。
 

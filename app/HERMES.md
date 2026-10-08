@@ -1,6 +1,6 @@
 # Hermes 原生模块
 
-入口：底部 Hermes 标签。当前电脑的 ChuckieHelper 服务端连接本机 Hermes；手机沿用设备地址与现有登录，不直接访问 8642，也不保存 API Server 密钥。
+入口：底部 Hermes 标签。当前电脑的 RemoteTool 服务端连接本机 Hermes；手机沿用设备地址与现有登录，不直接访问 8642，也不保存 API Server 密钥。
 
 ## 界面与操作
 
@@ -36,7 +36,7 @@ SSE 解析跳过注释与 keepalive，支持多行 data 和事件序号，重连
 
 - 配置 `HERMES_API_KEY_FILE` 为本机 Hermes `.env` 路径，例如 `C:\Users\chuckie\AppData\Local\hermes\.env`，也可使用 `Hermes:KeyFile`。
 - 常规 API 仅读取 `API_SERVER_KEY` 这一项。默认根地址为 `http://127.0.0.1:8642/`；只允许服务端回环地址，不接受手机指定 upstream URL。
-- 所有 `/api/hermes/*` 均要求 ChuckieHelper 登录。无密钥值、环境文件内容或请求提示词日志；不自动重试 Agent POST，不跟随 HTTP 重定向。
+- 所有 `/api/hermes/*` 均要求 RemoteTool 登录。无密钥值、环境文件内容或请求提示词日志；不自动重试 Agent POST，不跟随 HTTP 重定向。
 - 模型管理辅助脚本复制到 Web 输出目录 `hermes/hermes_management.py`。默认安装目录为 `.env` 同级的 `hermes-agent`，使用其 `venv/Scripts/python.exe`；可用 `Hermes:SourceDirectory` 指定。
 - 本机 0.21.5 的 API Server 未开放全局配置管理。受限辅助脚本仅调用已安装 Hermes 官方 Dashboard 的 `list_custom_endpoints`、`upsert_custom_endpoint`、`get_model_info`、`set_model_assignment`，操作白名单为四项，没有任意命令或任意配置文件接口。
 - 修改模型设置前在 Hermes 自己的 `backups/chuckie-helper` 创建配置备份。测试在独立配置目录中完成，不更改本机实际默认模型。
