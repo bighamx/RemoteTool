@@ -718,9 +718,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 val latest = mergeSessionPage(emptyList(), connection.json("$root/sessions").array("data").objects()) { it.optString("id") }
                 if (api !== connection) return@launch
                 noteSessionActivities(latest, requestedAt)
+                // The server page is sorted by last activity; adopting it wholesale keeps
+                // recently active sessions moving to the top instead of freezing positions.
                 val indexed = latest.associateBy { it.optString("id") }
-                val known = sessions.map { it.optString("id") }.toSet()
-                sessions = latest.filter { it.optString("id") !in known } + sessions.map { indexed[it.optString("id")] ?: it }
+                sessions = latest + sessions.filter { it.optString("id") !in indexed }
             reconcilePendingNow()
             for ((session, id) in backgroundRuns.toMap()) {
                 try {
@@ -1213,8 +1214,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val session = selectedId ?: return false
         if (hasPendingSubmission) { error = "请先核对上一次提交结果，避免重复创建任务"; return false }
         if (input.isBlank() || submitting) return false
-        if (externalRunning && !(agent == "codex" && questionId != null)) {
-            if (agent != "codex") { error = "其他端正在执行，本次消息未写入；可等待结束或中断并接管。文字和附件已保留。"; return false }
+        if (externalRunning && agent == "codex") {
             val connection = api
             val originalDraft = draft
             val originalFiles = pendingFiles.map { it.optString("id") }
@@ -1244,6 +1244,30 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             return true
         }
         val isQuestion = questionId != null
+        // Hermes external runs: the desktop holds the turn lease, so a normal submission is
+        // safely queued by the gateway instead of racing the running turn. Steer stays the
+        // fast path when the run registry still exposes the active run.
+        if (agent == "hermes" && externalRunning && runId == null && !isQuestion) {
+            val connection = api
+            val originalDraft = draft
+            val originalFiles = pendingFiles.map { it.optString("id") }
+            setSubmitting(session, true)
+            viewModelScope.launch {
+                var dispatched = false
+                try {
+                    withTimeout(8_000) { attachServerActiveRun(session, allowSubmitting = true) }
+                    if (selectedId != session || api !== connection) return@launch
+                    if (draft == originalDraft && pendingFiles.map { it.optString("id") } == originalFiles) {
+                        setSubmitting(session, false)
+                        dispatched = sendInput(input, questionId)
+                    }
+                } catch (_: kotlinx.coroutines.TimeoutCancellationException) { setError(session, "核对任务归属超时，文字和附件已保留，请重新连接")
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { setError(session, "无法核对任务归属，文字和附件已保留，请重新连接") }
+                finally { if (!dispatched) setSubmitting(session, false) }
+            }
+            return true
+        }
         if (runId != null && runSession == session) {
             val id = runId!!
             if (id.startsWith("hcompact_") || state == "正在压缩上下文") { error = "请等待压缩完成后发送"; return false }
