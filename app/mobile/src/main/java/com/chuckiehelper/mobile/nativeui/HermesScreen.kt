@@ -105,7 +105,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             }
         }
     }
-    LaunchedEffect(model, list, model.selectedId, model.hasKnownActivity) {
+    LaunchedEffect(model, list, model.selectedId, model.hasKnownActivity, model.messageQueue.entries.size) {
         // The watch service keeps CPU/network alive; this loop keeps draining the queue
         // even when the screen is off or the app is backgrounded.
         if (!list && (model.hasKnownActivity || model.messageQueue.entries.isNotEmpty())) while (true) {

@@ -8,9 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.net.wifi.WifiManager
-import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import com.chuckiehelper.mobile.NativeActivity
@@ -22,18 +22,25 @@ class AgentWatchService : LifecycleService() {
 
     override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
 
+    override fun onDestroy() {
+        releaseLocks()
+        synchronized(Companion) { owners.clear() }
+        super.onDestroy()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        val stop = intent?.getBooleanExtra(EXTRA_STOP, false) == true
-        if (stop) {
+        try {
+            startForeground(NOTIFICATION_ID, notification())
+            acquireLocks()
+        } catch (error: RuntimeException) {
+            Log.w("AgentWatchService", "Unable to keep agent connection in foreground", error)
             releaseLocks()
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
+            stopSelf(startId)
         }
-        startForeground(NOTIFICATION_ID, notification())
-        acquireLocks()
-        return START_STICKY
+        // Restoring this service alone cannot restore the model's run/queue observer.
+        return START_NOT_STICKY
     }
 
     private fun acquireLocks() {
@@ -84,16 +91,26 @@ class AgentWatchService : LifecycleService() {
     companion object {
         private const val CHANNEL_ID = "agent-watch"
         private const val NOTIFICATION_ID = 41
-        private const val EXTRA_STOP = "stop"
+        private val owners = mutableSetOf<String>()
 
-        fun start(context: Context) {
-            val intent = Intent(context, AgentWatchService::class.java)
-            context.startForegroundService(intent)
-        }
-
-        fun stop(context: Context) {
-            val intent = Intent(context, AgentWatchService::class.java).putExtra(EXTRA_STOP, true)
-            context.startForegroundService(intent)
+        @Synchronized
+        fun sync(context: Context, owner: String, needed: Boolean) {
+            if (!needed) {
+                if (owners.remove(owner) && owners.isEmpty())
+                    context.stopService(Intent(context, AgentWatchService::class.java))
+                return
+            }
+            if (!owners.add(owner)) return
+            try {
+                context.startForegroundService(Intent(context, AgentWatchService::class.java))
+            } catch (error: IllegalStateException) {
+                // Android can reject a foreground service launch after the app backgrounds.
+                owners.remove(owner)
+                Log.w("AgentWatchService", "Foreground service launch unavailable", error)
+            } catch (error: SecurityException) {
+                owners.remove(owner)
+                Log.w("AgentWatchService", "Foreground service launch denied", error)
+            }
         }
     }
 }

@@ -32,6 +32,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private val root = "/api/$agent"
     private val prefs = application.getSharedPreferences("$agent-$deviceId", 0)
     private val appContext = application.applicationContext
+    private val watchOwner = "$agent-$deviceId"
     private lateinit var api: NativeApi
     var sessions by mutableStateOf<List<JSONObject>>(emptyList())
         private set
@@ -110,7 +111,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun setObserving(value: Boolean) { observation.setActive(value) }
     fun syncWatchService() {
         val needed = hasKnownActivity || messageQueue.entries.isNotEmpty()
-        if (needed) AgentWatchService.start(appContext) else AgentWatchService.stop(appContext)
+        AgentWatchService.sync(appContext, watchOwner, needed)
+    }
+    override fun onCleared() {
+        AgentWatchService.sync(appContext, watchOwner, false)
+        super.onCleared()
     }
     private fun pauseWatching() {
         observationEpoch++
