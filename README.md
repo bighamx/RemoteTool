@@ -16,6 +16,8 @@
 ## 🖥️ 系统支持
 本项目支持 Windows 和 Linux 操作系统。
 
+配套 **RemoteTool Android App** 支持 Android 8.0 及以上，采用 Kotlin / Jetpack Compose 原生界面，通过本项目的服务端 API 管理电脑。
+
 ## ✨ 功能特性
 - 🖥️ **系统控制** - 实时监控 CPU、内存、磁盘、显卡等硬件信息，支持锁定、睡眠、休眠、关机等操作
 - 📊 **进程管理** - 查看和管理系统进程，支持按类型筛选和终止进程 
@@ -26,6 +28,52 @@
 - 📁 **文件管理** - 远程文件浏览、上传、下载和删除 
 - ⏰ **任务调度** - Hangfire 的定时任务管理，自行添加任何任务 (内置qBittorrent管理、DDNS 等任务模板)
 - 🔐 **安全认证** - JWT 认证保护所有敏感操作 
+
+---
+
+## 📱 手机 App
+
+- **多设备管理**：一个设备可保存多个 LAN、IPv6、VPN 或域名地址，校验设备身份，支持测速、手动切换通道和恢复上次连接。
+- **系统监控**：查看 CPU、内存、网络历史曲线及硬件温度、风扇转速；支持折叠卡片、电源操作和进程管理。传感器数据取决于电脑硬件和服务端支持。
+- **远程桌面**：H.264 硬件解码、横屏全屏、画质档位、直接触控与触控板、双指滚轮、缩放和平移，以及手机输入法；进入页面后手动连接。远程桌面主要支持 Windows。
+- **Codex / Hermes**：浏览、搜索、新建及继续会话，流式回复、Markdown、工具进度、运行计时、图片和文件附件、问题回答、斜杠命令，以及可编辑的消息队列。可选择模型和支持的思考程度；Codex 还支持项目目录、快速模式、个人／团队工作空间切换和用量展示。需要在被管理的电脑配置相应 Agent。
+- **更多管理工具**：文件浏览与传输、图片／视频预览、Docker / Compose、命令终端、Hangfire 任务及执行日志，并提供应用更新检查。
+
+从 [GitHub Releases](https://github.com/bighamx/RemoteTool/releases) 下载 APK；安装后添加电脑服务的完整根地址并登录。更新请覆盖安装，以保留设备配置。构建及服务端接入说明见 [app/README.md](app/README.md)。
+
+### 手机界面预览
+
+以下为用户提供的实际界面截图。
+
+<details open>
+<summary><b>系统监控与远程桌面</b></summary>
+
+<p>
+  <img src="screenshots/android/system.jpg" width="260" alt="手机系统页：电源操作与 CPU、内存历史曲线">
+  <img src="screenshots/android/remote.jpg" width="260" alt="手机远程桌面连接页：全屏、触控板与手机输入法">
+</p>
+
+</details>
+
+<details open>
+<summary><b>Codex 会话列表与对话</b></summary>
+
+<p>
+  <img src="screenshots/android/codex-sessions.jpg" width="260" alt="Codex 会话列表与账户用量">
+  <img src="screenshots/android/codex-chat.jpg" width="260" alt="Codex 对话：Markdown 消息、上下文用量与附件入口">
+</p>
+
+</details>
+
+<details open>
+<summary><b>Hermes 会话与更多工具</b></summary>
+
+<p>
+  <img src="screenshots/android/hermes-sessions.jpg" width="260" alt="Hermes 会话列表与运行中标记">
+  <img src="screenshots/android/more.jpg" width="260" alt="更多页面：文件、Docker、终端、Hangfire、进程与应用更新">
+</p>
+
+</details>
 
 ---
 
@@ -92,8 +140,8 @@ WebSocket 远程终端，支持 PowerShell 和 CMD。
 1. **克隆仓库**
 
 ```bash
-git clone https://github.com/bighamx/chuckieTool.git
-cd chuckieTool
+git clone https://github.com/bighamx/RemoteTool.git
+cd RemoteTool
 ```
 
 2. **配置应用**
