@@ -339,6 +339,13 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         maxLines = 2,
                                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     )
+                                    parseMessageTimestamp(session.opt("last_active"))?.let { active ->
+                                        Text(
+                                            "最近活动 ${formatMessageTimestamp(active)}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
                                 var actions by remember { mutableStateOf(false) }
                                 Box {

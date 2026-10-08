@@ -413,7 +413,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                                     file.optString("name"),
                                     style = MaterialTheme.typography.titleSmall,
                                 )
-                                val modified = formatFileModifiedTime(file.optString("modified"))
+                                val modified = if (file.has("totalBytes")) "" else formatFileModifiedTime(file.optString("modified"))
                                 Text(
                                     (if (isDir)
                                         if (file.has("totalBytes"))
