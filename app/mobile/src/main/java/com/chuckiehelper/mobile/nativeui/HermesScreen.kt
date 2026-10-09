@@ -997,6 +997,12 @@ private fun MessageBubble(
     val context = LocalContext.current
     var preview by remember { mutableStateOf<JSONObject?>(null) }
     var actions by remember { mutableStateOf(false) }
+    var bubbleOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    var menuPoint by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    val openActions: (androidx.compose.ui.geometry.Offset) -> Unit = { windowPoint ->
+        menuPoint = windowPoint - bubbleOrigin
+        actions = true
+    }
     val presentation = presentHermesMessage(text, attachments, availableFiles)
     val hasImages = presentation.files.any { hermesFileKind(it) == "图片" }
     Row(
@@ -1005,13 +1011,13 @@ private fun MessageBubble(
             if (role == "user" && !hasImages)
                 Arrangement.End else Arrangement.Start,
     ) {
-        Box {
+        Box(Modifier.onGloballyPositioned { bubbleOrigin = it.localToWindow(androidx.compose.ui.geometry.Offset.Zero) }) {
         Surface(
             shape = MaterialTheme.shapes.large,
             color =
                 if (role == "user") MaterialTheme.colorScheme.secondaryContainer
                 else MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.widthIn(max = if (hasImages) 268.dp else 600.dp).bubbleTap { actions = true },
+            modifier = Modifier.widthIn(max = if (hasImages) 268.dp else 600.dp).bubbleTap(openActions),
         ) {
             SelectionContainer {
                 Column(Modifier.padding(14.dp)) {
@@ -1022,7 +1028,7 @@ private fun MessageBubble(
                     if (presentation.text.isNotBlank()) HermesMarkdown(
                         if (role == "assistant") displayNarration(presentation.text, narration, narrationTexts) else presentation.text,
                         footer = if (inlineTime) metadata else "",
-                        onBubbleTap = { actions = true },
+                        onBubbleTap = openActions,
                     )
                     if (!inlineTime) delivery?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     presentation.unavailable.forEach { name ->
@@ -1059,6 +1065,9 @@ private fun MessageBubble(
                 }
             }
         }
+        // A zero-size anchor at the finger keeps Material's edge-aware menu placement:
+        // right/below first, left or above when space is insufficient.
+        Box(Modifier.offset { androidx.compose.ui.unit.IntOffset(menuPoint.x.toInt(), menuPoint.y.toInt()) }.size(0.dp)) {
         DropdownMenu(actions, { actions = false }) {
             DropdownMenuItem(text = { Text("复制") }, leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) }, onClick = {
                 actions = false
@@ -1071,6 +1080,7 @@ private fun MessageBubble(
                 onClick = { actions = false; onFork?.invoke() })
             if (role == "user") DropdownMenuItem(text = { Text("编辑") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) }, enabled = onEdit != null,
                 onClick = { actions = false; onEdit?.invoke() })
+        }
         }
         }
     }

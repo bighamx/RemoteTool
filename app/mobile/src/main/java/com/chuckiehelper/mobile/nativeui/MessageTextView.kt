@@ -18,7 +18,7 @@ internal fun messageFooterFits(lastLineRight: Float, width: Int, footerWidth: Fl
 
 /** Draw metadata outside selectable Markdown; reserve its space using real line metrics. */
 internal class MessageTextView(context: Context) : TextView(context) {
-    var onBubbleTap: (() -> Unit)? = null
+    var onBubbleTap: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
     private val tap = BubbleTapGesture(ViewConfiguration.get(context).scaledTouchSlop.toFloat(), ViewConfiguration.getLongPressTimeout().toLong())
     private fun overLink(event: MotionEvent): Boolean {
         val styled = text as? Spanned ?: return false
@@ -38,7 +38,12 @@ internal class MessageTextView(context: Context) : TextView(context) {
         }
         val clicked = event.actionMasked == MotionEvent.ACTION_UP && tap.up(event.x, event.y, event.eventTime) && !hasSelection()
         val handled = super.onTouchEvent(event)
-        if (clicked) onBubbleTap?.let { action -> post { action() } }
+        if (clicked) onBubbleTap?.let { action ->
+            val location = IntArray(2)
+            getLocationInWindow(location)
+            val point = androidx.compose.ui.geometry.Offset(location[0] + event.x, location[1] + event.y)
+            post { action(point) }
+        }
         return handled
     }
     private val footerPaint = Paint(Paint.ANTI_ALIAS_FLAG)

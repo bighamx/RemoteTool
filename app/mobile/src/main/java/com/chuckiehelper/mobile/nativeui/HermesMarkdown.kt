@@ -13,7 +13,7 @@ import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
 
 @Composable
-fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String = "", onBubbleTap: (() -> Unit)? = null) {
+fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String = "", onBubbleTap: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null) {
     val context = LocalContext.current
     val markwon =
         remember(context) {

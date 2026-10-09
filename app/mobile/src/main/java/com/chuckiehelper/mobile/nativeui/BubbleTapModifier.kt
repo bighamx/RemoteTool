@@ -4,16 +4,21 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.composed
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.remember
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalViewConfiguration
 
 /** Padding taps only. Child text selection, links, attachments and scrolling win. */
-internal fun Modifier.bubbleTap(onTap: () -> Unit): Modifier = composed {
+internal fun Modifier.bubbleTap(onTap: (Offset) -> Unit): Modifier = composed {
     val current = rememberUpdatedState(onTap)
     val config = LocalViewConfiguration.current
-    pointerInput(config) {
+    val coordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    onGloballyPositioned { coordinates[0] = it }.pointerInput(config) {
         awaitEachGesture {
             val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
             if (first.isConsumed) return@awaitEachGesture
@@ -24,7 +29,9 @@ internal fun Modifier.bubbleTap(onTap: () -> Unit): Modifier = composed {
                 val change = event.changes.firstOrNull { it.id == first.id } ?: break
                 if (event.changes.size != 1 || event.changes.any { it.isConsumed }) tap.cancel()
                 tap.move(change.position.x, change.position.y)
-                if (!change.pressed && tap.up(change.position.x, change.position.y, change.uptimeMillis)) current.value()
+                if (!change.pressed && tap.up(change.position.x, change.position.y, change.uptimeMillis)) {
+                    coordinates[0]?.takeIf { it.isAttached }?.let { current.value(it.localToWindow(change.position)) }
+                }
             } while (event.changes.any { it.pressed })
         }
     }
