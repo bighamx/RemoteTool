@@ -17,6 +17,10 @@ namespace RemoteTool.WebApi
     {
         public static async Task Main(string[] args)
         {
+            if (args.Length == 2 && args[0] == "--file-git-worker") {
+                await FileGitService.Worker(args[1]);
+                return;
+            }
             // 产品改名 ChuckieHelper → RemoteTool：首次启动把旧数据目录搬到新目录（幂等，见迁移类）。
             // 三个入口（Web/桌面代理/Codex 桥）都可能在 Web 进程之前先起来，各自调用一次即可。
             Services.RemoteToolDataMigration.Migrate();

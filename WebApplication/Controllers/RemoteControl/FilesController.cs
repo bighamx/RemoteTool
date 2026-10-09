@@ -12,6 +12,17 @@ namespace RemoteTool.WebApi.Controllers.RemoteControl;
 [Authorize]
 public class FilesController : ControllerBase
 {
+    [HttpPost("git")]
+    public IActionResult Git([FromBody] FileGitService.Request request) {
+        try { return Ok(new { jobId = FileGitService.Start(request) }); }
+        catch (ArgumentException error) { return BadRequest(new { message = error.Message }); }
+        catch (InvalidOperationException error) { return Conflict(new { message = error.Message }); }
+    }
+    [HttpGet("git/{id}")]
+    public IActionResult GitStatus(string id) {
+        try { return Ok(FileGitService.Status(id)); }
+        catch (KeyNotFoundException error) { return NotFound(new { message = error.Message }); }
+    }
     private readonly FileService _fileService;
 
     public FilesController(FileService fileService)

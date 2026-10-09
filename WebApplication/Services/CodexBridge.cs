@@ -14,6 +14,23 @@ namespace RemoteTool.WebApi.Services;
 
 public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration configuration) : ITitleModelGateway
 {
+    public async Task<JsonObject> WorkspaceResetCreditDetails(string workspaceId, CancellationToken ct) {
+        await Ensure(ct);
+        // The HTTP host can use the system's network route even when an isolated CLI
+        // cannot reach ChatGPT. Read the exact workspace credentials under its store lock.
+        var config = Read(Path.Combine(folder, "connection.json"));
+        var home = config.S("home");
+        var store = config.S("account_store", Path.Combine(Path.GetDirectoryName(home) ?? home, ".codex-switch"));
+        var accounts = new Codex.CodexAccountStore(home, store);
+        var auth = accounts.WorkspaceAuth(workspaceId);
+        var snapshot = await Codex.CodexWorkspaceUsage.Read(config.S("executable"), config.S("state_folder", folder), auth, ct);
+        accounts.RecoverWorkspaceAuth(workspaceId, auth, snapshot.Auth);
+        var usage = snapshot.Usage;
+        if (usage["rateLimitResetCredits"].L("availableCount") > 0)
+            usage = await Codex.CodexWorkspaceUsage.ReadResetCreditDetails(snapshot.Auth, usage, ct);
+        return Obj(("workspace_id", workspaceId), ("chatgpt_account_id", Codex.CodexAccountStore.Identity(snapshot.Auth).S("workspace_id")),
+            ("available", true), ("usage", usage), ("checked_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+    }
     public async Task<JsonObject> TitleRequest(string path, JsonObject body, CancellationToken ct) {
         using var response = await SendAsync(HttpMethod.Post, path, JsonSerializer.SerializeToElement(body), ct);
         var value = JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))!.AsObject();

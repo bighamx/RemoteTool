@@ -497,7 +497,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                             verticalAlignment = Alignment.CenterVertically,
                                         ) {
                                             Text(
-                                                listOf(it.text, (if (agent == "codex") compactCodexToolPreview(it.detail) else it.detail)
+                                                listOf(if (it.text.equals("commandExecution", ignoreCase = true)) "命令" else it.text,
+                                                    (if (agent == "codex") compactCodexToolPreview(it.detail) else it.detail)
                                                     .replace(Regex("\\s+"), " ").trim()).filter { part -> part.isNotBlank() }.joinToString(" · "),
                                                 modifier = Modifier.weight(1f).padding(end = 8.dp),
                                                 maxLines = 2,

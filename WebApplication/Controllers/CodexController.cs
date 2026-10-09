@@ -145,7 +145,14 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpGet("accounts/login-status")] public Task LoginStatus(CancellationToken ct) => Forward(HttpMethod.Get, "accounts/login-status", null, ct);
     [HttpGet("workspaces")] public Task Workspaces(CancellationToken ct) => Forward(HttpMethod.Get, "workspaces", null, ct);
     [HttpGet("workspaces/{id}/usage")] public Task WorkspaceUsage(string id, [FromQuery] bool refresh, CancellationToken ct) => Forward(HttpMethod.Get, $"workspaces/{Id(id)}/usage" + (refresh ? "?refresh=1" : ""), null, ct);
-    [HttpGet("workspaces/{id}/rate-limit-resets")] public Task WorkspaceRateLimitResets(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"workspaces/{Id(id)}/rate-limit-resets", null, ct);
+    [HttpGet("workspaces/{id}/rate-limit-resets")] public async Task<IActionResult> WorkspaceRateLimitResets(string id, CancellationToken ct) {
+        Response.Headers.CacheControl = "no-store";
+        try { return Ok(await bridge.WorkspaceResetCreditDetails(Id(id), ct)); }
+        catch (RemoteTool.WebApi.Services.Codex.CodexError error) { return StatusCode(error.Status, new { message = error.Message }); }
+        catch (Exception error) when (!ct.IsCancellationRequested && error is HttpRequestException or OperationCanceledException) {
+            return StatusCode(502, new { message = "额度重置详情查询失败，请稍后刷新重试" });
+        }
+    }
     [HttpPost("workspaces/{id}/rate-limit-resets/consume")] public Task ConsumeWorkspaceRateLimitReset(string id, [FromBody] JsonElement body, CancellationToken ct) =>
         Forward(HttpMethod.Post, $"workspaces/{Id(id)}/rate-limit-resets/consume", body, ct, Request.Headers["Idempotency-Key"].ToString());
     [HttpPost("workspaces")] public Task SaveWorkspace([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "workspaces", body, ct);

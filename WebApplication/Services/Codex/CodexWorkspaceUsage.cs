@@ -7,7 +7,8 @@ namespace RemoteTool.WebApi.Services.Codex;
 
 internal static class CodexWorkspaceUsage
 {
-    private static readonly HttpClient http = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(18) };
+    private static readonly HttpClient http = new(new HttpClientHandler { AllowAutoRedirect = false,
+        SslProtocols = System.Security.Authentication.SslProtocols.Tls12 }) { Timeout = TimeSpan.FromSeconds(18) };
     internal static JsonObject Normalize(JsonObject data) {
         var limits = data["rate_limit"] as JsonObject ?? throw new CodexError("此工作空间未返回用量数据", 502);
         JsonNode Window(string name) {
@@ -96,6 +97,29 @@ internal static class CodexWorkspaceUsage
             return baselineUsage.DeepClone().AsObject();
         detailed["applicableCount"] = baseline.L("applicableCount");
         return detailedUsage;
+    }
+    internal static async Task<JsonObject> ReadResetCreditDetails(JsonObject auth, JsonObject baseline, CancellationToken ct) {
+        var identity = CodexAccountStore.Identity(auth);
+        Verify(identity, baseline);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", auth["tokens"].S("access_token"));
+        request.Headers.Add("ChatGPT-Account-Id", identity.S("workspace_id"));
+        request.Headers.UserAgent.ParseAdd("RemoteTool/1.0");
+        using var response = await http.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode) throw new CodexError(response.StatusCode == HttpStatusCode.TooManyRequests
+            ? "额度重置详情查询过于频繁，请稍后重试" : "暂时无法读取额度重置详情，请刷新重试", 502);
+        var data = JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))!.AsObject();
+        if (data["credits"] is not JsonArray rows) throw new CodexError("额度重置详情格式无效，请稍后重试", 502);
+        var result = baseline.DeepClone().AsObject();
+        static JsonNode Timestamp(JsonNode value) => DateTimeOffset.TryParse(value?.ToString(),
+            System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var date)
+            ? JsonValue.Create(date.ToUnixTimeSeconds()) : value?.DeepClone();
+        result["rateLimitResetCredits"]["credits"] = new JsonArray(rows.OfType<JsonObject>().Select(row => (JsonNode)Obj(
+            ("id", row["id"]), ("status", row["status"]), ("resetType", row["reset_type"]),
+            ("grantedAt", Timestamp(row["granted_at"])), ("expiresAt", Timestamp(row["expires_at"])),
+            ("title", row["title"]), ("description", row["description"]))).ToArray());
+        // Eligibility belongs to the usage snapshot, not the detail inventory.
+        return result;
     }
     public static async Task<(JsonObject Usage, JsonObject Auth)> ReadResetCredits(string executable, string privateRoot, JsonObject auth, CancellationToken ct) {
         var baseline = await Read(executable, privateRoot, auth, ct);
