@@ -62,6 +62,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
     var document by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var media by remember { mutableStateOf<JSONObject?>(null) }
     var menuFile by remember { mutableStateOf<JSONObject?>(null) }
+    var gitOperation by remember { mutableStateOf<Pair<String, String>?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val visibleFiles = files.orEmpty()
@@ -201,6 +202,9 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
         val file = targets.first()
         val target = file.optString("path")
         when (name) {
+            "Git 状态", "Git 提交并推送", "Git 推送", "Git 拉取" -> gitOperation = target to when (name) {
+                "Git 状态" -> "status"; "Git 提交并推送" -> "commit-push"; "Git 拉取" -> "pull"; else -> "push"
+            }
             "复制路径" -> {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 clipboard.setPrimaryClip(android.content.ClipData.newPlainText("文件路径", "\"$target\""))
@@ -436,6 +440,8 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                                     onDismissRequest = { menuFile = null },
                                 ) {
                                     val actions = mutableListOf("复制路径", "重命名", "复制", "移动", "压缩")
+                                    if (file.optString("name").equals(".git", ignoreCase = true))
+                                        actions.addAll(0, listOf("Git 状态", "Git 提交并推送", "Git 推送", "Git 拉取"))
                                     if (
                                         !isDir &&
                                             file
@@ -466,6 +472,9 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                     }
                 }
             }
+    }
+    gitOperation?.let { (metadata, action) ->
+        FileGitDialog(api, metadata, action, close = { gitOperation = null }, changed = { refresh++ })
     }
     input?.let { (name, target, initial) ->
         val submit: (String) -> Unit = { dest ->
