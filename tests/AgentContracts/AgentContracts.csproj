@@ -3,23 +3,23 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <Using Include="Microsoft.Extensions.Configuration" />
-    <Compile Include="../../WebApplication1/Services/HermesBridge.cs" Link="HermesBridge.cs" />
-    <Compile Include="../../WebApplication1/Services/HermesTitleService.cs" Link="HermesTitleService.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexRpc.cs" Link="CodexRpc.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexTitleGenerator.cs" Link="CodexTitleGenerator.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexRunRecovery.cs" Link="CodexRunRecovery.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexAccountStore.cs" Link="CodexAccountStore.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexWorkspaceUsage.cs" Link="CodexWorkspaceUsage.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexOfficialRouting.cs" Link="CodexOfficialRouting.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexDesktopSync.cs" Link="CodexDesktopSync.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexDesktopActivity.cs" Link="CodexDesktopActivity.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexAssistantMessageStream.cs" Link="CodexAssistantMessageStream.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexModelSettings.cs" Link="CodexModelSettings.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexRollout.cs" Link="CodexRollout.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexSessionDetails.cs" Link="CodexSessionDetails.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexRolloutSnapshot.cs" Link="CodexRolloutSnapshot.cs" />
-    <Compile Include="../../WebApplication1/Services/Codex/CodexRolloutMessageTimes.cs" Link="CodexRolloutMessageTimes.cs" />
-    <Compile Include="../../WebApplication1/Services/RemoteControl/FilePathPolicy.cs" Link="FilePathPolicy.cs" />
-    <Compile Include="../../WebApplication1/Services/RemoteControl/WebSocketTextReader.cs" Link="WebSocketTextReader.cs" />
+    <Compile Include="../../WebApplication/Services/HermesBridge.cs" Link="HermesBridge.cs" />
+    <Compile Include="../../WebApplication/Services/HermesTitleService.cs" Link="HermesTitleService.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexRpc.cs" Link="CodexRpc.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexTitleGenerator.cs" Link="CodexTitleGenerator.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexRunRecovery.cs" Link="CodexRunRecovery.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexAccountStore.cs" Link="CodexAccountStore.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexWorkspaceUsage.cs" Link="CodexWorkspaceUsage.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexOfficialRouting.cs" Link="CodexOfficialRouting.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexDesktopSync.cs" Link="CodexDesktopSync.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexDesktopActivity.cs" Link="CodexDesktopActivity.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexAssistantMessageStream.cs" Link="CodexAssistantMessageStream.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexModelSettings.cs" Link="CodexModelSettings.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexRollout.cs" Link="CodexRollout.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexSessionDetails.cs" Link="CodexSessionDetails.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexRolloutSnapshot.cs" Link="CodexRolloutSnapshot.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexRolloutMessageTimes.cs" Link="CodexRolloutMessageTimes.cs" />
+    <Compile Include="../../WebApplication/Services/RemoteControl/FilePathPolicy.cs" Link="FilePathPolicy.cs" />
+    <Compile Include="../../WebApplication/Services/RemoteControl/WebSocketTextReader.cs" Link="WebSocketTextReader.cs" />
   </ItemGroup>
 </Project>

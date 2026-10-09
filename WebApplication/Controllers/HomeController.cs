@@ -3,9 +3,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Reflection;
-using WebApplication1.Models;
+using RemoteTool.Web.Models;
 
-namespace WebApplication1.Controllers
+namespace RemoteTool.Web.Controllers
 {
     [Authorize]
     public class HomeController : Controller

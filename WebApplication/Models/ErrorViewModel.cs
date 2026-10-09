@@ -1,4 +1,4 @@
-namespace WebApplication1.Models
+namespace RemoteTool.Web.Models
 {
     public class ErrorViewModel
     {

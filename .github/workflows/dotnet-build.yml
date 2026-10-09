@@ -24,13 +24,13 @@ jobs:
         dotnet-version: 8.0.x
 
     - name: Restore dependencies
-      run: dotnet restore ChuckieHelper.sln
+      run: dotnet restore RemoteTool.sln
 
     - name: Build
-      run: dotnet build ChuckieHelper.sln --no-restore --configuration Release
+      run: dotnet build RemoteTool.sln --no-restore --configuration Release
 
     - name: Publish
-      run: dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj --no-build --configuration Release --output ./publish
+      run: dotnet publish WebApplication/WebApplication.csproj --no-build --configuration Release --output ./publish
 
     - name: Zip published app
       if: startsWith(github.ref, 'refs/tags/')

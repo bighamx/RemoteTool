@@ -3,8 +3,8 @@
   <ItemGroup>
     <PackageReference Include="SharpCompress" Version="0.48.0" />
     <PackageReference Include="System.Drawing.Common" Version="10.0.2" />
-    <Compile Include="../../WebApplication1/Models/RemoteControl/FileModels.cs" Link="FileModels.cs" />
-    <Compile Include="../../WebApplication1/Services/RemoteControl/FileService.cs" Link="FileService.cs" />
-    <Compile Include="../../WebApplication1/Services/RemoteControl/FilePathPolicy.cs" Link="FilePathPolicy.cs" />
+    <Compile Include="../../WebApplication/Models/RemoteControl/FileModels.cs" Link="FileModels.cs" />
+    <Compile Include="../../WebApplication/Services/RemoteControl/FileService.cs" Link="FileService.cs" />
+    <Compile Include="../../WebApplication/Services/RemoteControl/FilePathPolicy.cs" Link="FilePathPolicy.cs" />
   </ItemGroup>
 </Project>

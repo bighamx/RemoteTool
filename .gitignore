@@ -117,17 +117,17 @@ SessionBundle/
 *.log
 
 # AppSettings
-WebApplication1/appsettings.json
-WebApplication1/appsettings.Development.json
+WebApplication/appsettings.json
+WebApplication/appsettings.Development.json
 ChuckieHelper/appsettings.json
 ChuckieHelper/appsettings.Development.json
-WebApplication1/hangfire.db
-WebApplication1/hangfire.db-shm
-WebApplication1/hangfire.db-wal
+WebApplication/hangfire.db
+WebApplication/hangfire.db-shm
+WebApplication/hangfire.db-wal
 
 # ChuckieHelper project (excluded from public repo)
 /ChuckieHelper/
-WebApplication1/.config/dotnet-tools.json
+WebApplication/.config/dotnet-tools.json
 
 # codex: local build artifacts
 .vs/

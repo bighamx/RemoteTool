@@ -148,7 +148,7 @@ cd RemoteTool
 
 ```bash
 # 复制示例配置文件
-copy WebApplication1\appsettings.example.json WebApplication1\appsettings.json
+copy WebApplication\appsettings.example.json WebApplication\appsettings.json
 ```
 
 编辑 `appsettings.json`，配置必要的参数：
@@ -166,7 +166,7 @@ copy WebApplication1\appsettings.example.json WebApplication1\appsettings.json
 3. **运行应用**
 
 ```bash
-cd WebApplication1
+cd WebApplication
 dotnet run
 ```
 
@@ -244,7 +244,7 @@ dotnet run
 ### 方式一：自宿主运行（推荐用于开发/测试）<sup>🪟 Windows/🐧 Linux</sup>
 ```bash
 # 开发模式
-dotnet run --project WebApplication1/ChuckieHelper.WebApi.csproj
+dotnet run --project WebApplication/WebApplication.csproj
 
 # 发布后运行
 dotnet publish -c Release -o publish
@@ -274,7 +274,7 @@ ChuckieHelper.WebApi.exe
 
 #### 步骤 2：发布应用
 ```bash
-dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inetpub\RemoteTool
+dotnet publish WebApplication/WebApplication.csproj -c Release -o C:\inetpub\RemoteTool
 ```
 
 > 📁 发布后，将你的 `appsettings.json` 复制到 `C:\inetpub\RemoteTool` 目录
@@ -339,7 +339,7 @@ dotnet publish WebApplication1/ChuckieHelper.WebApi.csproj -c Release -o C:\inet
 
 手动运行桌面代理模式：
 ```bash
-dotnet ChuckieHelper.WebApi.dll --desktop-agent
+dotnet WebApplication.dll --desktop-agent
 ```
 
 > ⚠️ 桌面代理仅支持 Windows，Linux 无需此功能。

@@ -4,6 +4,6 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="sqlite-net-pcl" Version="1.8.116" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
-    <Compile Include="../../WebApplication1/Services/HermesSessionActivity.cs" Link="HermesSessionActivity.cs" />
+    <Compile Include="../../WebApplication/Services/HermesSessionActivity.cs" Link="HermesSessionActivity.cs" />
   </ItemGroup>
 </Project>
