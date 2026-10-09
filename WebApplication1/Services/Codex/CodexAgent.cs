@@ -411,6 +411,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var result = Obj(("id", thread.S("id")), ("title", thread.S("name", thread.S("preview", "未命名会话"))),
         ("preview", thread.S("preview")), ("cwd", thread.S("cwd")), ("source", thread.S("source", "codex")),
         ("model", thread.S("model")), ("project_id", thread?["projectId"]), ("message_count", thread.A("turns").Count), ("status", thread?["status"]));
+        result["last_active"] = (thread?["updatedAt"] ?? thread?["updated_at"] ?? thread?["createdAt"] ?? thread?["created_at"])?.DeepClone();
         if (thread["status"].S("type") != "active" && CodexRollout.IsRunning(home, RolloutPath(thread))) result["status"] = Obj(("type", "active"), ("activeFlags", new JsonArray()));
         return result;
     }
