@@ -39,6 +39,20 @@ try {
         store.Bind(session, "1", [id]);
         Check(File.Exists(Path.Combine(folder, ".chuckie-message-attachments.json")), agent + " real attachment binding persists");
         Check(store.List(session).Length == 1, agent + " internal binding file not listed as attachment");
+        var forkMap = new JsonObject { ["1"] = "501" };
+        store.Inherit(session, "fork", forkMap);
+        var forkAttachment = store.AddMessageAttachments("fork", "{\"data\":[{\"id\":501,\"role\":\"user\",\"content\":\"file\"}]}")["data"][0]["attachments"][0];
+        var inheritedId = forkAttachment["id"].GetValue<string>();
+        Check(forkAttachment["url"].GetValue<string>() == beforeUrl, agent + " fork preserves source preview link");
+        Check(store.Resolve("fork", inheritedId) == store.Resolve(session, id), agent + " fork reuses original file without copying it");
+        Check(store.List("fork").Length == 1, agent + " fork lists inherited attachments");
+        store.Bind("fork", "502", [inheritedId]);
+        Check(store.AddMessageAttachments("fork", "{\"data\":[{\"id\":502}]}")["data"][0]["attachments"][0]["url"].GetValue<string>() == beforeUrl,
+            agent + " edited fork can resend the inherited attachment");
+        store.Inherit("fork", "fork-again", new JsonObject { ["501"] = "601" });
+        Check(store.List("fork-again").Length == 1 && store.Resolve("fork-again", inheritedId) == store.Resolve(session, id), agent + " nested fork retains original file reference");
+        store.Inherit(session, "empty-fork", new JsonObject { ["999"] = "999" });
+        Check(!Directory.Exists(store.Folder("empty-fork")), agent + " attachment-free fork creates no file directory");
         var attached = store.AddMessageAttachments(session, "{\"data\":[{\"id\":1}]}");
         Check(attached["data"][0]["attachments"][0]["url"].GetValue<string>() == beforeUrl, agent + " attachment id and URL stable after history binding");
         if (agent == "codex") {

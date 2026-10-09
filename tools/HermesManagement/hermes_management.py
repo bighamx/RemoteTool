@@ -19,8 +19,31 @@ import hermes_bootstrap
 def main():
     request = json.load(sys.stdin)
     action = request.get("action")
-    if action not in {"providers", "save_provider", "default_model", "model_info", "model_reasoning", "session_context", "compress_session", "run_lookup"}:
+    if action not in {"providers", "save_provider", "default_model", "model_info", "model_reasoning", "session_context", "compress_session", "run_lookup", "message_action"}:
         raise ValueError("Unsupported settings operation")
+    if action == "message_action":
+        with contextlib.redirect_stdout(io.StringIO()):
+            from hermes_state import SessionDB
+            from hermes_message_actions import message_action
+            db = SessionDB()
+            try:
+                try:
+                    result = message_action(db, request.get("body") or {})
+                except (ValueError, RuntimeError) as error:
+                    reason = str(error).lower()
+                    if "not found" in reason or "no longer active" in reason or "target changed" in reason:
+                        message = "消息已变更或属于压缩历史，请刷新后选择当前消息。"
+                    elif "conversation changed" in reason or "transcript changed" in reason:
+                        message = "会话已有新消息，请刷新后重新编辑。"
+                    elif "user" in reason:
+                        message = "此消息不支持编辑，请选择自己发送的消息。"
+                    else:
+                        message = "消息操作未完成；会话可能正在执行或被其他客户端占用，请刷新后重试。"
+                    result = {"error": message}
+            finally:
+                db.close()
+        print(json.dumps(result, ensure_ascii=True))
+        return
     if action == "run_lookup":
         with contextlib.redirect_stdout(io.StringIO()):
             from hermes_constants import get_hermes_home

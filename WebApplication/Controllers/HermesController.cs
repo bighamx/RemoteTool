@@ -17,7 +17,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         using var upstream = await bridge.SendAsync(HttpMethod.Get, "v1/capabilities", null, null, ct);
         if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 能力" });
         var result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
-        result["chuckie_features"] = new System.Text.Json.Nodes.JsonObject { ["attachment_steering"] = true, ["external_session_activity"] = true };
+        result["chuckie_features"] = new System.Text.Json.Nodes.JsonObject { ["attachment_steering"] = true, ["external_session_activity"] = true, ["message_actions"] = true };
         return Ok(result);
         } catch (Exception error) when (error is InvalidOperationException or HttpRequestException or IOException) {
             return StatusCode(503, new { message = error is InvalidOperationException ? error.Message : "无法访问本机 Hermes" });
@@ -110,6 +110,24 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         Response.StatusCode = (int)response.StatusCode; Response.ContentType = "application/json"; await Response.WriteAsync(payload, ct);
     }
     [HttpGet("sessions/{id}")] public Task SessionInfo(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"api/sessions/{Id(id)}", null, null, ct);
+    [HttpPost("sessions/{id}/fork")] public Task<IActionResult> ForkSession(string id, [FromBody] JsonElement body, CancellationToken ct) => MessageAction(id, "fork", body, ct);
+    [HttpPost("sessions/{id}/rewind")] public Task<IActionResult> RewindSession(string id, [FromBody] JsonElement body, CancellationToken ct) => MessageAction(id, "rewind", body, ct);
+    private async Task<IActionResult> MessageAction(string id, string operation, JsonElement body, CancellationToken ct) {
+        var request = JsonNode.Parse(body.GetRawText())!.AsObject();
+        request["session_id"] = Id(id); request["operation"] = operation;
+        if (operation == "rewind" && activity.Read(id)["running"]?.GetValue<bool>() == true)
+            return Conflict(new { message = "请先等待任务结束再编辑" });
+        try {
+            var result = JsonNode.Parse((await management.Invoke("message_action", JsonSerializer.SerializeToElement(request), ct)).GetRawText())!.AsObject();
+            if (result["error"]?.ToString() is string failure) return Conflict(new { message = failure });
+            if (operation == "fork" && result["message_id_map"] is JsonObject mapping && result["session"]?["id"]?.ToString() is string forkId) {
+                try { attachments.Inherit(Id(id), Id(forkId), mapping); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { result["warning"] = "分叉已创建，附件预览索引暂未复制；原附件仍保留。"; }
+            }
+            result.Remove("message_id_map");
+            return Ok(result);
+        } catch (InvalidOperationException error) { return Conflict(new { message = error.Message }); }
+    }
     [HttpPost("sessions/{id}/pin")] public Task PinSession(string id, [FromBody] JsonElement body, CancellationToken ct) {
         if (!body.TryGetProperty("pinned", out var pinned) || pinned.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) {
             Response.StatusCode = 400;

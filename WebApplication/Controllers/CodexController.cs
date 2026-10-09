@@ -30,6 +30,21 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpPatch("sessions/{id}")] public Task Rename(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Patch, $"sessions/{Id(id)}", body, ct);
     [HttpPost("sessions/{id}/delete")] public Task Delete(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/delete", JsonSerializer.SerializeToElement(new { }), ct);
     [HttpPost("sessions/{id}/pin")] public Task Pin(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/pin", body, ct);
+    [HttpPost("sessions/{id}/fork")] public async Task Fork(string id, [FromBody] JsonElement body, CancellationToken ct) {
+        using var response = await bridge.SendAsync(HttpMethod.Post, $"sessions/{Id(id)}/fork", body, ct);
+        var payload = await response.Content.ReadAsStringAsync(ct);
+        if (response.IsSuccessStatusCode) {
+            var value = System.Text.Json.Nodes.JsonNode.Parse(payload)!.AsObject();
+            if (value["message_id_map"] is System.Text.Json.Nodes.JsonObject mapping && value["session"]?["id"]?.ToString() is string forkId) {
+                try { attachments.Inherit(Id(id), Id(forkId), mapping); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { value["warning"] = "分叉已创建，附件预览索引暂未复制；原附件仍保留。"; }
+            }
+            value.Remove("message_id_map"); payload = value.ToJsonString();
+        }
+        Response.StatusCode = (int)response.StatusCode; Response.ContentType = "application/json";
+        await Response.WriteAsync(payload, ct);
+    }
+    [HttpPost("sessions/{id}/rewind")] public Task Rewind(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/rewind", body, ct);
     [HttpPost("sessions/{id}/model")] public Task SetModel(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/model", body, ct);
     [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 30, CancellationToken ct = default) {
         using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{Id(id)}/messages", null, ct);

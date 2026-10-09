@@ -41,6 +41,7 @@
 
   <ItemGroup>
     <Content Include="..\tools\HermesManagement\hermes_management.py" Link="hermes\hermes_management.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\tools\HermesManagement\hermes_message_actions.py" Link="hermes\hermes_message_actions.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Update="web.config">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

@@ -52,17 +52,66 @@ public sealed class HermesAttachments
         return Path.Combine(root, session);
     }
     private static string Identifier(string path) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(path))).ToLowerInvariant();
-    public object[] List(string session) => Paths(session).Select(path => Metadata(session, path)).ToArray();
+    public object[] List(string session) => Paths(session).Select(path => Metadata(session, path))
+        .Concat(Inherited(session).Select(file => { try { return Metadata(session, Resolve(session, file["id"]!.ToString())); } catch (FileNotFoundException) { return null; } }).Where(file => file != null))
+        .ToArray();
     private IEnumerable<string> Paths(string session) {
         var folder = Folder(session);
         if (!Directory.Exists(folder)) return Enumerable.Empty<string>();
         return Directory.EnumerateFiles(folder, "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.Hidden })
             .Where(path => !Path.GetFileName(path).StartsWith(".chuckie-"));
     }
-    public string Resolve(string session, string id) => Paths(session).FirstOrDefault(path => Identifier(Path.GetRelativePath(Folder(session), path)) == id) ?? throw new FileNotFoundException("附件不存在");
+    public string Resolve(string session, string id) => Paths(session).FirstOrDefault(path => Identifier(Path.GetRelativePath(Folder(session), path)) == id)
+        ?? Inherited(session).Where(file => file["id"]?.ToString() == id).Select(ResolveInherited).FirstOrDefault(path => path != null)
+        ?? throw new FileNotFoundException("附件不存在");
+    private JsonObject InheritedMap(string session) {
+        var path = Path.Combine(Folder(session), ".chuckie-fork-attachments.json");
+        lock (bindingLock) return File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path))!.AsObject() : new();
+    }
+    private JsonObject[] Inherited(string session) => InheritedMap(session).SelectMany(pair => pair.Value?.AsArray() ?? new JsonArray())
+        .OfType<JsonObject>().GroupBy(file => file["id"]?.ToString()).Select(group => group.First()).ToArray();
+    private string ResolveInherited(JsonObject file) {
+        var match = Regex.Match(file["url"]?.ToString() ?? "", $"^/api/{agent}/sessions/([a-zA-Z0-9_-]{{1,160}})/files/([a-f0-9]{{64}})(?:\\?v=[0-9]+)?$");
+        if (!match.Success) return null;
+        var source = match.Groups[1].Value; var id = match.Groups[2].Value;
+        return Paths(source).FirstOrDefault(path => Identifier(Path.GetRelativePath(Folder(source), path)) == id);
+    }
+    public void Inherit(string source, string target, JsonObject messageIds) {
+        var bindings = new Dictionary<string, string[]>();
+        var path = Path.Combine(Folder(source), ".chuckie-message-attachments.json");
+        lock (bindingLock) if (File.Exists(path)) bindings = JsonSerializer.Deserialize<Dictionary<string, string[]>>(File.ReadAllText(path))!;
+        var previous = InheritedMap(source);
+        var result = new JsonObject();
+        foreach (var pair in messageIds) {
+            if (!long.TryParse(pair.Key, out var oldId) || oldId <= 0 || !long.TryParse(pair.Value?.ToString(), out var newId) || newId <= 0) continue;
+            var files = new JsonArray();
+            if (bindings.TryGetValue(pair.Key, out var ids)) foreach (var id in ids) {
+                try { files.Add(JsonSerializer.SerializeToNode(Metadata(source, Resolve(source, id)))); }
+                catch (FileNotFoundException) { }
+            }
+            else if (previous[pair.Key] is JsonArray saved) foreach (var file in saved) files.Add(file!.DeepClone());
+            foreach (var file in files) file!["id"] = Identifier(file["url"]!.ToString().Split('?')[0]);
+            if (files.Count > 0) result[newId.ToString()] = files;
+        }
+        if (result.Count == 0) return;
+        lock (bindingLock) {
+            Directory.CreateDirectory(Folder(target));
+            var targetPath = Path.Combine(Folder(target), ".chuckie-fork-attachments.json");
+            File.WriteAllText(targetPath + ".tmp", result.ToJsonString());
+            File.Move(targetPath + ".tmp", targetPath, true);
+        }
+    }
     public object Metadata(string session, string path)
     {
         var file = new FileInfo(path);
+        var relative = Path.GetRelativePath(Folder(session), path);
+        if (relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar) || Path.IsPathRooted(relative)) {
+            var inherited = Inherited(session).FirstOrDefault(value => ResolveInherited(value) == path)
+                ?? throw new FileNotFoundException("附件不属于此会话");
+            var metadata = inherited.DeepClone().AsObject(); metadata["size"] = file.Length;
+            metadata["url"] = metadata["url"]!.ToString().Split('?')[0] + "?v=" + file.LastWriteTimeUtc.Ticks;
+            return metadata;
+        }
         var name = file.Name;
         if (name.Length > 33 && name[32] == '_') name = name[33..];
         return new { id = Identifier(Path.GetRelativePath(Folder(session), path)), name, size = file.Length,
@@ -193,10 +242,16 @@ public sealed class HermesAttachments
             if (File.Exists(path)) map = JsonSerializer.Deserialize<Dictionary<string, string[]>>(File.ReadAllText(path))!;
         }
         Dictionary<string, string> nativeFiles = null;
+        var inheritedMessages = InheritedMap(session);
         if (result["data"] is JsonArray rows) foreach (var row in rows)
         {
             if (map.TryGetValue(row!["id"]!.ToString(), out var ids))
                 row["attachments"] = JsonSerializer.SerializeToNode(ids.Select(id => { try { return Metadata(session, Resolve(session, id)); } catch (FileNotFoundException) { return null; } }).Where(value => value != null).ToArray());
+            else if (inheritedMessages[row["id"]!.ToString()] is JsonArray references)
+                row["attachments"] = new JsonArray(references.Select(reference => {
+                    try { return JsonSerializer.SerializeToNode(Metadata(session, Resolve(session, reference!["id"]!.ToString()))); }
+                    catch (FileNotFoundException) { return null; }
+                }).Where(file => file != null).ToArray());
             else if (agent == "codex" && row["role"]?.ToString() == "user") {
                 // Native queues can drain while the phone is offline. Build() persists
                 // the uploaded file paths in the user item, independently of phone binding.

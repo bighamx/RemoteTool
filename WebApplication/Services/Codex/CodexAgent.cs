@@ -785,8 +785,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private static long MessageId(string id) => Convert.ToInt64(Hash(id)[..14], 16) + 1;
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
-        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 10), ("ready", rpc?.Running == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("session_takeover", true), ("title_model", true), ("state_version", 10));
+        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 11), ("ready", rpc?.Running == true), ("cli_pid", rpc?.ProcessId));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("state_version", 11));
         if (path == "title-model") return method == "GET" ? titles.PublicConfig() : titles.Save(body);
         if (path == "title-model/test") return Obj(("title", await titles.Generate("修复手机会话的消息顺序与状态显示")));
         if (path == "title-model/generate") return Obj(("title", await titles.Generate(body.S("input"), context.RequestAborted)));
@@ -857,6 +857,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             return await Models();
         }
         if (p[0] == "sessions") {
+            if (p.Length == 3 && p[2] is "fork" or "rewind" && method == "POST") return await MessageAction(p[1], p[2], body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "pin" && method == "POST") {
                 if (body["pinned"] is not JsonValue flag || !flag.TryGetValue<bool>(out var pinned)) throw new CodexError("pinned 必须为布尔值");
                 await ReadThread(p[1], false); // Validate without acquiring a writer or resuming.
@@ -975,7 +976,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     var text=role=="user"?string.Join('\n',item.A("content").Where(c=>c.S("type")=="text").Select(c=>c.S("text"))):item.S("text");
                     object timestamp=source.Resolve(item.S("id"),role,text,ref position,out var nativeTime)?nativeTime:
                         times.TryGetValue(item.S("id"),out var exact)?exact:null;
-                    rows.Add(Obj(("id",MessageId(item.S("id"))),("role",role),("timestamp",timestamp),("content",text),("phase",role=="assistant"?item.S("phase"):null)));
+                    rows.Add(Obj(("id",MessageId(item.S("id"))),("role",role),("timestamp",timestamp),("content",text),("phase",role=="assistant"?item.S("phase"):null),
+                        ("turn_id", turn.S("id")), ("editable", role == "user" && ReferenceEquals(item, turn.A("items").FirstOrDefault(candidate => candidate.S("type") == "userMessage")))));
                 }
                 return Obj(("data", rows));
             }
