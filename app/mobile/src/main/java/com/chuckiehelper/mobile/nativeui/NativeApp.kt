@@ -380,11 +380,13 @@ private fun DeviceScreen(model: NativeModel) {
                             tint = MaterialTheme.colorScheme.primary,
                         )
                         Spacer(Modifier.width(12.dp))
-                        Text(
-                            device.name,
-                            Modifier.weight(1f),
-                            style = MaterialTheme.typography.titleLarge,
-                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(device.name, style = MaterialTheme.typography.titleLarge)
+                            if (model.session?.device?.id == device.id) {
+                                Text("当前连接", color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
                         IconButton(onClick = { manage = device }) {
                             Icon(Icons.Outlined.Settings, "管理设备")
                         }
