@@ -135,19 +135,34 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     var commandPanelBounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
     var attachmentPanelBounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
     var preview by remember { mutableStateOf<JSONObject?>(null) }
+    val context = LocalContext.current
+    var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
     val imagePicker =
         androidx.activity.compose.rememberLauncherForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
-        ) { uri ->
-            uri?.let { model.upload(it, true) }
+            androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia(8)
+        ) { uris ->
+            model.upload(uris, true)
         }
+    val camera = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.TakePicture()
+    ) { saved ->
+        val photo = cameraPath?.let { java.io.File(it) }
+        cameraPath = null
+        if (photo != null) {
+            if (saved && photo.length() > 0) {
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context, "${context.packageName}.hermes.files", photo,
+                )
+                model.upload(uri, true) { photo.delete() }
+            } else photo.delete()
+        }
+    }
     val filePicker =
         androidx.activity.compose.rememberLauncherForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
         ) { uri ->
             uri?.let { model.upload(it, false) }
         }
-    val context = LocalContext.current
     val scroll = rememberLazyListState()
     // LazyColumn evaluates its content later, potentially after history/SSE updates.
     // Capture the row and key together; never index keys using a newer model list.
@@ -436,7 +451,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         Modifier.weight(1f),
                                         style = MaterialTheme.typography.titleSmall,
                                     )
-                                    if (model.runId != null) TextButton(onClick = { stop = true }) { Text("停止") }
+                                    if (model.runId != null || agent == "hermes" && model.externalRunning)
+                                        TextButton(onClick = { stop = true }, enabled = !model.stopping) { Text(if (model.stopping) "正在停止" else "停止") }
                                     else if (model.canTakeover) TextButton(onClick = { takeover = true }) { Text("中断并接管") }
                                 }
                                 RunTimers(model.executionKey, model.executionTiming,
@@ -458,7 +474,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                             verticalAlignment = Alignment.CenterVertically,
                                         ) {
                                             Text(
-                                                listOf(it.text, it.detail.replace(Regex("\\s+"), " ").trim()).filter { part -> part.isNotBlank() }.joinToString(" · "),
+                                                listOf(it.text, (if (agent == "codex") compactCodexToolPreview(it.detail) else it.detail)
+                                                    .replace(Regex("\\s+"), " ").trim()).filter { part -> part.isNotBlank() }.joinToString(" · "),
                                                 modifier = Modifier.weight(1f).padding(end = 8.dp),
                                                 maxLines = 2,
                                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
@@ -663,7 +680,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                 },
                             )
                             DropdownMenuItem(
-                                text = { Text("选择图片") },
+                                text = { Text("选择图片（可多选）") },
+                                enabled = model.pendingFiles.size < 8,
                                 onClick = {
                                     attachMenu = false
                                     imagePicker.launch(
@@ -674,6 +692,26 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                                 .ImageOnly
                                         )
                                     )
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("拍照") },
+                                enabled = model.pendingFiles.size < 8,
+                                onClick = {
+                                    attachMenu = false
+                                    try {
+                                        val directory = java.io.File(context.cacheDir, "chat-camera").apply { mkdirs() }
+                                        val photo = java.io.File.createTempFile("photo-", ".jpg", directory)
+                                        cameraPath = photo.absolutePath
+                                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                                            context, "${context.packageName}.hermes.files", photo,
+                                        )
+                                        camera.launch(uri)
+                                    } catch (e: Exception) {
+                                        cameraPath?.let { java.io.File(it).delete() }
+                                        cameraPath = null
+                                        android.widget.Toast.makeText(context, "无法打开相机：${e.message ?: "请检查是否安装相机应用"}", android.widget.Toast.LENGTH_LONG).show()
+                                    }
                                 },
                             )
                             DropdownMenuItem(

@@ -27,7 +27,7 @@ internal fun sessionActivityEvidence(row: JSONObject, observedAt: Long): Session
 
 internal fun runActivityEvidence(row: JSONObject, observedAt: Long): SessionActivityEvidence =
     SessionActivityEvidence(when (row.optString("status")) {
-        "started", "running", "in_progress" -> if (row.optJSONObject("approval") != null) "waiting" else "active"
+        "started", "running", "in_progress", "stopping", "queued" -> if (row.optJSONObject("approval") != null) "waiting" else "active"
         "waiting_for_approval" -> "waiting"
         "submitting" -> "submitting"
         else -> "idle" // Completed, failed, missing, or uncertain tracking cannot prove a running task.

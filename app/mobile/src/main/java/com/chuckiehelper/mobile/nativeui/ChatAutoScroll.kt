@@ -60,7 +60,7 @@ internal fun rememberChatFollowing(
         following.value = false
         withFrameNanos { }
         val last = scroll.layoutInfo.totalItemsCount - 1
-        if (!list && positioned && last >= 0) scroll.animateScrollToItem(last)
+        if (!list && positioned && last >= 0) scroll.scrollToItem(last)
         if (!dragged) following.value = true
     }
     LaunchedEffect(sessionId, list, hasContent) {
@@ -75,9 +75,17 @@ internal fun rememberChatFollowing(
         while (true) {
             // Suspend while idle: no frame polling or perpetual animation when nothing grows.
             snapshotFlow { scroll.tailDistance() }.first { it > 0f }
+            val last = scroll.layoutInfo.totalItemsCount - 1
+            // History can replace an empty/cached list after the initial layout.
+            // Jump across unseen messages; only ease growth of the visible last item.
+            if (last >= 0 && scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index != last) {
+                scroll.scrollToItem(last)
+                continue
+            }
             var previous = withFrameNanos { it }
             while (scroll.canScrollForward) {
                 val now = withFrameNanos { it }
+                if (scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index != scroll.layoutInfo.totalItemsCount - 1) break
                 val distance = scroll.tailDistance()
                 if (distance <= 0f) break
                 val viewport = (scroll.layoutInfo.viewportEndOffset - scroll.layoutInfo.viewportStartOffset).toFloat()

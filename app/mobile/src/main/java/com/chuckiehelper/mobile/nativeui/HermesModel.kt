@@ -972,7 +972,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         contextInfo = contextCache[id]; asyncQuestion = null
         // 先回放上一次该会话的消息（如有缓存），网络刷新到位后替换 —— 消除「返回再进白屏等待」。
         cachedHistory[selectedId]?.let { cached ->
-            messages = cached
+            messages = cached.takeLast(30)
             // 回放缓存后请求滚到底，否则打开会话停在缓存顶部等网络刷新
             scrollToLatestRequest++
         } ?: run { messages = emptyList() }
@@ -988,24 +988,24 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     /** 多端共享：本地没有跟踪时，向服务端查询该会话是否有其它设备发起的活跃 run，有则以观察者身份挂载。 */
-    private suspend fun attachServerActiveRun(id: String, allowSubmitting: Boolean = false) {
+    private suspend fun attachServerActiveRun(id: String, allowSubmitting: Boolean = false, required: Boolean = false) {
         if (runId != null || submitting && !allowSubmitting) return
         val connection = api
         try {
             val result = connection.json("$root/sessions/${q(id)}/active-run")
             if (selectedId != id || api !== connection || runId != null) return
             val serverRun = result.optString("run_id").takeIf { it.isNotBlank() && it != "null" } ?: return
-            if (result.optString("status") !in setOf("started", "submitting")) return
+            if (result.optString("status") !in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval")) return
             startRunTiming(serverRun, result)
             runId = serverRun; runSession = id
             seq = -1; events = emptyList(); eventCount = 0; approval = null; pendingText = ""
             prefs.edit().putString("run", serverRun).putString("runSession", id).apply()
-            state = "执行中"
+            state = statusLabel(result.optString("status"))
             runVerifiedAt = activityClock(); activityNow = runVerifiedAt
             noteRunActivity(id, result, runVerifiedAt)
             saveRuns(); watch()
         } catch (e: CancellationException) { throw e }
-        catch (_: Exception) { }
+        catch (e: Exception) { if (required) throw e }
     }
     private suspend fun loadSelection(id: String) {
         val connection = api
@@ -1029,14 +1029,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     private suspend fun loadHistoryNow(id: String) {
         val connection = api
-        val response = connection.json("$root/sessions/$id/messages")
+        val response = connection.json("$root/sessions/$id/messages?limit=30")
         if (id != selectedId || api !== connection) return
         // Keep the visible list intact while acknowledgement/attachment requests suspend.
         // SSE can add narration during those requests; merge the latest local state only
         // at publication, rather than exposing a bare/stale server snapshot to Compose.
         var history =
             retainUserMessageMetadata(
-                response.array("data").objects().mapNotNull { row -> agentHistoryMessage(agent, row) }, messages,
+                response.array("data").objects().takeLast(30).mapNotNull { row -> agentHistoryMessage(agent, row) }, messages,
             )
         // Hermes has no request-key lookup. After an App restart the in-memory
         // pre-send boundary is gone, so reconcile persisted submissions using
@@ -1308,7 +1308,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 var accepted = false
                 try {
                     val live = connection.json("$root/runs/$id")
-                    if (live.optString("status") != "started") throw ApiRequestFailure("原任务已结束，本次插话未写入。草稿已保留，请作为新消息发送。", 409, "run_stale", "rejected")
+                    steeringRunPreflightFailure(agent, live.optString("status"))?.let { throw it }
                     val request = connection.request("$root/runs/$id/steer", obj("input" to input, "session_id" to session, "attachment_ids" to org.json.JSONArray(attached.map { it.getString("id") }))).newBuilder().header("Idempotency-Key", steerKey).build()
                     connection.json(request)
                     accepted = true
@@ -1477,7 +1477,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     runVerifiedAt = requestedAt
                     runTurnId = result.optString("turn_id").takeIf { it.isNotBlank() && it != "null" }
                     startRunTiming(id, result)
-                    state = if (result.optString("kind") == "compact" && result.optString("status") == "started") "正在压缩上下文" else statusLabel(result.optString("status"))
+                    state = if (stoppingRunId == id && result.optString("status") in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval")) "正在停止"
+                        else if (result.optString("kind") == "compact" && result.optString("status") == "started") "正在压缩上下文" else statusLabel(result.optString("status"))
                     approval = result.optJSONObject("approval")
                     result.optJSONObject("runtime")?.let {
                         runtime = it.optString("provider") + " · " + it.optString("model")
@@ -1617,6 +1618,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                                         event.optString("tool"),
                                                         event
                                                             .optString("preview")
+                                                            .let { if (agent == "codex") compactCodexToolPreview(it) else it }
                                                             .replace(Regex("\\s+"), " ")
                                                             .take(100),
                                                     ))
@@ -1667,14 +1669,42 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         } } finally { if (epoch == observationEpoch) streamConnected = false }
     }
 
+    var stopRequestInFlight by mutableStateOf(false)
+        private set
+    private var stoppingRunId by mutableStateOf<String?>(null)
+    val stopping get() = stopRequestInFlight || runId != null && (stoppingRunId == runId || state == "正在停止")
+
     fun stop() = launch {
-        runId?.let { id ->
-            val session = runSession ?: return@let
-            val result = api.json("$root/runs/$id/stop", obj())
-            if (result.optBoolean("stopped") && result.has("stop_requested")) {
-                clearRunTracking(session, id); state = "任务已结束"
-                if (selectedId == session) { loadHistory(session); loadSelection(session) }
-            } else if (runId == id) state = "已请求停止，等待任务结束确认"
+        val session = selectedId ?: return@launch
+        val connection = api
+        if (stopRequestInFlight) return@launch
+        stopRequestInFlight = true
+        setError(session, null)
+        try {
+            // Desktop/API turns may not be in the phone's saved run registry yet.
+            if (runId == null) attachServerActiveRun(session, required = true)
+            if (selectedId != session || api !== connection) return@launch
+            val id = runId ?: throw java.io.IOException(if (agent == "codex" && canTakeover)
+                "当前任务由桌面端管理，请使用“中断并接管”。" else if (externalRunning)
+                "未找到可控制的任务，请在运行该会话的原客户端停止。" else "当前会话没有正在运行的任务，请刷新会话。")
+            if (runSession != session) throw java.io.IOException("当前任务不属于所选会话，请刷新后重试。")
+            // Prevent a stopped turn from being immediately followed by the phone's next queued message.
+            if (agent == "hermes" && messageQueue.visible.isNotEmpty()) messageQueue.pause(true)
+            val result = connection.json("$root/runs/$id/stop", obj())
+            if (runId != id || selectedId != session || api !== connection) return@launch
+            val status = result.optString("status")
+            if (status in setOf("completed", "failed", "cancelled", "interrupted") ||
+                result.optBoolean("stopped") && result.has("stop_requested")) {
+                clearRunTracking(session, id); stoppingRunId = null
+                state = if (status.isNotBlank()) statusLabel(status) else "任务已结束"
+                loadHistory(session); loadSelection(session)
+            } else if (status == "stopping" || result.optBoolean("stop_requested") || result.optBoolean("stopped")) {
+                stoppingRunId = id
+                state = "正在停止"
+                statusWake?.trySend(Unit)
+            } else throw java.io.IOException("服务端尚未确认停止请求，请刷新任务状态后重试。")
+        } finally {
+            stopRequestInFlight = false
         }
     }
 
@@ -1721,34 +1751,42 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         pendingFiles = pendingFiles.filter { it.optString("id") != id }
     }
 
-    fun upload(uri: android.net.Uri, image: Boolean) {
-        val session = selectedId ?: return; val connection = api
-        if (uploading) return
-        if (pendingFiles.size >= 8) { setError(session, "每条消息最多 8 个附件"); return }
+    fun upload(uri: android.net.Uri, image: Boolean, onFinished: () -> Unit = {}) =
+        upload(listOf(uri), image, onFinished)
+
+    fun upload(uris: List<android.net.Uri>, image: Boolean, onFinished: () -> Unit = {}) {
+        val session = selectedId ?: run { onFinished(); return }
+        val connection = api
+        if (uploading || uris.isEmpty()) { onFinished(); return }
+        val available = (8 - pendingFiles.size).coerceAtLeast(0)
+        if (available == 0) { setError(session, "每条消息最多 8 个附件"); onFinished(); return }
+        val selected = uris.distinct()
+        if (selected.size > available) setError(session, "每条消息最多 8 个附件，本次只添加前 $available 个")
         uploading = true
         launch {
-        try {
-            val file =
-                withContext(Dispatchers.IO) { prepareHermesUpload(getApplication(), uri, image) }
             try {
-                val multipart =
-                    okhttp3.MultipartBody.Builder()
-                        .setType(okhttp3.MultipartBody.FORM)
-                        .addFormDataPart("file", file.name, file.body)
-                        .build()
-                val request =
-                    connection.request("$root/sessions/$session/files")
-                        .newBuilder()
-                        .post(multipart)
-                        .build()
-                val result = connection.json(request)
-                draftFiles = draftFiles + (session to (draftFiles[session].orEmpty() + result))
+                for (uri in selected.take(available)) {
+                    try {
+                        val file = withContext(Dispatchers.IO) { prepareHermesUpload(getApplication(), uri, image) }
+                        try {
+                            val multipart = okhttp3.MultipartBody.Builder()
+                                .setType(okhttp3.MultipartBody.FORM)
+                                .addFormDataPart("file", file.name, file.body)
+                                .build()
+                            val request = connection.request("$root/sessions/$session/files")
+                                .newBuilder().post(multipart).build()
+                            val result = connection.json(request)
+                            draftFiles = draftFiles + (session to (draftFiles[session].orEmpty() + result))
+                        } finally {
+                            file.temporary.delete()
+                        }
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) { setError(session, e.message ?: "附件上传失败") }
+                }
             } finally {
-                file.temporary.delete()
+                uploading = false
+                onFinished()
             }
-        } finally {
-            uploading = false
-        }
         }
     }
 

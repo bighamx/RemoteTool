@@ -20,6 +20,26 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
     }
     public JsonObject Read(string id) => ReadDatabase(DatabasePath, new[] { id }, true).GetValueOrDefault(id) ?? Unknown(id);
     public IReadOnlyDictionary<string, JsonObject> ReadMany(IEnumerable<string> ids) => ReadDatabase(DatabasePath, ids, false);
+    public IReadOnlyList<string> ActiveRunCandidates(string id) => ReadActiveRunCandidates(Path.Combine(Path.GetDirectoryName(DatabasePath)!, "runs_idempotency.db"), id);
+
+    // Desktop session streams also publish native run IDs here, without going through
+    // RemoteTool's run registry. Candidates must still be authenticated by GET /v1/runs/{id}.
+    internal static IReadOnlyList<string> ReadActiveRunCandidates(string database, string id) {
+        if (!Regex.IsMatch(id ?? "", "^[a-zA-Z0-9_-]{1,160}$") || !File.Exists(database)) return Array.Empty<string>();
+        try {
+            SQLitePCL.Batteries_V2.Init();
+            using var db = new SQLiteConnection(database, SQLiteOpenFlags.ReadOnly | SQLiteOpenFlags.FullMutex);
+            db.BusyTimeout = TimeSpan.FromMilliseconds(250);
+            return db.Query<NativeRunRow>("SELECT run_id FROM run_idempotency WHERE " +
+                "CASE WHEN json_valid(status_json) THEN json_extract(status_json,'$.session_id') END=? AND " +
+                "CASE WHEN json_valid(status_json) THEN json_extract(status_json,'$.status') END " +
+                "IN ('started','submitting','queued','running','stopping','waiting_for_approval') ORDER BY updated_at DESC LIMIT 3", id)
+                .Select(row => row.Id).Where(run => Regex.IsMatch(run ?? "", "^[a-zA-Z0-9_-]{1,160}$")).Distinct().ToArray();
+        } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException or DllNotFoundException or TypeInitializationException) {
+            return Array.Empty<string>();
+        }
+    }
+    private sealed class NativeRunRow { [Column("run_id")] public string Id { get; set; } }
 
     private sealed class SessionRow {
         [Column("id")] public string Id { get; set; }

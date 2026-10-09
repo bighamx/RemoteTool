@@ -87,5 +87,28 @@ if (args.Length == 2 && args[0] == "--probe") {
         ["started_at"] = snapshot["started_at"]?.DeepClone(), ["last_response_at"] = snapshot["last_response_at"]?.DeepClone(),
     }.ToJsonString());
 }
+var nativeRuns = Path.Combine(root, "runs_idempotency.db");
+using (var runDb = new SQLiteConnection(nativeRuns)) {
+    runDb.Execute("CREATE TABLE run_idempotency(run_id TEXT,status_json TEXT,updated_at REAL)");
+    void Run(string id, string session, string status, double updated) => runDb.Execute(
+        "INSERT INTO run_idempotency VALUES(?,?,?)", id,
+        new JsonObject { ["session_id"] = session, ["status"] = status }.ToJsonString(), updated);
+    Run("desktop-active", "desktop", "running", now);
+    Run("desktop-stopping", "desktop", "stopping", now + 1);
+    Run("desktop-ended", "desktop", "cancelled", now + 2);
+    Run("other-active", "other", "running", now + 3);
+    runDb.Execute("INSERT INTO run_idempotency VALUES('malformed','{',?)", now + 4);
+    Check(HermesSessionActivity.ReadActiveRunCandidates(nativeRuns, "desktop").SequenceEqual(["desktop-stopping", "desktop-active"]),
+        "desktop native runs absent from the mobile registry are discovered in newest order, excluding terminal/other/malformed rows");
+    Check(HermesSessionActivity.ReadActiveRunCandidates(nativeRuns, "unknown").Count == 0,
+        "another session cannot acquire the desktop run");
+    Check(new HermesSessionActivity(settings).ActiveRunCandidates("desktop").Count == 2,
+        "native runs use the configured Hermes directory, not the credentials directory");
+}
+var absentRuns = Path.Combine(root, "absent-runs.db");
+Check(HermesSessionActivity.ReadActiveRunCandidates(absentRuns, "desktop").Count == 0 && !File.Exists(absentRuns),
+    "read-only discovery never creates a missing native run database");
+Check(HermesSessionActivity.ReadActiveRunCandidates(nativeRuns, "../other").Count == 0,
+    "invalid session identity cannot discover a run");
 Console.WriteLine($"External Hermes activity checks: {count} passed; temporary fixture: {root}");
 // sqlite-net's provider can retain handles until process exit; this is an isolated temp fixture.

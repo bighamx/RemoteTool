@@ -194,7 +194,9 @@ fun NativeApp(model: NativeModel) {
                                     } }
                                     if (name !in listOf("Hermes", "Codex")) {
                                         Spacer(Modifier.height(4.dp))
-                                        Text(name, color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                                        Text(if (name == "系统" && !selected) session.device.name else name,
+                                            color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                                     }
                                 }
                             }

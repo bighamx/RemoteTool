@@ -125,11 +125,17 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         await Response.WriteAsync(await response.Content.ReadAsStringAsync(ct), ct);
     }
     [HttpDelete("sessions/{id}"), HttpPost("sessions/{id}/delete")] public Task DeleteSession(string id, CancellationToken ct) => Forward(HttpMethod.Delete, $"api/sessions/{Id(id)}", null, null, ct);
-    [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, CancellationToken ct)
+    [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 30, CancellationToken ct = default)
     {
         using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions/{Id(id)}/messages?inline_images=false", null, null, ct);
         if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 会话历史" });
-        return Ok(attachments.AddMessageAttachments(id, await upstream.Content.ReadAsStringAsync(ct)));
+        var json = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct));
+        var rows = json?["data"] as System.Text.Json.Nodes.JsonArray;
+        if (rows != null) {
+            var keep = Math.Clamp(limit, 1, 500);
+            json["data"] = new System.Text.Json.Nodes.JsonArray(rows.Skip(Math.Max(0, rows.Count - keep)).Select(row => row?.DeepClone()).ToArray());
+        }
+        return Ok(attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}"));
     }
     [HttpPost("sessions/{id}/messages/{messageId}/attachments")] public IActionResult BindAttachments(string id, string messageId, [FromBody] JsonElement body)
     { attachments.Bind(Id(id), messageId, body.GetProperty("ids").EnumerateArray().Select(value => value.GetString()!).ToArray()); return Ok(new { success = true }); }
@@ -187,33 +193,44 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     /// <summary>多端共享：该会话当前是否有活跃 run（供其它设备挂载实时进度）。终态自动清除。</summary>
     [HttpGet("sessions/{id}/active-run")] public async Task ActiveRun(string id, CancellationToken ct)
     {
+        Response.Headers.CacheControl = "no-store";
         var sessionId = Id(id);
-        var runId = runs.Query("hermes", sessionId);
-        if (runId == null) { await Response.WriteAsJsonAsync(new { run_id = (string?)null }, ct); return; }
-        // 校验 Hermes 侧真实状态：终态（含 404）即清除登记，避免幽灵 run。
-        try
-        {
+        var registered = runs.Query("hermes", sessionId);
+        var candidates = new[] { registered }.Concat(activity.ActiveRunCandidates(sessionId))
+            .Where(run => !string.IsNullOrEmpty(run)).Distinct();
+        foreach (var runId in candidates) {
+            if (runId.StartsWith("hcompact_")) {
+                try {
+                    var status = compaction.Status(runId);
+                    if (status["status"]?.ToString() is "started" or "submitting") {
+                        await Response.WriteAsJsonAsync(status, ct); return;
+                    }
+                } catch (KeyNotFoundException) { }
+                runs.Clear("hermes", sessionId, runId); continue;
+            }
+            // The local database only discovers IDs. Hermes verifies the credential's
+            // ownership and the authoritative run state before it is exposed to the phone.
             using var upstream = await bridge.SendAsync(HttpMethod.Get, $"v1/runs/{runId}", null, null, ct, null);
             if (upstream.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
                 runs.Clear("hermes", sessionId, runId);
-                await Response.WriteAsJsonAsync(new { run_id = (string?)null }, ct);
-                return;
+                continue;
             }
-            if (upstream.IsSuccessStatusCode)
-            {
-                using var doc = JsonDocument.Parse(await upstream.Content.ReadAsStringAsync(ct));
-                var status = doc.RootElement.TryGetProperty("status", out var s) ? s.GetString() : "";
-                if (status is "completed" or "failed" or "cancelled" or "interrupted")
-                {
-                    runs.Clear("hermes", sessionId, runId);
-                    await Response.WriteAsJsonAsync(new { run_id = (string?)null }, ct);
-                    return;
-                }
+            if (!upstream.IsSuccessStatusCode) {
+                Response.StatusCode = (int)upstream.StatusCode;
+                await Response.WriteAsJsonAsync(new { message = "无法核对 Hermes 当前任务，请稍后重试" }, ct); return;
             }
+            using var doc = JsonDocument.Parse(await upstream.Content.ReadAsStringAsync(ct));
+            var state = doc.RootElement.TryGetProperty("status", out var s) ? s.GetString() : "";
+            var owner = doc.RootElement.TryGetProperty("session_id", out var session) ? session.GetString() : null;
+            if (owner != sessionId || state is "completed" or "failed" or "cancelled" or "interrupted" or "acceptance_unknown") {
+                runs.Clear("hermes", sessionId, runId); continue;
+            }
+            if (state is not ("started" or "submitting" or "queued" or "running" or "stopping" or "waiting_for_approval")) continue;
+            if (registered != runId) runs.Register("hermes", sessionId, runId);
+            await Response.WriteAsJsonAsync(doc.RootElement, ct); return;
         }
-        catch (Exception) when (!ct.IsCancellationRequested) { /* 校验失败保守保留登记 */ }
-        await Response.WriteAsJsonAsync(new { run_id = runId }, ct);
+        await Response.WriteAsJsonAsync(new { run_id = (string?)null }, ct);
     }
     [HttpGet("runs/{id}")] public async Task Status(string id, CancellationToken ct) {
         if (!Id(id).StartsWith("hcompact_")) { await Forward(HttpMethod.Get, $"v1/runs/{id}", null, null, ct); return; }

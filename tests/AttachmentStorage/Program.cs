@@ -41,6 +41,26 @@ try {
         Check(store.List(session).Length == 1, agent + " internal binding file not listed as attachment");
         var attached = store.AddMessageAttachments(session, "{\"data\":[{\"id\":1}]}");
         Check(attached["data"][0]["attachments"][0]["url"].GetValue<string>() == beforeUrl, agent + " attachment id and URL stable after history binding");
+        if (agent == "codex") {
+            var uploadedPath = store.Resolve(session, id);
+            string NativeHistory(string sid, string role, string text) => store.AddMessageAttachments(sid,
+                new JsonObject { ["data"] = new JsonArray(new JsonObject { ["id"] = 2, ["role"] = role, ["content"] = text }) }.ToJsonString()).ToJsonString();
+            var nativeText = "请查看附件\n\n附件文件：\n\"" + uploadedPath + "\"";
+            var recovered = JsonNode.Parse(NativeHistory(session, "user", nativeText));
+            Check(recovered["data"][0]["attachments"][0]["url"].GetValue<string>() == beforeUrl,
+                "native queued history recovers attachments without a message binding");
+            Check(JsonNode.Parse(NativeHistory(session, "user", nativeText.Replace("\n", "\r\n")))["data"][0]["attachments"][0]["id"].GetValue<string>() == id,
+                "native history recovery preserves attachment IDs across CRLF formatting");
+            Check(JsonNode.Parse(NativeHistory("other-session", "user", nativeText))["data"][0]["attachments"] == null,
+                "quoted paths from another session never become downloadable attachments");
+            Check(JsonNode.Parse(NativeHistory(session, "assistant", nativeText))["data"][0]["attachments"] == null,
+                "assistant quotes are not treated as uploaded user attachments");
+            Check(JsonNode.Parse(NativeHistory(session, "user", "quoted path: \"" + uploadedPath + "\""))["data"][0]["attachments"] == null,
+                "ordinary quoted paths do not create attachment associations");
+            store.Bind(session, "2", []);
+            Check(JsonNode.Parse(NativeHistory(session, "user", nativeText))["data"][0]["attachments"].AsArray().Count == 0,
+                "an explicit empty binding remains authoritative over native inference");
+        }
         store.PrepareRun(Body(session, [id]), key);
         store.PrepareCodexRun(Body(session, [id]), key);
         store.PrepareHermesSteer(Body(session, [id]), session, key);

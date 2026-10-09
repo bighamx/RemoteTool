@@ -188,13 +188,32 @@ public sealed class HermesAttachments
     {
         var result = JsonNode.Parse(json)!;
         var path = Path.Combine(Folder(session), ".chuckie-message-attachments.json");
-        if (!File.Exists(path)) return result;
-        Dictionary<string, string[]> map;
-        lock (bindingLock) map = JsonSerializer.Deserialize<Dictionary<string, string[]>>(File.ReadAllText(path))!;
+        Dictionary<string, string[]> map = new();
+        lock (bindingLock) {
+            if (File.Exists(path)) map = JsonSerializer.Deserialize<Dictionary<string, string[]>>(File.ReadAllText(path))!;
+        }
+        Dictionary<string, string> nativeFiles = null;
         if (result["data"] is JsonArray rows) foreach (var row in rows)
         {
             if (map.TryGetValue(row!["id"]!.ToString(), out var ids))
                 row["attachments"] = JsonSerializer.SerializeToNode(ids.Select(id => { try { return Metadata(session, Resolve(session, id)); } catch (FileNotFoundException) { return null; } }).Where(value => value != null).ToArray());
+            else if (agent == "codex" && row["role"]?.ToString() == "user") {
+                // Native queues can drain while the phone is offline. Build() persists
+                // the uploaded file paths in the user item, independently of phone binding.
+                var content = (row["content"]?.ToString() ?? "").Replace("\r\n", "\n");
+                const string marker = "\n\n附件文件：\n";
+                var start = content.LastIndexOf(marker, StringComparison.Ordinal);
+                if (start < 0) continue;
+                // Only files enumerated from this session are eligible, never arbitrary
+                // paths quoted in a conversation or files from another session.
+                nativeFiles ??= Paths(session).ToDictionary(file => file, file => file,
+                    OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+                var attached = content[(start + marker.Length)..].Split('\n')
+                    .Select(line => line.Trim()).Where(line => line.Length > 2 && line[0] == '"' && line[^1] == '"')
+                    .Select(line => nativeFiles.GetValueOrDefault(line[1..^1])).Where(file => file != null)
+                    .Distinct().Take(8).Select(file => Metadata(session, file)).ToArray();
+                if (attached.Length > 0) row["attachments"] = JsonSerializer.SerializeToNode(attached);
+            }
         }
         return result;
     }

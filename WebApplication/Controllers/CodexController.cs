@@ -30,10 +30,16 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpPatch("sessions/{id}")] public Task Rename(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Patch, $"sessions/{Id(id)}", body, ct);
     [HttpPost("sessions/{id}/delete")] public Task Delete(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/delete", JsonSerializer.SerializeToElement(new { }), ct);
     [HttpPost("sessions/{id}/model")] public Task SetModel(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/model", body, ct);
-    [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, CancellationToken ct) {
+    [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 30, CancellationToken ct = default) {
         using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{Id(id)}/messages", null, ct);
         if (!upstream.IsSuccessStatusCode) return StatusCode((int)upstream.StatusCode, System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)));
-        return Ok(attachments.AddMessageAttachments(id, await upstream.Content.ReadAsStringAsync(ct)));
+        var json = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct));
+        var rows = json?["data"] as System.Text.Json.Nodes.JsonArray;
+        if (rows != null) {
+            var keep = Math.Clamp(limit, 1, 500);
+            json["data"] = new System.Text.Json.Nodes.JsonArray(rows.Skip(Math.Max(0, rows.Count - keep)).Select(row => row?.DeepClone()).ToArray());
+        }
+        return Ok(attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}"));
     }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
     [HttpGet("sessions/{id}/queue")] public Task Queue(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"sessions/{Id(id)}/queue", null, ct);
