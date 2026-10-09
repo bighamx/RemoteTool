@@ -22,6 +22,8 @@ data class HermesMessage(
     val delivery: String? = null,
     val timestamp: Long? = null,
     val narration: Boolean = false,
+    val nativeTurnId: String? = null,
+    val editable: Boolean = true,
 )
 
 data class HermesEvent(val type: String, val text: String, val detail: String = "")
@@ -39,6 +41,66 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     var pinningSessions by mutableStateOf<Set<String>>(emptySet())
         private set
     private var nextSessionOffset = 0
+    private var messageActionSessions by mutableStateOf<Set<String>>(emptySet())
+    val messageActionBusy get() = selectedId in messageActionSessions
+    val supportsMessageActions get() = if (agent == "codex") capabilities.optBoolean("message_actions")
+        else capabilities.optJSONObject("chuckie_features")?.optBoolean("message_actions") == true
+    val canEditMessages get() = supportsMessageActions && !hasExecution && runId == null && !submitting && !hasPendingSubmission && !messageActionBusy
+    fun forkMessage(message: HermesMessage, onDone: () -> Unit) {
+        val session = selectedId ?: return
+        if (!supportsMessageActions || message.serverId <= 0 || session in messageActionSessions) return
+        messageActionSessions = messageActionSessions + session
+        setError(session, null)
+        val connection = api
+        launch {
+            try {
+                val request = obj("message_id" to message.serverId, "fork_id" to "mobile_fork_${UUID.randomUUID().toString().replace("-", "")}")
+                val result = connection.json("$root/sessions/${q(session)}/fork", request)
+                val fork = result.getJSONObject("session")
+                if (api !== connection) return@launch
+                sessions = mergeSessionPage(listOf(fork), sessions) { it.optString("id") }
+                if (selectedId == session) { select(fork); controlMessage = result.optString("warning").takeIf { it.isNotBlank() }; onDone() }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { setError(session, "分叉未确认，请先刷新列表检查是否已创建；不会自动再次创建。" + connectionFailureMessage(e)) }
+            finally { messageActionSessions = messageActionSessions - session }
+        }
+    }
+    internal fun editMessage(message: HermesMessage, input: String, attached: List<JSONObject>, boundary: MessageEditBoundary, onDone: () -> Unit) {
+        val session = selectedId ?: return
+        if (!canEditMessages || message.role != "user" || message.serverId <= 0 || !message.editable) return
+        val connection = api
+        messageActionSessions = messageActionSessions + session; setSubmitting(session, true)
+        setError(session, null)
+        // Preserve the edited draft before the irreversible request. Unknown outcomes never resend.
+        setDraft(session, input); draftFiles = draftFiles + (session to attached)
+        launch {
+            var rewound = false
+            try {
+                historyReadMutex.withLock {
+                    val result = connection.json("$root/sessions/${q(session)}/rewind", obj("message_id" to message.serverId,
+                        "expected_last_turn_id" to boundary.lastTurnId, "expected_latest_user_id" to boundary.latestUserId))
+                    if (!result.optBoolean("rewound")) throw java.io.IOException("服务端未确认撤回，编辑内容已保留")
+                    rewound = true
+                    cachedHistory.remove(session); localSubmissions.remove(session)
+                    narrations = narrations.filterNot { it.session == session }; saveNarrations()
+                    compactionNotices = compactionNotices.filterNot { it.session == session }; saveCompactionNotices()
+                    steering = steering.filterNot { it.session == session }; saveSteering()
+                    if (selectedId == session) messages = emptyList()
+                }
+                if (api !== connection || selectedId != session) return@launch
+                loadHistory(session)
+                setSubmitting(session, false); messageActionSessions = messageActionSessions - session
+                onDone()
+                if (!sendInput(input.ifBlank { "请查看附件" })) setError(session, "原消息已撤回，编辑草稿已保留，请点击发送")
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                setError(session, (if (rewound) "原消息已撤回，尚未重发；" else "撤回未确认，不会自动重发；") + "编辑内容已保留。" + connectionFailureMessage(e))
+                if (rewound && selectedId == session) onDone()
+            } finally {
+                if (session in messageActionSessions) { messageActionSessions = messageActionSessions - session; setSubmitting(session, false) }
+            }
+        }
+    }
     fun isSessionPinned(session: JSONObject) = session.optBoolean("pinned")
     val orderedSessions get() = pinnedSessionsFirst(sessions, ::isSessionPinned)
     fun toggleSessionPin(session: JSONObject) {
@@ -1252,6 +1314,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     private fun sendInput(input: String, questionId: String? = null): Boolean {
         val session = selectedId ?: return false
+        if (messageActionBusy) { error = "请等待消息操作完成"; return false }
         if (hasPendingSubmission) { error = "请先核对上一次提交结果，避免重复创建任务"; return false }
         if (input.isBlank() || submitting) return false
         if (externalRunning && agent == "codex") {

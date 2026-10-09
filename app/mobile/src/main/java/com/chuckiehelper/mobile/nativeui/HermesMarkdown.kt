@@ -13,7 +13,7 @@ import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
 
 @Composable
-fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String = "") {
+fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String = "", onBubbleTap: (() -> Unit)? = null) {
     val context = LocalContext.current
     val markwon =
         remember(context) {
@@ -37,6 +37,7 @@ fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String =
             }
         },
         update = { view ->
+            view.onBubbleTap = onBubbleTap
             view.setFooter(footer, footerColor)
             view.setTextColor(color)
             view.setLinkTextColor(link)

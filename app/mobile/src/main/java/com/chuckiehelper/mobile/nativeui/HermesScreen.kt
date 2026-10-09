@@ -88,6 +88,13 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     var takeover by remember { mutableStateOf(false) }
     var filter by rememberSaveable { mutableStateOf("") }
     var pendingInfo by remember { mutableStateOf(false) }
+    var editTarget by remember { mutableStateOf<Pair<String, HermesMessage>?>(null) }
+    var editText by remember { mutableStateOf("") }
+    var editAttachments by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var editBoundary by remember { mutableStateOf<MessageEditBoundary?>(null) }
+    LaunchedEffect(model.selectedId, list) {
+        if (list || editTarget?.first != model.selectedId) editTarget = null
+    }
     var questionPanel by remember { mutableStateOf(false) }
     LaunchedEffect(pendingInfo, model.selectedId, model.hasPendingSubmission) {
         if (pendingInfo && !model.hasPendingSubmission) pendingInfo = false
@@ -440,7 +447,13 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         }
                     } else {
                     MessageBubble(message.role, message.text, message.attachments, api, model.files, agentName, message.delivery, message.timestamp,
-                        narration = message.narration || message.localKey?.startsWith("narration-") == true, narrationTexts = model.narrationTexts)
+                        narration = message.narration || message.localKey?.startsWith("narration-") == true, narrationTexts = model.narrationTexts,
+                        onFork = if (model.supportsMessageActions && message.serverId > 0 && !model.messageActionBusy) ({ model.forkMessage(message) { list = false } }) else null,
+                        onEdit = if (message.role == "user" && message.serverId > 0 && message.editable && model.canEditMessages) ({
+                            editTarget = model.selectedId!! to message; editText = message.text
+                            editBoundary = messageEditBoundary(model.messages)
+                            editAttachments = presentHermesMessage(message.text, message.attachments, model.files).files
+                        }) else null)
                     }
                 }
                 if (model.hasExecution) {
@@ -772,6 +785,30 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         }
     }
     if (queueDialog) MessageQueueDialog(model.messageQueue) { queueDialog = false }
+    editTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { if (!model.messageActionBusy) editTarget = null },
+            title = { Text("编辑消息") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("发送后将撤回这条消息及后续对话，再发送修改后的内容。已执行的文件或程序操作不会撤销。", style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(editText, { editText = it }, modifier = Modifier.fillMaxWidth(),
+                        minLines = 3, maxLines = 8, enabled = !model.messageActionBusy, label = { Text("消息内容") })
+                    editAttachments.forEach { file ->
+                        InputChip(selected = true, onClick = {}, label = { Text(file.optString("name"), maxLines = 1) },
+                            trailingIcon = { IconButton(onClick = { editAttachments = editAttachments.filterNot { it.optString("id") == file.optString("id") } },
+                                enabled = !model.messageActionBusy) { Icon(Icons.Outlined.Close, "移除附件", Modifier.size(18.dp)) } })
+                    }
+                    if (model.messageActionBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    model.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = { TextButton(enabled = model.canEditMessages && (editText.isNotBlank() || editAttachments.isNotEmpty()), onClick = {
+                editBoundary?.let { boundary -> model.editMessage(target.second, editText.trim(), editAttachments, boundary) { editTarget = null } }
+            }) { Text(if (model.messageActionBusy) "正在处理" else "撤回并重发") } },
+            dismissButton = { TextButton(enabled = !model.messageActionBusy, onClick = { editTarget = null }) { Text("取消") } },
+        )
+    }
     renameChat?.let { chat ->
         InputDialog(
             "修改会话名称",
@@ -953,9 +990,12 @@ private fun MessageBubble(
     timestamp: Long? = null,
     narration: Boolean = false,
     narrationTexts: List<String> = emptyList(),
+    onFork: (() -> Unit)? = null,
+    onEdit: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var preview by remember { mutableStateOf<JSONObject?>(null) }
+    var actions by remember { mutableStateOf(false) }
     val presentation = presentHermesMessage(text, attachments, availableFiles)
     val hasImages = presentation.files.any { hermesFileKind(it) == "图片" }
     Row(
@@ -964,12 +1004,13 @@ private fun MessageBubble(
             if (role == "user" && !hasImages)
                 Arrangement.End else Arrangement.Start,
     ) {
+        Box {
         Surface(
             shape = MaterialTheme.shapes.large,
             color =
                 if (role == "user") MaterialTheme.colorScheme.secondaryContainer
                 else MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.widthIn(max = if (hasImages) 268.dp else 600.dp),
+            modifier = Modifier.widthIn(max = if (hasImages) 268.dp else 600.dp).bubbleTap { actions = true },
         ) {
             SelectionContainer {
                 Column(Modifier.padding(14.dp)) {
@@ -980,6 +1021,7 @@ private fun MessageBubble(
                     if (presentation.text.isNotBlank()) HermesMarkdown(
                         if (role == "assistant") displayNarration(presentation.text, narration, narrationTexts) else presentation.text,
                         footer = if (inlineTime) metadata else "",
+                        onBubbleTap = { actions = true },
                     )
                     if (!inlineTime) delivery?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     presentation.unavailable.forEach { name ->
@@ -1015,6 +1057,20 @@ private fun MessageBubble(
                     )
                 }
             }
+        }
+        DropdownMenu(actions, { actions = false }) {
+            DropdownMenuItem(text = { Text("复制") }, leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) }, onClick = {
+                actions = false
+                val copied = presentation.text.ifBlank { presentation.files.joinToString("\n") { it.optString("name") } }
+                (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                    .setPrimaryClip(android.content.ClipData.newPlainText("消息", copied))
+                android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+            })
+            DropdownMenuItem(text = { Column { Text("分叉"); if (agentName == "Codex") Text("保留该消息所在的完整轮次", style = MaterialTheme.typography.labelSmall) } }, leadingIcon = { Icon(Icons.Outlined.CallSplit, null) }, enabled = onFork != null,
+                onClick = { actions = false; onFork?.invoke() })
+            if (role == "user") DropdownMenuItem(text = { Text("编辑") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) }, enabled = onEdit != null,
+                onClick = { actions = false; onEdit?.invoke() })
+        }
         }
     }
     preview?.let { file ->
