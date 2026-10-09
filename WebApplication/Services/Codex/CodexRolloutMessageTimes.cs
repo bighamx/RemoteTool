@@ -11,17 +11,35 @@ internal static class CodexRolloutMessageTimes
     internal sealed class Snapshot {
         private readonly Dictionary<string,Entry> ids;
         private readonly Dictionary<string,Entry[]> matches;
-        public Snapshot(Dictionary<string,Entry> ids=null,Dictionary<string,Entry[]> matches=null) {
+        private readonly bool strict;
+        public Snapshot(Dictionary<string,Entry> ids=null,Dictionary<string,Entry[]> matches=null,bool strict=false) {
+            this.strict=strict;
             this.ids=ids??new();this.matches=matches??new();
         }
         public bool Resolve(string id,string role,string text,ref long position,out long timestamp) {
             Entry found=null;
             var start=position;
             if(!string.IsNullOrWhiteSpace(id))ids.TryGetValue(id,out found);
-            if(found==null && matches.TryGetValue(Signature(role,text),out var candidates))found=candidates.FirstOrDefault(item=>item.Position>=start);
+            if(found==null && matches.TryGetValue(Signature(role,text),out var candidates)) {
+                var eligible=candidates.Where(item=>item.Position>=start).Take(strict?2:1).ToArray();
+                if(eligible.Length==1)found=eligible[0];
+            }
             timestamp=found?.Timestamp??0;
             if(found==null)return false;
             position=Math.Max(position,found.Position+1);return true;
+        }
+        public static Snapshot Merge(IEnumerable<Snapshot> sources) {
+            var snapshots=sources.ToArray();
+            var positions=snapshots.SelectMany(s=>s.matches.Values.SelectMany(v=>v).Concat(s.ids.Values))
+                .Select(e=>e.Timestamp).Distinct().Order().Select((time,index)=>(time,index))
+                .ToDictionary(p=>p.time,p=>(long)p.index);
+            Entry Global(Entry entry)=>new(positions[entry.Timestamp],entry.Timestamp);
+            var mergedIds=snapshots.SelectMany(s=>s.ids).GroupBy(p=>p.Key)
+                .ToDictionary(g=>g.Key,g=>Global(g.MinBy(p=>p.Value.Timestamp).Value));
+            var mergedMatches=snapshots.SelectMany(s=>s.matches).GroupBy(p=>p.Key)
+                .ToDictionary(g=>g.Key,g=>g.SelectMany(p=>p.Value).DistinctBy(e=>e.Timestamp)
+                    .OrderBy(e=>e.Timestamp).Select(Global).ToArray());
+            return new(mergedIds,mergedMatches,true);
         }
     }
     private static string Signature(string role,string text) => role+":"+Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text.Replace("\r\n","\n").Trim())));
@@ -35,6 +53,27 @@ internal static class CodexRolloutMessageTimes
     }
     private static readonly object gate = new();
     private static readonly Dictionary<string,State> cache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string,(DateTime Checked,string[] Paths)> histories = new(StringComparer.OrdinalIgnoreCase);
+    public static Snapshot ReadSession(string home,string session,string original) {
+        if(!System.Text.RegularExpressions.Regex.IsMatch(session??"", "^[a-zA-Z0-9_-]{1,160}$"))return new();
+        try {
+            var root=Path.Combine(home,"sessions");
+            var key=Path.GetFullPath(home)+"|"+session;
+            string[] paths;
+            lock(gate) {
+                if(histories.TryGetValue(key,out var known) && DateTime.UtcNow-known.Checked<TimeSpan.FromSeconds(10))paths=known.Paths;
+                else {
+                    var options=new EnumerationOptions {RecurseSubdirectories=true,AttributesToSkip=FileAttributes.ReparsePoint,IgnoreInaccessible=true};
+                    paths=Directory.Exists(root)?Directory.EnumerateFiles(root,"rollout-*-"+session+".jsonl",options)
+                        .Concat(Directory.EnumerateFiles(root,"rollout-*-"+session+"_*.jsonl",options)).ToArray():Array.Empty<string>();
+                    if(histories.Count>=512)histories.Clear();
+                    histories[key]=(DateTime.UtcNow,paths);
+                }
+            }
+            return Snapshot.Merge(paths.Concat(string.IsNullOrWhiteSpace(original)?Array.Empty<string>():new[]{original})
+                .Distinct(StringComparer.OrdinalIgnoreCase).Select(path=>Read(home,path)));
+        } catch(Exception error) when(error is IOException or UnauthorizedAccessException or ArgumentException) {return Read(home,original);}
+    }
     public static Snapshot Read(string home,string path) {
         try {
             if(string.IsNullOrWhiteSpace(path) || !RemoteControl.FilePathPolicy.IsWithin(home,path,false))return new();

@@ -785,8 +785,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private static long MessageId(string id) => Convert.ToInt64(Hash(id)[..14], 16) + 1;
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
-        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 11), ("ready", rpc?.Running == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("state_version", 11));
+        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 12), ("ready", rpc?.Running == true), ("cli_pid", rpc?.ProcessId));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("state_version", 12));
         if (path == "title-model") return method == "GET" ? titles.PublicConfig() : titles.Save(body);
         if (path == "title-model/test") return Obj(("title", await titles.Generate("修复手机会话的消息顺序与状态显示")));
         if (path == "title-model/generate") return Obj(("title", await titles.Generate(body.S("input"), context.RequestAborted)));
@@ -967,7 +967,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             if (p.Length == 3 && p[2] == "messages") {
                 var result = await ReadThread(session, true); var rows = new JsonArray();
                 var times = CodexMessageTimes.Read(home, session);
-                var source = CodexRolloutMessageTimes.Read(home, RolloutPath(result["thread"]));
+                var source = CodexRolloutMessageTimes.ReadSession(home, session, result["thread"].S("path"));
                 long position = 0;
                 foreach (var turn in result["thread"].A("turns")) foreach (var item in turn.A("items")) {
                     var kind = item.S("type");
