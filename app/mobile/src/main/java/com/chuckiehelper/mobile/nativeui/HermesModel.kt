@@ -671,9 +671,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
-    private suspend fun ensureCapabilities() {
-        if (!this::api.isInitialized || capabilities.optJSONObject("chuckie_features")?.optBoolean("external_session_activity") == true) return
-        capabilities = api.json("$root/capabilities")
+    private suspend fun ensureCapabilities(force: Boolean = false) {
+        if (!this::api.isInitialized || !force && capabilities.optJSONObject("chuckie_features")?.optBoolean("external_session_activity") == true) return
+        val connection = api
+        val result = connection.json("$root/capabilities")
+        if (api === connection) capabilities = result
     }
 
     private fun launch(block: suspend CoroutineScope.() -> Unit): Job {
@@ -692,6 +694,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     fun refresh() = launch {
+        ensureCapabilities(force = true)
         refreshSessions()
         selectedId?.let { loadHistory(it) }
     }
@@ -1651,7 +1654,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     fun reconnect() {
         error = null
-        if (runId != null) watch() else refresh()
+        launch {
+            ensureCapabilities(force = true)
+            refreshSessions()
+            selectedId?.let { loadHistory(it); loadSelection(it) }
+            if (runId != null) watch()
+        }
     }
 
     private suspend fun readEvents(connection: NativeApi, id: String, epoch: Long) {

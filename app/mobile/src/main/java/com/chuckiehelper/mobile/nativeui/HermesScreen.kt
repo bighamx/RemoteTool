@@ -448,6 +448,21 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     } else {
                     MessageBubble(message.role, message.text, message.attachments, api, model.files, agentName, message.delivery, message.timestamp,
                         narration = message.narration || message.localKey?.startsWith("narration-") == true, narrationTexts = model.narrationTexts,
+                        forkDisabledReason = when {
+                            !model.supportsMessageActions -> "当前连接尚未支持，请重新连接刷新或更新该设备服务端"
+                            message.serverId <= 0 -> "消息尚未绑定已保存记录，请刷新历史"
+                            model.messageActionBusy -> "正在处理消息操作"
+                            else -> null
+                        },
+                        editDisabledReason = when {
+                            !model.supportsMessageActions -> "当前连接尚未支持，请重新连接刷新或更新该设备服务端"
+                            message.serverId <= 0 -> "消息尚未绑定已保存记录，请刷新历史"
+                            !message.editable -> "仅可编辑该轮最初的用户消息"
+                            model.hasExecution || model.runId != null -> "请等待当前会话执行结束"
+                            model.submitting || model.hasPendingSubmission -> "请先核对消息发送状态"
+                            model.messageActionBusy -> "正在处理消息操作"
+                            else -> null
+                        },
                         onFork = if (model.supportsMessageActions && message.serverId > 0 && !model.messageActionBusy) ({ model.forkMessage(message) { list = false } }) else null,
                         onEdit = if (message.role == "user" && message.serverId > 0 && message.editable && model.canEditMessages) ({
                             editTarget = model.selectedId!! to message; editText = message.text
@@ -993,6 +1008,8 @@ private fun MessageBubble(
     narrationTexts: List<String> = emptyList(),
     onFork: (() -> Unit)? = null,
     onEdit: (() -> Unit)? = null,
+    forkDisabledReason: String? = null,
+    editDisabledReason: String? = null,
 ) {
     val context = LocalContext.current
     var preview by remember { mutableStateOf<JSONObject?>(null) }
@@ -1076,9 +1093,14 @@ private fun MessageBubble(
                     .setPrimaryClip(android.content.ClipData.newPlainText("消息", copied))
                 android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
             })
-            DropdownMenuItem(text = { Column { Text("分叉"); if (agentName == "Codex") Text("保留该消息所在的完整轮次", style = MaterialTheme.typography.labelSmall) } }, leadingIcon = { Icon(Icons.Outlined.CallSplit, null) }, enabled = onFork != null,
+            DropdownMenuItem(text = { Column { Text("分叉");
+                if (onFork == null && forkDisabledReason != null) Text(forkDisabledReason, style = MaterialTheme.typography.labelSmall)
+                else if (agentName == "Codex") Text("保留该消息所在的完整轮次", style = MaterialTheme.typography.labelSmall)
+            } }, leadingIcon = { Icon(Icons.Outlined.CallSplit, null) }, enabled = onFork != null,
                 onClick = { actions = false; onFork?.invoke() })
-            if (role == "user") DropdownMenuItem(text = { Text("编辑") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) }, enabled = onEdit != null,
+            if (role == "user") DropdownMenuItem(text = { Column { Text("编辑");
+                if (onEdit == null && editDisabledReason != null) Text(editDisabledReason, style = MaterialTheme.typography.labelSmall)
+            } }, leadingIcon = { Icon(Icons.Outlined.Edit, null) }, enabled = onEdit != null,
                 onClick = { actions = false; onEdit?.invoke() })
         }
         }
