@@ -4,7 +4,7 @@ using Hangfire.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-namespace ChuckieHelper.WebApi.Controllers;
+namespace RemoteTool.WebApi.Controllers;
 
 /// <summary>
 /// 任务管理控制器

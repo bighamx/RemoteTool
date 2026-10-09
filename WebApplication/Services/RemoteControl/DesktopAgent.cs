@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 /// <summary>
 /// 桌面交互代理：运行在交互式用户会话中，通过命名管道与 IIS 进程通信，
@@ -781,13 +781,15 @@ public static class DesktopAgent
         var root = Path.GetDirectoryName(InteractiveProcessLauncher.GetApplicationDllPath())!;
         var shadow = root.IndexOf("ShadowCopyDirectory", StringComparison.OrdinalIgnoreCase);
         if (shadow >= 0) root = root[..shadow].TrimEnd(Path.DirectorySeparatorChar);
-        using var query = new System.Management.ManagementObjectSearcher("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name='dotnet.exe' OR Name='ChuckieHelper.WebApi.exe'");
+        using var query = new System.Management.ManagementObjectSearcher($"SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name='dotnet.exe' OR Name='{typeof(DesktopAgent).Assembly.GetName().Name}.exe' OR Name='ChuckieHelper.WebApi.exe'");
         foreach (System.Management.ManagementObject entry in query.Get())
         {
             var command = entry["CommandLine"]?.ToString() ?? "";
+            // 产品改名后进程命令行里的 DLL 名是新程序集名；旧版遗留代理仍是 ChuckieHelper.WebApi，一并匹配。
+            var names = new[] { typeof(DesktopAgent).Assembly.GetName().Name!, "ChuckieHelper.WebApi" };
             if (!command.Contains("--desktop-agent", StringComparison.OrdinalIgnoreCase)
                 || !command.Contains(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-                || !command.Contains("ChuckieHelper.WebApi", StringComparison.OrdinalIgnoreCase)) continue;
+                || !names.Any(name => command.Contains(name, StringComparison.OrdinalIgnoreCase))) continue;
             using var process = Process.GetProcessById(Convert.ToInt32(entry["ProcessId"]));
             if (process.Id == Environment.ProcessId) continue;
             process.Kill(entireProcessTree: true);

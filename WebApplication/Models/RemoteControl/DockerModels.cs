@@ -1,7 +1,7 @@
 
 using System.Collections.Generic;
 
-namespace ChuckieHelper.WebApi.Models.RemoteControl;
+namespace RemoteTool.WebApi.Models.RemoteControl;
 
 public class PullImageRequest
 {

@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
-using static ChuckieHelper.WebApi.Services.Codex.CodexJson;
+using static RemoteTool.WebApi.Services.Codex.CodexJson;
 
-namespace ChuckieHelper.WebApi.Services.Codex;
+namespace RemoteTool.WebApi.Services.Codex;
 
 /** A transient read-only follower. No resume, writer ownership, or operation dispatch. */
 internal static class CodexDesktopActivity

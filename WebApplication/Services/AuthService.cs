@@ -4,7 +4,7 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 public class AuthService
 {

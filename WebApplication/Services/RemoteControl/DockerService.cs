@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using ChuckieHelper.WebApi.Models.RemoteControl;
+using RemoteTool.WebApi.Models.RemoteControl;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 
 public class DockerService : IDockerService

@@ -1,9 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using ChuckieHelper.WebApi.Services.Codex;
-using static ChuckieHelper.WebApi.Services.Codex.CodexJson;
+using RemoteTool.WebApi.Services.Codex;
+using static RemoteTool.WebApi.Services.Codex.CodexJson;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 public interface ITitleModelGateway { Task<JsonObject> TitleRequest(string path, JsonObject body, CancellationToken ct); }
 
@@ -11,7 +11,7 @@ public sealed class HermesTitleService {
     private readonly HermesBridge bridge;
     private readonly CodexTitleGenerator titles;
     private readonly Func<string, JsonObject, CancellationToken, Task<JsonObject>> titleRequest;
-    public HermesTitleService(HermesBridge bridge, ITitleModelGateway gateway) : this(bridge, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ChuckieHelper", "codex-bridge")) { titleRequest = gateway.TitleRequest; }
+    public HermesTitleService(HermesBridge bridge, ITitleModelGateway gateway) : this(bridge, RemoteToolPaths.CodexBridge) { titleRequest = gateway.TitleRequest; }
     internal HermesTitleService(HermesBridge bridge, string folder) {
         this.bridge = bridge; titles = new(folder, "hermes");
         titleRequest = async (path, body, ct) => path.EndsWith("/models") ? await titles.Models(body, ct) : Obj(("title", await titles.Generate(body.S("input", "修复手机会话的消息顺序与状态显示"), ct)));

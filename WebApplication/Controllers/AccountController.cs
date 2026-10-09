@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 
-namespace ChuckieHelper.WebApi.Controllers;
+namespace RemoteTool.WebApi.Controllers;
 
 public class AccountController : Controller
 {

@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
 
-namespace ChuckieHelper.WebApi.Services.Codex;
+namespace RemoteTool.WebApi.Services.Codex;
 
 internal sealed class CodexAccountStore
 {

@@ -3,7 +3,7 @@ using System.ComponentModel;
 using System.Security.Principal;
 using System.Runtime.InteropServices;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 /// <summary>
 /// 提供在交互式桌面会话中启动进程的能力，用于绕过 IIS/Windows Service 的 Session 0 隔离。

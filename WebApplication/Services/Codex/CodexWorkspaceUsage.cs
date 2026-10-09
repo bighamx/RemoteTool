@@ -1,9 +1,9 @@
 using System.Text.Json.Nodes;
 using System.Net;
 using System.Net.Http.Headers;
-using static ChuckieHelper.WebApi.Services.Codex.CodexJson;
+using static RemoteTool.WebApi.Services.Codex.CodexJson;
 
-namespace ChuckieHelper.WebApi.Services.Codex;
+namespace RemoteTool.WebApi.Services.Codex;
 
 internal static class CodexWorkspaceUsage
 {
@@ -37,7 +37,7 @@ internal static class CodexWorkspaceUsage
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://chatgpt.com/backend-api/wham/usage");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", auth["tokens"].S("access_token"));
         request.Headers.Add("ChatGPT-Account-Id", identity.S("workspace_id"));
-        request.Headers.UserAgent.ParseAdd("ChuckieHelper/1.0");
+        request.Headers.UserAgent.ParseAdd("RemoteTool/1.0");
         using var response = await http.SendAsync(request, ct);
         if (response.StatusCode == HttpStatusCode.Unauthorized) throw new CodexError("工作空间访问令牌需要更新", 401);
         if (!response.IsSuccessStatusCode) throw new CodexError(response.StatusCode == HttpStatusCode.TooManyRequests ? "用量查询过于频繁，请稍后重试" : "暂时无法读取该工作空间用量，请稍后重试", 502);

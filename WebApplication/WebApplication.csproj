@@ -17,7 +17,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ChuckieHelper.Lib\ChuckieHelper.Lib.csproj" />
+    <ProjectReference Include="..\RemoteTool.Lib\RemoteTool.Lib.csproj" />
   </ItemGroup>
 
   <ItemGroup>

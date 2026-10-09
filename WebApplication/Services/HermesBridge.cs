@@ -2,7 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 /// <summary>Server-only credential access. No client-supplied upstream URL or key.</summary>
 public sealed class HermesBridge(IHttpClientFactory clients, IConfiguration configuration)
@@ -10,7 +10,7 @@ public sealed class HermesBridge(IHttpClientFactory clients, IConfiguration conf
     public async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, JsonElement? body, string? idempotency, CancellationToken ct, string? lastEvent = null)
     {
         var keyPath = configuration["Hermes:KeyFile"] ?? Environment.GetEnvironmentVariable("HERMES_API_KEY_FILE")
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "hermes", ".env");
+            ?? RemoteToolPaths.HermesKeyFile;
         string? key = null;
         if (File.Exists(keyPath))
             foreach (var line in File.ReadLines(keyPath))

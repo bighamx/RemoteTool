@@ -1,7 +1,7 @@
-using ChuckieHelper.WebApi.Services;
+using RemoteTool.WebApi.Services;
 using Microsoft.AspNetCore.Mvc;
 
-namespace ChuckieHelper.WebApi.Controllers;
+namespace RemoteTool.WebApi.Controllers;
 
 [ApiController]
 [Route("api/device")]

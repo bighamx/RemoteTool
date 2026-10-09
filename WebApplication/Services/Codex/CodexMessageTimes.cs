@@ -1,6 +1,6 @@
 using SQLite;
 
-namespace ChuckieHelper.WebApi.Services.Codex;
+namespace RemoteTool.WebApi.Services.Codex;
 
 internal static class CodexMessageTimes
 {

@@ -1,7 +1,7 @@
 using Hangfire.Dashboard;
-using ChuckieHelper.WebApi.Services;
+using RemoteTool.WebApi.Services;
 
-namespace ChuckieHelper.WebApi.Filters;
+namespace RemoteTool.WebApi.Filters;
 
 public class HangfireAuthorizationFilter : IDashboardAuthorizationFilter
 {

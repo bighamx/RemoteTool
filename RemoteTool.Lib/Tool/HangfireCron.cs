@@ -1,4 +1,4 @@
-namespace ChuckieHelper.Lib.Tool;
+namespace RemoteTool.Lib.Tool;
 
 /// <summary>
 /// Hangfire Cron 表达式常量扩展

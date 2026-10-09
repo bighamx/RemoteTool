@@ -1,4 +1,4 @@
-namespace ChuckieHelper.WebApi.Models
+namespace RemoteTool.WebApi.Models
 {
     public class EmbySettings
     {

@@ -3,7 +3,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 /// <summary>Desktop-bound Win32 work stays on one dedicated native thread, never an async/thread-pool continuation.</summary>
 internal static class InputDesktopDispatcher
@@ -15,7 +15,7 @@ internal static class InputDesktopDispatcher
 
     static InputDesktopDispatcher()
     {
-        var thread = new Thread(Consume) { IsBackground = true, Name = "ChuckieHelper input desktop" };
+        var thread = new Thread(Consume) { IsBackground = true, Name = "RemoteTool input desktop" };
         thread.Start();
     }
 

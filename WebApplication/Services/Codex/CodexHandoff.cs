@@ -2,9 +2,9 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text.Json.Nodes;
-using static ChuckieHelper.WebApi.Services.Codex.CodexJson;
+using static RemoteTool.WebApi.Services.Codex.CodexJson;
 
-namespace ChuckieHelper.WebApi.Services.Codex;
+namespace RemoteTool.WebApi.Services.Codex;
 
 /** Keep accepted turns observable while replacing the bridge that owns them. */
 internal sealed class CodexHandoff : IDisposable

@@ -1,4 +1,4 @@
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 internal static class FilePathPolicy
 {

@@ -249,10 +249,28 @@ dotnet run --project WebApplication/WebApplication.csproj
 # 发布后运行
 dotnet publish -c Release -o publish
 cd publish
-ChuckieHelper.WebApi.exe
+WebApplication.exe
 ```
 
-> `ChuckieHelper.WebApi` 是当前服务端项目和程序集的兼容名称，因此项目文件、发布命令及可执行文件仍使用该名称。
+> `WebApplication` 是当前服务端项目和程序集的名称（`AssemblyName` 未显式设置，跟随项目文件名）；项目历史名为 `ChuckieHelper.WebApi`，旧版本部署里残留的同名 DLL 属于过往构建，可忽略。
+
+### 数据目录
+
+服务端在首次启动（以及改名为 RemoteTool 后的首个新版本启动）会把数据目录定位到 `%ProgramData%\RemoteTool`：
+
+| 内容 | 路径 |
+|------|------|
+| Codex 桥接配置/状态、会话恢复日志 | `%ProgramData%\RemoteTool\codex-bridge` |
+| Hermes / Codex 会话附件 | `%ProgramData%\RemoteTool\{hermes,codex}-attachments` |
+| Hermes 压缩任务记录 | `%ProgramData%\RemoteTool\hermes-compactions` |
+| 多端共享的运行注册表 | `%ProgramData%\RemoteTool\run-registry.json` |
+| 桌面代理日志 | `%ProgramData%\RemoteTool\logs\desktop-agent-startup.log` |
+
+由 RemoteTool 旧版本（原名 ChuckieHelper）升级时，`Services/RemoteToolDataMigration.cs` 会把旧的 `%ProgramData%\ChuckieHelper`（以及当前运行用户 `%LocalAppData%`、临时目录下的同名目录）迁移到新位置。每个目标目录独立记录 `data-migration.done`，不同用户的数据迁移互不影响；同名文件冲突或文件被占用时保留原文件，并在后续启动重试，完成后才删除空的旧目录。迁移会重写指定 JSON 状态文件中以旧数据目录开头的路径，保留日志和消息文本。升级应先结束活跃任务并停止旧桥接、桌面代理，再启动新版本，避免旧进程继续写入旧目录。
+
+Hermes API 密钥默认读取 `%ProgramData%\RemoteTool\hermes\api-key.env`，可通过 `Hermes:KeyFile` 或 `HERMES_API_KEY_FILE` 覆盖；该文件应只授权运行账户及 IIS 应用池读取。Hermes 自身的安装目录与 `state.db` 仍位于运行用户的 `%LocalAppData%\hermes`，IIS 部署必须通过 `Hermes:HomeDirectory` 明确指定桌面用户的 Hermes 目录，不能从密钥所在目录推断。
+
+解决方案中的类库与测试项目分别为 `RemoteTool.Lib`、`RemoteTool.Lib.Tests`，传感器程序为 `tools/RemoteTool.SensorHost`，服务端代码命名空间为 `RemoteTool.WebApi`。为兼容已有 Hangfire 任务，仅任务类型的 `ChuckieHelper.WebApi.Jobs` 命名空间暂时保留，旧任务记录中的程序集名由类型解析器映射到当前程序集；设备 ID 的哈希前缀、桌面代理管道/计划任务名、Android 应用 ID/密钥别名和历史附件标记也保留，避免改名导致任务无法读取、重复代理或客户端凭据失效。
 
 ### 方式二：IIS 部署（推荐用于生产环境）<sup>🪟 仅Windows</sup>
 #### 步骤 1：安装必要组件

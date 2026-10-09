@@ -1,5 +1,5 @@
 
-namespace ChuckieHelper.WebApi.Models.RemoteControl;
+namespace RemoteTool.WebApi.Models.RemoteControl;
 
 public class ClipboardRequest
 {

@@ -125,7 +125,7 @@ WebApplication/hangfire.db
 WebApplication/hangfire.db-shm
 WebApplication/hangfire.db-wal
 
-# ChuckieHelper project (excluded from public repo)
+# Legacy private project (retain exclusion to protect old checkout configuration)
 /ChuckieHelper/
 WebApplication/.config/dotnet-tools.json
 

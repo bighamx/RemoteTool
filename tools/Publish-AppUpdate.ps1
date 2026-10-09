@@ -30,24 +30,24 @@ $buildTools = Get-ChildItem -LiteralPath (Join-Path $AndroidSdk 'build-tools') -
 if (-not $buildTools) { throw 'Android build-tools with aapt and apksigner are required.' }
 $aapt = Join-Path $buildTools.FullName 'aapt.exe'
 $apksigner = Join-Path $buildTools.FullName 'apksigner.bat'
-$badging = (& rtk proxy $aapt dump badging $apkSource) -join "`n"
+$badging = (& $aapt dump badging $apkSource) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'Unable to read APK metadata.' }
 $identity = [regex]::Match($badging, "package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'")
 if (-not $identity.Success -or $identity.Groups[1].Value -ne 'com.chuckiehelper.mobile') { throw 'Wrong APK application ID.' }
 $versionCode = [long]$identity.Groups[2].Value
 $versionName = $identity.Groups[3].Value
 if ($versionName -notmatch '^[a-zA-Z0-9.+_-]{1,80}$') { throw 'Version name is not a safe release asset name.' }
-$verification = (& rtk proxy $apksigner verify --print-certs $apkSource) -join "`n"
+$verification = (& $apksigner verify --print-certs $apkSource) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'APK signature verification failed.' }
 $certificate = [regex]::Match($verification, 'Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]+)').Groups[1].Value.ToLowerInvariant()
 if (-not $certificate) { throw 'APK has no verified signing certificate.' }
 if ($PreviousApkPath) {
     $previousSource = (Resolve-Path -LiteralPath $PreviousApkPath).Path
-    $oldVerification = (& rtk proxy $apksigner verify --print-certs $previousSource) -join "`n"
+    $oldVerification = (& $apksigner verify --print-certs $previousSource) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw 'Previous APK signature verification failed.' }
     $oldCertificate = [regex]::Match($oldVerification, 'Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]+)').Groups[1].Value.ToLowerInvariant()
     if ($oldCertificate -ne $certificate) { throw 'New and previous APK signatures differ; do not uninstall to update.' }
-    $oldBadging = (& rtk proxy $aapt dump badging $previousSource) -join "`n"
+    $oldBadging = (& $aapt dump badging $previousSource) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw 'Unable to read previous APK version.' }
     $oldCode = [long][regex]::Match($oldBadging, "versionCode='(\d+)'").Groups[1].Value
     if ($versionCode -le $oldCode) { throw 'versionCode must be greater than the previous APK.' }
@@ -79,7 +79,7 @@ if ((Get-ApkSha256 $targetApk) -ne $manifest.sha256) { throw 'Copied APK hash mi
 if ($Publish) {
     $repository = 'bighamx/RemoteTool'
     $repositoryId = 368781353
-    $releasesRaw = & rtk proxy gh api "repositories/$repositoryId/releases?per_page=30"
+    $releasesRaw = & gh api "repositories/$repositoryId/releases?per_page=30"
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read current releases; refusing to publish without version verification.' }
     foreach ($release in ($releasesRaw -join "`n" | ConvertFrom-Json)) {
         if ($release.draft -or $release.prerelease) { continue }
@@ -91,7 +91,7 @@ if ($Publish) {
             if ($versionCode -le [long]$published.versionCode) { throw 'versionCode must exceed every published stable Android version.' }
         }
     }
-    & rtk proxy gh release create "android-v$versionName-build$versionCode" $targetApk $manifestPath --repo $repository --title "RemoteTool Android v$versionName" --notes-file $notesTarget
+    & gh release create "android-v$versionName-build$versionCode" $targetApk $manifestPath --repo $repository --title "RemoteTool Android v$versionName" --notes-file $notesTarget
     if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
 } else { Write-Output 'Prepared locally. Add -Publish to publish these assets as an Android GitHub release.' }
 Write-Output "APK: $targetApk"

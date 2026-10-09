@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 /// <summary>Stable, opaque identity for the physical host, independent of endpoint and web installation.</summary>
 public sealed class DeviceIdentity
@@ -20,7 +20,7 @@ public sealed class DeviceIdentity
         // The fallback lives outside the web app directory, so deploying another copy does not clone its identity.
         if (string.IsNullOrWhiteSpace(machineId))
         {
-            var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChuckieHelper");
+            var directory = RemoteToolPaths.LocalData;
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, "device-id");
             if (!File.Exists(path))
@@ -31,6 +31,7 @@ public sealed class DeviceIdentity
             machineId = File.ReadAllText(path).Trim();
         }
 
+        // Persist the original hash domain so existing clients keep the same device identity.
         Id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("ChuckieHelper/device/v1/" + machineId))).ToLowerInvariant();
     }
 }

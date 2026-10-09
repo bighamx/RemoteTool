@@ -1,4 +1,4 @@
-using ChuckieHelper.WebApi.Models.RemoteControl;
+using RemoteTool.WebApi.Models.RemoteControl;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
@@ -10,7 +10,7 @@ using System.Threading;
 
 using System.Reflection;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 /// <summary>
 /// 系统操作服务：提供截图、鼠标键盘控制、锁屏、关机等功能。

@@ -1,12 +1,12 @@
-using ChuckieHelper.WebApi.Services;
+using RemoteTool.WebApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
-using ChuckieHelper.WebApi.Services.Codex;
+using RemoteTool.WebApi.Services.Codex;
 
-namespace ChuckieHelper.WebApi.Controllers;
+namespace RemoteTool.WebApi.Controllers;
 
 [ApiController, Authorize, Route("api/hermes")]
 public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, IConfiguration configuration, HermesSessionActivity activity, HermesTitleService titles) : ControllerBase

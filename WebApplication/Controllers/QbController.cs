@@ -1,13 +1,13 @@
-﻿using ChuckieHelper.Lib;
-using ChuckieHelper.Lib.Tool;
+using RemoteTool.Lib;
+using RemoteTool.Lib.Tool;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using ChuckieHelper.WebApi.Models;
+using RemoteTool.WebApi.Models;
 using ChuckieHelper.WebApi.Jobs;
 using Newtonsoft.Json;
 
-namespace ChuckieHelper.WebApi.Controllers
+namespace RemoteTool.WebApi.Controllers
 {
     [Authorize]
     public class QbController : Controller

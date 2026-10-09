@@ -1,8 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using static ChuckieHelper.WebApi.Services.Codex.CodexJson;
+using static RemoteTool.WebApi.Services.Codex.CodexJson;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 public sealed class HermesCompaction
 {
@@ -13,7 +13,7 @@ public sealed class HermesCompaction
     private readonly Dictionary<string, CancellationTokenSource> cancellations = new();
     public HermesCompaction(HermesManagement management) {
         this.management = management;
-        folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ChuckieHelper", "hermes-compactions");
+        folder = RemoteToolPaths.HermesCompactions;
         Directory.CreateDirectory(folder);
         foreach (var path in Directory.EnumerateFiles(folder, "hcompact_*.json")) {
             try {

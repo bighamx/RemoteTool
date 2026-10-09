@@ -1,6 +1,6 @@
 using ChuckieHelper.WebApi.Jobs;
-using ChuckieHelper.WebApi.Services;
-using ChuckieHelper.WebApi.Services.RemoteControl;
+using RemoteTool.WebApi.Services;
+using RemoteTool.WebApi.Services.RemoteControl;
 using Hangfire;
 using Hangfire.Console;
 using Hangfire.Storage.SQLite;
@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 
-namespace ChuckieHelper.WebApi.Extensions
+namespace RemoteTool.WebApi.Extensions
 {
     public static class ServiceCollectionExtensions
     {
@@ -96,6 +96,7 @@ namespace ChuckieHelper.WebApi.Extensions
             services.AddHangfire(config => config
                 .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
                 .UseSimpleAssemblyNameTypeSerializer()
+                .UseTypeResolver(HangfireTypeResolver.Resolve)
                 .UseRecommendedSerializerSettings()
                 .UseConsole()
                 .UseSQLiteStorage("hangfire.db"));

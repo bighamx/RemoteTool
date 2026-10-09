@@ -3,10 +3,10 @@ using Hangfire.Common;
 using Hangfire.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using ChuckieHelper.WebApi.Services;
+using RemoteTool.WebApi.Services;
 using System.Text.Json;
 
-namespace ChuckieHelper.WebApi.Controllers;
+namespace RemoteTool.WebApi.Controllers;
 
 [Authorize]
 [ApiController]

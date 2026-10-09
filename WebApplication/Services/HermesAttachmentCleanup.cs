@@ -1,4 +1,4 @@
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 public sealed class HermesAttachmentCleanup(HermesAttachments attachments, [FromKeyedServices("codex")] HermesAttachments codex, ILogger<HermesAttachmentCleanup> logger) : BackgroundService
 {

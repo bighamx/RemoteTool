@@ -6,11 +6,11 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using static ChuckieHelper.WebApi.Services.Codex.CodexJson;
+using static RemoteTool.WebApi.Services.Codex.CodexJson;
 using Microsoft.Win32;
-using ChuckieHelper.WebApi.Services.RemoteControl;
+using RemoteTool.WebApi.Services.RemoteControl;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration configuration) : ITitleModelGateway
 {
@@ -21,7 +21,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
         return value;
     }
     private readonly SemaphoreSlim startup = new(1, 1);
-    private readonly string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ChuckieHelper", "codex-bridge");
+    private readonly string folder = RemoteToolPaths.CodexBridge;
     private string token;
     private int port;
 

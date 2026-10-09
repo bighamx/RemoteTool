@@ -1,10 +1,10 @@
-using ChuckieHelper.WebApi.Models.RemoteControl;
+using RemoteTool.WebApi.Models.RemoteControl;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 using System.Reflection;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 /// <summary>
 /// Linux 下的系统控制服务实现

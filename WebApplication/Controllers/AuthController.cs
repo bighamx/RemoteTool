@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using ChuckieHelper.WebApi.Services;
+using RemoteTool.WebApi.Services;
 
-namespace ChuckieHelper.WebApi.Controllers;
+namespace RemoteTool.WebApi.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]

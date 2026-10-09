@@ -4,13 +4,13 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 public sealed class HermesAttachments
 {
     private readonly string root;
     private readonly string agent;
-    public HermesAttachments(string agent = "hermes") : this(agent, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ChuckieHelper", agent + "-attachments")) { }
+    public HermesAttachments(string agent = "hermes") : this(agent, RemoteToolPaths.Attachments(agent)) { }
     internal HermesAttachments(string agent, string directory) {
         if (agent is not ("hermes" or "codex")) throw new ArgumentException("无效 Agent");
         this.agent = agent;

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 /// <summary>
 /// 远程桌面代理启动诊断日志（控制台 + 文件）。
@@ -115,11 +115,11 @@ internal static class AgentStartupLogger
 
         var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
         if (!string.IsNullOrWhiteSpace(programData))
-            return Path.Combine(programData, "ChuckieHelper", "logs", "desktop-agent-startup.log");
+            return RemoteToolPaths.DesktopAgentLog;
 
         return GetFallbackPath();
     }
 
     private static string GetFallbackPath()
-        => Path.Combine(Path.GetTempPath(), "ChuckieHelper", "desktop-agent-startup.log");
+        => Path.Combine(RemoteToolPaths.TempData, "desktop-agent-startup.log");
 }

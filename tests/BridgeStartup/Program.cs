@@ -8,7 +8,7 @@ AssemblyLoadContext.Default.Resolving += (_, name) => {
     return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null;
 };
 var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(dll);
-var agent = assembly.GetType("ChuckieHelper.WebApi.Services.Codex.CodexAgent", true)!;
+var agent = assembly.GetType("RemoteTool.WebApi.Services.Codex.CodexAgent", true)!;
 var ctor = agent.GetConstructor(BindingFlags.NonPublic | BindingFlags.Instance, null, [typeof(string)], null)!;
 var file = Path.GetTempFileName();
 try {
@@ -20,7 +20,7 @@ try {
     Console.WriteLine("PASS: missing/empty/whitespace/relative home rejected with explicit startup error");
 } finally { File.Delete(file); }
 if (args.Length > 1 && args[1] == "sid") {
-    var launcher = assembly.GetType("ChuckieHelper.WebApi.Services.RemoteControl.InteractiveProcessLauncher", true)!;
+    var launcher = assembly.GetType("RemoteTool.WebApi.Services.RemoteControl.InteractiveProcessLauncher", true)!;
     var sid = (string)launcher.GetMethod("GetInteractiveUserSid")!.Invoke(null, null)!;
     if (sid is "S-1-5-18" or "S-1-5-19" or "S-1-5-20") throw new Exception("Selected a service identity");
     Console.WriteLine("PASS interactive user SID: " + sid);

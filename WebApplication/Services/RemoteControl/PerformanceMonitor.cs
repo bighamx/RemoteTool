@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Management;
 using System.Net.NetworkInformation;
-using ChuckieHelper.WebApi.Models.RemoteControl;
+using RemoteTool.WebApi.Models.RemoteControl;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 public sealed record NetworkRate(string Name, double ReceiveBytesPerSecond, double SendBytesPerSecond);
 public sealed record TemperatureReading(string Name, double Celsius,string Id="",string Hardware="",string Source="");

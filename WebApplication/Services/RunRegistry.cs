@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 /// <summary>
 /// 会话级活跃任务注册表：手机/平板等多端共享「哪个会话当前有 run 在执行」。
@@ -11,9 +11,7 @@ namespace ChuckieHelper.WebApi.Services;
 /// </summary>
 public sealed class RunRegistry
 {
-    private readonly string path = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "ChuckieHelper", "run-registry.json");
+    private readonly string path = RemoteToolPaths.RunRegistry;
     private readonly object gate = new();
     private readonly Dictionary<string, JsonObject> entries; // key = $"{agent}:{sessionId}"
 

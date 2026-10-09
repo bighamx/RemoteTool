@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace ChuckieHelper.WebApi.Services.Codex;
+namespace RemoteTool.WebApi.Services.Codex;
 
 internal static class CodexDesktopRunResume
 {

@@ -48,7 +48,7 @@
 
 沿用手机原生附件 UI：500 MiB 上传、Markdown、图片缩放、视频缩略图及播放、音频/文本预览、文档交给本机应用打开、单独下载及清理手机副本。
 
-Codex 附件目录独立于 Hermes：ProgramData/ChuckieHelper/codex-attachments。图片通过 localImage 输入；其他文件保留本机路径供工具读取。生成文件写到独立回合的 outbox，MEDIA 标记转换为可点击附件。服务端每日清理超过三个日历月且大于 100 MiB 的附件，避开链接和正在使用的文件。
+Codex 附件目录独立于 Hermes：ProgramData/RemoteTool/codex-attachments。图片通过 localImage 输入；其他文件保留本机路径供工具读取。生成文件写到独立回合的 outbox，MEDIA 标记转换为可点击附件。服务端每日清理超过三个日历月且大于 100 MiB 的附件，避开链接和正在使用的文件。
 
 官方协议：https://learn.chatgpt.com/docs/app-server
 官方认证：https://learn.chatgpt.com/docs/auth

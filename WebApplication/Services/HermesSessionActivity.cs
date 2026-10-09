@@ -7,16 +7,14 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using SQLite;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 /// <summary>Read-only observation of turns owned by CLI, TUI, gateway or another API client.</summary>
 public sealed class HermesSessionActivity(IConfiguration configuration)
 {
     public string DatabasePath {
         get {
-            var key = configuration["Hermes:KeyFile"] ?? Environment.GetEnvironmentVariable("HERMES_API_KEY_FILE")
-                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "hermes", ".env");
-            var home = configuration["Hermes:HomeDirectory"] ?? Path.GetDirectoryName(Path.GetFullPath(key))!;
+            var home = configuration["Hermes:HomeDirectory"] ?? RemoteToolPaths.HermesHome;
             return Path.Combine(home, "state.db");
         }
     }

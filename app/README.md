@@ -51,9 +51,9 @@ App 原生绘制性能面板，Web 使用网页组件，两端共享性能 API�
 
 ## 服务端
 
-- `tools/ChuckieHelper.SensorHost` 使用 LibreHardwareMonitor 0.9.6，独立部署到 Web 运行目录的 `sensors` 子目录。只读取温度和转速，不调用风扇控制 API。当前 MSI PRO Z790-P II 已有 PawnIO 驱动，服务复用既有 LocalSystem 身份采集。
+- `tools/RemoteTool.SensorHost` 使用 LibreHardwareMonitor 0.9.6，独立部署到 Web 运行目录的 `sensors` 子目录。只读取温度和转速，不调用风扇控制 API。当前 MSI PRO Z790-P II 已有 PawnIO 驱动，服务复用既有 LocalSystem 身份采集。运行时优先加载 `RemoteTool.SensorHost.dll`，兼容尚未更新的旧名称采集程序。
 - 已读到 CPU P/E 核、封装、脚座、MOS、PCH、内存、显卡核心/热点及磁盘温度，CPU/水泵/机箱/显卡风扇 RPM。报警阈值、距 TjMax 余量及分辨率不作为当前温度展示。未标定的传感器保留原始名称，内存 DIMM 编号不猜测为 A2/B2。
-- 采集超过 20 秒未更新时隐藏旧读数。诊断快照在 ProgramData/ChuckieHelper/sensors/latest.json，不含账户凭据；采集程序随父服务退出。
+- 采集超过 20 秒未更新时隐藏旧读数。诊断快照在 ProgramData/RemoteTool/sensors/latest.json，不含账户凭据；采集程序随父服务退出。
 - 新增 `/api/native-jobs` 任务管理 API，均要求登录。
 - Docker / Compose 标准输出和错误按 UTF-8 解码，App 只读日志清理 ANSI 控制码。
 - 原生终端沿用服务端按行输入协议，支持输出选择复制和 ANSI 文本控制，未引入 PTY，不承诺 vim 等全屏交互程序兼容。

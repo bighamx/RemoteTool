@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 /// <summary>终端类型：Linux 仅支持 Shell；Windows 支持 PowerShell/Cmd，Shell 映射为 Cmd。</summary>
 public enum TerminalType

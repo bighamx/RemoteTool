@@ -2,9 +2,9 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using static ChuckieHelper.WebApi.Services.Codex.CodexJson;
+using static RemoteTool.WebApi.Services.Codex.CodexJson;
 
-namespace ChuckieHelper.WebApi.Services.Codex;
+namespace RemoteTool.WebApi.Services.Codex;
 
 internal sealed class CodexTitleGenerator(string folder, string agent = "codex")
 {
@@ -66,7 +66,7 @@ internal sealed class CodexTitleGenerator(string folder, string agent = "codex")
                 : Obj(("model", snapshot.S("model")), ("messages", new JsonArray(Obj(("role", "system"), ("content", instruction)), Obj(("role", "user"), ("content", text)))), ("max_tokens", 64), ("stream", false));
             using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint) { Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json") };
-            request.Headers.UserAgent.ParseAdd("ChuckieHelper/1.0"); request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.UserAgent.ParseAdd("RemoteTool/1.0"); request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             if (snapshot.S("api_key").Length > 0) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", snapshot.S("api_key"));
             using var response = await client.SendAsync(request, timeout.Token);
             if (!response.IsSuccessStatusCode) throw new CodexError($"标题模型请求失败（HTTP {(int)response.StatusCode}），请检查 URL、Key 和模型名", 400, "title_model_failed");
@@ -92,7 +92,7 @@ internal sealed class CodexTitleGenerator(string folder, string agent = "codex")
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(12));
             using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
             using var request = new HttpRequestMessage(HttpMethod.Get, path);
-            request.Headers.UserAgent.ParseAdd("ChuckieHelper/1.0"); request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.UserAgent.ParseAdd("RemoteTool/1.0"); request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             if (snapshot.S("api_key").Length > 0) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", snapshot.S("api_key"));
             using var response = await client.SendAsync(request, timeout.Token);
             if (!response.IsSuccessStatusCode) throw new CodexError($"获取模型失败（HTTP {(int)response.StatusCode}），可手动填写模型名");

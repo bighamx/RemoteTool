@@ -2,11 +2,26 @@ using Hangfire;
 using Hangfire.States;
 using Hangfire.Storage.SQLite;
 using Hangfire.Common;
-using ChuckieHelper.WebApi.Controllers;
+using RemoteTool.WebApi.Controllers;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 using Hangfire.Console;
 using Hangfire.Server;
+using Hangfire.Storage;
+using RemoteTool.WebApi.Services;
+
+GlobalConfiguration.Configuration.UseTypeResolver(HangfireTypeResolver.Resolve);
+foreach (var priorAssembly in new[] { "ChuckieHelper.WebApi", "WebApplication1" })
+{
+    var payload = JsonSerializer.Serialize(new {
+        Type = $"ChuckieHelper.WebApi.Jobs.LegacyJobFixture, {priorAssembly}",
+        Method = "Run", ParameterTypes = "[]", Arguments = "[]"
+    });
+    var legacyJob = InvocationData.DeserializePayload(payload).DeserializeJob();
+    if (legacyJob.Type != typeof(ChuckieHelper.WebApi.Jobs.LegacyJobFixture) || legacyJob.Method.Name != "Run")
+        throw new Exception("Legacy Hangfire task failed to resolve to the current assembly");
+}
+Console.WriteLine("Legacy Hangfire assembly names deserialize to the current task (not executed)");
 
 var root = Path.Combine(Path.GetTempPath(), "chuckie-storage-check-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
 try {

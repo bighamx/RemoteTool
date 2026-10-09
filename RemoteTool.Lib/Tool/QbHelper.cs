@@ -1,8 +1,8 @@
-using ChuckieHelper.Lib.Tool;
+using RemoteTool.Lib.Tool;
 using Newtonsoft.Json;
 
 using System;
-namespace ChuckieHelper.Lib
+namespace RemoteTool.Lib
 {
     public static class QbHelper
     {

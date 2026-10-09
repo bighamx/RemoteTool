@@ -2,6 +2,7 @@
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Compile Include="../../WebApplication/Services/HangfireTypeResolver.cs" Link="HangfireTypeResolver.cs" />
     <Compile Include="../../WebApplication/Controllers/NativeJobsController.cs" Link="NativeJobsController.cs" />
     <Compile Include="../../WebApplication/Services/HangfireConsoleReader.cs" Link="HangfireConsoleReader.cs" />
     <PackageReference Include="Hangfire.Console" Version="1.4.3" />

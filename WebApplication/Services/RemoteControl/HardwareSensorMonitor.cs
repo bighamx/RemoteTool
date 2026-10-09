@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 public sealed record HardwareReading(string Id,string Name,string Hardware,string HardwareType,string Kind,string Unit,double Value);
 public sealed record HardwareSnapshot(DateTimeOffset Timestamp,string Source,HardwareReading[] Sensors,bool DriverInstalled=false,bool IsElevated=false);
@@ -16,7 +16,10 @@ public sealed class HardwareSensorMonitor(ILogger<HardwareSensorMonitor> logger)
     public HardwareSnapshot Latest => _latest!=null&&DateTimeOffset.UtcNow-_latest.Timestamp<TimeSpan.FromSeconds(20)?_latest:null;
     protected override async Task ExecuteAsync(CancellationToken token){
         if(!OperatingSystem.IsWindows()){_status="当前平台未启用硬件传感器采集";return;}
-        var path=Path.Combine(Path.GetDirectoryName(InteractiveProcessLauncher.GetApplicationDllPath())!,"sensors","ChuckieHelper.SensorHost.dll");
+        var folderPath = Path.Combine(Path.GetDirectoryName(InteractiveProcessLauncher.GetApplicationDllPath())!, "sensors");
+        var path = Path.Combine(folderPath, "RemoteTool.SensorHost.dll");
+        // Existing deployments may still have the pre-rename sensor host.
+        if (!File.Exists(path)) path = Path.Combine(folderPath, "ChuckieHelper.SensorHost.dll");
         if(!File.Exists(path)){_status="尚未部署硬件传感器采集程序";logger.LogWarning("Sensor host is missing: {Path}",path);return;}
         while(!token.IsCancellationRequested){
             using var process=new Process{StartInfo=new ProcessStartInfo(InteractiveProcessLauncher.GetDotnetPath()){
@@ -33,7 +36,7 @@ public sealed class HardwareSensorMonitor(ILogger<HardwareSensorMonitor> logger)
                     _latest=snapshot;_status=$"已读取 {snapshot.Sensors.Length} 个硬件传感器";
                     if(!snapshot.DriverInstalled)_status+=" · CPU/主板采集需要安装 PawnIO";
                     else if(!snapshot.IsElevated)_status+=" · 部分传感器需要服务账户权限";
-                    var folder=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"ChuckieHelper","sensors");
+                    var folder = RemoteToolPaths.Sensors;
                     try{Directory.CreateDirectory(folder);await File.WriteAllTextAsync(Path.Combine(folder,"latest.json"),line,token);}catch(IOException){}
                 }
                 await process.WaitForExitAsync(token);await stderr;

@@ -1,4 +1,4 @@
-namespace ChuckieHelper.WebApi.Models
+namespace RemoteTool.WebApi.Models
 {
     // QbSettings: 对应 appsettings.json 中的 QbSettings 节点
     public class QbSettings

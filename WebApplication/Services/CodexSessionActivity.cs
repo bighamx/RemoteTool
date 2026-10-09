@@ -1,9 +1,9 @@
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
-using ChuckieHelper.WebApi.Services.Codex;
-using static ChuckieHelper.WebApi.Services.Codex.CodexJson;
+using RemoteTool.WebApi.Services.Codex;
+using static RemoteTool.WebApi.Services.Codex.CodexJson;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 public sealed class CodexSessionActivity(IConfiguration configuration)
 {
@@ -12,7 +12,7 @@ public sealed class CodexSessionActivity(IConfiguration configuration)
         try {
             var home = configuration["Codex:Home"];
             if (string.IsNullOrWhiteSpace(home)) {
-                var connection = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ChuckieHelper", "codex-bridge", "connection.json");
+                var connection = Path.Combine(RemoteToolPaths.CodexBridge, "connection.json");
                 home = File.Exists(connection) ? JsonNode.Parse(File.ReadAllText(connection)).S("home") : "";
             }
             if (string.IsNullOrWhiteSpace(home)) return result;

@@ -3,7 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace ChuckieHelper.WebApi.Models.RemoteControl;
+namespace RemoteTool.WebApi.Models.RemoteControl;
 
 /// <summary>
 /// 文件信息

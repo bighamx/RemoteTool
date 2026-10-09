@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Security.Cryptography;
 
-namespace ChuckieHelper.WebApi.Services.Codex;
+namespace RemoteTool.WebApi.Services.Codex;
 
 /** Message identity, not receipt time or turn start, determines chronology after desktop continuation. */
 internal static class CodexRolloutMessageTimes

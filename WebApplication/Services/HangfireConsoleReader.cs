@@ -4,7 +4,7 @@ using Hangfire.Common;
 using System.Globalization;
 using System.Text.Json;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 /// <summary>Bounded, read-only adapter for the pinned Hangfire.Console 1.4.3 storage format.</summary>
 public static class HangfireConsoleReader

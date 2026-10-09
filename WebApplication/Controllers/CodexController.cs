@@ -1,10 +1,10 @@
-using ChuckieHelper.WebApi.Services;
+using RemoteTool.WebApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace ChuckieHelper.WebApi.Controllers;
+namespace RemoteTool.WebApi.Controllers;
 
 [ApiController, Authorize, Route("api/codex")]
 public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("codex")] HermesAttachments attachments, RunRegistry runs, CodexSessionActivity activity) : ControllerBase

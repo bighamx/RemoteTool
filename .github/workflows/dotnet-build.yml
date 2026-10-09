@@ -36,14 +36,14 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       run: |
         cd publish
-        zip -r ../ChuckieHelper.zip .
+        zip -r ../RemoteTool.zip .
         cd ..
 
     - name: Release
       uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/')
       with:
-        files: ChuckieHelper.zip
+        files: RemoteTool.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

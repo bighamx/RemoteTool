@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 
-namespace ChuckieHelper.WebApi.Services;
+namespace RemoteTool.WebApi.Services;
 
 public sealed class HermesManagement(IConfiguration configuration)
 {
@@ -11,10 +11,8 @@ public sealed class HermesManagement(IConfiguration configuration)
     private readonly SemaphoreSlim contextGate = new(1, 1);
     public async Task<JsonElement> Invoke(string action, JsonElement? body, CancellationToken ct)
     {
-        var keyFile = configuration["Hermes:KeyFile"] ?? Environment.GetEnvironmentVariable("HERMES_API_KEY_FILE")
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "hermes", ".env");
         var home = configuration["Hermes:HomeDirectory"]
-            ?? Path.GetDirectoryName(Path.GetFullPath(keyFile))!;
+            ?? RemoteToolPaths.HermesHome;
         var source = configuration["Hermes:SourceDirectory"] ?? Path.Combine(home, "hermes-agent");
         var python = Path.Combine(source, "venv", "Scripts", "python.exe");
         var script = Path.Combine(Path.GetDirectoryName(RemoteControl.InteractiveProcessLauncher.GetApplicationDllPath())!, "hermes", "hermes_management.py");

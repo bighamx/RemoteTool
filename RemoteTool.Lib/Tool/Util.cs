@@ -6,7 +6,7 @@ using SharpCompress.Archives;
 using SharpCompress.Common;
 using System.Linq;
 
-namespace ChuckieHelper.Lib.Tool
+namespace RemoteTool.Lib.Tool
 {
     public static class Util
     {

@@ -1,7 +1,7 @@
 using ChuckieHelper.WebApi.Jobs;
-using ChuckieHelper.WebApi.Services;
-using ChuckieHelper.WebApi.Services.RemoteControl;
-using ChuckieHelper.WebApi.Extensions;
+using RemoteTool.WebApi.Services;
+using RemoteTool.WebApi.Services.RemoteControl;
+using RemoteTool.WebApi.Extensions;
 using Hangfire;
 using Hangfire.Console;
 using Hangfire.Storage.SQLite;
@@ -11,12 +11,16 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 
 
-namespace ChuckieHelper.WebApi
+namespace RemoteTool.WebApi
 {
     public class Program
     {
         public static async Task Main(string[] args)
         {
+            // 产品改名 ChuckieHelper → RemoteTool：首次启动把旧数据目录搬到新目录（幂等，见迁移类）。
+            // 三个入口（Web/桌面代理/Codex 桥）都可能在 Web 进程之前先起来，各自调用一次即可。
+            Services.RemoteToolDataMigration.Migrate();
+
             if (args.Length == 2 && args[0] == "--codex-bridge") {
                 await Services.Codex.CodexAgent.RunAsync(args[1]);
                 return;
@@ -168,7 +172,7 @@ builder.Services.AddSingleton<HermesCompaction>();
             {
                 DashboardTitle = "Hangfire 任务",
                 AppPath = null, // Set to null to hide the "Back to Site" link
-                Authorization = new[] { new ChuckieHelper.WebApi.Filters.HangfireAuthorizationFilter() }
+                Authorization = new[] { new RemoteTool.WebApi.Filters.HangfireAuthorizationFilter() }
             });
 
             // 按实例名称注册 Hangfire 定时任务：Office 仅 DDNS，Home 注册全部

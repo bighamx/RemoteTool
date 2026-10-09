@@ -3,13 +3,13 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
-using ChuckieHelper.WebApi.Models.RemoteControl;
+using RemoteTool.WebApi.Models.RemoteControl;
 using System.IO.Compression;
 using SharpCompress.Archives;
 using SharpCompress.Common;
 using SharpCompress.Readers;
 
-namespace ChuckieHelper.WebApi.Services.RemoteControl;
+namespace RemoteTool.WebApi.Services.RemoteControl;
 
 public class FileService
 {

@@ -1,4 +1,5 @@
-using ChuckieHelper.WebApi.Services;
+using RemoteTool.WebApi.Services;
+using Microsoft.Extensions.Configuration;
 using SQLite;
 using System.Text.Json.Nodes;
 using System.Security.Cryptography;
@@ -9,6 +10,12 @@ var path = Path.Combine(root, "state.db");
 const double now = 1791207000;
 var count = 0;
 void Check(bool valid, string message) { if (!valid) throw new Exception(message); count++; }
+var settings = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(
+    new Dictionary<string, string> { ["Hermes:KeyFile"] = Path.Combine(root, "credentials", "api-key.env") }).Build();
+Check(new HermesSessionActivity(settings).DatabasePath == Path.Combine(RemoteToolPaths.HermesHome, "state.db"),
+    "machine credential directory must not become the Hermes database directory");
+settings["Hermes:HomeDirectory"] = root;
+Check(new HermesSessionActivity(settings).DatabasePath == path, "explicit desktop Hermes directory wins");
 JsonObject Read(string id, Func<string, double, bool> alive = null) => HermesSessionActivity.ReadDatabase(path, [id], true, now, alive ?? ((_, _) => true))[id];
 SQLitePCL.Batteries_V2.Init();
 using var db = new SQLiteConnection(path);

@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace ChuckieHelper.WebApi.Services.Codex;
+namespace RemoteTool.WebApi.Services.Codex;
 
 /** Desktop continuation rollouts can use frontend-id_native-session-id names
  * while thread_history still contains the original native session snapshot. */

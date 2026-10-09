@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
-using ChuckieHelper.WebApi.Services.Codex;
+using RemoteTool.WebApi.Services.Codex;
 
 internal static class TitleModelChecks {
     public static async Task Run() {

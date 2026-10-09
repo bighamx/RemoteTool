@@ -5,7 +5,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 
-namespace ChuckieHelper.WebApi.Services.Codex;
+namespace RemoteTool.WebApi.Services.Codex;
 
 internal sealed class CodexError(string message, int status = 400, string code = "", string delivery = "") : Exception(message) {
     public int Status { get; } = status;
@@ -67,7 +67,7 @@ internal sealed class CodexRpc : IAsyncDisposable
         _ = Task.Run(async () => { while (await process.StandardError.ReadLineAsync() != null) { } });
     }
     public async Task Initialize(CancellationToken ct = default) {
-        await Call("initialize", CodexJson.Obj(("clientInfo", CodexJson.Obj(("name", "chuckie_helper_mobile"), ("title", "ChuckieHelper Mobile"), ("version", "1.0"))),
+        await Call("initialize", CodexJson.Obj(("clientInfo", CodexJson.Obj(("name", "chuckie_helper_mobile"), ("title", "RemoteTool Mobile"), ("version", "1.0"))),
             ("capabilities", CodexJson.Obj(("experimentalApi", true)))), ct);
         await Write(CodexJson.Obj(("method", "initialized")), ct);
     }

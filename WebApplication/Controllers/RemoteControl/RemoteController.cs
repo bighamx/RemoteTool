@@ -1,7 +1,7 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 
-namespace ChuckieHelper.WebApi.Controllers.RemoteControl
+namespace RemoteTool.WebApi.Controllers.RemoteControl
 {
     [Authorize]
     public class RemoteController : Controller
