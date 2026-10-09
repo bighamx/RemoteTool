@@ -22,7 +22,12 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
@@ -303,6 +308,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     },
                     key = { it.getString("id") },
                 ) { session ->
+                    val latestActivity = parseMessageTimestamp(session.opt("last_active"))
+                        ?.let(::formatMessageTimestamp)
                     Card(
                         onClick = {
                             model.select(session)
@@ -339,13 +346,6 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         maxLines = 2,
                                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     )
-                                    parseMessageTimestamp(session.opt("last_active"))?.let { active ->
-                                        Text(
-                                            "最近活动 ${formatMessageTimestamp(active)}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
                                 }
                                 var actions by remember { mutableStateOf(false) }
                                 Box {
@@ -357,14 +357,36 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                     }
                                 }
                             }
-                            Text(
-                                if (agent == "codex") session.optString("cwd").ifBlank { "Codex 会话" }
-                                else "${session.optString("source")} · ${session.optInt("message_count")} 条消息",
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            if (agent == "codex") {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    MiddleEllipsisText(
+                                        session.optString("cwd").ifBlank { "Codex 会话" },
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    latestActivity?.let {
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            it,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            } else {
+                                Text(
+                                    buildString {
+                                        append("${session.optString("source")} · ${session.optInt("message_count")} 条消息")
+                                        latestActivity?.let { append(" · ").append(it) }
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 }
@@ -752,6 +774,47 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     if (filesDialog) HermesFilesDialog(api, model.files) { filesDialog = false }
     preview?.let { file ->
         MediaViewer(api, file, { preview = null }, { downloadHermesFile(context, api, file) })
+    }
+}
+
+@Composable
+private fun MiddleEllipsisText(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    color: Color = Color.Unspecified,
+) {
+    val textMeasurer = rememberTextMeasurer()
+    BoxWithConstraints(modifier) {
+        val availableWidth = constraints.maxWidth
+        val displayText = remember(text, availableWidth, style, textMeasurer) {
+            if (availableWidth == Constraints.Infinity || textMeasurer.measure(text, style).size.width <= availableWidth) {
+                text
+            } else {
+                var shortestFit = "…"
+                var low = 0
+                var high = text.length
+                while (low <= high) {
+                    val keep = (low + high) / 2
+                    val prefixLength = (keep + 1) / 2
+                    val candidate = text.take(prefixLength) + "…" + text.takeLast(keep - prefixLength)
+                    if (textMeasurer.measure(candidate, style).size.width <= availableWidth) {
+                        shortestFit = candidate
+                        low = keep + 1
+                    } else {
+                        high = keep - 1
+                    }
+                }
+                shortestFit
+            }
+        }
+        Text(
+            displayText,
+            style = style,
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+        )
     }
 }
 
