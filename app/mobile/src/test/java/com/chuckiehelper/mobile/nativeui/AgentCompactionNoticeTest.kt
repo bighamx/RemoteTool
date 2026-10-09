@@ -28,10 +28,10 @@ class AgentCompactionNoticeTest {
         assertEquals(history, merged.filterNot { it.role == "system" })
     }
 
-    @Test fun unknownNativeTimesUseExactBoundaryNotNumericIdOrder() {
+    @Test fun unknownNativeTimesDoNotTrustLegacyAnchors() {
         val merged = mergeCompactionNotices(listOf(row(90, null), row(2, null)), listOf(AgentCompactionNotice("a", "s", time, 90)))
         assertEquals(2L, merged.last().serverId)
-        assertEquals("system", merged[1].role)
+        assertEquals(listOf(row(90, null), row(2, null)), merged)
         assertEquals(listOf(row(90, null)), mergeCompactionNotices(listOf(row(90, null)), listOf(AgentCompactionNotice("a", "s", time, 999))))
     }
 
@@ -39,14 +39,16 @@ class AgentCompactionNoticeTest {
         val note = AgentCompactionNotice("a", "s", time, 999)
         assertEquals(listOf(row(2, time + 1000)), mergeCompactionNotices(listOf(row(2, time + 1000)), listOf(note)))
         val fullWindow = (1L..500).map { row(it, time - 1000) }
-        assertEquals(fullWindow, mergeCompactionNotices(fullWindow, listOf(note)))
+        val merged = mergeCompactionNotices(fullWindow, listOf(note))
+        assertEquals(fullWindow, merged.take(500))
+        assertEquals("system", merged.last().role)
     }
 
     @Test fun multipleCompactionsAtOneBoundaryRemainChronological() {
         val a = AgentCompactionNotice("a", "s", time + 1000, 90)
         val b = AgentCompactionNotice("b", "s", time + 2000, 90)
         assertEquals(listOf("compaction-a", "compaction-b"),
-            mergeCompactionNotices(listOf(row(90, null)), listOf(b, a)).filter { it.role == "system" }.map { it.localKey })
+            mergeCompactionNotices(listOf(row(90)), listOf(b, a)).filter { it.role == "system" }.map { it.localKey })
         assertNull(AgentCompactionNotice.restore(obj("run" to "a", "session" to "s")))
     }
 
@@ -68,6 +70,27 @@ class AgentCompactionNoticeTest {
         val history = listOf(row(12, time - 1000), row(90, time + 1000), row(2, time + 2000))
         val merged = mergeCompactionNotices(history, listOf(AgentCompactionNotice("a", "s", time, 90)))
         assertEquals(listOf(12L, 0L, 90L, 2L), merged.map { it.serverId })
+    }
+
+    @Test fun earlierDatedMessageDoesNotMakeAnUndatedGapSafe() {
+        val history = listOf(row(1, time - 10 * 86_400_000L), row(12, null), row(90, null), row(2, time + 1000))
+        val old = (1..7).map { AgentCompactionNotice("old-$it", "s", time - it * 86_400_000L, 90) }
+        assertEquals(history, mergeCompactionNotices(history, old))
+        // Already corrupted cached notices must also be removed, not retained as
+        // apparent evidence for the next operation's insertion point.
+        val corrupted = history.take(3) + old.map {
+            HermesMessage("system", "上下文压缩完成", localKey = "compaction-${it.run}", timestamp = it.timestamp)
+        } + history.last()
+        assertEquals(history, mergeCompactionNotices(corrupted, old))
+        assertEquals(history, mergeCompactionNotices(corrupted, old.reversed()))
+    }
+
+    @Test fun validNoticesUseTheirOwnDatedBoundaryDespiteLegacyAnchor() {
+        val history = listOf(row(1, time - 3000), row(2, time - 1000), row(3, time + 1000), row(4, null))
+        val notes = listOf(AgentCompactionNotice("a", "s", time - 2000, 4), AgentCompactionNotice("b", "s", time, 4))
+        val merged = mergeCompactionNotices(history, notes)
+        assertEquals(listOf(1L, 0L, 2L, 0L, 3L, 4L), merged.map { it.serverId })
+        assertEquals(merged, mergeCompactionNotices(merged, notes))
     }
 
     @Test fun taskAndRolloutWithSameNativeIdentityProduceOneStableNoticeInEitherArrivalOrder() {

@@ -1066,7 +1066,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         contextInfo = contextCache[id]; asyncQuestion = null
         // 先回放上一次该会话的消息（如有缓存），网络刷新到位后替换 —— 消除「返回再进白屏等待」。
         cachedHistory[selectedId]?.let { cached ->
-            messages = cached.takeLast(30)
+            messages = mergeCompactionNotices(
+                cached.filterNot { it.localKey?.startsWith("compaction-") == true }.takeLast(30),
+                compactionNotices.filter { it.session == selectedId })
             // 回放缓存后请求滚到底，否则打开会话停在缓存顶部等网络刷新
             scrollToLatestRequest++
         } ?: run { messages = emptyList() }
