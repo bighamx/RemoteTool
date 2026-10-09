@@ -317,7 +317,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 if (model.sessions.isEmpty() && !model.loading)
                     item { Text("暂无会话。点击 + 开始与 $agentName 对话。") }
                 items(
-                    model.sessions.filter {
+                    model.orderedSessions.filter {
                         it.optString("title").contains(filter, true) ||
                             it.optString("latest_user_message", it.optString("preview")).contains(filter, true)
                     },
@@ -342,6 +342,10 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                     verticalArrangement = Arrangement.spacedBy(5.dp),
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (model.isSessionPinned(session)) {
+                                            Icon(Icons.Outlined.PushPin, "已置顶", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                            Spacer(Modifier.width(5.dp))
+                                        }
                                         Text(
                                             session.optString("title").ifBlank { "未命名会话" },
                                             modifier = Modifier.weight(1f),
@@ -366,6 +370,12 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                 Box {
                                     IconButton(onClick = { actions = true }) { Icon(Icons.Outlined.MoreVert, "会话操作") }
                                     DropdownMenu(actions, { actions = false }) {
+                                        DropdownMenuItem(
+                                            text = { Text(if (model.isSessionPinned(session)) "取消置顶" else "置顶会话") },
+                                            leadingIcon = { Icon(Icons.Outlined.PushPin, null) },
+                                            enabled = session.getString("id") !in model.pinningSessions,
+                                            onClick = { actions = false; model.toggleSessionPin(session) },
+                                        )
                                         DropdownMenuItem(text = { Text("修改名称") }, onClick = { actions = false; renameChat = session })
                                         if (model.hasPendingFor(session.getString("id"))) DropdownMenuItem(text = { Text("核对上次提交") }, onClick = { actions = false; pendingInfo = true })
                                         DropdownMenuItem(text = { Text("删除会话", color = MaterialTheme.colorScheme.error) }, onClick = { actions = false; deleteChat = session })

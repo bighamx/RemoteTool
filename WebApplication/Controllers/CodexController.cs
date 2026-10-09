@@ -29,6 +29,7 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpPost("sessions/{id}/compact")] public Task Compact(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/compact", JsonSerializer.SerializeToElement(new { }), ct, Request.Headers["Idempotency-Key"].ToString());
     [HttpPatch("sessions/{id}")] public Task Rename(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Patch, $"sessions/{Id(id)}", body, ct);
     [HttpPost("sessions/{id}/delete")] public Task Delete(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/delete", JsonSerializer.SerializeToElement(new { }), ct);
+    [HttpPost("sessions/{id}/pin")] public Task Pin(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/pin", body, ct);
     [HttpPost("sessions/{id}/model")] public Task SetModel(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/model", body, ct);
     [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 30, CancellationToken ct = default) {
         using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{Id(id)}/messages", null, ct);

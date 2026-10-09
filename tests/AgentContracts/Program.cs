@@ -2,6 +2,21 @@ using System.Text.Json.Nodes;
 using RemoteTool.WebApi.Services.Codex;
 
 {
+    var pinTest = Path.Combine(Path.GetTempPath(), "remotetool-pins-" + Guid.NewGuid().ToString("N"));
+    try {
+        var path = Path.Combine(pinTest, "pins.json");
+        var pins = new CodexSessionPins(path);
+        if (File.Exists(path)) throw new Exception("Listing pins must not create storage");
+        pins.Set("older", true); pins.Set("newer", true); pins.Set("older", true);
+        var restored = new CodexSessionPins(path);
+        if (restored.Ids.Length != 2 || !restored.Contains("older")) throw new Exception("Pins must survive restart without duplicates");
+        restored.Set("older", false);
+        if (new CodexSessionPins(path).Contains("older") || !new CodexSessionPins(path).Contains("newer")) throw new Exception("Unpin must preserve other records");
+        if (new CodexSessionPins(Path.Combine(pinTest, "other-home", "pins.json")).Contains("newer")) throw new Exception("Different Codex homes must not share pins");
+    } finally { if (Directory.Exists(pinTest)) Directory.Delete(pinTest, true); }
+}
+
+{
     var orphan = new JsonObject { ["status"] = "started", ["approval"] = new JsonObject() };
     if (!CodexRunRecovery.Recover(orphan, false) || orphan.S("status") != "acceptance_unknown" || orphan.ContainsKey("approval"))
         throw new Exception("An old journal entry must not prove a running task or retain an approval");

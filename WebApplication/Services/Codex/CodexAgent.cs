@@ -154,10 +154,12 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         } finally { settingsLock.Release(); }
     }
 
+    private readonly CodexSessionPins sessionPins;
     private CodexAgent(string config) {
         settings = Read(config); folder = settings.S("state_folder", Path.GetDirectoryName(config)!); home = settings.S("home");
         if (string.IsNullOrWhiteSpace(home) || !Path.IsPathFullyQualified(home))
             throw new InvalidOperationException("Codex bridge home must be a non-empty absolute path; regenerate connection.json through the web service.");
+        sessionPins = new CodexSessionPins(Path.Combine(home, "remotetool-session-pins.json"));
         titles = new CodexTitleGenerator(Path.GetDirectoryName(config)!);
         journal = Path.Combine(folder, "runs.json");
         providers = Read(Path.Combine(folder, "providers.json")); runs = Read(journal);
@@ -412,6 +414,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         ("preview", thread.S("preview")), ("cwd", thread.S("cwd")), ("source", thread.S("source", "codex")),
         ("model", thread.S("model")), ("project_id", thread?["projectId"]), ("message_count", thread.A("turns").Count), ("status", thread?["status"]));
         result["last_active"] = (thread?["updatedAt"] ?? thread?["updated_at"] ?? thread?["createdAt"] ?? thread?["created_at"])?.DeepClone();
+        result["pinned"] = sessionPins.Contains(thread.S("id"));
         if (thread["status"].S("type") != "active" && CodexRollout.IsRunning(home, RolloutPath(thread))) result["status"] = Obj(("type", "active"), ("activeFlags", new JsonArray()));
         return result;
     }
@@ -854,6 +857,12 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             return await Models();
         }
         if (p[0] == "sessions") {
+            if (p.Length == 3 && p[2] == "pin" && method == "POST") {
+                if (body["pinned"] is not JsonValue flag || !flag.TryGetValue<bool>(out var pinned)) throw new CodexError("pinned 必须为布尔值");
+                await ReadThread(p[1], false); // Validate without acquiring a writer or resuming.
+                sessionPins.Set(p[1], pinned);
+                return Obj(("pinned", pinned));
+            }
             if (p.Length == 3 && p[2] == "queue") return await Queue(p[1], method, body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "takeover" && method == "POST") return await TakeoverSession(p[1], body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "active-run" && method == "GET") return await FindActiveRun(p[1], context.RequestAborted);
@@ -862,6 +871,20 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 var request = Obj(("limit", 50), ("sortKey", "updated_at"), ("sourceKinds", new JsonArray("cli", "vscode", "appServer")));
                 if (context.Request.Query["cursor"].Count > 0) request["cursor"] = context.Request.Query["cursor"].ToString();
                 var result = await rpc.Call("thread/list", request);
+                // Pins must remain reachable even when their activity falls outside page one.
+                if (context.Request.Query["cursor"].Count == 0) {
+                    var visible = result.A("data").Select(thread => thread.S("id")).ToHashSet();
+                    foreach (var id in sessionPins.Ids.Where(id => !visible.Contains(id))) {
+                        context.RequestAborted.ThrowIfCancellationRequested();
+                        try {
+                            var pin = (await ReadThread(id, false))["thread"];
+                            if (pin != null) result["data"]!.AsArray().Add(pin.DeepClone());
+                        } catch (CodexError error) when (error.Status == 404 || error.Message.Contains("thread not found", StringComparison.OrdinalIgnoreCase)
+                            || error.Message.Contains("no rollout found", StringComparison.OrdinalIgnoreCase)) {
+                            sessionPins.Set(id, false);
+                        }
+                    }
+                }
                 _ = NotifyDesktop(result.A("data").Where(thread => thread.S("originator") == "chuckie_helper_mobile").Select(thread => thread.S("id")).ToArray());
                 var threads = result.A("data").Where(t => t.S("id").Length > 0).GroupBy(t => t.S("id")).Select(group => group.First()).ToArray();
                 var previews = LatestSessionPreview.Read(Path.Combine(home, "thread_history_1.sqlite"), threads.Select(thread => thread.S("id")), true);
@@ -913,6 +936,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     lock (gate) if (active.ContainsKey(session)) throw new CodexError("运行中的会话不可删除", 409);
                     await ReleaseSessionCore(session);
                     await rpc.Call("thread/delete", Obj(("threadId", session)));
+                    sessionPins.Set(session, false);
                     lock (gate) { sessionOverrides.Remove(session); PersistModels(); }
                     await CodexDesktopSync.NotifyRemoved(new[] { session });
                     return Obj(("deleted", true));

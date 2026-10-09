@@ -36,6 +36,27 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private lateinit var api: NativeApi
     var sessions by mutableStateOf<List<JSONObject>>(emptyList())
         private set
+    var pinningSessions by mutableStateOf<Set<String>>(emptySet())
+        private set
+    private var nextSessionOffset = 0
+    fun isSessionPinned(session: JSONObject) = session.optBoolean("pinned")
+    val orderedSessions get() = pinnedSessionsFirst(sessions, ::isSessionPinned)
+    fun toggleSessionPin(session: JSONObject) {
+        val id = session.optString("id")
+        if (id.isBlank() || id in pinningSessions) return
+        pinningSessions = pinningSessions + id
+        launch {
+            try {
+                sessionRefreshMutex.withLock {
+                val pinned = !isSessionPinned(session)
+                val result = api.json("$root/sessions/${q(id)}/pin", obj("pinned" to pinned))
+                if (!confirmedSessionPin(result, pinned))
+                    throw java.io.IOException("服务端未确认置顶状态，请刷新列表后重试")
+                sessions = sessions.map { if (it.optString("id") == id) JSONObject(it.toString()).put("pinned", pinned) else it }
+                }
+            } finally { pinningSessions = pinningSessions - id }
+        }
+    }
     private val sessionRefreshMutex = Mutex()
     private val historyReadMutex = Mutex()
     private var sessionActivities by mutableStateOf<Map<String, SessionActivityEvidence>>(emptyMap())
@@ -629,13 +650,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 rows,
             ) { it.optString("id") }
             hasMore = result.optBoolean("has_more")
+            // Hermes back-fills pins beyond the page: visible row count is not a page offset.
+            nextSessionOffset = result.optInt("offset", offset) + result.optInt("limit", 50)
             nextCursor = result.optString("next_cursor").takeIf { it.isNotBlank() && it != "null" }
         } finally {
             loading = false
         }
     }
 
-    fun moreSessions() = launch { refreshSessions(sessions.size) }
+    fun moreSessions() = launch { refreshSessions(if (agent == "codex") sessions.size else nextSessionOffset) }
     fun sessionActivity(session: JSONObject): String? {
         val id = session.optString("id")
         return sessionActivityLabel(sessionActivities[id], activityNow, hasPendingFor(id))
@@ -733,7 +756,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 // The server page is sorted by last activity; adopting it wholesale keeps
                 // recently active sessions moving to the top instead of freezing positions.
                 val indexed = latest.associateBy { it.optString("id") }
-                sessions = latest + sessions.filter { it.optString("id") !in indexed }
+                sessions = latest + sessions.filter { it.optString("id") !in indexed }.map {
+                    // Page one back-fills every native pin. Absence clears stale cached pins
+                    // after another client unpins, archives or deletes an older conversation.
+                    if (isSessionPinned(it)) JSONObject(it.toString()).put("pinned", false) else it
+                }
             reconcilePendingNow()
             for ((session, id) in backgroundRuns.toMap()) {
                 try {

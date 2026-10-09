@@ -1,5 +1,14 @@
 package com.chuckiehelper.mobile.nativeui
 
+/** Stable partition: pins first; preserve the server's order within each group. */
+internal fun <T> pinnedSessionsFirst(rows: List<T>, pinned: (T) -> Boolean): List<T> =
+    rows.filter(pinned) + rows.filterNot(pinned)
+
+internal fun confirmedSessionPin(result: org.json.JSONObject, expected: Boolean): Boolean {
+    val value = (result.optJSONObject("session") ?: result).opt("pinned")
+    return value is Boolean && value == expected
+}
+
 /** Keep list identity unique even when the agent returns repeated session records. */
 internal fun <T> mergeSessionPage(existing: List<T>, incoming: List<T>, id: (T) -> String): List<T> {
     val rows = linkedMapOf<String, T>()

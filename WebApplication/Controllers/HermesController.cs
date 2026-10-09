@@ -110,6 +110,13 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         Response.StatusCode = (int)response.StatusCode; Response.ContentType = "application/json"; await Response.WriteAsync(payload, ct);
     }
     [HttpGet("sessions/{id}")] public Task SessionInfo(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"api/sessions/{Id(id)}", null, null, ct);
+    [HttpPost("sessions/{id}/pin")] public Task PinSession(string id, [FromBody] JsonElement body, CancellationToken ct) {
+        if (!body.TryGetProperty("pinned", out var pinned) || pinned.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) {
+            Response.StatusCode = 400;
+            return Response.WriteAsJsonAsync(new { message = "pinned 必须为布尔值" }, ct);
+        }
+        return Forward(HttpMethod.Patch, $"api/sessions/{Id(id)}", JsonSerializer.SerializeToElement(new { pinned = pinned.GetBoolean() }), null, ct);
+    }
     [HttpPatch("sessions/{id}")] public Task RenameSession(string id, [FromBody] JsonElement body, CancellationToken ct)
     {
         var title = body.GetProperty("title").GetString()?.Trim();

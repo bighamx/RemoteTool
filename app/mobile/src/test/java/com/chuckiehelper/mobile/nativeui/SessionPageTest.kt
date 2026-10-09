@@ -1,9 +1,29 @@
 package com.chuckiehelper.mobile.nativeui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.json.JSONObject
 import org.junit.Test
 
 class SessionPageTest {
+    @Test fun nativePinAcknowledgementAcceptsBothAgentsAndRejectsMissingOrWrongState() {
+        assertTrue(confirmedSessionPin(JSONObject("{\"pinned\":true}"), true))
+        assertTrue(confirmedSessionPin(JSONObject("{\"session\":{\"pinned\":false}}"), false))
+        assertFalse(confirmedSessionPin(JSONObject("{}"), false))
+        assertFalse(confirmedSessionPin(JSONObject("{\"pinned\":true}"), false))
+    }
+    @Test fun pinsPrecedeRecentRowsWithoutChangingOrderWithinGroups() {
+        val pins = setOf("old", "older")
+        assertEquals(listOf("old", "older", "new", "recent"),
+            pinnedSessionsFirst(listOf("new", "old", "recent", "older")) { it in pins })
+    }
+
+    @Test fun backfilledPinsRemainUniqueAcrossPagesAndUnpinRestoresServerOrder() {
+        val rows = mergeSessionPage(listOf("new", "old"), listOf("old", "older")) { it }
+        assertEquals(listOf("older", "new", "old"), pinnedSessionsFirst(rows) { it == "older" })
+        assertEquals(rows, pinnedSessionsFirst(rows) { false })
+    }
     private data class Session(val id: String, val status: String = "idle")
 
     @Test fun initialPageKeepsOnlyOneRowForEachSession() {
