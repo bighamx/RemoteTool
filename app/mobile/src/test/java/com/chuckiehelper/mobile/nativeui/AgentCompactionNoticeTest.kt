@@ -37,7 +37,7 @@ class AgentCompactionNoticeTest {
 
     @Test fun oldNoticesStayAheadOfNewMessagesAndOutsideWindowNeverAppendToTail() {
         val note = AgentCompactionNotice("a", "s", time, 999)
-        assertEquals("system", mergeCompactionNotices(listOf(row(2, time + 1000)), listOf(note)).first().role)
+        assertEquals(listOf(row(2, time + 1000)), mergeCompactionNotices(listOf(row(2, time + 1000)), listOf(note)))
         val fullWindow = (1L..500).map { row(it, time - 1000) }
         assertEquals(fullWindow, mergeCompactionNotices(fullWindow, listOf(note)))
     }
@@ -50,10 +50,24 @@ class AgentCompactionNoticeTest {
         assertNull(AgentCompactionNotice.restore(obj("run" to "a", "session" to "s")))
     }
 
-    @Test fun serverClockAheadDoesNotPlaceCompletionBeforeItsKnownBoundary() {
+    @Test fun datedHistoryRejectsContradictoryCachedBoundary() {
         val history = listOf(row(90, time + 60000), row(2, time + 61000))
         val merged = mergeCompactionNotices(history, listOf(AgentCompactionNotice("a", "s", time, 90)))
-        assertEquals(listOf("user", "system", "user"), merged.map { it.role })
+        assertEquals(history, merged)
+    }
+
+    @Test fun oldCompletionsNeverClusterAfterRecentUndatedContinue() {
+        val history = listOf(row(12, null), row(90, null), row(2, time + 1000))
+        val old = (1..7).map { AgentCompactionNotice("old-$it", "s", time - it * 86_400_000L, 90) }
+        assertEquals(history, mergeCompactionNotices(history, old))
+        assertEquals(history, mergeCompactionNotices(mergeCompactionNotices(history, old), old))
+        assertTrue(mergeCompactionNotices(emptyList(), old).isEmpty())
+    }
+
+    @Test fun staleDatedAnchorCannotOverrideChronologicalSlot() {
+        val history = listOf(row(12, time - 1000), row(90, time + 1000), row(2, time + 2000))
+        val merged = mergeCompactionNotices(history, listOf(AgentCompactionNotice("a", "s", time, 90)))
+        assertEquals(listOf(12L, 0L, 90L, 2L), merged.map { it.serverId })
     }
 
     @Test fun taskAndRolloutWithSameNativeIdentityProduceOneStableNoticeInEitherArrivalOrder() {

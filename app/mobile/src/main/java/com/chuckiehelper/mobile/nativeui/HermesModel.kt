@@ -391,7 +391,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             started != null && nativeTime != null && nativeTime >= started && nativeTime <= time + 5_000 }
         val history = if (selectedId == session) messages else cachedHistory[session].orEmpty()
         compactionNotices = coalesceCompactionNotices(compactionNotices + AgentCompactionNotice(run, session,
-            if (nativeId != null) nativeTime!! else time, history.lastOrNull { it.serverId > 0 }?.serverId ?: 0, nativeId, started))
+            if (nativeId != null) nativeTime!! else time,
+            history.lastOrNull { it.serverId > 0 && it.timestamp?.let { at -> at <= (if (nativeId != null) nativeTime!! else time) } == true }?.serverId ?: 0,
+            nativeId, started))
         saveCompactionNotices()
         val merged = mergeCompactionNotices(history, compactionNotices.filter { it.session == session })
         cachedHistory[session] = merged

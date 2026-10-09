@@ -59,20 +59,26 @@ fun successfulCompaction(run: String, result: JSONObject): Boolean =
 
 fun mergeCompactionNotices(history: List<HermesMessage>, notices: List<AgentCompactionNotice>): List<HermesMessage> {
     val rows = history.filterNot { it.localKey?.startsWith("compaction-") == true }.toMutableList()
+    // A partial/compacted snapshot can contain an undated prefix. Its IDs alone do
+    // not prove that a cached operation belongs there; never backfill old notices
+    // next to a recent undated user message just because an old anchor survived.
+    val earliestTime = rows.mapNotNull { it.timestamp }.minOrNull()
     for (notice in coalesceCompactionNotices(notices).sortedBy { it.timestamp }) {
+        if (earliestTime != null && notice.timestamp < earliestTime) continue
         val future = rows.indexOfFirst { it.timestamp?.let { time -> time > notice.timestamp } == true }
-        val anchor = rows.indexOfLast { it.serverId > 0 && it.serverId == notice.afterMessageId }
+        val anchor = rows.indexOfLast { it.serverId > 0 && it.serverId == notice.afterMessageId &&
+            (it.timestamp == null || it.timestamp <= notice.timestamp) }
         // IDs are identities, never chronological counters. Retain a known boundary if
         // native history omits timestamps; do not move an older off-window notice to the tail.
         val index = when {
-            future >= 0 && future > anchor -> future
+            future >= 0 -> future
             anchor >= 0 -> {
                 var next = anchor + 1
                 while (next < rows.size && rows[next].role == "system" &&
                     rows[next].timestamp?.let { it <= notice.timestamp } == true) next++
                 next
             }
-            rows.isEmpty() -> 0
+            rows.isEmpty() -> continue
             history.size >= 500 -> continue
             rows.all { it.timestamp != null && it.timestamp <= notice.timestamp } -> rows.size
             else -> continue
