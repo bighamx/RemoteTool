@@ -5,20 +5,42 @@ import org.json.JSONObject
 data class HermesPresentation(val text: String, val files: List<JSONObject>, val unavailable: List<String>)
 data class HermesMediaText(val text: String, val paths: List<String>)
 
-fun extractHermesMedia(text: String): HermesMediaText {
+fun extractHermesMedia(text: String): HermesMediaText = transformHermesMedia(text) { true }
+
+/** Delivery markers are whole lines outside Markdown code, with an absolute file path. */
+private fun transformHermesMedia(text: String, remove: (String) -> Boolean): HermesMediaText {
     val paths = mutableListOf<String>()
-    val cleaned = Regex("(?m)^[ \\t]*MEDIA:[ \\t]*(.+?)[ \\t]*$", RegexOption.IGNORE_CASE).replace(text) { match ->
-        paths += match.groupValues[1].trim().trim('"', '\'', '`').replace('\\', '/')
-        ""
-    }.replace(Regex("\\n{3,}"), "\n\n").trim()
+    var fenceChar: Char? = null
+    var fenceLength = 0
+    val fence = Regex("^ {0,3}(`{3,}|~{3,})(.*)$")
+    val marker = Regex("^ {0,3}MEDIA:[ \\t]*(.+?)[ \\t]*$", RegexOption.IGNORE_CASE)
+    val cleaned = text.replace("\r\n", "\n").split('\n').map { line ->
+        val delimiter = fence.matchEntire(line)
+        if (fenceChar != null) {
+            if (delimiter != null && delimiter.groupValues[1][0] == fenceChar &&
+                delimiter.groupValues[1].length >= fenceLength && delimiter.groupValues[2].isBlank()) fenceChar = null
+            line
+        } else if (delimiter != null) {
+            fenceChar = delimiter.groupValues[1][0]; fenceLength = delimiter.groupValues[1].length
+            line
+        } else {
+            val path = marker.matchEntire(line)?.groupValues?.get(1)?.trim()?.trim('"', '\'')?.replace('\\', '/')
+            val absolute = path != null && (Regex("^[a-zA-Z]:/").containsMatchIn(path) || path.startsWith('/'))
+            if (absolute) {
+                paths += path!!
+                if (remove(path)) "" else line
+            } else line
+        }
+    }.joinToString("\n")
     return HermesMediaText(cleaned, paths)
 }
 
-fun presentHermesMessage(text: String, attached: List<JSONObject>, available: List<JSONObject>): HermesPresentation {
+fun presentHermesMessage(text: String, attached: List<JSONObject>, available: List<JSONObject>, role: String = "assistant"): HermesPresentation {
+    val display = codexQuestionReplyDisplay(text)
+    if (role != "assistant") return HermesPresentation(display, attached, emptyList())
     val files = attached.toMutableList()
     val unavailable = mutableListOf<String>()
-    val parsed = extractHermesMedia(codexQuestionReplyDisplay(text))
-    parsed.paths.forEach { path ->
+    val parsed = transformHermesMedia(display) { path ->
         val name = path.substringAfterLast('/')
         val candidates = (attached + available).distinctBy { it.optString("id") }.filter {
             it.optString("name") == name
@@ -30,7 +52,11 @@ fun presentHermesMessage(text: String, attached: List<JSONObject>, available: Li
         } ?: candidates.singleOrNull().takeIf { expectedOutbox == null }
         if (file != null) {
             if (files.none { it.optString("id") == file.optString("id") }) files += file
-        } else unavailable += name
+            true
+        } else {
+            unavailable += name
+            false // Keep unresolved text visible instead of silently removing it.
+        }
     }
     return HermesPresentation(parsed.text, files, unavailable.distinct())
 }

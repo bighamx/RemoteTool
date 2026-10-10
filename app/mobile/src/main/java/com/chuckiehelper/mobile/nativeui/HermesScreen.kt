@@ -471,7 +471,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         onEdit = if (message.role == "user" && message.serverId > 0 && message.editable && model.canEditMessages) ({
                             editTarget = model.selectedId!! to message; editText = message.text
                             editBoundary = messageEditBoundary(model.messages)
-                            editAttachments = presentHermesMessage(message.text, message.attachments, model.files).files
+                            editAttachments = presentHermesMessage(message.text, message.attachments, model.files, message.role).files
                         }) else null)
                     }
                 }
@@ -1024,7 +1024,7 @@ private fun MessageBubble(
         menuPoint = windowPoint - bubbleOrigin
         actions = true
     }
-    val presentation = presentHermesMessage(text, attachments, availableFiles)
+    val presentation = presentHermesMessage(text, attachments, availableFiles, role)
     val hasImages = presentation.files.any { hermesFileKind(it) == "图片" }
     Row(
         Modifier.fillMaxWidth(),
