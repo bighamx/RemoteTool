@@ -20,23 +20,46 @@ internal fun messageFooterFits(lastLineRight: Float, width: Int, footerWidth: Fl
 internal class MessageTextView(context: Context) : TextView(context) {
     var onBubbleTap: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
     private val tap = BubbleTapGesture(ViewConfiguration.get(context).scaledTouchSlop.toFloat(), ViewConfiguration.getLongPressTimeout().toLong())
-    private fun overLink(event: MotionEvent): Boolean {
-        val styled = text as? Spanned ?: return false
-        val lines = layout ?: return false
-        val line = lines.getLineForVertical((event.y - totalPaddingTop + scrollY).toInt())
-        val offset = lines.getOffsetForHorizontal(line, event.x - totalPaddingLeft + scrollX)
-        return styled.getSpans(offset, offset, ClickableSpan::class.java).isNotEmpty()
+    private var pressedLink: ClickableSpan? = null
+    private fun linkAt(event: MotionEvent): ClickableSpan? {
+        val styled = text as? Spanned ?: return null
+        val lines = layout ?: return null
+        val x = event.x - totalPaddingLeft + scrollX
+        val y = event.y - totalPaddingTop + scrollY
+        // Footer and padding must not resolve to the nearest link character.
+        if (y < 0 || y >= lines.height) return null
+        val line = lines.getLineForVertical(y.toInt())
+        if (x < lines.getLineLeft(line) || x > lines.getLineRight(line)) return null
+        val offset = lines.getOffsetForHorizontal(line, x)
+        return styled.getSpans(offset, offset, ClickableSpan::class.java).firstOrNull {
+            styled.getSpanStart(it) <= offset && offset < styled.getSpanEnd(it)
+        }
     }
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 tap.down(event.x, event.y, event.eventTime)
-                if (hasSelection() || overLink(event)) tap.cancel()
+                pressedLink = linkAt(event)
+                if (hasSelection()) tap.cancel()
             }
             MotionEvent.ACTION_MOVE -> tap.move(event.x, event.y)
-            MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> tap.cancel()
+            MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> { tap.cancel(); pressedLink = null }
         }
         val clicked = event.actionMasked == MotionEvent.ACTION_UP && tap.up(event.x, event.y, event.eventTime) && !hasSelection()
+        if (event.actionMasked == MotionEvent.ACTION_UP) {
+            val link = pressedLink
+            pressedLink = null
+            if (clicked && link != null && linkAt(event) === link) {
+                // Selectable TextView uses selection movement, not link movement.
+                // Dispatch exactly once and cancel its native touch sequence so
+                // it cannot also open the link or activate the bubble menu.
+                val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+                try { super.onTouchEvent(cancel) } finally { cancel.recycle() }
+                link.onClick(this)
+                return true
+            }
+            if (link != null) return super.onTouchEvent(event)
+        }
         val handled = super.onTouchEvent(event)
         if (clicked) onBubbleTap?.let { action ->
             val location = IntArray(2)

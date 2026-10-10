@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import android.text.method.ArrowKeyMovementMethod
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
@@ -33,6 +34,8 @@ fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String =
                 textSize = 15f
                 includeFontPadding = false
                 setTextIsSelectable(true)
+                // MessageTextView owns short link taps; native selection keeps long presses.
+                linksClickable = false
                 setPadding(0, 0, 0, 0)
             }
         },
@@ -43,6 +46,7 @@ fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String =
             view.setLinkTextColor(link)
             if (view.tag != text) {
                 markwon.setMarkdown(view, text)
+                view.movementMethod = ArrowKeyMovementMethod.getInstance()
                 view.tag = text
             }
         },
