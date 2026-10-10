@@ -83,13 +83,31 @@ internal fun withActiveNarrations(history: List<HermesMessage>, narrations: List
             row.serverId == narrationMessageId(it.messageId) && narrationCovers(it.text, row.text) }
         if (live != null && live.text.length > row.text.length) row.copy(text = live.text) else row
     }
+    val firstNativeTime = liveRows.firstNotNullOfOrNull { it.timestamp.takeIf { _ -> it.serverId > 0 } }
     val overlays = active.filter { note ->
-        val anchor = liveRows.indexOfFirst { it.role == "user" && (
-            note.anchor > 0 && it.serverId == note.anchor || note.userKey != null && it.localKey == note.userKey) }
-        val end = if (anchor >= 0) (anchor + 1 until liveRows.size).firstOrNull { liveRows[it].role == "user" } ?: liveRows.size else 0
+        val anchor = narrationAnchorIndex(liveRows, note)
+        // A long-running task can outlive the last-30-message window. Its earlier
+        // replayed events belong before that window, never after the newest reply.
+        if (firstNativeTime != null && note.timestamp < firstNativeTime && anchor < 0) return@filter false
+        val end = if (anchor >= 0) (anchor + 1 until liveRows.size).firstOrNull { liveRows[it].role == "user" } ?: liveRows.size
+            else liveRows.indexOfFirst { it.role == "user" && it.timestamp?.let { at -> at > note.timestamp } == true }
+                .takeIf { it >= 0 } ?: liveRows.size
         liveRows.withIndex().none { (index, row) -> row.role == "assistant" && (
             note.messageId != null && row.serverId == narrationMessageId(note.messageId) ||
-                note.messageId == null && anchor >= 0 && index in (anchor + 1 until end) && narrationCovers(row.text, note.text)) }
-    }.map { note -> HermesMessage("assistant", note.text, localKey = note.key, timestamp = note.timestamp, narration = true) }
-    return liveRows + overlays
+                note.messageId == null && index in (anchor + 1 until end) &&
+                    (anchor >= 0 || firstNativeTime != null && row.timestamp != null &&
+                        note.userTimestamp?.let { row.timestamp >= it } == true) && narrationCovers(row.text, note.text)) }
+    }.sortedWith(compareBy<AssistantNarration> { it.timestamp }.thenBy { it.sequence ?: Long.MAX_VALUE })
+    val rows = liveRows.toMutableList()
+    overlays.forEach { note ->
+        val anchor = narrationAnchorIndex(rows, note)
+        val start = (anchor + 1).coerceAtLeast(0)
+        val end = (start until rows.size).firstOrNull { rows[it].role == "user" &&
+            (anchor >= 0 || rows[it].timestamp?.let { at -> at > note.timestamp } == true) } ?: rows.size
+        // Insert only transient rows. Preserve the exact relative order of every native row,
+        // including undated rows and timestamps that differ slightly from append order.
+        val position = (start until end).firstOrNull { rows[it].timestamp?.let { at -> at > note.timestamp } == true } ?: end
+        rows.add(position, HermesMessage("assistant", note.text, localKey = note.key, timestamp = note.timestamp, narration = true))
+    }
+    return rows
 }

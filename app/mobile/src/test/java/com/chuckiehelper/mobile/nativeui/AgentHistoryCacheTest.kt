@@ -5,6 +5,34 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AgentHistoryCacheTest {
+    @Test fun replayedNarrationsOutsideCurrentWindowCannotReappearAtTheBottom() {
+        val history = listOf(HermesMessage("assistant", "22:58 回复", 100, timestamp = 58000),
+            HermesMessage("user", "22:59 请求", 101, timestamp = 59000),
+            HermesMessage("assistant", "22:59 回复", 102, timestamp = 59100))
+        val old = AssistantNarration("narration-old", "s", "22:46 旁白", 1, "原始请求", 46000,
+            userTimestamp = 45000, run = "running", streamed = true)
+        assertEquals(history, withActiveNarrations(history, listOf(old), "running"))
+    }
+
+    @Test fun restoredActiveNarrationIsInsertedBeforeLaterNativeRows() {
+        val history = listOf(HermesMessage("user", "请求", 100, timestamp = 1000),
+            HermesMessage("assistant", "较晚回复", 101, timestamp = 3000),
+            HermesMessage("user", "下一条请求", 102, timestamp = 4000))
+        val note = AssistantNarration("narration-live", "s", "中途旁白", 100, "请求", 2000,
+            userTimestamp = 1000, run = "running")
+        val result = withActiveNarrations(history, listOf(note), "running")
+        assertEquals(listOf("请求", "中途旁白", "较晚回复", "下一条请求"), result.map { it.text })
+        assertEquals(history, result.filter { it.serverId > 0 })
+    }
+
+    @Test fun nativeNarrationIsAcknowledgedEvenWhenItsUserHasLeftTheWindow() {
+        val history = listOf(HermesMessage("assistant", "已保存旁白", 100, timestamp = 2000),
+            HermesMessage("assistant", "较晚回复", 101, timestamp = 3000))
+        val note = AssistantNarration("narration-live", "s", "已保存旁白", 1, "窗口外请求", 2100,
+            userTimestamp = 1000, run = "running", streamed = true)
+        assertEquals(history, withActiveNarrations(history, listOf(note), "running"))
+    }
+
     @Test fun restartUsesSnapshotAndServerReplacementNeverKeepsStaleRows() {
         val root = Files.createTempDirectory("history-cache-test").toFile()
         try {
