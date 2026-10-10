@@ -26,6 +26,18 @@ internal static class LatestSessionPreview
             else if (codex && text.StartsWith('{') && JsonNode.Parse(text) is JsonObject item && item["type"]?.ToString() == "userMessage")
                 text = ContentText(item["content"] as JsonArray ?? new());
         } catch (JsonException) { }
+        // Codex transports persist client metadata as user-role response items.
+        // Strip only leading, complete known envelopes; ordinary quoted examples stay intact.
+        while (true) {
+            text = text.TrimStart();
+            var envelope = new[] { "environment_context", "external_codex_apps_open_page" }
+                .FirstOrDefault(name => text.StartsWith("<" + name + ">", StringComparison.Ordinal));
+            if (envelope == null) break;
+            var closeTag = "</" + envelope + ">";
+            var end = text.IndexOf(closeTag, StringComparison.Ordinal);
+            if (end < 0) return "";
+            text = text[(end + closeTag.Length)..];
+        }
         if (text.TrimStart().StartsWith("<heartbeat>", StringComparison.Ordinal)) return "";
         const string close = "[/OUT-OF-BAND USER MESSAGE]";
         if (text.StartsWith("[OUT-OF-BAND USER MESSAGE", StringComparison.Ordinal) && text.EndsWith(close, StringComparison.Ordinal)) {
