@@ -61,6 +61,19 @@ internal fun appendPendingHistory(history: List<HermesMessage>, pending: List<He
     }
 }
 
+/** A current send remains visible until its native row arrives, even if an assistant row arrives first. */
+internal fun projectCurrentSubmission(history: List<HermesMessage>, message: HermesMessage, existingIds: Set<Long>): List<HermesMessage> {
+    if (history.any { it.localKey == message.localKey }) return history
+    val boundary = history.indexOfFirst { it.serverId > 0 && it.serverId !in existingIds }
+        .takeIf { it >= 0 } ?: history.size
+    return history.toMutableList().apply { add(boundary, message) }
+}
+
+internal fun attachConfirmedSubmission(history: List<HermesMessage>, id: Long, attachments: List<org.json.JSONObject>): List<HermesMessage> =
+    history.map { row -> if (row.serverId == id && row.role == "user") row.copy(
+        attachments = (row.attachments + attachments).distinctBy { it.optString("id") }, delivery = null
+    ) else row }
+
 /** Only the live task contributes an overlay. Native rows are never moved or coalesced. */
 internal fun withActiveNarrations(history: List<HermesMessage>, narrations: List<AssistantNarration>, activeRun: String?): List<HermesMessage> {
     if (activeRun == null) return history

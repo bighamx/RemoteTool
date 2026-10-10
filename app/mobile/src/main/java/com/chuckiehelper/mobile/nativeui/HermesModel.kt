@@ -1169,8 +1169,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
         if (id != selectedId || api !== connection) return
         // Native order and content are authoritative. Local snapshots never contribute rows.
-        val history = response.array("data").objects().takeLast(30).mapNotNull { row -> agentHistoryMessage(agent, row) }
+        var history = response.array("data").objects().takeLast(30).mapNotNull { row -> agentHistoryMessage(agent, row) }
         val bindings = mutableListOf<Pair<Long, List<String>>>()
+        val confirmedLocalKeys = mutableSetOf<String>()
         // Hermes has no request-key lookup. After an App restart the in-memory
         // pre-send boundary is gone, so reconcile persisted submissions using
         // unambiguous timestamped history rather than leaving them pending forever.
@@ -1187,18 +1188,21 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
         val sessionSteering = steering.filter { it.session == id }
         val reconciliation = reconcileSteeringMessages(history, sessionSteering)
+        val confirmedSteeringKeys = reconciliation.second.map { it.first.key }.toSet()
         for ((sent, confirmed) in reconciliation.second) {
             val canonical = confirmed.copy(localKey = sent.key)
             narrations = acknowledgeNarrationUser(narrations, id, sent.key, canonical)
             if (sent.attachments.isNotEmpty()) {
                 bindings += confirmed.serverId to sent.attachments.map { it.getString("id") }
+                history = attachConfirmedSubmission(history, confirmed.serverId, sent.attachments)
             }
         }
         // 放弃的失败记录（>10 分钟）与已确认/滑出窗口的记录一并清除，防止本地气泡永久堆叠在列表尾部
         val abandonedKeys = sessionSteering.filter { isAbandonedSteering(it) }.map { it.key }.toSet()
         if (abandonedKeys.isNotEmpty()) setError(id, "未送达的插话已从本机记录清除；如仍需发送，请重新输入")
         val refreshedKeys = sessionSteering.map { it.key }.toSet()
-        steering = steering.filter { it.session != id || it.key !in refreshedKeys } + reconciliation.first.filter { it.key !in abandonedKeys }
+        steering = steering.filter { it.session != id || it.key !in refreshedKeys } + reconciliation.first.filter { it.key !in abandonedKeys } +
+            reconciliation.second.map { it.first }.filter { it.attachments.isNotEmpty() }.map { it.copy(delivery = "已送达") }
         saveSteering()
         localSubmissions[id]?.let { local ->
             val acknowledged = history.firstOrNull {
@@ -1213,8 +1217,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 }
                 if (local.files.isNotEmpty()) {
                     bindings += acknowledged.serverId to local.files.map { it.getString("id") }
+                    history = attachConfirmedSubmission(history, acknowledged.serverId, local.files)
                 }
-                if (localSubmissions[id]?.pending?.key == local.pending.key) localSubmissions.remove(id)
+                confirmedLocalKeys += local.pending.key
                 narrations = acknowledgeNarrationUser(narrations, id, local.pending.key, canonical)
                 runNarrationUsers.entries.forEach { entry ->
                     if (entry.value.localKey == local.pending.key) entry.setValue(canonical)
@@ -1228,22 +1233,36 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         compactionNotices = compactionNotices.filterNot { it.session == id }; saveCompactionNotices()
         cachedHistory[id] = history
         historyCacheStatus = null
-        val pendingRows = steering.filter { it.session == id && !rejectedSteering(it) && it.delivery != "已送达" }.map {
+        val currentSteering = steering.filter { it.session == id && it.key in currentSubmissionKeys && it.key !in confirmedSteeringKeys && !rejectedSteering(it) }
+        val pendingRows = steering.filter { it.session == id && it.key !in currentSubmissionKeys && it.key !in confirmedSteeringKeys && !rejectedSteering(it) && it.delivery != "已送达" }.map {
             HermesMessage("user", it.text, attachments = it.attachments, localKey = it.key,
                 delivery = it.delivery, timestamp = it.timestamp)
         }.toMutableList()
-        localSubmissions[id]?.let { local ->
-            pendingRows += HermesMessage("user", local.pending.input, attachments = local.files,
-                localKey = local.pending.key, delivery = if (hasPendingFor(id)) {
-                    if (submitting) "正在发送" else "发送状态待核对"
-                } else "已送达", timestamp = local.pending.timestamp)
+        var visibleHistory = appendPendingHistory(history, pendingRows, currentSubmissionKeys)
+        currentSteering.forEach { sent ->
+            visibleHistory = projectCurrentSubmission(visibleHistory,
+                HermesMessage("user", sent.text, attachments = sent.attachments, localKey = sent.key,
+                    delivery = sent.delivery.takeUnless { it == "已送达" }, timestamp = sent.timestamp), sent.existingIds)
         }
-        messages = withActiveNarrations(appendPendingHistory(history, pendingRows, currentSubmissionKeys), liveNarrations(id), activeRun)
+        localSubmissions[id]?.takeUnless { it.pending.key in confirmedLocalKeys }?.let { local ->
+            visibleHistory = projectCurrentSubmission(visibleHistory,
+                HermesMessage("user", local.pending.input, attachments = local.files,
+                    localKey = local.pending.key, delivery = if (hasPendingFor(id)) {
+                        if (submitting) "正在发送" else "发送状态待核对"
+                    } else null, timestamp = local.pending.timestamp), local.existing)
+        }
+        messages = withActiveNarrations(visibleHistory, liveNarrations(id), activeRun)
         withContext(Dispatchers.IO) { historyCache.write(id, history) }
         if (selectedId != id || api !== connection) return
         for ((messageId, attachmentIds) in bindings) {
             connection.json("$root/sessions/$id/messages/$messageId/attachments", obj("ids" to org.json.JSONArray(attachmentIds)))
             if (selectedId != id || api !== connection) return
+        }
+        // Keep receipts with files until binding succeeds; failed bindings are
+        // retried on the next history read without hiding the native image bubble.
+        if (localSubmissions[id]?.pending?.key in confirmedLocalKeys) localSubmissions.remove(id)
+        if (confirmedSteeringKeys.isNotEmpty()) {
+            steering = steering.filterNot { it.session == id && it.key in confirmedSteeringKeys }; saveSteering()
         }
         sessions
             .find { it.optString("id") == id }
@@ -1361,7 +1380,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     fun send(): Boolean = sendInput(draft.trim().ifBlank { if (pendingFiles.isNotEmpty()) "请查看附件" else "" })
 
-    private fun sendInput(input: String, questionId: String? = null): Boolean {
+    private fun sendInput(input: String, questionId: String? = null, hermesExternalVerified: Boolean = false): Boolean {
         val session = selectedId ?: return false
         if (messageActionBusy) { error = "请等待消息操作完成"; return false }
         if (hasPendingSubmission) { error = "请先核对上一次提交结果，避免重复创建任务"; return false }
@@ -1399,7 +1418,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         // Hermes external runs: the desktop holds the turn lease, so a normal submission is
         // safely queued by the gateway instead of racing the running turn. Steer stays the
         // fast path when the run registry still exposes the active run.
-        if (agent == "hermes" && externalRunning && runId == null && !isQuestion) {
+        if (agent == "hermes" && externalRunning && runId == null && !isQuestion && !hermesExternalVerified) {
             val connection = api
             val originalDraft = draft
             val originalFiles = pendingFiles.map { it.optString("id") }
@@ -1411,7 +1430,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     if (selectedId != session || api !== connection) return@launch
                     if (draft == originalDraft && pendingFiles.map { it.optString("id") } == originalFiles) {
                         setSubmitting(session, false)
-                        dispatched = sendInput(input, questionId)
+                        dispatched = sendInput(input, questionId, hermesExternalVerified = true)
                     }
                 } catch (_: kotlinx.coroutines.TimeoutCancellationException) { setError(session, "核对任务归属超时，文字和附件已保留，请重新连接")
                 } catch (e: CancellationException) { throw e }
@@ -1453,6 +1472,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     connection.json(request)
                     accepted = true
                     questionAccepted(session); updateSteering(steerKey, "已送达")
+                    if (selectedId == session) messages = messages.map { if (it.localKey == steerKey) it.copy(delivery = null) else it }
                     if (selectedId == session && runId == id && api === connection)
                         messages.firstOrNull { it.role == "user" && it.localKey == steerKey }?.let { runNarrationUsers[id] = it }
                     val ids = attached.map { it.getString("id") }.toSet()
@@ -1496,7 +1516,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private fun markSubmissionAccepted(session: String, key: String) {
         messageQueue.accepted(key)
         if (selectedId == session) messages = messages.map {
-            if (it.role == "user" && it.localKey == key) it.copy(delivery = "已送达") else it
+            if (it.role == "user" && it.localKey == key) it.copy(delivery = null) else it
         }
         cachedHistory[session]?.let { rows -> cachedHistory[session] = rows.map {
             if (it.role == "user" && it.localKey == key) it.copy(delivery = "已送达") else it
