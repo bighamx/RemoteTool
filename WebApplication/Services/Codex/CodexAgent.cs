@@ -434,6 +434,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             Emit(run, method.EndsWith("/started") ? "message.started" : "message.completed", ("item_id", item.S("id")),
                 ("phase", item.S("phase")), ("text", item.S("text")), ("timestamp", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
         } else if (method is "item/started" or "item/completed" && item != null && item.S("type") is not ("userMessage" or "agentMessage" or "reasoning")) {
+            if (CodexCompactionEvent.Create(item, method.EndsWith("/completed")) is { } compaction) {
+                var phase = compaction.S("event"); compaction.Remove("event");
+                Emit(run, phase, compaction.Select(pair => (pair.Key, (object)pair.Value)).ToArray());
+                return;
+            }
             var kind = item.S("type");
             var name = item.S("tool", item.S("name", kind switch { "commandExecution" => "终端", "fileChange" => "文件修改", "mcpToolCall" => "MCP", "webSearch" => "搜索", "imageView" => "查看图片", _ => kind }));
             var preview = item.S("command", item.S("query", item.S("arguments")));
@@ -797,7 +802,14 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 }
                 foreach (var item in turn.A("items")) {
                     var kind = item.S("type");
-                    if (kind is "userMessage" or "agentMessage" or "reasoning" or "contextCompaction" or "userInputResponse") continue;
+                    if (kind is "userMessage" or "agentMessage" or "reasoning" or "userInputResponse") continue;
+                    if (CodexCompactionEvent.Create(item, item.B("completed")) is { } compaction) {
+                        var compactionPhase = compaction.S("event"); var compactionKey = "compaction:" + item.S("id");
+                        if (seenTools.GetValueOrDefault(compactionKey) == compactionPhase) continue;
+                        seenTools[compactionKey] = compactionPhase; compaction.Remove("event");
+                        Emit(run, compactionPhase, compaction.Select(pair => (pair.Key, (object)pair.Value)).ToArray());
+                        continue;
+                    }
                     var completed = item.B("completed") || item.S("status") is "completed" or "failed" or "declined";
                     var phase = completed ? "tool.completed" : "tool.started"; var id = item.S("id");
                     if (seenTools.GetValueOrDefault(id) == phase) continue; seenTools[id] = phase;
@@ -827,8 +839,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private static long MessageId(string id) => Convert.ToInt64(Hash(id)[..14], 16) + 1;
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
-        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 13), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("state_version", 13));
+        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 14), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("state_version", 14));
         if (path == "title-model") return method == "GET" ? titles.PublicConfig() : titles.Save(body);
         if (path == "title-model/test") return Obj(("title", await titles.Generate("修复手机会话的消息顺序与状态显示")));
         if (path == "title-model/generate") return Obj(("title", await titles.Generate(body.S("input"), context.RequestAborted)));

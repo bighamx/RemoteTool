@@ -213,13 +213,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     val externalRunning get() = runId == null && externalActivityRunning(externalActivity, selectedId, activityNow, externalVerifiedAt)
     private var compactionRequest by mutableStateOf<Pair<String, Long>?>(null)
+    private var streamCompaction by mutableStateOf<Pair<String, Long>?>(null)
+    private val streamCompacting get() = streamCompaction?.first == runId && runId != null && runSession == selectedId
     val requestingCompaction get() = compactionRequest?.first == selectedId && compactionRequest != null
     val hasExecution get() = requestingCompaction || (runStateVerified && runSession == selectedId) || externalRunning
     val executionKey get() = if (requestingCompaction) "compact-request-${compactionRequest?.second}" else runId ?: externalActivity?.optString("activity_id")?.takeIf { externalRunning }?.let { "external-$it" }
-    val executionTiming get() = if (requestingCompaction) AgentRunTiming(startedAt = compactionRequest?.second) else if (runId != null) currentRunTiming else externalActivityTiming(externalActivity)
+    val executionTiming get() = if (requestingCompaction) AgentRunTiming(startedAt = compactionRequest?.second) else if (streamCompacting) AgentRunTiming(startedAt = streamCompaction?.second) else if (runId != null) currentRunTiming else externalActivityTiming(externalActivity)
     val executionEvents get() = if (runId != null) events else externalActivityEvents(externalActivity)
     val executionEventCount get() = if (runId != null) eventCount else externalActivity?.optInt("event_count") ?: 0
-    val executionState get() = if (requestingCompaction) "正在提交压缩请求" else if (runId != null) state else externalActivityLabel(externalActivity)
+    val executionState get() = if (requestingCompaction) "正在提交压缩请求" else if (streamCompacting) "正在压缩上下文" else if (runId != null) state else externalActivityLabel(externalActivity)
     val executionCompacting get() = requestingCompaction || executionState == "正在压缩上下文"
 
     fun pollExternalActivity() = viewModelScope.launch {
@@ -1764,6 +1766,18 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                 if (n >= 0 && n <= seq) return@withContext
                                 if (n >= 0) seq = n
                                 recordRunResponse(id, event)
+                                compactionStreamPhase(agent, event)?.let { started ->
+                                    if (started) {
+                                        if (streamCompaction?.first != id) streamCompaction = id to
+                                            (parseMessageTimestamp(event.opt("timestamp")) ?: System.currentTimeMillis())
+                                    } else {
+                                        if (streamCompaction?.first == id) streamCompaction = null
+                                        // Read the native item at its native position; never persist a synthetic notice.
+                                        val session = runSession
+                                        if (session != null) launch { loadHistory(session); pollContext() }
+                                    }
+                                    return@withContext
+                                }
                                 if (event.optString("type", event.optString("event")) in setOf("approval.request", "run.completed", "run.failed", "run.cancelled", "run.interrupted")) statusWake?.trySend(Unit)
                                 when (event.optString("type", event.optString("event"))) {
                                     "message.started" -> beginStreamItem(id, event, n.takeIf { it >= 0 })
