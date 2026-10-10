@@ -9,6 +9,7 @@ internal const val UPDATE_REPOSITORY_ID = 368781353L
 internal const val UPDATE_RELEASES_URL = "https://api.github.com/repositories/368781353/releases?per_page=30"
 private val updateRepositoryAliases = setOf(UPDATE_REPOSITORY, "bighamx/chuckieTool")
 internal const val UPDATE_MANIFEST = "chuckiehelper-update.json"
+internal const val UPDATE_LATEST_MANIFEST_URL = "https://github.com/$UPDATE_REPOSITORY/releases/latest/download/$UPDATE_MANIFEST"
 internal const val UPDATE_PACKAGE = "com.chuckiehelper.mobile"
 internal const val MAX_UPDATE_SIZE = 256L * 1024 * 1024
 
@@ -27,7 +28,10 @@ internal data class AppRelease(
 internal fun isUpdateAssetUrl(url: String): Boolean = runCatching {
     val uri = URI(url)
     uri.scheme == "https" && uri.host == "github.com" && uri.port in setOf(-1, 443) &&
-        uri.userInfo == null && updateRepositoryAliases.any { uri.rawPath.startsWith("/$it/releases/download/", ignoreCase = true) }
+        uri.userInfo == null && updateRepositoryAliases.any {
+            uri.rawPath.startsWith("/$it/releases/download/", ignoreCase = true) ||
+                uri.rawPath.startsWith("/$it/releases/latest/download/", ignoreCase = true)
+        }
 }.getOrDefault(false)
 
 internal fun isUpdateTransportUrl(url: String): Boolean = runCatching {
@@ -69,6 +73,23 @@ internal fun parseAppRelease(manifest: JSONObject, release: JSONObject): AppRele
     val url = asset.getString("browser_download_url")
     require(isUpdateAssetUrl(url)) { "更新包地址不属于本项目" }
     return AppRelease(code, name, manifest.optString("notes", release.optString("body")).take(6000), url, size, sha)
+}
+
+/** The public latest-release asset endpoint does not consume GitHub API quota.
+ * Hash, byte count, installed package identity and signer still pin the downloaded APK. */
+internal fun parseLatestAppRelease(manifest: JSONObject): AppRelease {
+    val name = manifest.getString("apkAsset")
+    require(name.matches(Regex("[a-zA-Z0-9._+-]+\\.apk"))) { "更新包名称无效" }
+    val asset = JSONObject().put("name", name).put("size", manifest.getLong("size"))
+        .put("browser_download_url", "https://github.com/$UPDATE_REPOSITORY/releases/latest/download/$name")
+    return parseAppRelease(manifest, JSONObject().put("assets", JSONArray().put(asset)))
+}
+
+internal fun updateHttpFailureMessage(code: Int, remaining: String?, retryAfter: String?): String = when {
+    code == 429 || code == 403 && remaining == "0" ->
+        "更新服务请求限额已用尽" + (retryAfter?.toLongOrNull()?.takeIf { it > 0 }?.let { "，请在 ${it} 秒后重试" } ?: "，请稍后重试或切换网络")
+    code == 403 -> "更新服务拒绝访问（HTTP 403），请检查网络或稍后重试"
+    else -> "更新服务 HTTP $code"
 }
 
 internal fun restoreAppRelease(value: JSONObject): AppRelease {

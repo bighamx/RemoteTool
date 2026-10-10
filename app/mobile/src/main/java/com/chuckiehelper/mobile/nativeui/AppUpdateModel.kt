@@ -244,6 +244,13 @@ internal class AppUpdateModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun findLatest(): AppRelease? {
+        // Prefer one public asset request; VPN/mobile users may share an exhausted
+        // unauthenticated GitHub API quota despite checking only once.
+        val latestManifest = try { fetchText(UPDATE_LATEST_MANIFEST_URL) }
+            catch (cancel: CancellationException) { throw cancel }
+            catch (_: IOException) { null }
+        if (latestManifest != null) return parseLatestAppRelease(JSONObject(latestManifest))
+        // A newer web-only release may not contain the Android manifest.
         val releases = JSONArray(fetchText(UPDATE_RELEASES_URL))
         return appReleaseCandidates(releases).map { candidate ->
             val assets = candidate.getJSONArray("assets")
@@ -279,7 +286,8 @@ internal class AppUpdateModel(app: Application) : AndroidViewModel(app) {
                     val next = response.header("Location")?.let { response.request.url.resolve(it) } ?: throw IOException("更新下载地址缺失")
                     return@use fetch(next.toString(), redirects + 1, action)
                 }
-                if (!response.isSuccessful) throw IOException(if (response.code == 403 || response.code == 429) "更新检查过于频繁，请稍后再试" else "更新服务 HTTP ${response.code}")
+                if (!response.isSuccessful) throw IOException(updateHttpFailureMessage(response.code,
+                    response.header("X-RateLimit-Remaining"), response.header("Retry-After")))
                 action(response)
             }
         }

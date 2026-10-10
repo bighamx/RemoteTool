@@ -15,6 +15,27 @@ class AppUpdatePolicyTest {
         .put(JSONObject().put("name", "ChuckieHelper.apk").put("size", 1234)
             .put("browser_download_url", "https://github.com/$UPDATE_REPOSITORY/releases/download/android-v0.4.0/ChuckieHelper.apk")))
 
+    @Test fun publicLatestManifestAvoidsApiQuotaAndStillPinsTheApk() {
+        assertTrue(isUpdateTransportUrl(UPDATE_LATEST_MANIFEST_URL))
+        val parsed = parseLatestAppRelease(manifest().put("notes", "新版本"))
+        assertEquals("https://github.com/$UPDATE_REPOSITORY/releases/latest/download/ChuckieHelper.apk", parsed.apkUrl)
+        assertEquals(hash, parsed.sha256)
+        assertEquals(1234L, parsed.size)
+        assertEquals(parsed, restoreAppRelease(parsed.json()))
+        assertThrows(IllegalArgumentException::class.java) { parseLatestAppRelease(manifest().put("apkAsset", "../evil.apk")) }
+        assertThrows(IllegalArgumentException::class.java) { parseLatestAppRelease(manifest().put("apkAsset", "%2Fother.apk")) }
+        assertThrows(IllegalArgumentException::class.java) { parseLatestAppRelease(manifest().put("sha256", "bad")) }
+        assertFalse(isUpdateTransportUrl("https://github.com/other/repo/releases/latest/download/a.apk"))
+        assertFalse(isUpdateTransportUrl("https://github.com/$UPDATE_REPOSITORY/releases/latest/other/a.apk"))
+    }
+
+    @Test fun forbiddenDoesNotClaimThatTheUserCheckedTooFrequently() {
+        assertTrue(updateHttpFailureMessage(403, null, null).contains("拒绝访问"))
+        assertFalse(updateHttpFailureMessage(403, null, null).contains("频繁"))
+        assertTrue(updateHttpFailureMessage(403, "0", null).contains("限额"))
+        assertTrue(updateHttpFailureMessage(429, null, "60").contains("60 秒"))
+    }
+
     @Test fun skipsWebOnlyDraftAndPreviewReleases() {
         val list = JSONArray().put(JSONObject().put("assets", JSONArray()))
             .put(release().put("draft", true)).put(release().put("prerelease", true)).put(release())
