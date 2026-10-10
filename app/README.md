@@ -36,6 +36,16 @@ Windows 桌面代理在专用线程上绑定当前输入桌面，并保留服务
 
 需要 JDK 17+ 和 Android SDK 34。设置 `ANDROID_HOME`，或在不提交的 `local.properties` 中配置 `sdk.dir`。
 
+发行包使用 Release 构建，启用 R8 代码优化、未使用代码移除和资源裁剪：
+
+```powershell
+rtk proxy .\gradlew.bat :mobile:assembleRelease :mobile:lintRelease --no-daemon "-Pkotlin.compiler.execution.strategy=in-process"
+```
+
+产物为 `mobile/build/outputs/apk/release/mobile-release.apk`，`tools/Publish-AppUpdate.ps1` 默认读取这个发行包。当前 Release 沿用已安装版本的签名，构建机必须使用同一签名密钥；发布脚本可通过 `-PreviousApkPath` 检查签名一致和版本递增。不要通过卸载 App 来解决签名不一致。
+
+开发调试仍可使用以下命令：
+
 ```powershell
 .\gradlew.bat :mobile:assembleDebug
 .\gradlew.bat :mobile:testDebugUnitTest
@@ -65,4 +75,4 @@ App 原生绘制性能面板，Web 使用网页组件，两端共享性能 API�
 - FFmpeg 可通过环境变量 `CHUCKIEHELPER_FFMPEG_PATH` 设置完整路径。IIS 不会继承用户 WinGet PATH，建议配置系统公共路径，避免把大型可执行文件放进 Shadow Copy 源目录。
 - IIS 的程序集更新须验证文件校验值及运行接口；Razor 与静态资源须同步到实际站点目录。
 
-调试 APK 为开发签名。正式发布时需另行配置自己的稳定签名密钥。
+当前已发行版本使用既有开发签名，更新须保持一致。签名密钥迁移需单独规划，不能直接更换后覆盖安装。

@@ -14,7 +14,7 @@ function Get-ApkSha256([string]$LiteralPath) {
     finally { $digest.Dispose(); $stream.Dispose() }
 }
 $taskRepo = Split-Path -Parent $PSScriptRoot
-if (-not $ApkPath) { $ApkPath = Join-Path $taskRepo 'app\mobile\build\outputs\apk\debug\mobile-debug.apk' }
+if (-not $ApkPath) { $ApkPath = Join-Path $taskRepo 'app\mobile\build\outputs\apk\release\mobile-release.apk' }
 $apkSource = (Resolve-Path -LiteralPath $ApkPath).Path
 if (-not $AndroidSdk) { $AndroidSdk = $env:ANDROID_HOME }
 if (-not $AndroidSdk) { $AndroidSdk = $env:ANDROID_SDK_ROOT }
@@ -32,6 +32,7 @@ $aapt = Join-Path $buildTools.FullName 'aapt.exe'
 $apksigner = Join-Path $buildTools.FullName 'apksigner.bat'
 $badging = (& $aapt dump badging $apkSource) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'Unable to read APK metadata.' }
+if ($Publish -and $badging -match '(?m)^application-debuggable') { throw 'Publish the optimized Release APK, not a debuggable APK.' }
 $identity = [regex]::Match($badging, "package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'")
 if (-not $identity.Success -or $identity.Groups[1].Value -ne 'com.chuckiehelper.mobile') { throw 'Wrong APK application ID.' }
 $versionCode = [long]$identity.Groups[2].Value
