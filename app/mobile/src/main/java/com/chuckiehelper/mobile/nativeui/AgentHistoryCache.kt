@@ -49,10 +49,17 @@ internal fun decodeHistorySnapshot(rows: JSONArray): List<HermesMessage> = rows.
 }
 
 /** Pending submissions are temporary trailing rows, never position hints for native history. */
-internal fun appendPendingHistory(history: List<HermesMessage>, pending: List<HermesMessage>): List<HermesMessage> =
-    history + pending.distinctBy { it.localKey }.filter { row ->
-        row.serverId == 0L && row.localKey != null && history.none { it.localKey == row.localKey }
+internal fun appendPendingHistory(history: List<HermesMessage>, pending: List<HermesMessage>, currentKeys: Set<String> = emptySet()): List<HermesMessage> {
+    val latestNativeTime = history.filter { it.serverId > 0 }.mapNotNull { it.timestamp }.maxOrNull()
+    return history + pending.distinctBy { it.localKey }.filter { row ->
+        // A restored pending record is not proof of a new message. Keep its durable
+        // receipt separately, but never append older/undated submissions after newer history.
+        val belongsAtEnd = row.timestamp?.let { time ->
+            if (latestNativeTime != null) time >= latestNativeTime else row.localKey in currentKeys
+        } == true
+        belongsAtEnd && row.serverId == 0L && row.localKey != null && history.none { it.localKey == row.localKey }
     }
+}
 
 /** Only the live task contributes an overlay. Native rows are never moved or coalesced. */
 internal fun withActiveNarrations(history: List<HermesMessage>, narrations: List<AssistantNarration>, activeRun: String?): List<HermesMessage> {

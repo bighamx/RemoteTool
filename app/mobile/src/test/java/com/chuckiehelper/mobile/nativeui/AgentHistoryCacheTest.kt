@@ -67,8 +67,34 @@ class AgentHistoryCacheTest {
     @Test fun pendingRowsStaySeparateFromAuthoritativeHistory() {
         val native = listOf(HermesMessage("assistant", "没有时间", 90), HermesMessage("user", "最新", 2))
         val pending = HermesMessage("user", "尚待确认", localKey = "pending", timestamp = 1L)
-        val result = appendPendingHistory(native, listOf(pending, pending))
+        val result = appendPendingHistory(native, listOf(pending, pending), setOf("pending"))
         assertEquals(native, result.take(native.size))
         assertEquals(listOf(pending), result.drop(native.size))
+    }
+
+    @Test fun restoredOctoberSixPendingNeverAppendsAfterOctoberTenHistory() {
+        val history = listOf(HermesMessage("user", "最新任务", 90, timestamp = 1791592000000L),
+            HermesMessage("assistant", "最新回复", 2, timestamp = 1791592100000L))
+        val old = HermesMessage("user", "旧的待核对消息", localKey = "old", timestamp = 1791260000000L,
+            delivery = "发送状态待核对")
+        repeat(3) { assertEquals(history, appendPendingHistory(history, listOf(old))) }
+        assertEquals(history, appendPendingHistory(history, listOf(old), setOf("old")))
+        assertEquals("发送状态待核对", old.delivery) // Visibility does not fabricate acceptance or delete the receipt.
+    }
+
+    @Test fun unknownHistoryTimesDoNotAuthorizeRestoredPendingPlacement() {
+        val history = listOf(HermesMessage("assistant", "原始记录没有时间", 90))
+        val pending = HermesMessage("user", "待核对", localKey = "restored", timestamp = 100L)
+        assertEquals(history, appendPendingHistory(history, listOf(pending)))
+        assertEquals(history + pending, appendPendingHistory(history, listOf(pending), setOf("restored")))
+        assertEquals(history, appendPendingHistory(history, listOf(pending.copy(timestamp = null)), setOf("restored")))
+    }
+
+    @Test fun freshPendingRemainsVisibleUntilNativeHistoryAdvancesBeyondIt() {
+        val old = HermesMessage("assistant", "上一轮", 90, timestamp = 100L)
+        val pending = HermesMessage("user", "本次发送", localKey = "new", timestamp = 200L)
+        assertEquals(listOf(old, pending), appendPendingHistory(listOf(old), listOf(pending)))
+        val reply = HermesMessage("assistant", "下一条原生消息", 2, timestamp = 300L)
+        assertEquals(listOf(old, reply), appendPendingHistory(listOf(old, reply), listOf(pending)))
     }
 }

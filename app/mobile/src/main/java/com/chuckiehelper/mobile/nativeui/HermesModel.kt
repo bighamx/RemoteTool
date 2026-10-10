@@ -331,6 +331,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var seq = -1L
     private data class LocalSubmission(val pending: PendingAgentSubmission, val existing: Set<Long>, val after: Long, val files: List<JSONObject>)
     private val localSubmissions = mutableMapOf<String, LocalSubmission>()
+    private val currentSubmissionKeys = mutableSetOf<String>()
     // Keep an explicit user boundary until the run ends, even after history acknowledges
     // and removes the optimistic submission. This is not inferred from the latest row.
     private val runNarrationUsers = mutableMapOf<String, HermesMessage>()
@@ -1237,7 +1238,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     if (submitting) "正在发送" else "发送状态待核对"
                 } else "已送达", timestamp = local.pending.timestamp)
         }
-        messages = withActiveNarrations(appendPendingHistory(history, pendingRows), liveNarrations(id), activeRun)
+        messages = withActiveNarrations(appendPendingHistory(history, pendingRows, currentSubmissionKeys), liveNarrations(id), activeRun)
         withContext(Dispatchers.IO) { historyCache.write(id, history) }
         if (selectedId != id || api !== connection) return
         for ((messageId, attachmentIds) in bindings) {
@@ -1340,6 +1341,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private fun dispatchQueuedMessage(row: QueuedChatMessage, response: JSONObject?) {
         if (selectedId != row.session || runId != null || submitting || hasPendingSubmission) return
         val pending = PendingAgentSubmission(row.key, row.text, row.files.map { it.getString("id") }, System.currentTimeMillis())
+        currentSubmissionKeys += row.key
         if (response == null) {
             pendingSubmissions = pendingSubmissions + (row.session to pending); savePending()
             submit(pending, row.session, row.files, clearDraft = false)
@@ -1431,6 +1433,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             error = null
             setSubmitting(session, true)
             val steerKey = UUID.randomUUID().toString()
+            currentSubmissionKeys += steerKey
             val connection = api
             val record = SteeringMessage(steerKey, session, input, messages.map { it.serverId }.filter { it > 0 }.toSet(), messages.lastOrNull { it.serverId > 0 }?.serverId ?: 0, timestamp = System.currentTimeMillis(), attachments = attached)
             steering = steering + record; saveSteering()
@@ -1502,6 +1505,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     private fun submit(pending: PendingAgentSubmission, session: String, queuedFiles: List<JSONObject>? = null, clearDraft: Boolean = true) {
         val key = pending.key; val input = pending.input
+        currentSubmissionKeys += key
         val provider = sessionProvider; val model = sessionModel
         val attached = queuedFiles ?: pendingFiles.filter { it.optString("id") in pending.attachmentIds }
         setSubmitting(session, true); setError(session, null)
