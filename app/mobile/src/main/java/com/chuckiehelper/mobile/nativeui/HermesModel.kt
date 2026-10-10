@@ -36,7 +36,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private val appContext = application.applicationContext
     private val watchOwner = "$agent-$deviceId"
     private lateinit var api: NativeApi
-    var sessions by mutableStateOf<List<JSONObject>>(emptyList())
+    var sessions by mutableStateOf<List<JSONObject>>(runCatching {
+        org.json.JSONArray(prefs.getString("offlineSessions", "[]")).objects()
+    }.getOrDefault(emptyList()))
         private set
     var pinningSessions by mutableStateOf<Set<String>>(emptySet())
         private set
@@ -82,6 +84,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     if (!result.optBoolean("rewound")) throw java.io.IOException("服务端未确认撤回，编辑内容已保留")
                     rewound = true
                     cachedHistory.remove(session); localSubmissions.remove(session)
+                    withContext(Dispatchers.IO) { historyCache.remove(session) }
                     narrations = narrations.filterNot { it.session == session }; saveNarrations()
                     compactionNotices = compactionNotices.filterNot { it.session == session }; saveCompactionNotices()
                     steering = steering.filterNot { it.session == session }; saveSteering()
@@ -373,6 +376,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     // 每会话最近一次成功加载的消息列表（内存级，进程内有效），用于 select() 时先回放再刷新。
     private val cachedHistory = mutableMapOf<String, List<HermesMessage>>()
+    private val historyCache = AgentHistoryCache(application.noBackupFilesDir.resolve("conversation-history"), "$agent-$deviceId")
+    var historyCacheStatus by mutableStateOf<String?>(null)
+        private set
+    private fun saveOfflineSessions() {
+        prefs.edit().putString("offlineSessions", org.json.JSONArray(sessions.take(50)).toString()).apply()
+    }
     private var compactionNotices = if (agent == "codex") {
         prefs.edit().remove("compactionNotices").apply()
         emptyList()
@@ -393,7 +402,6 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             startedAt = started))
         saveCompactionNotices()
         val merged = mergeCompactionNotices(history, compactionNotices.filter { it.session == session })
-        cachedHistory[session] = merged
         if (selectedId == session) messages = merged
     }
     private fun saveCompactionNotices() {
@@ -410,7 +418,6 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         compactionNotices = coalesceCompactionNotices(known + AgentCompactionNotice(key, session, time, anchor, compactedId))
         saveCompactionNotices()
         val merged = mergeCompactionNotices(history, compactionNotices.filter { it.session == session })
-        cachedHistory[session] = merged
         if (selectedId == session) messages = merged
     }
     // 切走时挂到后台的 run（sessionId -> runId）。服务端继续执行，切回对应会话时恢复跟踪。
@@ -515,8 +522,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         var note = assistantNarrationEvent(key, session, text, eventTime, messages, sequence, userKey)?.copy(run = run, messageId = messageId, streamed = streamed) ?: return
         if (boundUser != null) note = note.copy(anchor = boundUser.serverId, userText = boundUser.text, userTimestamp = boundUser.timestamp)
         narrations = upsertAssistantNarration(narrations, note, messages); saveNarrations()
-        messages = mergeAssistantNarrations(messages, liveNarrations(session))
-        cachedHistory[session] = messages
+        val nativeRows = messages.filterNot { it.serverId == 0L && it.localKey?.startsWith("narration-") == true }
+        messages = withActiveNarrations(nativeRows, liveNarrations(session), run)
         if (needsMediaCatalogRefresh(text, files)) refreshFiles()
     }
     private fun flushPendingNarration(run: String, sequence: Long?, text: String = pendingText, eventTime: Any? = pendingTextTimestamp,
@@ -534,9 +541,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
         event.optString("phase").takeIf { it.isNotBlank() && it != "null" }?.let { pendingPhase = it }
     }
-    /** 旁白气泡 24h 过期：过期后不再插入聊天列表，只在进度区可回看。 */
+    /** Only the currently tracked task supplies temporary narration. */
     private fun liveNarrations(id: String) = narrations.filter {
-        it.session == id && System.currentTimeMillis() - it.timestamp < 24 * 60 * 60 * 1000L
+        it.session == id && it.run != null && it.run == (runId.takeIf { runSession == id } ?: backgroundRuns[id])
     }
     private fun saveSteering() {
         prefs.edit().putString("steeringMessages", org.json.JSONArray(steering.map { row ->
@@ -557,7 +564,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             events = emptyList(); eventCount = 0
             prefs.edit().remove("run").remove("runSession").apply()
         }
+        discardRunNarrations(id)
         runNarrationUsers.remove(id); saveRuns()
+    }
+    private fun discardRunNarrations(run: String) {
+        val keys = narrations.filter { it.run == run }.map { it.key }.toSet()
+        narrations = narrations.filterNot { it.run == run }; saveNarrations()
+        messages = messages.filterNot { it.serverId == 0L && it.localKey in keys }
     }
     fun takeover() = launch {
         val session = selectedId ?: return@launch
@@ -657,6 +670,16 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         watching?.cancel()
         streamJob?.cancel()
         launch {
+            selectedId?.let { session ->
+                if (messages.isEmpty()) {
+                    val offline = cachedHistory[session] ?: withContext(Dispatchers.IO) { historyCache.read(session) }
+                    if (selectedId == session && offline != null) {
+                        cachedHistory[session] = offline; messages = offline
+                        historyCacheStatus = "本地缓存 · 正在同步"
+                        sessions.firstOrNull { it.optString("id") == session }?.optString("title")?.takeIf { it.isNotBlank() }?.let { title = it }
+                    }
+                }
+            }
             capabilities = api.json("$root/capabilities")
             if (agent == "hermes" && capabilities.optJSONObject("features")?.optBoolean("run_submission") != true)
                 throw java.io.IOException("当前 $agentName 不支持可恢复任务接口")
@@ -688,6 +711,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
                 setError(originatingSession, connectionFailureMessage(e))
+                if (selectedId == originatingSession && historyCacheStatus != null) historyCacheStatus = "缓存 · 同步失败"
                 if (e is ReadConnectionFailure && selectedId == originatingSession) readConnectionError = error
             }
         }
@@ -714,6 +738,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 if (offset == 0) emptyList() else sessions,
                 rows,
             ) { it.optString("id") }
+            saveOfflineSessions()
             hasMore = result.optBoolean("has_more")
             // Hermes back-fills pins beyond the page: visible row count is not a page offset.
             nextSessionOffset = result.optInt("offset", offset) + result.optInt("limit", 50)
@@ -800,7 +825,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             "failed", "interrupted" -> {
                 removePending(session)
                 localSubmissions.remove(session)
-                if (selectedId == session) { messages = messages.filterNot { it.localKey == pending.key }; cachedHistory[session] = messages }
+                if (selectedId == session) { messages = messages.filterNot { it.localKey == pending.key } }
                 if (conversationUi.entry(session).draft.isBlank() && pending.questionId == null) setDraft(session, pending.input)
             }
             "acceptance_unknown" -> {
@@ -836,12 +861,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     noteRunActivity(session, result, runRequestedAt)
                     if (result.optString("status") in setOf("completed", "failed", "cancelled", "interrupted", "acceptance_unknown") && backgroundRuns[session] == id) {
                         recordCompactionCompletion(id, session, result)
+                        discardRunNarrations(id)
                         runNarrationUsers.remove(id)
                         backgroundRuns.remove(session); saveRuns()
                     }
                 } catch (e: CancellationException) { throw e }
                 catch (e: ApiRequestFailure) {
                     if (e.status == 404 && backgroundRuns[session] == id && api === connection) {
+                        discardRunNarrations(id)
                         runNarrationUsers.remove(id)
                         noteRunActivity(session, obj("status" to "missing"), activityClock())
                         backgroundRuns.remove(session); saveRuns()
@@ -1064,12 +1091,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         contextInfo = contextCache[id]; asyncQuestion = null
         // 先回放上一次该会话的消息（如有缓存），网络刷新到位后替换 —— 消除「返回再进白屏等待」。
         cachedHistory[selectedId]?.let { cached ->
-            messages = mergeAgentCompactionNotices(agent,
-                cached.filterNot { it.localKey?.startsWith("compaction-") == true }.takeLast(30),
-                compactionNotices.filter { it.session == selectedId })
+            messages = cached.takeLast(30)
+            historyCacheStatus = "本地缓存 · 正在同步"
             // 回放缓存后请求滚到底，否则打开会话停在缓存顶部等网络刷新
             scrollToLatestRequest++
-        } ?: run { messages = emptyList() }
+        } ?: run { messages = emptyList(); historyCacheStatus = null }
         // 恢复该会话的后台 run 跟踪
         backgroundRuns.remove(id)?.let { resumed ->
             runId = resumed; runSession = id
@@ -1078,7 +1104,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
         saveRuns()
         pollContext()
-        historyJob = launch { reconcilePendingNow(id); loadHistory(id); loadSelection(id) }
+        historyJob = launch {
+            if (id !in cachedHistory) {
+                val offline = withContext(Dispatchers.IO) { historyCache.read(id) }
+                if (selectedId != id) return@launch
+                if (offline != null && messages.isEmpty()) {
+                    cachedHistory[id] = offline; messages = offline
+                    historyCacheStatus = "本地缓存 · 正在同步"; scrollToLatestRequest++
+                }
+            }
+            loadHistory(id); reconcilePendingNow(id); loadSelection(id)
+        }
     }
 
     /** 多端共享：本地没有跟踪时，向服务端查询该会话是否有其它设备发起的活跃 run，有则以观察者身份挂载。 */
@@ -1123,15 +1159,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     private suspend fun loadHistoryNow(id: String) {
         val connection = api
-        val response = connection.json("$root/sessions/$id/messages?limit=30")
+        val response = try {
+            connection.json("$root/sessions/$id/messages?limit=30").also { it.getJSONArray("data") }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (selectedId == id && api === connection && id in cachedHistory) historyCacheStatus = "离线缓存"
+            throw e
+        }
         if (id != selectedId || api !== connection) return
-        // Keep the visible list intact while acknowledgement/attachment requests suspend.
-        // SSE can add narration during those requests; merge the latest local state only
-        // at publication, rather than exposing a bare/stale server snapshot to Compose.
-        var history =
-            retainUserMessageMetadata(
-                response.array("data").objects().takeLast(30).mapNotNull { row -> agentHistoryMessage(agent, row) }, messages,
-            )
+        // Native order and content are authoritative. Local snapshots never contribute rows.
+        val history = response.array("data").objects().takeLast(30).mapNotNull { row -> agentHistoryMessage(agent, row) }
+        val bindings = mutableListOf<Pair<Long, List<String>>>()
         // Hermes has no request-key lookup. After an App restart the in-memory
         // pre-send boundary is gone, so reconcile persisted submissions using
         // unambiguous timestamped history rather than leaving them pending forever.
@@ -1140,25 +1178,19 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 markSubmissionAccepted(id, pending.key)
                 removePending(id)
                 questionAccepted(id)
-                history = history.map { if (it.serverId == confirmed.serverId) it.copy(localKey = pending.key, delivery = "已送达") else it }
                 if (error.orEmpty().contains("尚未确认")) setError(id, null)
                 if (pending.attachmentIds.isNotEmpty()) {
-                    connection.json("$root/sessions/$id/messages/${confirmed.serverId}/attachments", obj("ids" to org.json.JSONArray(pending.attachmentIds)))
-                    if (selectedId != id || api !== connection) return
+                    bindings += confirmed.serverId to pending.attachmentIds
                 }
             }
         }
         val sessionSteering = steering.filter { it.session == id }
         val reconciliation = reconcileSteeringMessages(history, sessionSteering)
         for ((sent, confirmed) in reconciliation.second) {
-            val canonical = confirmed.copy(timestamp = confirmed.timestamp ?: sent.timestamp, localKey = sent.key)
-            history = history.map { if (it.serverId == confirmed.serverId) canonical else it }
+            val canonical = confirmed.copy(localKey = sent.key)
             narrations = acknowledgeNarrationUser(narrations, id, sent.key, canonical)
             if (sent.attachments.isNotEmpty()) {
-                connection.json("$root/sessions/$id/messages/${confirmed.serverId}/attachments",
-                    obj("ids" to org.json.JSONArray(sent.attachments.map { it.getString("id") })))
-                if (selectedId != id || api !== connection) return
-                history = history.map { if (it.serverId == confirmed.serverId) it.copy(attachments = sent.attachments) else it }
+                bindings += confirmed.serverId to sent.attachments.map { it.getString("id") }
             }
         }
         // 放弃的失败记录（>10 分钟）与已确认/滑出窗口的记录一并清除，防止本地气泡永久堆叠在列表尾部
@@ -1173,17 +1205,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     it.text.replace("\r\n", "\n").trim() == local.pending.input.replace("\r\n", "\n").trim()
             }
             if (acknowledged != null) {
-                val canonical = acknowledged.copy(timestamp = acknowledged.timestamp ?: local.pending.timestamp, localKey = local.pending.key)
-                history = history.map { if (it.serverId == acknowledged.serverId) canonical else it }
+                val canonical = acknowledged.copy(localKey = local.pending.key)
                 if (pendingSubmissions[id]?.key == local.pending.key) {
                     markSubmissionAccepted(id, local.pending.key); removePending(id); questionAccepted(id)
                     if (error.orEmpty().contains("尚未确认")) setError(id, null)
                 }
                 if (local.files.isNotEmpty()) {
-                    connection.json("$root/sessions/$id/messages/${acknowledged.serverId}/attachments",
-                        obj("ids" to org.json.JSONArray(local.files.map { it.getString("id") })))
-                    if (selectedId != id || api !== connection) return
-                    history = history.map { if (it.serverId == acknowledged.serverId) it.copy(attachments = local.files) else it }
+                    bindings += acknowledged.serverId to local.files.map { it.getString("id") }
                 }
                 if (localSubmissions[id]?.pending?.key == local.pending.key) localSubmissions.remove(id)
                 narrations = acknowledgeNarrationUser(narrations, id, local.pending.key, canonical)
@@ -1192,19 +1220,30 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 }
             }
         }
-        // Everything below is synchronous: no observer sees the unreconciled snapshot.
+        // Replace the canonical window, including a successful empty response.
+        val activeRun = runId.takeIf { runSession == id } ?: backgroundRuns[id]
+        narrations = narrations.filter { it.session != id || it.run == activeRun && activeRun != null }
         saveNarrations()
-        history = mergeSteeringMessages(history, steering.filter { it.session == id })
+        compactionNotices = compactionNotices.filterNot { it.session == id }; saveCompactionNotices()
+        cachedHistory[id] = history
+        historyCacheStatus = null
+        val pendingRows = steering.filter { it.session == id && !rejectedSteering(it) && it.delivery != "已送达" }.map {
+            HermesMessage("user", it.text, attachments = it.attachments, localKey = it.key,
+                delivery = it.delivery, timestamp = it.timestamp)
+        }.toMutableList()
         localSubmissions[id]?.let { local ->
-            history = insertLocalMessage(history, HermesMessage("user", local.pending.input, attachments = local.files,
+            pendingRows += HermesMessage("user", local.pending.input, attachments = local.files,
                 localKey = local.pending.key, delivery = if (hasPendingFor(id)) {
                     if (submitting) "正在发送" else "发送状态待核对"
-                } else "已送达", timestamp = local.pending.timestamp), local.existing, local.after)
+                } else "已送达", timestamp = local.pending.timestamp)
         }
-        history = mergeAssistantNarrations(history, liveNarrations(id))
-        history = reconcilePendingAssistant(history, pendingItemId, pendingText)
-        messages = mergeAgentCompactionNotices(agent, history, compactionNotices.filter { it.session == id })
-        if (messages.isNotEmpty()) cachedHistory[id] = messages
+        messages = withActiveNarrations(appendPendingHistory(history, pendingRows), liveNarrations(id), activeRun)
+        withContext(Dispatchers.IO) { historyCache.write(id, history) }
+        if (selectedId != id || api !== connection) return
+        for ((messageId, attachmentIds) in bindings) {
+            connection.json("$root/sessions/$id/messages/$messageId/attachments", obj("ids" to org.json.JSONArray(attachmentIds)))
+            if (selectedId != id || api !== connection) return
+        }
         sessions
             .find { it.optString("id") == id }
             ?.let { title = it.optString("title").ifBlank { "未命名会话" } }
@@ -1241,6 +1280,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val result = api.json(api.request("$root/sessions/$id").newBuilder().patch(body).build())
         val renamed = result.getJSONObject("session").optString("title")
         sessions = sessions.map { if (it.optString("id") == id) JSONObject(it.toString()).put("title", renamed) else it }
+        saveOfflineSessions()
         if (selectedId == id) title = renamed
         onDone()
     }
@@ -1253,7 +1293,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val result = api.json("$root/sessions/$id/delete", obj())
         if (!result.optBoolean("deleted")) throw java.io.IOException("$agentName 未删除该会话")
         sessions = sessions.filter { it.optString("id") != id }
+        saveOfflineSessions()
         cachedHistory.remove(id)
+        withContext(Dispatchers.IO) { historyCache.remove(id) }
         sessionActivities = sessionActivities - id
         compactionNotices = compactionNotices.filterNot { it.session == id }; saveCompactionNotices()
         narrations = narrations.filterNot { it.session == id }; saveNarrations()
@@ -1422,7 +1464,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     updateSteering(steerKey, steeringFailureDelivery(e))
                     if (writeWasRejected(e)) {
                         steering = steering.filterNot { it.key == steerKey }; saveSteering()
-                        if (selectedId == session) { messages = messages.filterNot { it.localKey == steerKey }; cachedHistory[session] = messages }
+                        if (selectedId == session) { messages = messages.filterNot { it.localKey == steerKey } }
                     }
                     if (staleRunFailure(e)) clearRunTracking(session, id)
                     if (!isQuestion && conversationUi.entry(session).draft.isBlank()) setDraft(session, input)
@@ -1516,7 +1558,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     if (clearDraft && pending.questionId == null && conversationUi.entry(session).draft.isBlank()) setDraft(session, input)
                     localSubmissions.remove(session)
                     if (selectedId == session) {
-                        messages = messages.filterNot { it.localKey == key }; cachedHistory[session] = messages
+                        messages = messages.filterNot { it.localKey == key }
                         pollContext()
                     }
                 } else {
@@ -1590,6 +1632,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                             pendingText = result.optString("output").removePrefix(flushedStreamPrefix)
                         runId = null
                         runVerifiedAt = 0
+                        discardRunNarrations(id)
                         runNarrationUsers.remove(id)
                         backgroundRuns.values.remove(id); saveRuns()
                         approval = null
@@ -1637,6 +1680,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     if (e is ApiRequestFailure && e.status == 404) {
                         noteRunActivity(watchedSession, obj("status" to "missing"), activityClock())
                         runId = null; approval = null
+                        discardRunNarrations(id)
                         runNarrationUsers.remove(id)
                         streamJob?.cancel()
                         backgroundRuns.values.remove(id); saveRuns()

@@ -426,6 +426,10 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     item { TextButton(onClick = { model.moreSessions() }) { Text("加载更多会话") } }
             }
         } else {
+            model.historyCacheStatus?.let { label ->
+                Text(label, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 Modifier.fillMaxSize(),
