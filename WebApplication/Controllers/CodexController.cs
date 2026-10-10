@@ -54,6 +54,8 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
         return Ok(attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}"));
     }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
+    [HttpGet("sessions/{id}/tools/{summaryId}")] public Task ToolDetails(string id, string summaryId, [FromQuery] int offset, CancellationToken ct) =>
+        Forward(HttpMethod.Get, $"sessions/{Id(id)}/tools/{Id(summaryId)}?offset={Math.Max(0, offset)}", null, ct);
     [HttpGet("sessions/{id}/queue")] public Task Queue(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"sessions/{Id(id)}/queue", null, ct);
     [HttpPost("sessions/{id}/queue")] public Task QueueAction(string id, [FromBody] JsonElement body, CancellationToken ct) {
         var normalized = System.Text.Json.Nodes.JsonNode.Parse(body.GetRawText())!.AsObject();

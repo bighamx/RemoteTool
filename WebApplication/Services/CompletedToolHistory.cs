@@ -12,7 +12,7 @@ public static class CompletedToolHistory
         ["tool_count"] = count, ["timestamp"] = timestamp?.DeepClone(), ["editable"] = false
     };
 
-    public static JsonNode Reduce(JsonNode document, bool running, long startedAt = 0)
+    public static JsonNode Reduce(JsonNode document, bool running, long startedAt = 0, string session = null, string revision = "")
     {
         if (document?["data"] is not JsonArray rows) return document;
         var output = new JsonArray();
@@ -33,18 +33,10 @@ public static class CompletedToolHistory
                 if (found >= 0) active = found;
             }
         }
+        var cacheIds = new HashSet<string> { "active" }; var activeTools = new JsonArray();
         for (var index = 0; index < groups.Count; index++) {
-            var group = groups[index]; var calls = new HashSet<string>(); var fallback = 0;
+            var group = groups[index];
             foreach (var row in group) {
-                if (row?["role"]?.ToString() == "tool") {
-                    var key = row?["tool_call_id"]?.ToString();
-                    if (!string.IsNullOrEmpty(key)) calls.Add(key); else fallback++;
-                }
-                JsonArray tools = row?["tool_calls"] as JsonArray;
-                if (tools == null && row?["tool_calls"] is JsonValue value && value.TryGetValue<string>(out var text)) {
-                    try { tools = JsonNode.Parse(text) as JsonArray; } catch (System.Text.Json.JsonException) { }
-                }
-                if (tools != null) foreach (var tool in tools) calls.Add(tool?["id"]?.ToString() ?? row?["id"] + ":" + fallback++);
                 if (index >= active) { output.Add(row?.DeepClone()); continue; }
                 if (row?["role"]?.ToString() == "tool") continue;
                 if (row?["role"]?.ToString() == "assistant" && string.IsNullOrWhiteSpace(row?["content"]?.ToString()) &&
@@ -53,9 +45,18 @@ public static class CompletedToolHistory
                 if (copy is JsonObject obj) { obj.Remove("tool_calls"); obj.Remove("tool_call_id"); }
                 output.Add(copy);
             }
-            var count = Math.Max(calls.Count, fallback);
-            if (index < active && count > 0)
-                output.Add(Summary(group[0]?["id"]?.ToString() ?? index.ToString(), count, group[^1]?["timestamp"]));
+            var tools = ToolHistoryCache.HermesTools(group, index >= active);
+            if (index < active && tools.Count > 0) {
+                var summary = ToolHistoryCache.Summary(group[0]?["id"]?.ToString() ?? index.ToString(), tools, group[^1]?["timestamp"]);
+                var id = summary["id"]!.ToString(); cacheIds.Add(id);
+                if (session != null) ToolHistoryCache.Save("hermes", session, id, tools, false, revision);
+                output.Add(summary);
+            } else if (index >= active) foreach (var tool in tools) activeTools.Add(tool?.DeepClone());
+        }
+        if (session != null) {
+            if (!running && activeTools.Count == 0 && groups.Count > 0) activeTools = ToolHistoryCache.HermesTools(groups[^1], false);
+            ToolHistoryCache.Save("hermes", session, "active", activeTools, running, revision);
+            ToolHistoryCache.Keep("hermes", session, cacheIds);
         }
         document["data"] = output;
         return document;

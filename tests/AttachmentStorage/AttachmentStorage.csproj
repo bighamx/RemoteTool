@@ -8,5 +8,6 @@
     <Compile Include="../../WebApplication/Services/AgentHistoryWindow.cs" Link="AgentHistoryWindow.cs" />
     <Compile Include="../../WebApplication/Services/CompletedToolHistory.cs" Link="CompletedToolHistory.cs" />
     <Using Include="Microsoft.AspNetCore.Http" />
-  </ItemGroup>
+      <Compile Include="../../WebApplication/Services/ToolHistoryCache.cs" Link="ToolHistoryCache.cs" />
+</ItemGroup>
 </Project>

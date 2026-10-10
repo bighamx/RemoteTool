@@ -8,6 +8,30 @@ var count = 0;
 void Check(bool valid, string name) { if (!valid) throw new Exception(name); count++; }
 JsonElement Body(string session, string[] ids = null) => JsonSerializer.SerializeToElement(new { session_id = session, input = "测试", attachment_ids = ids ?? [] });
 try {
+    var simplified = ToolHistoryCache.HermesTools(new JsonNode[] {
+        new JsonObject { ["id"] = 1, ["role"] = "assistant", ["tool_calls"] = new JsonArray(
+            new JsonObject { ["id"] = "patch", ["function"] = new JsonObject { ["name"] = "apply_patch", ["arguments"] = "*** Begin Patch\n*** Update File: app.kt\nsecret patch body\n*** End Patch" } },
+            new JsonObject { ["id"] = "shell", ["function"] = new JsonObject { ["name"] = "terminal", ["arguments"] = "{\"command\":\"build\"}" } }) },
+        new JsonObject { ["id"] = 2, ["role"] = "tool", ["tool_call_id"] = "shell", ["content"] = "{\"exit_code\":1}" }
+    }, false);
+    Check(simplified[0]["category"].ToString() == "file_change" && simplified[0]["description"].ToString() == "app.kt", "patch details contain paths but no patch body");
+    Check(simplified[0]["status"].ToString() == "unknown" && simplified[1]["status"].ToString() == "failed", "missing output stays unknown and nonzero exit is failure");
+    var toolSummary = ToolHistoryCache.Summary("fixture", simplified, null);
+    Check(toolSummary["tools"].GetValue<int>() == 1 && toolSummary["file_changes"].GetValue<int>() == 1, "separate tool and file modification counts");
+    var many = new JsonArray(Enumerable.Range(0, 61).Select(index => (JsonNode)ToolHistoryCache.Tool(index.ToString(), "terminal", JsonValue.Create("build"), "completed")).ToArray());
+    ToolHistoryCache.Save("hermes", "cache-check", "1", many, false, "v1");
+    Check(ToolHistoryCache.Read("hermes", "cache-check", "1", 0, true, "v1")["data"].AsArray().Count == 50, "tool details are paged without raw output");
+    Check(ToolHistoryCache.Read("hermes", "cache-check", "1", 50, true, "v1")["data"].AsArray().Count == 11, "tool detail second page remains accessible");
+    Check(ToolHistoryCache.Read("hermes", "cache-check", "1", 0, true, "v2") == null, "source revision invalidates cached details");
+    Check(ToolHistoryCache.Read("hermes", "other-session", "1", 0, true, "v1") == null, "cache cannot leak across sessions");
+    ToolHistoryCache.Keep("hermes", "cache-check", new());
+    Check(ToolHistoryCache.Read("hermes", "cache-check", "1", 0, true, "v1") == null, "removed turns are purged after rewind");
+    Directory.CreateDirectory(fixture);
+    var sourceVersion = Path.Combine(fixture, "source-version.txt"); File.WriteAllText(sourceVersion, "old");
+    ToolHistoryCache.Save("codex", "cache-check", "1", many, false, path: sourceVersion);
+    Check(ToolHistoryCache.Read("codex", "cache-check", "1", 0, true) != null, "unchanged source returns cached data");
+    File.WriteAllText(sourceVersion, "new longer source");
+    Check(ToolHistoryCache.Read("codex", "cache-check", "1", 0, true) == null, "source rewrite invalidates cached detail even without a message read");
     JsonNode ToolFixture() => new JsonObject { ["data"] = new JsonArray(
         new JsonObject { ["id"] = 1, ["role"] = "user", ["content"] = "first", ["timestamp"] = 1 },
         new JsonObject { ["id"] = 2, ["role"] = "assistant", ["content"] = "", ["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "call-a" }) },

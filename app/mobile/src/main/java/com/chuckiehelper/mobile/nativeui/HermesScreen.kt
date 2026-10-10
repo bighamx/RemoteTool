@@ -144,6 +144,10 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     var commandPanelBounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
     var attachmentPanelBounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
     var preview by remember { mutableStateOf<JSONObject?>(null) }
+    var toolDetails by remember(model.selectedId) { mutableStateOf<String?>(null) }
+    toolDetails?.let { key -> model.selectedId?.let { session ->
+        ToolDetailsDialog(api, agent, session, key) { toolDetails = null }
+    } }
     val context = LocalContext.current
     var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
     val imagePicker =
@@ -473,7 +477,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 items(messageItems, key = { it.key }) { item ->
                     val message = item.message
                     if (message.role == "system") {
-                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center,
+                        Row(Modifier.fillMaxWidth().then(if (message.nativeTurnId == "toolSummary") Modifier.clickable { toolDetails = message.serverId.toString() } else Modifier)
+                            .padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically) {
                             Icon(if (message.nativeTurnId == "toolSummary") Icons.Outlined.Build else Icons.Outlined.CheckCircle,
                                 null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
@@ -539,7 +544,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                                 if (!model.executionCompacting && model.executionEvents.isNotEmpty())
-                                    TextButton(onClick = { showTools = !showTools }) {
+                                    TextButton(onClick = { toolDetails = "active" }) {
                                         // 显示本 run 收到的工具/进度事件总数（events 列表只保留最近 30 条，直接用 size 会一直显示截断后的值）
                                         Text("工具与进度 · ${model.executionEventCount}")
                                     }

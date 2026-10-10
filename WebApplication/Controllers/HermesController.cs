@@ -157,7 +157,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         var json = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct));
         var state = activity.Read(id);
         json = CompletedToolHistory.Reduce(json, state["running"]?.GetValue<bool>() == true,
-            state["started_at"]?.GetValue<long>() ?? 0);
+            state["started_at"]?.GetValue<long>() ?? 0, id, state["revision"]?.ToString() ?? "");
         json = AgentHistoryWindow.Select(json, limit, from_id, older_before);
         return Ok(attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}"));
     }
@@ -262,6 +262,18 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         catch (KeyNotFoundException) { Response.StatusCode = 404; await Response.WriteAsJsonAsync(new { message = "压缩任务不存在" }, ct); }
     }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
+    [HttpGet("sessions/{id}/tools/{summaryId}")] public async Task<IActionResult> ToolDetails(string id, string summaryId, [FromQuery] int offset = 0, CancellationToken ct = default) {
+        var session = Id(id); var key = Id(summaryId); var state = activity.Read(session);
+        var revision = state["revision"]?.ToString() ?? "";
+        var cached = ToolHistoryCache.Read("hermes", session, key, offset, true, revision);
+        if (cached != null) return Ok(cached);
+        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions/{session}/messages?inline_images=false", null, null, ct);
+        if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取工具记录" });
+        CompletedToolHistory.Reduce(JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)), state["running"]?.GetValue<bool>() == true,
+            state["started_at"]?.GetValue<long>() ?? 0, session, revision);
+        var result = ToolHistoryCache.Read("hermes", session, key, offset, false, revision);
+        return result != null ? Ok(result) : NotFound(new { message = "该轮记录已变化或不再存在，请刷新会话" });
+    }
     [HttpPost("sessions/{id}/files")]
     [RequestSizeLimit(501L * 1024 * 1024)]
     [RequestFormLimits(MultipartBodyLengthLimit = 501L * 1024 * 1024)]

@@ -25,5 +25,6 @@
     <Compile Include="../../WebApplication/Services/RemoteControl/FilePathPolicy.cs" Link="FilePathPolicy.cs" />
     <Compile Include="../../WebApplication/Services/RemoteControl/WebSocketTextReader.cs" Link="WebSocketTextReader.cs" />
       <Compile Include="../../WebApplication/Services/CompletedToolHistory.cs" Link="CompletedToolHistory.cs" />
+    <Compile Include="../../WebApplication/Services/ToolHistoryCache.cs" Link="ToolHistoryCache.cs" />
 </ItemGroup>
 </Project>
