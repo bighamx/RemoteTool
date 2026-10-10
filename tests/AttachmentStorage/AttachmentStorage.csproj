@@ -6,6 +6,7 @@
     <Compile Include="../../WebApplication/Services/HermesAttachments.cs" Link="HermesAttachments.cs" />
     <Compile Include="../../WebApplication/Services/AssistantMediaPaths.cs" Link="AssistantMediaPaths.cs" />
     <Compile Include="../../WebApplication/Services/AgentHistoryWindow.cs" Link="AgentHistoryWindow.cs" />
+    <Compile Include="../../WebApplication/Services/CompletedToolHistory.cs" Link="CompletedToolHistory.cs" />
     <Using Include="Microsoft.AspNetCore.Http" />
   </ItemGroup>
 </Project>

@@ -8,6 +8,21 @@ var count = 0;
 void Check(bool valid, string name) { if (!valid) throw new Exception(name); count++; }
 JsonElement Body(string session, string[] ids = null) => JsonSerializer.SerializeToElement(new { session_id = session, input = "测试", attachment_ids = ids ?? [] });
 try {
+    JsonNode ToolFixture() => new JsonObject { ["data"] = new JsonArray(
+        new JsonObject { ["id"] = 1, ["role"] = "user", ["content"] = "first", ["timestamp"] = 1 },
+        new JsonObject { ["id"] = 2, ["role"] = "assistant", ["content"] = "", ["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "call-a" }) },
+        new JsonObject { ["id"] = 3, ["role"] = "tool", ["tool_call_id"] = "call-a", ["content"] = "large result" },
+        new JsonObject { ["id"] = 4, ["role"] = "assistant", ["content"] = "done", ["timestamp"] = 2 },
+        new JsonObject { ["id"] = 5, ["role"] = "user", ["content"] = "second", ["timestamp"] = 3 },
+        new JsonObject { ["id"] = 6, ["role"] = "assistant", ["content"] = "", ["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "call-b" }) },
+        new JsonObject { ["id"] = 7, ["role"] = "tool", ["tool_call_id"] = "call-b", ["content"] = "live result", ["timestamp"] = 4 }) };
+    var finished = CompletedToolHistory.Reduce(ToolFixture(), false)["data"].AsArray();
+    Check(finished.All(row => row["role"].ToString() != "tool" && row["tool_calls"] == null), "completed history sends no tool details");
+    Check(finished.Count(row => row["type"]?.ToString() == "toolSummary") == 2 && finished.Where(row => row["type"]?.ToString() == "toolSummary").All(row => row["tool_count"].GetValue<int>() == 1), "completed calls counted once despite matching results");
+    var activeTools = CompletedToolHistory.Reduce(ToolFixture(), true, 3000)["data"].AsArray();
+    Check(activeTools.Any(row => row["id"]?.ToString() == "7" && row["content"]?.ToString() == "live result"), "active turn keeps tool results");
+    Check(activeTools.Any(row => row["id"]?.ToString() == "6" && row["tool_calls"] != null), "active turn keeps tool arguments");
+    Check(activeTools.Count(row => row["type"]?.ToString() == "toolSummary") == 1, "only completed turn gets tool summary");
     var raw = new JsonArray();
     for (var index = 1; index <= 120; index++) {
         raw.Add(new JsonObject { ["id"] = index * 10, ["role"] = "user", ["content"] = "message " + index });

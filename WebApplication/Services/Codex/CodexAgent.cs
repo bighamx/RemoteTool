@@ -839,8 +839,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private static long MessageId(string id) => Convert.ToInt64(Hash(id)[..14], 16) + 1;
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
-        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 14), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("state_version", 14));
+        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 16), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("state_version", 16));
         if (path == "title-model") return method == "GET" ? titles.PublicConfig() : titles.Save(body);
         if (path == "title-model/test") return Obj(("title", await titles.Generate("修复手机会话的消息顺序与状态显示")));
         if (path == "title-model/generate") return Obj(("title", await titles.Generate(body.S("input"), context.RequestAborted)));
@@ -1023,7 +1023,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 var times = CodexMessageTimes.Read(home, session);
                 var source = CodexRolloutMessageTimes.ReadSession(home, session, result["thread"].S("path"));
                 long position = 0;
-                foreach (var turn in result["thread"].A("turns")) foreach (var item in turn.A("items")) {
+                foreach (var turn in result["thread"].A("turns")) {
+                var firstRow = rows.Count;
+                foreach (var item in turn.A("items")) {
                     var kind = item.S("type");
                     if(kind == "contextCompaction") {
                         // Keep the native item at its original position, even without a timestamp.
@@ -1041,6 +1043,14 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                         times.TryGetValue(item.S("id"),out var exact)?exact:null;
                     rows.Add(Obj(("id",MessageId(item.S("id"))),("role",role),("timestamp",timestamp),("content",text),("phase",role=="assistant"?item.S("phase"):null),
                         ("turn_id", turn.S("id")), ("editable", role == "user" && ReferenceEquals(item, turn.A("items").FirstOrDefault(candidate => candidate.S("type") == "userMessage")))));
+                }
+                var toolCount = turn.A("items").Count(item => item.S("type") is
+                    "commandExecution" or "fileChange" or "mcpToolCall" or "dynamicToolCall" or "webSearch" or "imageView" or "imageGeneration" or "collabAgentToolCall");
+                if (toolCount > 0 && turn.S("status") is "completed" or "failed" or "interrupted") {
+                    var last = rows.Skip(firstRow).LastOrDefault();
+                    var summary = CompletedToolHistory.Summary(turn.S("id"), toolCount, last?["timestamp"]);
+                    summary["turn_id"] = turn.S("id"); rows.Add(summary);
+                }
                 }
                 return Obj(("data", rows));
             }

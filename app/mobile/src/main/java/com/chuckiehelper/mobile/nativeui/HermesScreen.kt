@@ -475,7 +475,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     if (message.role == "system") {
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.CheckCircle, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                            Icon(if (message.nativeTurnId == "toolSummary") Icons.Outlined.Build else Icons.Outlined.CheckCircle,
+                                null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                             Spacer(Modifier.width(6.dp))
                             Text(message.text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.width(8.dp))

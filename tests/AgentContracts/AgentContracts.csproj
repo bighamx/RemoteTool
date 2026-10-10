@@ -24,5 +24,6 @@
     <Compile Include="../../WebApplication/Services/Codex/CodexRolloutMessageTimes.cs" Link="CodexRolloutMessageTimes.cs" />
     <Compile Include="../../WebApplication/Services/RemoteControl/FilePathPolicy.cs" Link="FilePathPolicy.cs" />
     <Compile Include="../../WebApplication/Services/RemoteControl/WebSocketTextReader.cs" Link="WebSocketTextReader.cs" />
-  </ItemGroup>
+      <Compile Include="../../WebApplication/Services/CompletedToolHistory.cs" Link="CompletedToolHistory.cs" />
+</ItemGroup>
 </Project>
