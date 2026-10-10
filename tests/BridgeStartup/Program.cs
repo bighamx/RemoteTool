@@ -25,3 +25,4 @@ if (args.Length > 1 && args[1] == "sid") {
     if (sid is "S-1-5-18" or "S-1-5-19" or "S-1-5-20") throw new Exception("Selected a service identity");
     Console.WriteLine("PASS interactive user SID: " + sid);
 }
+if (args.Length > 2 && args[1] == "upgrade") await CodexRuntimeUpgradeChecks.Run(assembly, Path.GetFullPath(args[2]));

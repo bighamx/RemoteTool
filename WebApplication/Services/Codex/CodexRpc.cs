@@ -38,6 +38,23 @@ internal static class CodexJson
     public static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 }
 
+internal static class CodexExecutable
+{
+    public static bool Complete(string executable) => !string.IsNullOrWhiteSpace(executable) && File.Exists(executable) &&
+        (!executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
+         File.Exists(Path.Combine(Path.GetDirectoryName(executable)!, "codex-code-mode-host.exe")) &&
+         File.Exists(Path.Combine(Path.GetDirectoryName(executable)!, "codex-command-runner.exe")));
+
+    public static string Resolve(string executable, string home) {
+        if (Complete(executable)) return executable;
+        var profile = Path.GetDirectoryName(Path.GetFullPath(home).TrimEnd(Path.DirectorySeparatorChar));
+        var bundled = Path.Combine(profile!, "AppData", "Local", "OpenAI", "Codex", "bin");
+        var replacement = Directory.Exists(bundled) ? Directory.EnumerateFiles(bundled, "codex.exe", SearchOption.AllDirectories)
+            .Where(Complete).OrderByDescending(File.GetLastWriteTimeUtc).ThenBy(path => path, StringComparer.OrdinalIgnoreCase).FirstOrDefault() : null;
+        return replacement ?? throw new CodexError("Codex 工具程序不完整，请等待桌面版更新完成后重试；本次消息未写入。", 503, "codex_tools_missing", "rejected");
+    }
+}
+
 internal sealed class CodexRpc : IAsyncDisposable
 {
     private readonly Process process;
@@ -49,9 +66,13 @@ internal sealed class CodexRpc : IAsyncDisposable
     private int disposed;
     private readonly int processId;
     public int ProcessId => processId;
+    public string Executable { get; }
+    public bool ToolsAvailable => CodexExecutable.Complete(Executable);
     public bool Running { get { if (Volatile.Read(ref disposed) != 0) return false; try { return !process.HasExited; } catch (InvalidOperationException) { return false; } } }
     public CodexRpc(string executable, string home, IDictionary<string, string> environment, Func<JsonObject, Task> notification, params string[] overrides) {
         this.notification = notification;
+        executable = CodexExecutable.Resolve(executable, home);
+        Executable = executable;
         var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };

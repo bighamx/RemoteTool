@@ -285,5 +285,6 @@ Check(await RemoteTool.WebApi.Services.RemoteControl.WebSocketTextReader.Read(ws
 using var oversized = new FragmentSocket(new byte[17000]);
 Check(await RemoteTool.WebApi.Services.RemoteControl.WebSocketTextReader.Read(oversized, new byte[4096], default) == null && oversized.ClosedAs == System.Net.WebSockets.WebSocketCloseStatus.MessageTooBig, "oversized message bounded");
 Console.WriteLine($"Including remote WebSocket checks: {count} passed");
+CodexExecutableChecks.Run();
 await TitleModelChecks.Run();
 await HermesTitleChecks.Run();

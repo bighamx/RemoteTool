@@ -155,19 +155,19 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             }
             var home = ConfiguredPath("Codex:Home", Path.Combine(profile, ".codex"));
             var executable = configuration["Codex:Executable"];
-            if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable)) {
+            if (!Codex.CodexExecutable.Complete(executable)) {
                 // The desktop app rotates bin/<hash> directories on update; a fresh download may
                 // briefly contain only codex.exe. Prefer directories that also carry the tool
                 // executables (code-mode host etc.) — a lone codex.exe cannot run tools.
                 var bundled = Path.Combine(profile, "AppData", "Local", "OpenAI", "Codex", "bin");
                 executable = Directory.Exists(bundled)
                     ? Directory.EnumerateFiles(bundled, "codex.exe", SearchOption.AllDirectories)
-                        .Where(candidate => File.Exists(Path.Combine(Path.GetDirectoryName(candidate)!, "codex-code-mode-host.exe")))
+                        .Where(Codex.CodexExecutable.Complete)
                         .OrderByDescending(File.GetLastWriteTimeUtc)
-                        .FirstOrDefault() ?? Directory.EnumerateFiles(bundled, "codex.exe", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
+                        .FirstOrDefault()
                     : null;
             }
-            if (executable == null || !File.Exists(executable)) throw new InvalidOperationException("未找到本机 Codex，请安装 Codex 或配置 Codex:Executable");
+            executable = Codex.CodexExecutable.Resolve(executable, home);
             var dll = InteractiveProcessLauncher.GetApplicationDllPath();
             token ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new { token, executable, home, account_store = accountStore, state_folder = stateFolder, handoff,

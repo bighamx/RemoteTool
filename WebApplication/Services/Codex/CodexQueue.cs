@@ -39,6 +39,7 @@ internal sealed partial class CodexAgent
                 } catch { await ReleaseSessionCore(session); throw; }
             }
             if (action is "add" or "update") {
+                if (!queueRpc.ToolsAvailable) throw new CodexError("Codex 已更新，正在等待现有任务结束以刷新工具；队列消息未写入。", 409, "codex_update_pending", "rejected");
                 request["input"] = CodexAttachmentInput.Build(body.S("input"), body.A("attachment_paths"), settings.S("attachments"), session);
                 string queuedRun = null;
                 if (action == "add") {

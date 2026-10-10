@@ -13,6 +13,7 @@ namespace RemoteTool.WebApi.Services.Codex;
 internal sealed partial class CodexAgent : IAsyncDisposable
 {
     private readonly JsonObject settings;
+    private readonly string configPath;
     private readonly string folder, home, journal;
     private readonly CodexAccountStore accounts;
     private readonly CodexHandoff handoff;
@@ -156,6 +157,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
 
     private readonly CodexSessionPins sessionPins;
     private CodexAgent(string config) {
+        configPath = config;
         settings = Read(config); folder = settings.S("state_folder", Path.GetDirectoryName(config)!); home = settings.S("home");
         if (string.IsNullOrWhiteSpace(home) || !Path.IsPathFullyQualified(home))
             throw new InvalidOperationException("Codex bridge home must be a non-empty absolute path; regenerate connection.json through the web service.");
@@ -183,6 +185,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         accounts = new CodexAccountStore(home, accountStore);
     }
     private async Task Launch() {
+        var executable = CodexExecutable.Resolve(settings.S("executable"), home);
+        if (executable != settings.S("executable")) {
+            settings["executable"] = executable;
+            Atomic(configPath, settings);
+        }
         var environment = new Dictionary<string, string>();
         foreach (var entry in providers) if (entry.Value.S("api_key").Length > 0) environment["CHUCKIE_CODEX_" + entry.Key.ToUpperInvariant() + "_KEY"] = entry.Value.S("api_key");
         runtimeWorkspace = CurrentWorkspace();
@@ -190,10 +197,18 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         await rpc.Initialize(); loaded.Clear(); workspaceUsage.Clear();
     }
     private async Task EnsureConnection() {
-        if (rpc?.Running == true && runtimeWorkspace == CurrentWorkspace()) return;
+        if (rpc?.Running == true && runtimeWorkspace == CurrentWorkspace() && rpc.ToolsAvailable) return;
         await settingsLock.WaitAsync();
         try {
-            if (rpc?.Running == true && runtimeWorkspace == CurrentWorkspace()) return;
+            if (rpc?.Running == true && runtimeWorkspace == CurrentWorkspace()) {
+                if (rpc.ToolsAvailable) return;
+                // Keep progress, interrupts and approvals usable during an update. Never
+                // terminate an accepted turn or native queued submission to refresh tools.
+                lock (gate) if (active.Count > 0) return;
+                if (await QueuedWorkBlocksToolRefresh()) return;
+                // Resolve before closing readers, so a partial update can be retried safely.
+                CodexExecutable.Resolve(settings.S("executable"), home);
+            }
             lock (gate) if (rpc?.Running == true && active.Count > 0) throw new CodexError("电脑登录身份已切换，请先停止原工作空间的手机任务，再恢复连接", 409);
             lock (gate) {
                 foreach (var run in active.Values) {
@@ -208,6 +223,32 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         } finally { settingsLock.Release(); }
     }
     private void Persist() { lock (gate) Atomic(journal, runs); }
+    private async Task<bool> QueuedWorkBlocksToolRefresh() {
+        JsonObject[] queued;
+        lock (gate) queued = runs.Select(entry => entry.Value as JsonObject)
+            .Where(row => row != null && row.B("native_queue") && row.S("status") == "queued").ToArray();
+        foreach (var group in queued.GroupBy(row => row.S("session_id"))) {
+            CodexRpc owner; lock (gate) sessionRpcs.TryGetValue(group.Key, out owner);
+            try {
+                var reader = owner?.Running == true ? owner : rpc;
+                var waiting = (await reader.Call("thread/queue/list", Obj(("threadId", group.Key), ("limit", 100)))).A("data");
+                if (waiting.Count > 0) return true;
+                // Empty queue alone is ambiguous: a submission may have just started.
+                var thread = (await reader.Call("thread/read", Obj(("threadId", group.Key), ("includeTurns", false))))["thread"];
+                if (thread?["status"].S("type") != "idle") return true;
+                lock (gate) {
+                    if (active.Count > 0) return true;
+                    foreach (var row in group) if (row.S("status") == "queued") {
+                        row["status"] = "acceptance_unknown";
+                        row["error_code"] = "queue_tracking_lost";
+                        row["error"] = "原生队列已为空且会话空闲，请查看历史核对这条旧队列消息；不会自动重发。";
+                    }
+                    Persist();
+                }
+            } catch (CodexError) { return true; }
+        }
+        return false;
+    }
     private string RolloutPath(JsonNode thread) => CodexPreviewRollout.LatestPath(home, thread.S("id"), thread.S("path"));
     private CodexError TranslateBusyThread(string session, CodexError error) {
         if (error.Message.Contains("already has an active writer", StringComparison.OrdinalIgnoreCase))
@@ -646,6 +687,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 if (entry.Value.S("fingerprint") != fingerprint) throw new CodexError("相同任务标识内容不一致", 409);
                 return Obj(("run_id", entry.Key), ("status", entry.Value.S("status")), ("replayed", true));
             }
+            if (!rpc.ToolsAvailable) throw new CodexError("Codex 已更新，正在等待现有任务结束以刷新工具；本次消息未写入。", 409, "codex_update_pending", "rejected");
             if (active.ContainsKey(session)) throw new CodexError("此会话已有手机任务在运行", 409);
             runs[run] = Obj(("run_id", run), ("session_id", session), ("key", key), ("fingerprint", fingerprint), ("status", "submitting"), ("phase", "preparing"),
                 ("output", ""), ("created_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()), ("account_id", accounts.List().S("current")));
@@ -785,7 +827,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private static long MessageId(string id) => Convert.ToInt64(Hash(id)[..14], 16) + 1;
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
-        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 13), ("ready", rpc?.Running == true), ("cli_pid", rpc?.ProcessId));
+        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 13), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
         if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("state_version", 13));
         if (path == "title-model") return method == "GET" ? titles.PublicConfig() : titles.Save(body);
         if (path == "title-model/test") return Obj(("title", await titles.Generate("修复手机会话的消息顺序与状态显示")));
