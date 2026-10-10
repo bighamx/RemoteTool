@@ -124,6 +124,25 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     private val sessionRefreshMutex = Mutex()
     private val historyReadMutex = Mutex()
+    var historyHasMore by mutableStateOf(false)
+        private set
+    var historyLoadingEarlier by mutableStateOf(false)
+        private set
+    private var historyOldestId: String? = null
+
+    fun loadEarlierHistory() = launch {
+        val id = selectedId ?: return@launch
+        val connection = api
+        if (!historyHasMore || historyLoadingEarlier) return@launch
+        historyLoadingEarlier = true
+        try {
+            historyReadMutex.withLock {
+                if (selectedId == id && api === connection) loadHistoryNow(id, earlier = true)
+            }
+        } finally {
+            if (selectedId == id && api === connection) historyLoadingEarlier = false
+        }
+    }
     private var sessionActivities by mutableStateOf<Map<String, SessionActivityEvidence>>(emptyMap())
     private var activityNow by mutableLongStateOf(activityClock())
     private fun activityClock() = System.nanoTime() / 1_000_000
@@ -666,6 +685,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     fun bind(value: NativeApi) {
         if (this::api.isInitialized && api.base == value.base) return
+        historyOldestId = null; historyHasMore = false; historyLoadingEarlier = false
         filesReadEpoch++; filesReadJob?.cancel(); filesReadJob = null; filesRefreshPending = false
         loginJob?.cancel(); loginJob = null; loginInfo = null; loginVisible = false; loginStarting = false; loginError = null
         workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
@@ -1096,6 +1116,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             prefs.edit().remove("run").remove("runSession").apply()
         }
         selectedId = id
+        historyOldestId = null
+        historyHasMore = false
+        historyLoadingEarlier = false
         title = session.optString("title").ifBlank { "未命名会话" }
         prefs.edit().putString("session", selectedId).apply()
         historyJob?.cancel()
@@ -1103,7 +1126,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         contextInfo = contextCache[id]; asyncQuestion = null
         // 先回放上一次该会话的消息（如有缓存），网络刷新到位后替换 —— 消除「返回再进白屏等待」。
         cachedHistory[selectedId]?.let { cached ->
-            messages = cached.takeLast(30)
+            messages = cached
             historyCacheStatus = "本地缓存 · 正在同步"
             // 回放缓存后请求滚到底，否则打开会话停在缓存顶部等网络刷新
             scrollToLatestRequest++
@@ -1169,10 +1192,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private suspend fun loadHistory(id: String) = historyReadMutex.withLock {
         if (id == selectedId) loadHistoryNow(id)
     }
-    private suspend fun loadHistoryNow(id: String) {
+    private suspend fun loadHistoryNow(id: String, earlier: Boolean = false) {
         val connection = api
         val response = try {
-            connection.json("$root/sessions/$id/messages?limit=30").also { it.getJSONArray("data") }
+            connection.json("$root/sessions/$id/messages?limit=100" +
+                (historyOldestId?.let { "&${if (earlier) "older_before" else "from_id"}=" + android.net.Uri.encode(it) } ?: "")).also { it.getJSONArray("data") }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             if (selectedId == id && api === connection && id in cachedHistory) historyCacheStatus = "离线缓存"
@@ -1180,7 +1204,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
         if (id != selectedId || api !== connection) return
         // Native order and content are authoritative. Local snapshots never contribute rows.
-        var history = response.array("data").objects().takeLast(30).mapNotNull { row -> agentHistoryMessage(agent, row) }
+        var history = response.array("data").objects().mapNotNull { row -> agentHistoryMessage(agent, row) }
+        historyHasMore = response.optBoolean("has_more", false)
+        historyOldestId = response.optString("oldest_id").takeIf { it.isNotBlank() && it != "null" }
         val bindings = mutableListOf<Pair<Long, List<String>>>()
         val confirmedLocalKeys = mutableSetOf<String>()
         // Hermes has no request-key lookup. After an App restart the in-memory

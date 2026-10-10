@@ -4,6 +4,7 @@ package com.chuckiehelper.mobile.nativeui
 
 import android.app.Application
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -38,6 +39,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import org.json.JSONObject
+import kotlinx.coroutines.launch
 
 @Composable
 fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
@@ -181,6 +183,28 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         scroll, model.selectedId, list,
         model.messages.isNotEmpty() || model.pendingText.isNotEmpty(), model.scrollToLatestRequest, latestRequest,
     )
+    val historyUiScope = rememberCoroutineScope()
+    fun loadEarlier() = historyUiScope.launch {
+        followLatest = false
+        val session = model.selectedId
+        val anchor = scroll.layoutInfo.visibleItemsInfo.firstOrNull { it.key != "history-start" }
+        model.loadEarlierHistory().join()
+        if (session == model.selectedId && anchor != null) {
+            withFrameNanos { }
+            val index = chatMessageItems(model.messages).indexOfFirst { it.key == anchor.key }
+            if (index >= 0) scroll.scrollToItem(index + 1, (-anchor.offset).coerceAtLeast(0))
+        }
+    }
+    val historyDragged by scroll.interactionSource.collectIsDraggedAsState()
+    LaunchedEffect(model.selectedId, list, historyDragged) {
+        if (!list && historyDragged) {
+            snapshotFlow { scroll.firstVisibleItemIndex }.collect { index ->
+                if (index == 0 && model.historyHasMore && !model.historyLoadingEarlier) {
+                    loadEarlier().join()
+                }
+            }
+        }
+    }
     fun createChat() {
         if (agent == "codex") { createCodex = true; model.fetchProjects() }
         else model.newSession(newHermesChatName(), { list = false })
@@ -437,6 +461,15 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                item(key = "history-start") {
+                    if (model.historyHasMore || model.historyLoadingEarlier) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                            TextButton(enabled = !model.historyLoadingEarlier, onClick = {
+                                loadEarlier()
+                            }) { Text(if (model.historyLoadingEarlier) "正在加载更早消息…" else "加载更早消息") }
+                        }
+                    }
+                }
                 items(messageItems, key = { it.key }) { item ->
                     val message = item.message
                     if (message.role == "system") {

@@ -245,6 +245,34 @@ public sealed class HermesAttachments
         var inheritedMessages = InheritedMap(session);
         if (result["data"] is JsonArray rows) foreach (var row in rows)
         {
+            if (row?["role"]?.ToString() == "assistant") {
+                var files = row["attachments"] as JsonArray ?? new JsonArray();
+                foreach (var source in AssistantMediaPaths.Read(row["content"]?.ToString() ?? "").Distinct().Take(32)) {
+                    try {
+                        var info = new FileInfo(source);
+                        if (!info.Exists || info.Length > 500L * 1024 * 1024 || info.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+                        var folder = Path.GetFullPath(Folder(session)) + Path.DirectorySeparatorChar;
+                        var target = source;
+                        if (!source.StartsWith(folder, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) {
+                            // Snapshot explicit delivery markers; never change or serve the project original directly.
+                            var version = Identifier(source + "|" + info.LastWriteTimeUtc.Ticks + "|" + info.Length)[..32];
+                            target = Path.Combine(folder, "media", version + "_" + info.Name);
+                            lock (bindingLock) {
+                                if (!File.Exists(target)) {
+                                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                                    var temporary = Path.Combine(Path.GetDirectoryName(target)!, ".chuckie-" + Guid.NewGuid().ToString("N"));
+                                    try { File.Copy(source, temporary, true); File.Move(temporary, target, true); }
+                                    finally { if (File.Exists(temporary)) File.Delete(temporary); }
+                                }
+                            }
+                        }
+                        var metadata = JsonSerializer.SerializeToNode(Metadata(session, target))!.AsObject();
+                        metadata["mediaPath"] = source.Replace('\\', '/');
+                        if (!files.Any(file => file?["id"]?.ToString() == metadata["id"]!.ToString())) files.Add(metadata);
+                    } catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { }
+                }
+                if (files.Count > 0) row["attachments"] = files;
+            }
             if (map.TryGetValue(row!["id"]!.ToString(), out var ids))
                 row["attachments"] = JsonSerializer.SerializeToNode(ids.Select(id => { try { return Metadata(session, Resolve(session, id)); } catch (FileNotFoundException) { return null; } }).Where(value => value != null).ToArray());
             else if (inheritedMessages[row["id"]!.ToString()] is JsonArray references)

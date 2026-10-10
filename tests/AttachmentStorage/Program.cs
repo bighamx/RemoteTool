@@ -8,6 +8,20 @@ var count = 0;
 void Check(bool valid, string name) { if (!valid) throw new Exception(name); count++; }
 JsonElement Body(string session, string[] ids = null) => JsonSerializer.SerializeToElement(new { session_id = session, input = "测试", attachment_ids = ids ?? [] });
 try {
+    var raw = new JsonArray();
+    for (var index = 1; index <= 120; index++) {
+        raw.Add(new JsonObject { ["id"] = index * 10, ["role"] = "user", ["content"] = "message " + index });
+        for (var tool = 1; tool <= 4; tool++) raw.Add(new JsonObject { ["id"] = index * 10 + tool, ["role"] = "tool", ["content"] = "hidden" });
+    }
+    JsonNode Window(string from = null, string older = null) => AgentHistoryWindow.Select(new JsonObject { ["data"] = raw.DeepClone() }, 100, from, older);
+    var recent = Window();
+    Check(recent["data"].AsArray().Count(AgentHistoryWindow.Visible) == 100, "100 visible messages exclude tool rows");
+    Check(recent["oldest_id"].ToString() == "210" && recent["has_more"].GetValue<bool>(), "stable native cursor points to first included message");
+    var expanded = Window(older: "210");
+    Check(expanded["data"].AsArray().Count(AgentHistoryWindow.Visible) == 120 && !expanded["has_more"].GetValue<bool>(), "older page expands a canonical window to the start");
+    Check(Window(from: "10")["data"].AsArray().Count == raw.Count, "refresh retains the expanded canonical range");
+    Check(Window(from: "removed")["oldest_id"].ToString() == "210", "removed rewind anchor falls back to current history");
+    Check(expanded["data"].AsArray().Select(row => row["id"].ToString()).SequenceEqual(raw.Select(row => row["id"].ToString())), "native order remains unchanged");
     foreach (var agent in new[] { "codex", "hermes" }) {
         var root = Path.Combine(fixture, agent);
         var store = new HermesAttachments(agent, root);
@@ -90,6 +104,20 @@ try {
         catch (IOException) { Check(!Directory.Exists(store.Folder("failed-upload")), agent + " aborted upload leaves no file or empty session folder"); }
         try { store.PrepareCodexRun(Body("invalid-attachment", ["missing"]), key); throw new Exception("invalid attachment accepted"); }
         catch (FileNotFoundException) { Check(!Directory.Exists(store.Folder("invalid-attachment")), agent + " rejected run leaves no folders"); }
+        var source = Path.Combine(fixture, "project-" + agent, "音效 one.mp3");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)); File.WriteAllText(source, "audio snapshot");
+        JsonNode Media(string role, string text) => store.AddMessageAttachments("media-test", new JsonObject {
+            ["data"] = new JsonArray(new JsonObject { ["id"] = 100, ["role"] = role, ["content"] = text }) }.ToJsonString())["data"][0];
+        Check(Media("user", "MEDIA:" + source)["attachments"] == null, agent + " user examples never import files");
+        Check(Media("assistant", "```text\nMEDIA:" + source + "\n```")["attachments"] == null, agent + " fenced examples never import files");
+        Check(!Directory.Exists(store.Folder("media-test")), agent + " examples create no folders");
+        var imported = Media("assistant", "已生成\nMEDIA:" + source)["attachments"][0];
+        Check(imported["name"].ToString() == "音效 one.mp3" && imported["mediaPath"].ToString() == source.Replace('\\', '/'), agent + " project MEDIA becomes an exact-path attachment");
+        Check(File.ReadAllText(store.Resolve("media-test", imported["id"].ToString())) == "audio snapshot", agent + " imported content resolves without exposing the original");
+        Check(Media("assistant", "MEDIA:" + source)["attachments"][0]["id"].ToString() == imported["id"].ToString(), agent + " repeated refresh keeps stable attachment identity");
+        Check(store.List("media-test").Length == 1, agent + " repeated refresh does not duplicate copied files");
+        File.WriteAllText(source, "updated audio snapshot");
+        Check(Media("assistant", "MEDIA:" + source)["attachments"][0]["id"].ToString() != imported["id"].ToString(), agent + " source changes produce a new immutable snapshot");
     }
 } finally { if (Directory.Exists(fixture)) Directory.Delete(fixture, true); }
 Console.WriteLine($"Attachment storage checks: {count} passed");

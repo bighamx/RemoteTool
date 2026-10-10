@@ -4,6 +4,8 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <Compile Include="../../WebApplication/Services/RemoteToolPaths.cs" Link="RemoteToolPaths.cs" />
     <Compile Include="../../WebApplication/Services/HermesAttachments.cs" Link="HermesAttachments.cs" />
+    <Compile Include="../../WebApplication/Services/AssistantMediaPaths.cs" Link="AssistantMediaPaths.cs" />
+    <Compile Include="../../WebApplication/Services/AgentHistoryWindow.cs" Link="AgentHistoryWindow.cs" />
     <Using Include="Microsoft.AspNetCore.Http" />
   </ItemGroup>
 </Project>
