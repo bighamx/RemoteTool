@@ -82,4 +82,18 @@ try {
     position=0;if(!CodexRolloutMessageTimes.ReadSession(temp,"session",second).Resolve("appended","user","appended",ref position,out _))
         throw new Exception("Cached historical files must observe appended records");
     Console.WriteLine("5 continuation timestamp contracts passed");
+    JsonObject Compaction(string eventKind,string itemKind,string id,string at)=>new(){
+        ["type"]="event_msg",["timestamp"]=at,["payload"]=new JsonObject {
+            ["type"]=eventKind,["item"]=new JsonObject{["type"]=itemKind,["id"]=id}}};
+    File.AppendAllText(second,Compaction("item_started","ContextCompaction","compact-1","2026-10-07T08:04:00Z").ToJsonString()+"\n");
+    var beforeCompletion=CodexRolloutMessageTimes.ReadSession(temp,"session",second);position=0;
+    if(beforeCompletion.Resolve("compact-1","system","",ref position,out _))throw new Exception("Start is not a completed compaction");
+    File.AppendAllText(second,Compaction("item_completed","ContextCompaction","compact-1","2026-10-07T08:04:30Z").ToJsonString()+"\n"+
+        Compaction("item_completed","CommandExecution","tool-1","2026-10-07T08:04:31Z").ToJsonString()+"\n");
+    var completedSource=CodexRolloutMessageTimes.ReadSession(temp,"session",second);position=0;
+    if(!completedSource.Resolve("compact-1","system","",ref position,out var completedTime) ||
+        completedTime!=DateTimeOffset.Parse("2026-10-07T08:04:30Z").ToUnixTimeMilliseconds())throw new Exception("Native compaction ID must recover completion time");
+    position=0;if(completedSource.Resolve("unknown-compaction","system","",ref position,out _))throw new Exception("Compaction text must not guess time");
+    if(completedSource.Resolve("tool-1","system","",ref position,out _))throw new Exception("Tool completion is not a compaction");
+    Console.WriteLine("4 native compaction timestamp contracts passed");
 } finally { Directory.Delete(temp,true); }

@@ -108,9 +108,21 @@ internal static class CodexRolloutMessageTimes
         } catch(Exception error) when(error is IOException or UnauthorizedAccessException or ArgumentException) { return new(); }
     }
     private static void Apply(State state,string line) {
-        if(!line.Contains("response_item") || !line.Contains("message"))return;
+        if(!line.Contains("response_item") && !line.Contains("item_completed"))return;
         try {
             using var document=JsonDocument.Parse(line);var record=document.RootElement;
+            if(record.TryGetProperty("type",out var eventType) && eventType.GetString()=="event_msg" &&
+                record.TryGetProperty("payload",out var eventPayload) &&
+                eventPayload.TryGetProperty("type",out var eventKind) && eventKind.GetString()=="item_completed" &&
+                eventPayload.TryGetProperty("item",out var completedItem) &&
+                completedItem.TryGetProperty("type",out var completedKind) &&
+                string.Equals(completedKind.GetString(),"ContextCompaction",StringComparison.OrdinalIgnoreCase)) {
+                if(completedItem.TryGetProperty("id",out var completedId) && !string.IsNullOrWhiteSpace(completedId.GetString()) &&
+                    !state.Ids.ContainsKey(completedId.GetString()) && record.TryGetProperty("timestamp",out var completedTime) &&
+                    DateTimeOffset.TryParse(completedTime.GetString(),out var completedAt))
+                    state.Ids[completedId.GetString()]=new(state.Position++,completedAt.ToUnixTimeMilliseconds());
+                return;
+            }
             if(!record.TryGetProperty("type",out var type) || type.GetString()!="response_item" || !record.TryGetProperty("payload",out var payload) ||
                 !payload.TryGetProperty("type",out var itemType) || itemType.GetString()!="message" || !payload.TryGetProperty("role",out var roleNode))return;
             var role=roleNode.GetString();if(role is not ("user" or "assistant"))return;

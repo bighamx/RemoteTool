@@ -373,27 +373,24 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     // 每会话最近一次成功加载的消息列表（内存级，进程内有效），用于 select() 时先回放再刷新。
     private val cachedHistory = mutableMapOf<String, List<HermesMessage>>()
-    private var compactionNotices = runCatching {
+    private var compactionNotices = if (agent == "codex") {
+        prefs.edit().remove("compactionNotices").apply()
+        emptyList()
+    } else runCatching {
         org.json.JSONArray(prefs.getString("compactionNotices", "[]")).objects().mapNotNull { AgentCompactionNotice.restore(it) }
     }.getOrDefault(emptyList())
     private suspend fun recordCompactionCompletion(run: String, session: String, result: JSONObject) {
+        if (agent == "codex") {
+            if (successfulCompaction(run, result) && selectedId == session) loadHistory(session)
+            return
+        }
         if (!successfulCompaction(run, result) || compactionNotices.any { it.run == run }) return
         val time = parseMessageTimestamp(result.opt("completed_at")) ?: parseMessageTimestamp(result.opt("finished_at")) ?: System.currentTimeMillis()
         val started = runTimings[run]?.startedAt
-        val connection = api
-        val observed = if (agent == "codex") try {
-            withTimeout(4_000) { connection.json("$root/sessions/${q(session)}/activity") }
-        } catch (e: CancellationException) { if (!currentCoroutineContext().isActive) throw e else null }
-        catch (_: Exception) { null } else null
-        if (api !== connection) return
-        val nativeTime = parseMessageTimestamp(observed?.opt("compacted_at"))
-        val nativeId = observed?.optString("compaction_id")?.takeIf { it.isNotBlank() && it != "null" &&
-            started != null && nativeTime != null && nativeTime >= started && nativeTime <= time + 5_000 }
         val history = if (selectedId == session) messages else cachedHistory[session].orEmpty()
         compactionNotices = coalesceCompactionNotices(compactionNotices + AgentCompactionNotice(run, session,
-            if (nativeId != null) nativeTime!! else time,
-            history.lastOrNull { it.serverId > 0 && it.timestamp?.let { at -> at <= (if (nativeId != null) nativeTime!! else time) } == true }?.serverId ?: 0,
-            nativeId, started))
+            time, history.lastOrNull { it.serverId > 0 && it.timestamp?.let { at -> at <= time } == true }?.serverId ?: 0,
+            startedAt = started))
         saveCompactionNotices()
         val merged = mergeCompactionNotices(history, compactionNotices.filter { it.session == session })
         cachedHistory[session] = merged
@@ -404,6 +401,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         prefs.edit().putString("compactionNotices", org.json.JSONArray(compactionNotices.map { it.json() }).toString()).apply()
     }
     private fun recordExternalCompaction(session: String, compactedId: String, time: Long) {
+        if (agent == "codex") return // History refresh returns the native ordered item.
         val key = "external-$compactedId"
         if (compactionNotices.any { it.session == session && (it.run == key || it.compactionId == compactedId) }) return
         val history = if (selectedId == session) messages else cachedHistory[session].orEmpty()
@@ -1066,7 +1064,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         contextInfo = contextCache[id]; asyncQuestion = null
         // 先回放上一次该会话的消息（如有缓存），网络刷新到位后替换 —— 消除「返回再进白屏等待」。
         cachedHistory[selectedId]?.let { cached ->
-            messages = mergeCompactionNotices(
+            messages = mergeAgentCompactionNotices(agent,
                 cached.filterNot { it.localKey?.startsWith("compaction-") == true }.takeLast(30),
                 compactionNotices.filter { it.session == selectedId })
             // 回放缓存后请求滚到底，否则打开会话停在缓存顶部等网络刷新
@@ -1205,7 +1203,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
         history = mergeAssistantNarrations(history, liveNarrations(id))
         history = reconcilePendingAssistant(history, pendingItemId, pendingText)
-        messages = mergeCompactionNotices(history, compactionNotices.filter { it.session == id })
+        messages = mergeAgentCompactionNotices(agent, history, compactionNotices.filter { it.session == id })
         if (messages.isNotEmpty()) cachedHistory[id] = messages
         sessions
             .find { it.optString("id") == id }

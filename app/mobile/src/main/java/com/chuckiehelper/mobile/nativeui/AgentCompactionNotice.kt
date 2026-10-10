@@ -57,6 +57,11 @@ internal fun coalesceCompactionNotices(notices: List<AgentCompactionNotice>): Li
 fun successfulCompaction(run: String, result: JSONObject): Boolean =
     result.optString("status") == "completed" && (result.optString("kind") == "compact" || run.startsWith("hcompact_"))
 
+/** Codex returns native compaction items in history order; discard legacy local overlays. */
+internal fun mergeAgentCompactionNotices(agent: String, history: List<HermesMessage>, notices: List<AgentCompactionNotice>): List<HermesMessage> =
+    if (agent == "codex") history.filterNot { it.localKey?.startsWith("compaction-") == true }
+    else mergeCompactionNotices(history, notices)
+
 fun mergeCompactionNotices(history: List<HermesMessage>, notices: List<AgentCompactionNotice>): List<HermesMessage> {
     val rows = history.filterNot { it.localKey?.startsWith("compaction-") == true }
     val insertions = mutableMapOf<Int, MutableList<HermesMessage>>()
