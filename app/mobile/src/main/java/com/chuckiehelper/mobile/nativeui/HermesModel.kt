@@ -212,13 +212,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         saveRuns()
     }
     val externalRunning get() = runId == null && externalActivityRunning(externalActivity, selectedId, activityNow, externalVerifiedAt)
-    val hasExecution get() = (runStateVerified && runSession == selectedId) || externalRunning
-    val executionKey get() = runId ?: externalActivity?.optString("activity_id")?.takeIf { externalRunning }?.let { "external-$it" }
-    val executionTiming get() = if (runId != null) currentRunTiming else externalActivityTiming(externalActivity)
+    private var compactionRequest by mutableStateOf<Pair<String, Long>?>(null)
+    val requestingCompaction get() = compactionRequest?.first == selectedId && compactionRequest != null
+    val hasExecution get() = requestingCompaction || (runStateVerified && runSession == selectedId) || externalRunning
+    val executionKey get() = if (requestingCompaction) "compact-request-${compactionRequest?.second}" else runId ?: externalActivity?.optString("activity_id")?.takeIf { externalRunning }?.let { "external-$it" }
+    val executionTiming get() = if (requestingCompaction) AgentRunTiming(startedAt = compactionRequest?.second) else if (runId != null) currentRunTiming else externalActivityTiming(externalActivity)
     val executionEvents get() = if (runId != null) events else externalActivityEvents(externalActivity)
     val executionEventCount get() = if (runId != null) eventCount else externalActivity?.optInt("event_count") ?: 0
-    val executionState get() = if (runId != null) state else externalActivityLabel(externalActivity)
-    val executionCompacting get() = executionState == "正在压缩上下文"
+    val executionState get() = if (requestingCompaction) "正在提交压缩请求" else if (runId != null) state else externalActivityLabel(externalActivity)
+    val executionCompacting get() = requestingCompaction || executionState == "正在压缩上下文"
 
     fun pollExternalActivity() = viewModelScope.launch {
         val id = selectedId ?: return@launch
@@ -632,8 +634,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val id = selectedId ?: return@launch
         if (runId != null || submitting || hasPendingSubmission) throw java.io.IOException("请先结束或核对当前任务，再压缩上下文")
         setSubmitting(id, true)
+        val started = System.currentTimeMillis()
+        val pendingCompaction = id to started
+        compactionRequest = pendingCompaction
+        setError(id, null)
         try {
-            val started = System.currentTimeMillis()
             val request = api.request("$root/sessions/${q(id)}/compact", obj()).newBuilder().header("Idempotency-Key", UUID.randomUUID().toString()).build()
             val result = api.json(request)
             startRunTiming(result.getString("run_id"), result, started)
@@ -643,9 +648,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 return@launch
             }
             runId = result.getString("run_id"); runSession = id; seq = -1; events = emptyList(); eventCount = 0; pendingText = ""; approval = null; state = "正在压缩上下文"
+            runVerifiedAt = activityClock(); activityNow = runVerifiedAt
             prefs.edit().putString("run", runId).putString("runSession", id).remove("runMessageKey").apply()
             saveRuns(); watch()
-        } finally { setSubmitting(id, false) }
+        } finally {
+            if (compactionRequest == pendingCompaction) compactionRequest = null
+            setSubmitting(id, false)
+        }
     }
     fun fetchProjects() = launch {
         projectsLoading = true; error = null

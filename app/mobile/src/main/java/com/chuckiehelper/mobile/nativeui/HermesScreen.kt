@@ -493,15 +493,15 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         Modifier.weight(1f),
                                         style = MaterialTheme.typography.titleSmall,
                                     )
-                                    if (model.runId != null || agent == "hermes" && model.externalRunning)
+                                    if (!model.requestingCompaction && (model.runId != null || agent == "hermes" && model.externalRunning))
                                         TextButton(onClick = { stop = true }, enabled = !model.stopping) { Text(if (model.stopping) "正在停止" else "停止") }
-                                    else if (model.canTakeover) TextButton(onClick = { takeover = true }) { Text("中断并接管") }
+                                    else if (!model.requestingCompaction && model.canTakeover) TextButton(onClick = { takeover = true }) { Text("中断并接管") }
                                 }
-                                RunTimers(model.executionKey, model.executionTiming,
+                                if (!model.requestingCompaction) RunTimers(model.executionKey, model.executionTiming,
                                     responseLabel = if (model.runId == null) "距上次已保存响应" else "距上次响应", compacting = model.executionCompacting)
                                 if (model.executionCompacting) {
                                     LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
-                                    Text("正在整理上下文，完成后可继续对话", Modifier.padding(top = 8.dp),
+                                    Text(if (model.requestingCompaction) "正在等待服务端确认" else "正在整理上下文，完成后可继续对话", Modifier.padding(top = 8.dp),
                                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                                 if (!model.executionCompacting && model.executionEvents.isNotEmpty())
@@ -650,9 +650,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         ComposerMenu(commands, { commands = false }, onBounds = { commandPanelBounds = it }) {
                             (listOf(
                                     "新建会话" to "/new",
-                                    "切换模型" to "/model",
                                     "会话历史" to "/sessions",
-                                    "Provider 管理" to "/providers",
                                     "状态与重连" to "/status",
                                     "停止任务" to "/stop",
                                 ) + listOf("压缩上下文" to "/compact") + if (agent == "codex") listOf("账户与工作空间" to "/account") else emptyList())
