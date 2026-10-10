@@ -544,30 +544,15 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                                 if (!model.executionCompacting && model.executionEvents.isNotEmpty())
-                                    TextButton(onClick = { toolDetails = "active" }) {
+                                    TextButton(onClick = { showTools = !showTools }) {
                                         // 显示本 run 收到的工具/进度事件总数（events 列表只保留最近 30 条，直接用 size 会一直显示截断后的值）
                                         Text("工具与进度 · ${model.executionEventCount}")
                                     }
                                 if (showTools && !model.executionCompacting)
                                     model.executionEvents.forEach {
-                                        Row(
-                                            Modifier.fillMaxWidth(),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            Text(
-                                                listOf(if (it.text.equals("commandExecution", ignoreCase = true)) "命令" else it.text,
-                                                    (if (agent == "codex") compactCodexToolPreview(it.detail) else it.detail)
-                                                    .replace(Regex("\\s+"), " ").trim()).filter { part -> part.isNotBlank() }.joinToString(" · "),
-                                                modifier = Modifier.weight(1f).padding(end = 8.dp),
-                                                maxLines = 2,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                                style = MaterialTheme.typography.bodySmall,
-                                            )
-                                            Text(
-                                                it.type,
-                                                style = MaterialTheme.typography.labelSmall,
-                                            )
-                                        }
+                                        ToolProgressRow(it.text,
+                                            if (agent == "codex") compactCodexToolPreview(it.detail) else it.detail,
+                                            it.type)
                                     }
                             }
                         }

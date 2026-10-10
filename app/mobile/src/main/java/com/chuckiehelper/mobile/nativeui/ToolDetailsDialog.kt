@@ -47,20 +47,15 @@ internal fun ToolDetailsDialog(api: NativeApi, agent: String, session: String, s
             catch (error: Exception) { failure = error.message ?: "无法读取工具详情"; loading = false; break }
         }
     }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("工具 ${total - changed} 次 · 文件修改 $changed 次") },
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("工具 ${total - changed} 次 · 文件修改 $changed 次", style = MaterialTheme.typography.titleSmall) },
         text = {
             Column {
                 if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(bottom = 8.dp))
                 failure?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton(onClick = { retry++ }) { Text("重试") } }
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     items(rows, key = { it.optString("id") }) { tool ->
-                        Column {
-                            val name = if (tool.optString("category") == "file_change") "文件修改" else tool.optString("tool", "工具")
-                            val status = when (tool.optString("status")) { "completed" -> "成功"; "failed" -> "失败"; "running" -> "正在运行"; "cancelled" -> "已取消"; else -> "状态未知" }
-                            Row { Text(name, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge); Text(status, style = MaterialTheme.typography.labelMedium,
-                                color = if (status == "失败") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
-                            tool.optString("description").takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                        }
+                        ToolProgressRow(if (tool.optString("category") == "file_change") "文件修改" else tool.optString("tool", "工具"),
+                            tool.optString("description"), tool.optString("status"), maxLines = 4)
                     }
                     if (rows.size < total) item { TextButton(onClick = { limit += 50 }) { Text("加载更多（${rows.size}/$total）") } }
                     if (!loading && failure == null && rows.isEmpty()) item { Text("暂无工具调用") }
