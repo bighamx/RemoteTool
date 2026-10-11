@@ -26,7 +26,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private readonly Dictionary<string, JsonObject> loaded = new();
     private readonly Dictionary<string, string> active = new();
     private readonly Dictionary<string, List<JsonObject>> events = new();
-    private readonly Dictionary<string, JsonObject> approvals = new();
+    private readonly Dictionary<string, string> itemTurns = new();
+    private sealed record ApprovalRequest(string Run, string Session, string NativeId, CodexRpc Origin, JsonObject Message);
+    private readonly Dictionary<string, ApprovalRequest> approvals = new();
     private readonly HashSet<string> replyingApprovals = new();
     private CodexRpc loginRpc;
     private string loginFolder, loginName;
@@ -37,7 +39,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private readonly HashSet<string> desktopAnnounced = new();
     private readonly Dictionary<string, JsonObject> sessionOverrides = new();
     private readonly Dictionary<string, JsonObject> contexts = new();
-    private sealed record HistorySnapshot(string Path, long Length, long Modified, JsonObject Payload);
+    private sealed record HistorySnapshot(CodexHistoryFileStamp Stamp, JsonObject Payload);
     private readonly Dictionary<string, HistorySnapshot> messageSnapshots = new();
     private JsonObject CachedMessages(string session) {
         HistorySnapshot cached;
@@ -45,21 +47,20 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             if (active.ContainsKey(session) || !messageSnapshots.TryGetValue(session, out cached)) return null;
         }
         try {
-            var path = CodexPreviewRollout.LatestPath(home, session, cached.Path);
-            var file = new FileInfo(path);
-            if (path == cached.Path && file.Exists && file.Length == cached.Length && file.LastWriteTimeUtc.Ticks == cached.Modified)
+            var path = CodexPreviewRollout.LatestPath(home, session, cached.Stamp.Path);
+            if (cached.Stamp.SameVersion(CodexHistoryFileStamp.Capture(path)))
                 return cached.Payload.DeepClone().AsObject();
         } catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { }
         lock (gate) if (messageSnapshots.GetValueOrDefault(session) == cached) messageSnapshots.Remove(session);
         return null;
     }
-    private void CacheMessages(string session, JsonNode thread, JsonObject payload) {
+    private void CacheMessages(string session, JsonNode thread, JsonObject payload, CodexHistoryFileStamp? before) {
         if (thread?["status"].S("type") == "active" || payload.ToJsonString().Length > 2_000_000) return;
         try {
             var path = RolloutPath(thread);
-            var file = new FileInfo(path);
-            if (!file.Exists) return;
-            var snapshot = new HistorySnapshot(path, file.Length, file.LastWriteTimeUtc.Ticks, payload.DeepClone().AsObject());
+            var after = CodexHistoryFileStamp.Capture(path);
+            if (before is not { } original || !original.SameVersion(after)) return;
+            var snapshot = new HistorySnapshot(original, payload.DeepClone().AsObject());
             lock (gate) {
                 if (active.ContainsKey(session)) return;
                 if (messageSnapshots.Count >= 16 && !messageSnapshots.ContainsKey(session)) messageSnapshots.Remove(messageSnapshots.Keys.First());
@@ -83,7 +84,10 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     }
     private async Task ReleaseSessionCore(string id) {
         CodexRpc owner;
-        lock (gate) { sessionRpcs.Remove(id, out owner); loaded.Remove(id); }
+        lock (gate) {
+            sessionRpcs.Remove(id, out owner); loaded.Remove(id);
+            foreach (var key in itemTurns.Keys.Where(key => key.StartsWith(id + "\n", StringComparison.Ordinal)).ToArray()) itemTurns.Remove(key);
+        }
         // Unsubscribe keeps a runtime alive for 30 minutes. An owned, per-session
         // connection can be closed without interrupting any other conversation.
         if (owner != null) await owner.DisposeAsync();
@@ -438,12 +442,40 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             list.Add(value); if (list.Count > 256) list.RemoveRange(0, list.Count - 256);
         }
     }
+    private bool AcceptNotification(CodexRpc origin, string session, string turn, string method, JsonObject parameters) {
+        lock (gate) {
+            var owner = sessionRpcs.GetValueOrDefault(session) ?? rpc;
+            var run = active.GetValueOrDefault(session);
+            var expected = run == null ? "" : runs[run].S("turn_id");
+            if (!CodexNotificationScope.Accept(owner, origin, expected, turn)) return false;
+            if (!method.StartsWith("item/", StringComparison.Ordinal)) return true;
+            var itemId = parameters.S("itemId", parameters["item"].S("id"));
+            if (itemId.Length == 0) return expected.Length == 0 || turn == expected;
+            var key = session + "\n" + itemId;
+            itemTurns.TryGetValue(key, out var known);
+            if (!CodexNotificationScope.AcceptItem(expected, turn, known, method == "item/started")) return false;
+            if (method == "item/started" && expected.Length > 0) {
+                if (itemTurns.Count > 4096) itemTurns.Remove(itemTurns.Keys.First());
+                itemTurns[key] = expected;
+            }
+            return true;
+        }
+    }
+    private void ClearApprovals(string run) {
+        lock (gate) foreach (var key in approvals.Where(entry => entry.Value.Run == run).Select(entry => entry.Key).ToArray()) {
+            approvals.Remove(key); replyingApprovals.Remove(key);
+        }
+    }
     private async Task Notification(JsonObject message, CodexRpc origin = null) {
         var method = message.S("method"); var p = message["params"] as JsonObject ?? new JsonObject();
+        origin ??= rpc;
+        var session = p.S("threadId");
+        var turnId = p.S("turnId", p["turn"].S("id", p["item"].S("turnId")));
+        if (!AcceptNotification(origin, session, turnId, method, p)) return;
         if (method == "turn/started") await BindQueuedNativeTurn(p.S("threadId"), p["turn"].S("id"), origin);
         if (method == "thread/closed") {
             lock (gate) {
-                var session = p.S("threadId"); loaded.Remove(session);
+                loaded.Remove(session);
                 if (active.Remove(session, out var closedRun)) { CodexRunRecovery.Recover(runs[closedRun]!.AsObject(), false); Persist(); }
             }
         }
@@ -454,11 +486,19 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         string run; lock (gate) active.TryGetValue(p.S("threadId"), out run);
         if (message.ContainsKey("id")) {
             if (run == null) { await (origin ?? rpc).Write(Obj(("id", message["id"]), ("error", Obj(("code", -32601), ("message", "No mobile turn owns this request"))))); return; }
-            var key = message["id"]!.ToJsonString();
+            var nativeId = message["id"]!.ToJsonString();
+            string key; bool created;
+            lock (gate) {
+                key = approvals.FirstOrDefault(entry => entry.Value.Run == run && entry.Value.NativeId == nativeId &&
+                    ReferenceEquals(entry.Value.Origin, origin)).Key;
+                created = key == null;
+                key ??= "approval_" + Guid.NewGuid().ToString("N");
+                approvals[key] = new ApprovalRequest(run, session, nativeId, origin, message.DeepClone().AsObject());
+            }
             var approval = Obj(("request_id", key), ("kind", method.EndsWith("requestUserInput") ? "user_input" : "approval"),
                 ("description", p.S("reason", p.S("command", "Codex 请求你的确认"))), ("command", p.S("command")), ("questions", p.A("questions")));
-            lock (gate) { approvals[key] = message.DeepClone().AsObject(); runs[run]!["approval"] = approval.DeepClone(); }
-            Emit(run, "approval.request", approval.Select(x => (x.Key, (object)x.Value)).ToArray());
+            lock (gate) runs[run]!["approval"] = approval.DeepClone();
+            if (created) Emit(run, "approval.request", approval.Select(x => (x.Key, (object)x.Value)).ToArray());
             return;
         }
         if (run == null) {
@@ -487,7 +527,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             var name = item.S("tool", item.S("name", kind switch { "commandExecution" => "终端", "fileChange" => "文件修改", "mcpToolCall" => "MCP", "webSearch" => "搜索", "imageView" => "查看图片", _ => kind }));
             var preview = item.S("command", item.S("query", item.S("arguments")));
             preview = Regex.Replace(preview, "\\s+", " "); if (preview.Length > 180) preview = preview[..180];
-            Emit(run, method.EndsWith("/started") ? "tool.started" : "tool.completed", ("tool", name), ("preview", preview), ("error", item.S("status") is "failed" or "declined"));
+            Emit(run, method.EndsWith("/started") ? "tool.started" : "tool.completed", ("tool", name),
+                ("item_id", item.S("id")), ("call_id", item.S("callId")),
+                ("preview", preview), ("error", item.S("status") is "failed" or "declined"));
         } else if (method == "turn/completed") {
             var turn = p["turn"]; var status = turn.S("status");
             lock (gate) {
@@ -495,6 +537,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 state["error"] = turn?["error"].S("message"); state.Remove("approval"); active.Remove(p.S("threadId"));
             }
             Emit(run, status == "completed" ? "run.completed" : "run.failed"); Persist();
+            ClearApprovals(run);
             if (status == "completed") _ = StartQueuedIfIdle(p.S("threadId"), completedTurn: true);
             _ = ReleaseAndNotify(p.S("threadId"));
         } else if (method == "serverRequest/resolved") { lock (gate) runs[run]!.AsObject().Remove("approval"); }
@@ -876,10 +919,17 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 }
                 var request = snapshot.A("requests").FirstOrDefault(r => r["params"].S("turnId") == turn.S("turnId") && r.S("method") is "item/tool/requestUserInput" or "item/commandExecution/requestApproval" or "item/fileChange/requestApproval" or "item/permissions/requestApproval");
                 if (request != null) {
-                    var requestKey = request["id"]!.ToJsonString(); var p = request["params"];
+                    var nativeId = request["id"]!.ToJsonString(); var p = request["params"];
+                    string requestKey; bool changed;
+                    lock (gate) {
+                        requestKey = approvals.FirstOrDefault(entry => entry.Value.Run == run && entry.Value.NativeId == nativeId && entry.Value.Origin == null).Key;
+                        requestKey ??= "approval_" + Guid.NewGuid().ToString("N");
+                        changed = runs[run]?["approval"].S("request_id") != requestKey;
+                        approvals[requestKey] = new ApprovalRequest(run, session, nativeId, null, request.DeepClone().AsObject());
+                    }
                     var approval = Obj(("request_id", requestKey), ("kind", request.S("method").EndsWith("requestUserInput") ? "user_input" : "approval"),
                         ("description", p.S("reason", p.S("command", "Codex 请求你的确认"))), ("command", p.S("command")), ("questions", p.A("questions")));
-                    bool changed; lock (gate) { changed = runs[run]?["approval"].S("request_id") != requestKey; approvals[requestKey] = request.DeepClone().AsObject(); runs[run]!["approval"] = approval.DeepClone(); }
+                    lock (gate) runs[run]!["approval"] = approval.DeepClone();
                     if (changed) Emit(run, "approval.request", approval.Select(x => (x.Key, (object)x.Value)).ToArray());
                 } else lock (gate) runs[run]!.AsObject().Remove("approval");
                 var usage = snapshot["latestTokenUsageInfo"];
@@ -887,7 +937,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 var status = turn.S("status");
                 if (status is "completed" or "failed" or "interrupted") {
                     lock (gate) { runs[run]!["status"] = status; runs[run]!["error"] = turn["error"].S("message"); runs[run]!.AsObject().Remove("approval"); active.Remove(session); Persist(); }
-                    Emit(run, status == "completed" ? "run.completed" : "run.failed"); return;
+                    Emit(run, status == "completed" ? "run.completed" : "run.failed"); ClearApprovals(run); return;
                 }
             }
         } catch (Exception error) when (error is IOException or OperationCanceledException or InvalidOperationException or System.Text.Json.JsonException) { }
@@ -1087,6 +1137,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             }
             if (p.Length == 3 && p[2] == "messages") {
                 if (CachedMessages(session) is { } cached) return cached;
+                var before = CodexHistoryFileStamp.Capture(CodexPreviewRollout.LatestPath(home, session, ""));
                 var result = await ReadThread(session, true); var rows = new JsonArray();
                 CodexToolHistory.Populate(result["thread"], session, home);
                 var times = CodexMessageTimes.Read(home, session);
@@ -1132,7 +1183,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 }
                 }
                 var payload = Obj(("data", rows));
-                CacheMessages(session, result["thread"], payload);
+                CacheMessages(session, result["thread"], payload, before);
                 return payload;
             }
         }
@@ -1189,18 +1240,22 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 return Obj(("stop_requested", state.S("status") == "started"), ("stopped", state.S("status") is not ("started" or "submitting")));
             }
             if (p[2] == "approval") {
-                var key = body.S("request_id"); JsonObject request;
+                var key = body.S("request_id"); ApprovalRequest saved;
                 lock (gate) {
                     if (runs[p[1]].A("answered_approvals").Any(value => value?.ToString() == key)) return Obj(("accepted", true), ("replayed", true));
-                    if (!approvals.TryGetValue(key, out request) || request["params"].S("threadId") != state.S("session_id")) throw new CodexError("审批已过期", 409);
+                    if (!approvals.TryGetValue(key, out saved) || saved.Run != p[1] || saved.Session != state.S("session_id") ||
+                        (state.S("owner") == "desktop") != (saved.Origin == null) ||
+                        saved.Origin != null && !ReferenceEquals(saved.Origin, sessionRpcs.GetValueOrDefault(saved.Session) ?? rpc))
+                        throw new CodexError("审批已过期", 409);
                     if (!replyingApprovals.Add(key)) throw new CodexError("正在发送该回答，请稍候", 409);
                 }
                 try {
+                var request = saved.Message;
                 JsonObject answer = request.S("method").EndsWith("requestUserInput") ? Obj(("answers", body["answers"] ?? new JsonObject()))
                     : request.S("method") == "item/permissions/requestApproval" ? Obj(("permissions", body.S("choice") == "once" ? request["params"]?["permissions"] ?? new JsonObject() : new JsonObject()), ("scope", "turn"))
                     : Obj(("decision", body.S("choice") == "once" ? "accept" : "decline"));
                 if (state.S("owner") == "desktop") await CodexDesktopSync.Reply(state.S("session_id"), request, answer);
-                else await Runtime(state.S("session_id")).Write(Obj(("id", request["id"]), ("result", answer)));
+                else await saved.Origin.Write(Obj(("id", request["id"]), ("result", answer)));
                 lock (gate) {
                     approvals.Remove(key);
                     var current = runs[p[1]]!.AsObject();
@@ -1274,9 +1329,14 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         lock (gate) if (!runs.ContainsKey(run)) throw new CodexError("任务不存在", 404);
         context.Response.ContentType = "text/event-stream"; context.Response.Headers.CacheControl = "no-store";
         long.TryParse(context.Request.Headers["Last-Event-ID"], out var last);
+        last = Math.Max(0, last);
         while (!context.RequestAborted.IsCancellationRequested) {
             List<JsonObject> batch; bool done;
             lock (gate) { batch = events.GetValueOrDefault(run)?.Where(e => e.L("seq") > last).Select(e => e.DeepClone().AsObject()).ToList() ?? new(); done = runs[run].S("status") is "completed" or "failed" or "interrupted" or "acceptance_unknown"; }
+            if (batch.Count > 0 && CodexEventReplayGap.Marker(last, batch[0].L("seq")) is { } gap) {
+                await context.Response.WriteAsync("id: " + gap.L("seq") + "\ndata: " + gap.ToJsonString() + "\n\n", context.RequestAborted);
+                last = gap.L("seq");
+            }
             foreach (var value in batch) { await context.Response.WriteAsync("id: " + value.L("seq") + "\ndata: " + value.ToJsonString() + "\n\n", context.RequestAborted); last = value.L("seq"); }
             await context.Response.WriteAsync(": keepalive\n\n", context.RequestAborted); await context.Response.Body.FlushAsync(context.RequestAborted);
             if (done) return; await Task.Delay(1000, context.RequestAborted);

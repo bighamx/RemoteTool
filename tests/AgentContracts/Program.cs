@@ -289,3 +289,6 @@ CodexExecutableChecks.Run();
 CompactionEventChecks.Run();
 await TitleModelChecks.Run();
 await HermesTitleChecks.Run();
+CodexHistoryCacheChecks.Run();
+CodexEventReplayChecks.Run();
+CodexNotificationScopeChecks.Run();

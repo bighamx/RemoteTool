@@ -9,6 +9,9 @@
     <Compile Include="../../WebApplication/Services/Codex/CodexRpc.cs" Link="CodexRpc.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexTitleGenerator.cs" Link="CodexTitleGenerator.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexRunRecovery.cs" Link="CodexRunRecovery.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexHistoryFileStamp.cs" Link="CodexHistoryFileStamp.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexEventReplayGap.cs" Link="CodexEventReplayGap.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexNotificationScope.cs" Link="CodexNotificationScope.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexSessionPins.cs" Link="CodexSessionPins.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexAccountStore.cs" Link="CodexAccountStore.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexWorkspaceUsage.cs" Link="CodexWorkspaceUsage.cs" />

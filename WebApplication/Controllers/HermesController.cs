@@ -9,7 +9,7 @@ using RemoteTool.WebApi.Services.Codex;
 namespace RemoteTool.WebApi.Controllers;
 
 [ApiController, Authorize, Route("api/hermes")]
-public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, IConfiguration configuration, HermesSessionActivity activity, HermesTitleService titles) : ControllerBase
+public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, HermesSessionActivity activity, HermesTitleService titles) : ControllerBase
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效的会话或任务标识");
     [HttpGet("capabilities")] public async Task<IActionResult> Capabilities(CancellationToken ct) {

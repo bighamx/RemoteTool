@@ -517,13 +517,12 @@ public class FileService
             {
                 File.Move(fullSource, fullDest, false);
                 return true;
-            }                          
+            }
+            else
             {
                 Directory.Move(fullSource, fullDest);
                 return true;
             }
-
-            return true;
         }
         catch (Exception ex)
         {

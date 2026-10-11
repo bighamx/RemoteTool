@@ -31,7 +31,7 @@ public sealed class RunRegistry
                     return doc.ToDictionary(e => e.Key, e => e.Value as JsonObject ?? new JsonObject());
             }
         }
-        catch (Exception) when (true) { /* 损坏即丢弃，注册表只是提示性质 */ }
+        catch (Exception) { /* 损坏即丢弃，注册表只是提示性质 */ }
         return new Dictionary<string, JsonObject>();
     }
 
