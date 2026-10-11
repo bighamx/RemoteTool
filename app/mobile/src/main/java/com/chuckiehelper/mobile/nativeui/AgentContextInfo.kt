@@ -1,5 +1,6 @@
 package com.chuckiehelper.mobile.nativeui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -16,15 +17,17 @@ private fun contextTokens(value: Long) = when {
 }
 
 @Composable
-fun AgentContextInfo(info: JSONObject?, runtime: String = "") {
+fun AgentContextInfo(info: JSONObject?, runtime: String = "", onClick: (() -> Unit)? = null) {
     val available = info?.optBoolean("available") == true
     val tokens = info?.optLong("tokens") ?: 0
     val limit = info?.optLong("limit") ?: 0
     val ratio = if (available && limit > 0) tokens.toDouble() / limit else null
     val estimate = if (info?.optBoolean("estimated") == true) "约 " else ""
-    val context = if (!available) "上下文 · " + (info?.optString("message")?.takeIf { it.isNotBlank() } ?: "暂无数据") else
-        "上下文 · $estimate${contextTokens(tokens)}" + if (ratio != null) " / ${contextTokens(limit)} · ${(ratio * 100).toInt()}%" else " · 未返回上限"
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp)) {
+    val context = if (!available) (info?.optString("message")?.takeIf { it.isNotBlank() } ?: "暂无数据") else
+        "$estimate${contextTokens(tokens)}" + if (ratio != null) " / ${contextTokens(limit)} · ${(ratio * 100).toInt()}%" else " · 未返回上限"
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp).let { modifier ->
+        if (onClick != null) modifier.clickable(onClick = onClick) else modifier
+    }) {
         Text(context + runtime.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
             modifier = Modifier.fillMaxWidth(), maxLines = 1, overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

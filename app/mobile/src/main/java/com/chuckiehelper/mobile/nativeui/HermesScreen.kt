@@ -3,10 +3,13 @@
 package com.chuckiehelper.mobile.nativeui
 
 import android.app.Application
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -28,6 +31,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -173,7 +179,15 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     // Capture the row and key together; never index keys using a newer model list.
     val messageRows = model.messages
     val messageItems = remember(messageRows) { chatMessageItems(messageRows) }
-    val sessionsScroll = rememberLazyListState()
+    val sessionsScroll = model.sessionsListState
+    val filteredSessions = remember(model.sessions, filter) {
+        model.orderedSessions.filter {
+            it.optString("title").contains(filter, true) ||
+                it.optString("latest_user_message", it.optString("preview")).contains(filter, true)
+        }
+    }
+    val sessionsDragged by sessionsScroll.interactionSource.collectIsDraggedAsState()
+    LaunchedEffect(sessionsDragged) { if (sessionsDragged) model.sessionsListTouched = true }
     var latestRequest by remember(model.selectedId, list) { mutableStateOf(0L) }
     var followLatest by rememberChatFollowing(
         scroll, model.selectedId, list,
@@ -298,7 +312,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         }
         if (agent == "codex") CodexUsage(model, compact = true) { accountsPanel = true; model.fetchAccounts() }
         if (!list && model.selectedId != null) AgentContextInfo(model.contextInfo,
-            model.runtime + if (model.sessionEffort.isNotBlank()) " · ${effortLabel(model.sessionEffort)}思考" else "")
+            model.runtime + if (model.sessionEffort.isNotBlank()) " · ${effortLabel(model.sessionEffort)}思考" else "",
+            onClick = { models = true; model.fetchModels() })
         if (!list && model.error == null && model.canTakeover) model.writeAccessMessage?.let { message ->
             FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.Center) {
                 Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth())
@@ -335,8 +350,9 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
             )
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
-                Modifier.weight(1f),
+                Modifier.fillMaxSize().padding(end = 8.dp),
                 state = sessionsScroll,
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -344,10 +360,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 if (model.sessions.isEmpty() && !model.loading)
                     item { Text("暂无会话。点击 + 开始与 $agentName 对话。") }
                 items(
-                    model.orderedSessions.filter {
-                        it.optString("title").contains(filter, true) ||
-                            it.optString("latest_user_message", it.optString("preview")).contains(filter, true)
-                    },
+                    filteredSessions,
                     key = { it.getString("id") },
                 ) { session ->
                     val latestActivity = parseMessageTimestamp(session.opt("last_active"))
@@ -428,22 +441,29 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                     }
                                 }
                             } else {
-                                Text(
-                                    buildString {
-                                        append("${session.optString("source")} · ${session.optInt("message_count")} 条消息")
-                                        latestActivity?.let { append(" · ").append(it) }
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "${session.optString("source")} · ${session.optInt("message_count")} 条消息",
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    latestActivity?.let {
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(it, style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                             }
                         }
                     }
                 }
                 if (model.hasMore)
                     item { TextButton(onClick = { model.moreSessions() }) { Text("加载更多会话") } }
+            }
+            SessionListScrollbar(sessionsScroll, Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(4.dp).padding(vertical = 12.dp))
             }
         } else {
             model.historyCacheStatus?.let { label ->
@@ -506,11 +526,11 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         }) else null)
                     }
                 }
+                if (model.runId != null && model.visiblePendingText.isNotBlank()) item {
+                    MessageBubble("assistant", model.visiblePendingText, api = api, availableFiles = model.files,
+                        agentName = agentName, timestamp = model.pendingTextTimestamp, narrationTexts = model.narrationTexts)
+                }
                 if (model.hasExecution) {
-                    item {
-if ((model.runId != null || model.finalSyncPending) && model.visiblePendingText.isNotBlank())
-                            MessageBubble("assistant", model.visiblePendingText, api = api, availableFiles = model.files, agentName = agentName, timestamp = model.pendingTextTimestamp, narrationTexts = model.narrationTexts)
-                    }
                     item {
                         var showTools by remember(model.executionKey) { mutableStateOf(false) }
                         Card(Modifier.fillMaxWidth()) {
@@ -893,6 +913,57 @@ if ((model.runId != null || model.finalSyncPending) && model.visiblePendingText.
     if (filesDialog) HermesFilesDialog(api, model.files) { filesDialog = false }
     preview?.let { file ->
         MediaViewer(api, file, { preview = null }, { downloadHermesFile(context, api, file) })
+    }
+}
+
+@Composable
+private fun SessionListScrollbar(state: LazyListState, modifier: Modifier = Modifier) {
+    // layoutInfo and firstVisibleItemIndex change every frame while scrolling; reading
+    // them in composition would recompose this whole composable per frame (that
+    // recomposition storm was a likely source of the original flicker). snapshotFlow
+    // + Animatable keeps every read out of composition: derived values are collected
+    // in a coroutine, and the Canvas reads only Animatable values during the draw phase.
+    val rawThumb = remember {
+        derivedStateOf {
+            val layout = state.layoutInfo
+            val visible = layout.visibleItemsInfo.size
+            val total = layout.totalItemsCount
+            if (visible == 0 || total <= visible) 1f
+            else (visible.toFloat() / total).coerceIn(0.05f, 1f)
+        }
+    }
+    val rawPosition = remember {
+        derivedStateOf {
+            val layout = state.layoutInfo
+            val visible = layout.visibleItemsInfo.size
+            val total = layout.totalItemsCount
+            if (visible == 0 || total <= visible) 0f
+            else state.firstVisibleItemIndex.coerceIn(0, (total - visible).coerceAtLeast(1)).toFloat() /
+                (total - visible).coerceAtLeast(1)
+        }
+    }
+    val thumbFraction = remember { Animatable(1f) }
+    val position = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        launch {
+            snapshotFlow { rawThumb.value }.collect { value ->
+                thumbFraction.animateTo(value, tween(120))
+            }
+        }
+        launch {
+            snapshotFlow { rawPosition.value }.collect { value ->
+                position.animateTo(value, tween(120))
+            }
+        }
+    }
+    val thumbColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    Canvas(modifier) {
+        // Empty list: nothing to scroll, no thumb. Checked in the draw phase so
+        // layoutInfo is never read in composition.
+        if (state.layoutInfo.visibleItemsInfo.isEmpty()) return@Canvas
+        val thumbHeight = (size.height * thumbFraction.value).coerceAtLeast(24.dp.toPx()).coerceAtMost(size.height)
+        drawRoundRect(thumbColor, Offset(0f, (size.height - thumbHeight) * position.value.coerceIn(0f, 1f)),
+            Size(size.width, thumbHeight), CornerRadius(size.width / 2f))
     }
 }
 

@@ -11,8 +11,8 @@ android {
         applicationId 'com.chuckiehelper.mobile'
         minSdk 26
         targetSdk 34
-        versionCode 36
-        versionName '0.3.33'
+        versionCode 37
+        versionName '0.3.34'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

@@ -96,6 +96,26 @@ class AgentHistoryCacheTest {
         assertFalse(terminalHistoryContainsAssistant(emptyList(), item, live))
     }
 
+    @Test fun oldIdenticalAssistantCannotConfirmOrReceiveCurrentFinalFiles() {
+        val old = HermesMessage("assistant", "已完成", 91, timestamp = 1_000L)
+        assertFalse(terminalHistoryContainsAssistant(listOf(old), null, "已完成", startedAt = 2_000L))
+        assertEquals(null, exactFinalAssistant(listOf(old), null, null, "已完成", 2_000L))
+        val current = HermesMessage("assistant", "已完成", 92, timestamp = 2_100L)
+        assertTrue(terminalHistoryContainsAssistant(listOf(old, current), null, "已完成", startedAt = 2_000L))
+        assertEquals(current, exactFinalAssistant(listOf(old, current), null, null, "已完成", 2_000L))
+        assertEquals(null, exactFinalAssistant(listOf(old, current, current.copy(serverId = 93)), null, null,
+            "已完成", 2_000L))
+    }
+
+    @Test fun finalFilesRequireCurrentNativeTurnWhenAvailable() {
+        val previous = HermesMessage("assistant", "结果", 91, nativeTurnId = "old")
+        val partial = HermesMessage("assistant", "还在处理", 93, nativeTurnId = "current")
+        val current = HermesMessage("assistant", "结果", 92, nativeTurnId = "current")
+        assertEquals(null, exactFinalAssistant(listOf(previous), null, "current"))
+        assertEquals(null, exactFinalAssistant(listOf(previous, partial), null, "current", "结果"))
+        assertEquals(current, exactFinalAssistant(listOf(previous, partial, current), null, "current", "结果"))
+    }
+
     @Test fun identicalTextInAnOlderTaskCannotHideCurrentNarration() {
         val history = listOf(HermesMessage("user", "旧任务", 90), HermesMessage("assistant", "正在检查", 2),
             HermesMessage("user", "当前任务", 70))

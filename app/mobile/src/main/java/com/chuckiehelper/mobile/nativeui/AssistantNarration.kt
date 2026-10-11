@@ -149,10 +149,25 @@ internal fun reconcilePendingAssistant(history: List<HermesMessage>, item: Strin
 internal fun visiblePendingAssistant(history: List<HermesMessage>, item: String?, text: String): String =
     if (item != null && history.any { it.role == "assistant" && it.serverId == narrationMessageId(item) && narrationCovers(it.text, text) }) "" else text
 
-internal fun terminalHistoryContainsAssistant(history: List<HermesMessage>, item: String?, text: String): Boolean {
-    if (text.isBlank()) return true
-    return history.any { it.role == "assistant" && (item == null || it.serverId == narrationMessageId(item)) &&
-        narrationCovers(it.text, text) }
+internal fun exactFinalAssistant(history: List<HermesMessage>, item: String?, turn: String?,
+    text: String = "", startedAt: Long? = null): HermesMessage? = when {
+    item != null -> history.singleOrNull { it.role == "assistant" && it.serverId == narrationMessageId(item) }
+    turn != null -> history.lastOrNull { it.role == "assistant" && !it.narration && it.nativeTurnId == turn &&
+        (text.isBlank() || it.text.trim() == text.trim()) }
+    text.isNotBlank() && startedAt != null && startedAt > 0 -> history.filter {
+        it.role == "assistant" && !it.narration && it.timestamp?.let { time -> time >= startedAt } == true &&
+            it.text.trim() == text.trim()
+    }.singleOrNull()
+    else -> null
+}
+
+internal fun terminalHistoryContainsAssistant(history: List<HermesMessage>, item: String?, text: String,
+    turn: String? = null, startedAt: Long? = null): Boolean {
+    if (text.isBlank()) return false
+    if (item != null || turn != null) return exactFinalAssistant(history, item, turn, text)?.text?.trim() == text.trim()
+    // Older Hermes streams have no item/turn ID. A final answer from this run
+    // must be newer than its start and must not be an interim tool narration.
+    return exactFinalAssistant(history, null, null, text, startedAt) != null
 }
 
 internal fun upsertAssistantNarration(existing: List<AssistantNarration>, incoming: AssistantNarration,
