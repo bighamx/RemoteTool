@@ -3,8 +3,6 @@
 package com.chuckiehelper.mobile.nativeui
 
 import android.app.Application
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
@@ -920,49 +918,20 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
 private fun SessionListScrollbar(state: LazyListState, modifier: Modifier = Modifier) {
     // layoutInfo and firstVisibleItemIndex change every frame while scrolling; reading
     // them in composition would recompose this whole composable per frame (that
-    // recomposition storm was a likely source of the original flicker). snapshotFlow
-    // + Animatable keeps every read out of composition: derived values are collected
-    // in a coroutine, and the Canvas reads only Animatable values during the draw phase.
-    val rawThumb = remember {
-        derivedStateOf {
-            val layout = state.layoutInfo
-            val visible = layout.visibleItemsInfo.size
-            val total = layout.totalItemsCount
-            if (visible == 0 || total <= visible) 1f
-            else (visible.toFloat() / total).coerceIn(0.05f, 1f)
-        }
-    }
-    val rawPosition = remember {
-        derivedStateOf {
-            val layout = state.layoutInfo
-            val visible = layout.visibleItemsInfo.size
-            val total = layout.totalItemsCount
-            if (visible == 0 || total <= visible) 0f
-            else state.firstVisibleItemIndex.coerceIn(0, (total - visible).coerceAtLeast(1)).toFloat() /
-                (total - visible).coerceAtLeast(1)
-        }
-    }
-    val thumbFraction = remember { Animatable(1f) }
-    val position = remember { Animatable(0f) }
-    LaunchedEffect(Unit) {
-        launch {
-            snapshotFlow { rawThumb.value }.collect { value ->
-                thumbFraction.animateTo(value, tween(120))
-            }
-        }
-        launch {
-            snapshotFlow { rawPosition.value }.collect { value ->
-                position.animateTo(value, tween(120))
-            }
-        }
-    }
+    // recomposition storm was the original flicker). The Canvas reads them inside the
+    // draw phase instead: draw invalidation never recomposes, and the thumb tracks
+    // the scroll exactly like a native scrollbar — no tween lag, no rubber-worm feel.
     val thumbColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
     Canvas(modifier) {
-        // Empty list: nothing to scroll, no thumb. Checked in the draw phase so
-        // layoutInfo is never read in composition.
-        if (state.layoutInfo.visibleItemsInfo.isEmpty()) return@Canvas
-        val thumbHeight = (size.height * thumbFraction.value).coerceAtLeast(24.dp.toPx()).coerceAtMost(size.height)
-        drawRoundRect(thumbColor, Offset(0f, (size.height - thumbHeight) * position.value.coerceIn(0f, 1f)),
+        val layout = state.layoutInfo
+        val total = layout.totalItemsCount
+        val visible = layout.visibleItemsInfo.size
+        if (visible == 0 || total <= visible) return@Canvas
+        val thumbHeight = (size.height * (visible.toFloat() / total).coerceIn(0.05f, 1f))
+            .coerceAtLeast(24.dp.toPx()).coerceAtMost(size.height)
+        val lastStart = (total - visible).coerceAtLeast(1)
+        val position = state.firstVisibleItemIndex.coerceIn(0, lastStart).toFloat() / lastStart
+        drawRoundRect(thumbColor, Offset(0f, (size.height - thumbHeight) * position),
             Size(size.width, thumbHeight), CornerRadius(size.width / 2f))
     }
 }
