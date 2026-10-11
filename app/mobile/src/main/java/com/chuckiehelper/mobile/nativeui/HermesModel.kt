@@ -2,6 +2,7 @@ package com.chuckiehelper.mobile.nativeui
 
 import android.app.Application
 import androidx.compose.runtime.*
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import java.util.UUID
@@ -27,7 +28,7 @@ data class HermesMessage(
     val requestKey: String? = null,
 )
 
-data class HermesEvent(val type: String, val text: String, val detail: String = "")
+data class HermesEvent(val type: String, val text: String, val detail: String = "", val itemId: String? = null)
 
 /** Durable run ids, never a persisted provider secret or automatically replayed prompt. */
 class HermesModel(application: Application, deviceId: String, val agent: String = "hermes") : AndroidViewModel(application) {
@@ -37,6 +38,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private val appContext = application.applicationContext
     private val watchOwner = "$agent-$deviceId"
     private lateinit var api: NativeApi
+    val sessionsListState = LazyListState()
+    var sessionsListTouched by mutableStateOf(false)
     var sessions by mutableStateOf<List<JSONObject>>(runCatching {
         org.json.JSONArray(prefs.getString("offlineSessions", "[]")).objects()
     }.getOrDefault(emptyList()))
@@ -534,8 +537,35 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var flushedStreamPrefix = ""
     private var pendingItemId: String? = null
     private var pendingPhase = ""
-    var finalSyncPending by mutableStateOf(false)
-        private set
+    private var streamGap = false
+    private var streamGapRun: String? = null
+    private var finalSnapshotReceived = false
+    private val finalSyncStates = mutableStateListOf<FinalSyncState>().apply {
+        addAll(restoreFinalSyncStates(prefs.getString("finalSyncStates", "[]")))
+    }
+    private val outgoingFiles = restoreOutgoingFiles(prefs.getString("outgoingFiles", "[]")).toMutableList()
+    private val bindingOutgoingRuns = mutableSetOf<String>()
+    private fun saveFinalSyncStates() {
+        prefs.edit().putString("finalSyncStates", org.json.JSONArray(finalSyncStates.map { it.json() }).toString()).apply()
+    }
+    private fun saveOutgoingFiles() {
+        prefs.edit().putString("outgoingFiles", org.json.JSONArray(outgoingFiles.map { it.json() }).toString()).apply()
+    }
+    private fun keepFinalSync(sync: FinalSyncState) {
+        val next = retainFinalSync(finalSyncStates, sync)
+        finalSyncStates.clear(); finalSyncStates.addAll(next); saveFinalSyncStates()
+        if (selectedId == sync.session) messages = projectFinalSyncRows(messages, finalSyncStates, sync.session)
+    }
+    private fun acknowledgeFinalSync(session: String, history: List<HermesMessage>) {
+        val next = reconcileFinalSync(finalSyncStates, session, history)
+        if (next.size != finalSyncStates.size) {
+            finalSyncStates.clear(); finalSyncStates.addAll(next)
+            saveFinalSyncStates()
+        }
+    }
+    val finalSyncPending get() = finalSyncStates.any { it.session == selectedId }
+    private fun needsFinalSyncPolling(session: String) = finalSyncStates.any { it.session == session } ||
+        outgoingFiles.any { it.session == session }
     private var finalSyncJob: Job? = null
     val visiblePendingText get() = visiblePendingAssistant(messages, pendingItemId, pendingText)
     private fun syncPendingCanonical() {
@@ -1203,11 +1233,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             runSession = null
             seq = -1; events = emptyList(); eventCount = 0
             pendingText = ""; pendingTextTimestamp = null; flushedStreamPrefix = ""; pendingItemId = null; pendingPhase = ""
-            finalSyncPending = false; finalSyncJob?.cancel()
+            finalSyncJob?.cancel()
             state = "就绪"; readConnectionError = null; files = emptyList()
             prefs.edit().remove("run").remove("runSession").apply()
         }
         selectedId = id
+        if (finalSyncStates.any { it.session == id }) state = "已结束，正在同步消息"
         historyOldestId = null
         historyHasMore = false
         historyLoadingEarlier = false
@@ -1218,11 +1249,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         contextInfo = contextCache[id]; asyncQuestion = null
         // 先回放上一次该会话的消息（如有缓存），网络刷新到位后替换 —— 消除「返回再进白屏等待」。
         cachedHistory[selectedId]?.let { cached ->
-            messages = cached
+            messages = projectFinalSyncRows(cached, finalSyncStates, id)
             historyCacheStatus = null
             // 回放缓存后请求滚到底，否则打开会话停在缓存顶部等网络刷新
             scrollToLatestRequest++
-        } ?: run { messages = emptyList(); historyCacheStatus = null }
+        } ?: run { messages = projectFinalSyncRows(emptyList(), finalSyncStates, id); historyCacheStatus = null }
         // 恢复该会话的后台 run 跟踪
         backgroundRuns.remove(id)?.let { resumed ->
             runId = resumed; runSession = id
@@ -1236,11 +1267,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 val offline = withContext(Dispatchers.IO) { historyCache.read(id) }?.let { withConfirmedKeys(id, it) }
                 if (selectedId != id) return@launch
                 if (offline != null && messages.isEmpty()) {
-                    cachedHistory[id] = offline; messages = offline
+                    cachedHistory[id] = offline; messages = projectFinalSyncRows(offline, finalSyncStates, id)
                     historyCacheStatus = null; scrollToLatestRequest++
                 }
             }
             loadHistory(id)
+            if (needsFinalSyncPolling(id)) ensureFinalSyncPolling(id, api)
             this@HermesModel.launch { reconcilePendingNow(id) }
             this@HermesModel.launch { loadSelection(id) }
         }
@@ -1388,13 +1420,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         if (submitting) "正在发送" else "发送状态待核对"
                     } else null, timestamp = local.pending.timestamp), local.existing, usedNativePresentationIds)
         }
-        messages = reconcilePendingAssistant(withActiveNarrations(visibleHistory, liveNarrations(id), activeRun), pendingItemId, pendingText)
-        if (finalSyncPending && terminalHistoryContainsAssistant(history, pendingItemId, pendingText)) {
-            finalSyncPending = false; pendingText = ""; messages = visibleHistory
-        }
+        acknowledgeFinalSync(id, history)
+        messages = projectFinalSyncRows(
+            reconcilePendingAssistant(withActiveNarrations(visibleHistory, liveNarrations(id), activeRun),
+                pendingItemId.takeIf { activeRun != null }, pendingText.takeIf { activeRun != null }.orEmpty()),
+            finalSyncStates, id)
         withContext(Dispatchers.IO) { historyCache.write(id, history) }
         if (selectedId != id || api !== connection) return
         reconcileSteeringReceipts(id, connection)
+        launch { bindOutgoingIfReady(id, connection) }
         launch {
             for ((messageId, attachmentIds) in bindings) {
                 connection.json("$root/sessions/$id/messages/$messageId/attachments", obj("ids" to org.json.JSONArray(attachmentIds)))
@@ -1411,6 +1445,79 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             .find { it.optString("id") == id }
             ?.let { title = it.optString("title").ifBlank { "未命名会话" } }
         if (selectedId == id) refreshFiles()
+    }
+
+    private suspend fun bindOutgoingIfReady(session: String, connection: NativeApi) {
+        var catalog: List<JSONObject>? = null
+        for (pending in outgoingFiles.filter { it.session == session }.toList()) {
+            if (!bindingOutgoingRuns.add(pending.run)) continue
+            try {
+            if (!pending.canBind) continue
+            var receipt = pending
+            if (receipt.ids.isEmpty() && receipt.messageKey.isNotBlank()) {
+                val available = catalog ?: connection.json("$root/sessions/$session/files").array("data").objects()
+                    .also { catalog = it }
+                val ids = available.filter { it.optBoolean("outgoing") &&
+                    it.optString("messageKey") == receipt.messageKey }.map { it.getString("id") }
+                if (ids.isEmpty()) {
+                    if (receipt.discoveryUntil > 0 && System.currentTimeMillis() > receipt.discoveryUntil &&
+                        outgoingFiles.remove(pending)) saveOutgoingFiles()
+                    continue
+                }
+                receipt = receipt.copy(ids = ids)
+                val index = outgoingFiles.indexOf(pending)
+                if (index >= 0) { outgoingFiles[index] = receipt; saveOutgoingFiles() }
+            }
+            val target = exactFinalAssistant(cachedHistory[session].orEmpty(), receipt.item, receipt.turn,
+                receipt.text, receipt.startedAt) ?: continue
+            if (target.serverId <= 0) continue
+            connection.json("$root/sessions/$session/messages/${target.serverId}/attachments",
+                obj("ids" to org.json.JSONArray(receipt.ids)))
+            if (outgoingFiles.remove(receipt)) saveOutgoingFiles()
+            if (api === connection) {
+                val attached = (catalog ?: files).filter { it.optString("id") in receipt.ids }
+                cachedHistory[session] = cachedHistory[session].orEmpty().map { row ->
+                    if (row.serverId == target.serverId) row.copy(attachments =
+                        (row.attachments + attached).distinctBy { it.optString("id") }) else row
+                }
+                if (selectedId == session) messages = messages.map { row ->
+                    if (row.serverId == target.serverId) row.copy(attachments =
+                        (row.attachments + attached).distinctBy { it.optString("id") }) else row
+                }
+            }
+            } finally { bindingOutgoingRuns.remove(pending.run) }
+        }
+    }
+
+    private fun ensureFinalSyncPolling(session: String, connection: NativeApi) {
+        if (finalSyncJob?.isActive == true || !needsFinalSyncPolling(session)) return
+        finalSyncJob = viewModelScope.launch {
+            repeat(12) {
+                delay(5000)
+                if (selectedId != session || api !== connection || !needsFinalSyncPolling(session)) return@launch
+                try {
+                    finalSyncStates.filter { it.session == session && !it.canConfirm }.toList().forEach { pending ->
+                        try {
+                            val status = connection.json("$root/runs/${pending.run}")
+                            val recovered = status.optString("output").removePrefix(pending.flushedPrefix)
+                            if (recovered.isNotBlank()) {
+                                keepFinalSync(pending.copy(text = recovered, item = null, canConfirm = true))
+                                outgoingFiles.indexOfFirst { it.run == pending.run }.takeIf { it >= 0 }?.let { index ->
+                                    outgoingFiles[index] = outgoingFiles[index].copy(text = recovered, item = null, canBind = true)
+                                    saveOutgoingFiles()
+                                }
+                            }
+                        } catch (cancel: CancellationException) { throw cancel }
+                        catch (_: Exception) { }
+                    }
+                    loadHistory(session)
+                }
+                catch (cancel: CancellationException) { throw cancel }
+                catch (_: Exception) { }
+            }
+            if (selectedId == session && runId == null && finalSyncStates.any { it.session == session })
+                state = "消息同步尚未完成，请刷新"
+        }
     }
 
     fun newSession(name: String, onDone: () -> Unit = {}, project: JSONObject? = null) = launch {
@@ -1455,6 +1562,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         sessions = sessions.filter { it.optString("id") != id }
         saveOfflineSessions()
         cachedHistory.remove(id)
+        if (finalSyncStates.removeAll { it.session == id }) saveFinalSyncStates()
+        if (outgoingFiles.removeAll { it.session == id }) saveOutgoingFiles()
         withContext(Dispatchers.IO) { historyCache.remove(id) }
         sessionActivities = sessionActivities - id
         compactionNotices = compactionNotices.filterNot { it.session == id }; saveCompactionNotices()
@@ -1721,7 +1830,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     prefs.edit().putString("runMessageKey", key).putString("run", startedRun).putString("runSession", session).apply()
                     pendingFiles = pendingFiles.filterNot { it.optString("id") in pending.attachmentIds }
                     pendingText = ""; flushedStreamPrefix = ""; pendingTextTimestamp = null; pendingItemId = null; pendingPhase = ""
-                    finalSyncPending = false; finalSyncJob?.cancel()
+                    // Older completed runs keep their own final text and attachment receipts.
                     events = emptyList(); eventCount = 0; approval = null; seq = -1; state = "执行中"
                     runVerifiedAt = activityClock(); activityNow = runVerifiedAt
                     watch(); loadHistory(session)
@@ -1758,6 +1867,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         streamConnected = false
         if (!observation.active || !this::api.isInitialized) return
         val id = runId ?: return
+        if (streamGapRun != id) { streamGapRun = id; streamGap = false; finalSnapshotReceived = false }
         val watchedSession = runSession ?: return
         val connection = api
         val wake = Channel<Unit>(Channel.CONFLATED)
@@ -1807,15 +1917,34 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         runSession?.let { recordCompactionCompletion(id, it, result) }
                         if (result.optString("status") != "completed")
                             error = result.optString("error").ifBlank { state }
-                        if (result.optString("status") != "acceptance_unknown" && pendingItemId == null && result.optString("output").isNotBlank())
-                            pendingText = result.optString("output").removePrefix(flushedStreamPrefix)
+                        val statusText = if (result.optString("status") == "acceptance_unknown") "" else result.optString("output")
+                        val terminalText = terminalSyncText(pendingText, pendingPhase, streamGap, statusText, flushedStreamPrefix)
+                        val statusTail = statusText.removePrefix(flushedStreamPrefix)
+                        val canConfirm = terminalText.isNotBlank() &&
+                            (statusTail.isNotBlank() && terminalText.trim() == statusTail.trim() || finalSnapshotReceived)
+                        val terminalItem = pendingItemId.takeIf { pendingPhase == "final_answer" &&
+                            (!streamGap || terminalText == pendingText) }
+                        val completedMessageKey = prefs.getString("runMessageKey", "").orEmpty()
+                        val returned = files.filter { it.optBoolean("outgoing") &&
+                            completedMessageKey.isNotBlank() && it.optString("messageKey") == completedMessageKey }
                         // Keep the live item and the run receipt until a successful
                         // authoritative read has taken over. A failed read must retry
                         // without hiding the final streamed text.
                         val finishedSession = runSession
+                        val finalSync = FinalSyncState(watchedSession, id, terminalItem, runTurnId, terminalText,
+                            pendingTextTimestamp ?: System.currentTimeMillis(), runTimings[id]?.startedAt, canConfirm,
+                            flushedStreamPrefix)
+                        if (finishedSession != null && completedMessageKey.isNotBlank()) {
+                            outgoingFiles.removeAll { it.run == id }
+                            outgoingFiles.add(OutgoingFiles(finishedSession, id, finalSync.item, finalSync.turn,
+                                finalSync.text, finalSync.startedAt, returned.map { it.getString("id") },
+                                completedMessageKey, System.currentTimeMillis() + 300_000L, canConfirm))
+                            saveOutgoingFiles()
+                        }
                         finishedSession?.let { loadHistory(it) }
                         val historyReady = finishedSession == null ||
-                            terminalHistoryContainsAssistant(cachedHistory[finishedSession].orEmpty(), pendingItemId, pendingText)
+                            finalSyncAcknowledged(finalSync, cachedHistory[finishedSession].orEmpty())
+                        if (finishedSession != null && !historyReady) keepFinalSync(finalSync)
                         runId = null
                         runVerifiedAt = 0
                         discardRunNarrations(id)
@@ -1825,52 +1954,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         streamJob?.cancel()
                         prefs.edit().remove("run").remove("runSession").apply()
                         if (finishedSession != null && selectedId == finishedSession) {
-                            finalSyncPending = !historyReady
-                            messages = if (historyReady) cachedHistory[finishedSession].orEmpty() else
-                                reconcilePendingAssistant(cachedHistory[finishedSession].orEmpty(), pendingItemId, pendingText)
-                            if (historyReady) pendingText = "" else {
+                            messages = projectFinalSyncRows(cachedHistory[finishedSession].orEmpty(), finalSyncStates, finishedSession)
+                            pendingText = ""; pendingItemId = null; pendingPhase = ""; streamGap = false
+                            if (!historyReady) {
                                 state = "已结束，正在同步消息"
-                                val finishedConnection = connection
-                                finalSyncJob?.cancel()
-                                finalSyncJob = viewModelScope.launch {
-                                    repeat(12) {
-                                        delay(5000)
-                                        if (!finalSyncPending || selectedId != finishedSession || api !== finishedConnection) return@launch
-                                        try { loadHistory(finishedSession) }
-                                        catch (cancel: CancellationException) { throw cancel }
-                                        catch (_: Exception) { }
-                                    }
-                                    if (finalSyncPending && selectedId == finishedSession) state = "消息同步尚未完成，请刷新"
-                                }
                             }
+                            ensureFinalSyncPolling(finishedSession, connection)
                         }
                         currentCoroutineContext().ensureActive()
-                        if (selectedId != finishedSession || runId != null) return@launch
-                        val returned =
-                            files.filter {
-                                it.optBoolean("outgoing") &&
-                                    it.optString("messageKey") ==
-                                        prefs.getString("runMessageKey", "")
-                            }
-                        val finalMessage = finishedSession?.let { cachedHistory[it] }?.lastOrNull { it.role == "assistant" && it.serverId > 0 }
-                        if (
-                            selectedId == runSession &&
-                                returned.isNotEmpty() &&
-                                finalMessage != null
-                        ) {
-                            api.json(
-                                "$root/sessions/${runSession}/messages/${finalMessage.serverId}/attachments",
-                                obj(
-                                    "ids" to org.json.JSONArray(returned.map { it.getString("id") })
-                                ),
-                            )
-                            messages =
-                                messages.map {
-                                    if (it.serverId == finalMessage.serverId)
-                                        it.copy(attachments = returned)
-                                    else it
-                                }
-                        }
                         refreshSessions()
                         break
                     }
@@ -1932,7 +2023,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                 if (runId != id || api !== connection || !observation.active || epoch != observationEpoch) return@withContext
                                 val n = event.optLong("seq", -1)
                                 if (n >= 0 && n <= seq) return@withContext
+                                val kind = event.optString("type", event.optString("event"))
+                                if (kind == "stream.gap" || n >= 0 && missingSseEvents(seq, n)) {
+                                    streamGap = true
+                                    runSession?.let { session -> launch { loadHistory(session) } }
+                                    state = "正在同步遗漏的输出"
+                                }
                                 if (n >= 0) seq = n
+                                if (kind == "stream.gap") return@withContext
                                 recordRunResponse(id, event)
                                 compactionStreamPhase(agent, event)?.let { started ->
                                     if (started) {
@@ -1950,15 +2048,18 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                 when (event.optString("type", event.optString("event"))) {
                                     "message.started" -> beginStreamItem(id, event, n.takeIf { it >= 0 })
                                     "message.delta" -> {
+                                         if (streamGap) return@withContext
                                         beginStreamItem(id, event, n.takeIf { it >= 0 })
                                         if (pendingTextTimestamp == null) pendingTextTimestamp = parseMessageTimestamp(event.opt("timestamp")) ?: System.currentTimeMillis()
                                         pendingText += event.optString("delta")
                                         syncPendingCanonical()
                                     }
                                     "message.snapshot", "message.completed" -> {
+                                         streamGap = false
                                         beginStreamItem(id, event, n.takeIf { it >= 0 })
                                         if (pendingTextTimestamp == null) pendingTextTimestamp = parseMessageTimestamp(event.opt("timestamp")) ?: System.currentTimeMillis()
                                         pendingText = event.optString("text")
+                                        if (kind == "message.completed" && pendingPhase == "final_answer") finalSnapshotReceived = true
                                         syncPendingCanonical()
                                         if (needsMediaCatalogRefresh(pendingText, files)) refreshFiles()
                                         if (event.optString("type", event.optString("event")) == "message.completed" && pendingPhase == "commentary")
@@ -1980,33 +2081,16 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                                             .let { if (agent == "codex") compactCodexToolPreview(it) else it }
                                                             .replace(Regex("\\s+"), " ")
                                                             .take(100),
+                                                         event.optString("item_id").ifBlank { event.optString("call_id") }.takeIf { it.isNotBlank() },
                                                     ))
                                                 .takeLast(20)
                                         eventCount++
                                     }
                                     "tool.completed",
                                     "tool.failed" -> {
-                                        val index =
-                                            events.indexOfLast {
-                                                it.text == event.optString("tool") &&
-                                                    it.type == "执行中"
-                                            }
-                                        if (index >= 0)
-                                            events =
-                                                events.mapIndexed { i, item ->
-                                                    if (i == index)
-                                                        item.copy(
-                                                            type =
-                                                                if (
-                                                                    event.optBoolean("error") ||
-                                                                        event.optString("event") ==
-                                                                            "tool.failed"
-                                                                )
-                                                                    "失败"
-                                                                else "完成"
-                                                        )
-                                                    else item
-                                                }
+                                        events = completeToolEvent(events, event.optString("tool"),
+                                            event.optString("item_id").ifBlank { event.optString("call_id") }.takeIf { it.isNotBlank() },
+                                            event.optBoolean("error") || event.optString("event") == "tool.failed")
                                     }
                                     "message.interim" -> {
                                         val text = event.optString("text")
