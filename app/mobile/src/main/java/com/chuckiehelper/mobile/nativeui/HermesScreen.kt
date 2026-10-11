@@ -119,14 +119,6 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             }
         }
     }
-    LaunchedEffect(model, list, model.selectedId, model.hasKnownActivity, model.messageQueue.entries.size) {
-        // The watch service keeps CPU/network alive; this loop keeps draining the queue
-        // even when the screen is off or the app is backgrounded.
-        if (!list && (model.hasKnownActivity || model.messageQueue.entries.isNotEmpty())) while (true) {
-            model.pollMessageQueue().join()
-            kotlinx.coroutines.delay(4000)
-        }
-    }
     LaunchedEffect(model.asyncQuestion?.optString("request_id"), list) { if (!list && model.asyncQuestion != null) questionPanel = true }
     LaunchedEffect(api.base, list, agent, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -306,7 +298,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         }
         if (agent == "codex") CodexUsage(model, compact = true) { accountsPanel = true; model.fetchAccounts() }
         if (!list && model.selectedId != null) AgentContextInfo(model.contextInfo,
-            model.runtime + if (model.sessionEffort.isNotBlank()) " · 思考${effortLabel(model.sessionEffort)}" else "")
+            model.runtime + if (model.sessionEffort.isNotBlank()) " · ${effortLabel(model.sessionEffort)}思考" else "")
         if (!list && model.error == null && model.canTakeover) model.writeAccessMessage?.let { message ->
             FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.Center) {
                 Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth())
@@ -516,7 +508,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 }
                 if (model.hasExecution) {
                     item {
-                        if (model.runId != null && model.visiblePendingText.isNotBlank())
+if ((model.runId != null || model.finalSyncPending) && model.visiblePendingText.isNotBlank())
                             MessageBubble("assistant", model.visiblePendingText, api = api, availableFiles = model.files, agentName = agentName, timestamp = model.pendingTextTimestamp, narrationTexts = model.narrationTexts)
                     }
                     item {

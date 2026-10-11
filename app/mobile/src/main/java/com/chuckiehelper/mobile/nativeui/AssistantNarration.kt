@@ -149,6 +149,12 @@ internal fun reconcilePendingAssistant(history: List<HermesMessage>, item: Strin
 internal fun visiblePendingAssistant(history: List<HermesMessage>, item: String?, text: String): String =
     if (item != null && history.any { it.role == "assistant" && it.serverId == narrationMessageId(item) && narrationCovers(it.text, text) }) "" else text
 
+internal fun terminalHistoryContainsAssistant(history: List<HermesMessage>, item: String?, text: String): Boolean {
+    if (text.isBlank()) return true
+    return history.any { it.role == "assistant" && (item == null || it.serverId == narrationMessageId(item)) &&
+        narrationCovers(it.text, text) }
+}
+
 internal fun upsertAssistantNarration(existing: List<AssistantNarration>, incoming: AssistantNarration,
     history: List<HermesMessage>): List<AssistantNarration> {
     val anchor = narrationAnchorIndex(history, incoming)

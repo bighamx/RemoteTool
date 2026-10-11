@@ -280,11 +280,11 @@ public sealed class HermesAttachments
                     try { return JsonSerializer.SerializeToNode(Metadata(session, Resolve(session, reference!["id"]!.ToString()))); }
                     catch (FileNotFoundException) { return null; }
                 }).Where(file => file != null).ToArray());
-            else if (agent == "codex" && row["role"]?.ToString() == "user") {
+            else if (row["role"]?.ToString() == "user") {
                 // Native queues can drain while the phone is offline. Build() persists
                 // the uploaded file paths in the user item, independently of phone binding.
                 var content = (row["content"]?.ToString() ?? "").Replace("\r\n", "\n");
-                const string marker = "\n\n附件文件：\n";
+                var marker = agent == "codex" ? "\n\n附件文件：\n" : "\n\n[ChuckieHelper 持久附件]\n";
                 var start = content.LastIndexOf(marker, StringComparison.Ordinal);
                 if (start < 0) continue;
                 // Only files enumerated from this session are eligible, never arbitrary
@@ -292,8 +292,10 @@ public sealed class HermesAttachments
                 nativeFiles ??= Paths(session).ToDictionary(file => file, file => file,
                     OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
                 var attached = content[(start + marker.Length)..].Split('\n')
-                    .Select(line => line.Trim()).Where(line => line.Length > 2 && line[0] == '"' && line[^1] == '"')
-                    .Select(line => nativeFiles.GetValueOrDefault(line[1..^1])).Where(file => file != null)
+                    .Select(line => line.Trim()).Select(line => agent == "codex"
+                        ? line.Length > 2 && line[0] == '"' && line[^1] == '"' ? line[1..^1] : null
+                        : line.Contains('：') ? line[(line.IndexOf('：') + 1)..].Trim().Trim('"') : null)
+                    .Select(path => path == null ? null : nativeFiles.GetValueOrDefault(path)).Where(file => file != null)
                     .Distinct().Take(8).Select(file => Metadata(session, file)).ToArray();
                 if (attached.Length > 0) row["attachments"] = JsonSerializer.SerializeToNode(attached);
             }

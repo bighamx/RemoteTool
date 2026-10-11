@@ -33,11 +33,11 @@ class SteeringMessagesTest {
         assertEquals(note, accepted.single().first)
     }
     @Test fun identicalSteersNeedSeparateHistoryRowsAndPartialTextNeverAcknowledges() {
-        val first = SteeringMessage("first", "session", "同意", setOf(10), 10, "已送达")
-        val second = first.copy(key = "second")
-        val persisted = HermesMessage("user", "同意", 11)
+        val first = SteeringMessage("first", "session", "同意", setOf(10), 10, "已送达", 1000)
+        val second = first.copy(key = "second", timestamp = 200000)
+        val persisted = HermesMessage("user", "同意", 11, timestamp = 2000)
         assertEquals(listOf(second), pendingSteeringMessages(listOf(persisted), listOf(first, second)))
-        assertEquals(emptyList<SteeringMessage>(), pendingSteeringMessages(listOf(persisted, persisted.copy(serverId = 12)), listOf(first, second)))
+        assertEquals(emptyList<SteeringMessage>(), pendingSteeringMessages(listOf(persisted, persisted.copy(serverId = 12, timestamp = 201000)), listOf(first, second)))
         assertFalse(steeringAppearsInHistory(first, listOf(HermesMessage("user", "不同意", 11))))
         assertFalse(steeringAppearsInHistory(first.copy(delivery = "发送失败"), listOf(persisted)))
         assertTrue(steeringAppearsInHistory(first.copy(text = "first\r\nsecond"), listOf(persisted.copy(text = " first\nsecond "))))
@@ -45,13 +45,28 @@ class SteeringMessagesTest {
     @Test fun steeringStaysInChatAcrossHistoryRefreshAndMergesWhenPersisted() {
         val old = HermesMessage("user", "start", 10)
         val reply = HermesMessage("assistant", "reply", 11)
-        val steering = SteeringMessage("key", "session", "change direction", setOf(10), 10, "已送达")
+        val steering = SteeringMessage("key", "session", "change direction", setOf(10), 10, "已送达", 1000)
         val rows = mergeSteeringMessages(listOf(old, reply), listOf(steering))
         assertEquals(listOf("start", "change direction", "reply"), rows.map { it.text })
         assertEquals("已送达", rows[1].delivery)
-        val persisted = HermesMessage("user", "change direction", 12)
+        val persisted = HermesMessage("user", "change direction", 12, timestamp = 2000)
         assertTrue(steeringAppearsInHistory(steering, listOf(old, persisted)))
         assertEquals(listOf(old, persisted, reply), mergeSteeringMessages(listOf(old, persisted, reply), listOf(steering)))
         assertFalse(steeringAppearsInHistory(steering, listOf(HermesMessage("user", "change direction", 10))))
+    }
+    @Test fun nativeRequestKeyConfirmsUndatedCodexSteeringWithoutMatchingAnotherRequest() {
+        val sent = SteeringMessage("current-key", "session", "继续", emptySet(), 0)
+        val other = HermesMessage("user", "继续", 10, requestKey = "other-key")
+        val current = HermesMessage("user", "继续", 11, requestKey = sent.key)
+        assertFalse(steeringAppearsInHistory(sent, listOf(other)))
+        assertTrue(steeringAppearsInHistory(sent, listOf(current)))
+        assertEquals(current, reconcileSteeringMessages(listOf(other, current), listOf(sent)).second.single().second)
+    }
+    @Test fun anUnconfirmedHermesSteerIsNotAcceptedFromSameTextAlone() {
+        val pending = SteeringMessage("unknown-key", "session", "继续", emptySet(), 0,
+            delivery = "发送状态待核对", timestamp = 10000)
+        val old = HermesMessage("user", "继续", 20, timestamp = 11000)
+        assertFalse(steeringAppearsInHistory(pending, listOf(old)))
+        assertEquals(listOf(pending), reconcileSteeringMessages(listOf(old), listOf(pending)).first)
     }
 }

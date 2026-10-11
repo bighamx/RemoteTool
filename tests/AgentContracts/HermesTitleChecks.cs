@@ -42,7 +42,13 @@ internal static class HermesTitleChecks {
             service.Accepted("test", "after manual rename");
             var journal = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(folder, "title-sessions-hermes.json")));
             if (handler.Title != "manual title" || journal["test"]["status"].ToString() != "manual") throw new Exception("Hermes manual title not preserved");
-            Console.WriteLine("Hermes title integration passed: accepted input, generated title saved, duplicate prevented, manual title preserved");
+            handler.Title = "untitled";
+            service.Register("test", handler.Title, true);
+            service.Accepted("test", "  小鸡游戏  ");
+            for (var i = 0; i < 30 && handler.Title != "小鸡游戏"; i++) await Task.Delay(100);
+            journal = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(folder, "title-sessions-hermes.json")));
+            if (handler.Title != "小鸡游戏" || journal["test"]["status"].ToString() != "completed") throw new Exception("Short Hermes input must become the title without a model request");
+            Console.WriteLine("Hermes title integration passed: short direct title, generated title, duplicate prevention, manual rename");
         } finally { Directory.Delete(folder, true); }
     }
 }

@@ -129,6 +129,19 @@ try {
                 "an explicit empty binding remains authoritative over native inference");
         }
         store.PrepareRun(Body(session, [id]), key);
+        if (agent == "hermes") {
+            var uploadedPath = store.Resolve(session, id);
+            var uploadInput = Body(session, [id]);
+            var prepared = JsonNode.Parse(store.PrepareRun(uploadInput, key).GetRawText());
+            var text = prepared["input"] is JsonValue ? prepared["input"].ToString() : prepared["input"][0]["content"][0]["text"].ToString();
+            JsonNode Recover(string sid, string content) => store.AddMessageAttachments(sid, new JsonObject {
+                ["data"] = new JsonArray(new JsonObject { ["id"] = 99, ["role"] = "user", ["content"] = content }) }.ToJsonString())["data"][0];
+            Check(Recover(session, text)["attachments"][0]["id"].ToString() == id, "Hermes restores native persistent attachments without phone binding");
+            Check(Recover(session, text.Replace("\n", "\r\n"))["attachments"][0]["id"].ToString() == id, "Hermes attachment recovery tolerates CRLF");
+            var steer = store.PrepareHermesSteer(uploadInput, session, key).GetProperty("input").GetString();
+            Check(Recover(session, steer)["attachments"][0]["id"].ToString() == id, "Hermes quoted steering attachments recover after reconnect");
+            Check(Recover("other-hermes", text)["attachments"] == null, "Hermes cannot recover another session's uploaded files");
+        }
         store.PrepareCodexRun(Body(session, [id]), key);
         store.PrepareHermesSteer(Body(session, [id]), session, key);
         Check(!Directory.Exists(Path.Combine(folder, "outbox")), agent + " using uploads still creates no speculative output folders");

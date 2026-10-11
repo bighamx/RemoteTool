@@ -18,5 +18,6 @@ internal fun agentHistoryMessage(agent: String, row: JSONObject): HermesMessage?
         timestamp = parseMessageTimestamp(row.opt("timestamp")) ?: parseMessageTimestamp(row.opt("created_at")),
         narration = description != null || isAssistantNarration(row),
         nativeTurnId = row.optString("turn_id").takeIf { it.isNotBlank() && it != "null" },
-        editable = row.optBoolean("editable", true))
+        editable = row.optBoolean("editable", true),
+        requestKey = row.optString("client_request_id").takeIf { it.isNotBlank() && it != "null" })
 }

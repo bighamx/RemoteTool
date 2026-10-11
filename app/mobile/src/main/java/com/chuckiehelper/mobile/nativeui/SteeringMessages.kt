@@ -25,6 +25,10 @@ fun rejectedSteering(message: SteeringMessage): Boolean = message.delivery in se
 fun steeringAppearsInHistory(message: SteeringMessage, history: List<HermesMessage>): Boolean =
     message.delivery != "发送失败" && message.delivery != BUSY_STEERING_DELIVERY && history.any {
         it.role == "user" && it.serverId > 0 && it.serverId !in message.existingIds &&
+            (it.requestKey == message.key || message.delivery == "已送达" && it.requestKey == null && message.timestamp != null &&
+                it.timestamp?.let { at -> at >= message.timestamp - 2000L && at <= message.timestamp + 120_000L } == true) &&
+            (message.attachments.isEmpty() || it.attachments.map { file -> file.optString("id") }
+                .containsAll(message.attachments.map { file -> file.optString("id") })) &&
             it.text.replace("\r\n", "\n").trim() == message.text.replace("\r\n", "\n").trim()
     }
 
@@ -42,7 +46,7 @@ fun reconcileSteeringMessages(history: List<HermesMessage>, steering: List<Steer
     val pending = steering.filter { message ->
         // Match first so real messages always receive their attachments. Codex IDs
         // are hashes: numeric ID order cannot prove that a record left the window.
-        val match = history.firstOrNull { it.serverId !in consumed && steeringAppearsInHistory(message, listOf(it)) }
+        val match = history.filter { it.serverId !in consumed && steeringAppearsInHistory(message, listOf(it)) }.singleOrNull()
         if (match != null) {
             consumed += match.serverId; acknowledged += message to match; false
         } else if (message.attachments.isEmpty() && outsideSteeringWindow(history, message)) {

@@ -13,13 +13,14 @@ class DeferredChatQueueTest {
         }
     }
     @Test fun durableQueuePreservesFifoSessionAndAttachmentsAcrossRestart() {
-        val rows=listOf(QueuedChatMessage("a","session-a","first",listOf(JSONObject("{\"id\":\"file\",\"name\":\"image.jpg\"}"))),
-            QueuedChatMessage("b","session-b","second",emptyList(),"native-b","native","等待任务结束"))
+        val rows=listOf(QueuedChatMessage("a","session-a","first",listOf(JSONObject("{\"id\":\"file\",\"name\":\"image.jpg\"}")), accountId="account-a"),
+            QueuedChatMessage("b","session-b","second",emptyList(),"native-b","native","等待任务结束",accountId="account-b"))
         val restored=restoreQueuedMessages(queuedMessagesJson(rows))
         assertEquals(listOf("a","b"),restored.map { it.key })
         assertEquals(listOf("session-a","session-b"),restored.map { it.session })
         assertEquals("file",restored.first().files.single().getString("id"))
         assertEquals("native-b",restored.last().nativeId)
+        assertEquals(listOf("account-a","account-b"),restored.map { it.accountId })
     }
     @Test fun interruptedDispatchNeverAutomaticallyReplaysAfterAppRestart() {
         val row=QueuedChatMessage("key","s","once",emptyList(),mode="local",status="发送中")

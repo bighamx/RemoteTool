@@ -38,14 +38,16 @@ internal class AgentHistoryCache(private val root: File, private val scope: Stri
 internal fun encodeHistorySnapshot(messages: List<HermesMessage>) = JSONArray(messages.map { message ->
     obj("role" to message.role, "text" to message.text, "id" to message.serverId,
         "attachments" to JSONArray(message.attachments), "timestamp" to message.timestamp,
-        "narration" to message.narration, "turnId" to message.nativeTurnId, "editable" to message.editable)
+        "narration" to message.narration, "turnId" to message.nativeTurnId, "editable" to message.editable,
+        "requestKey" to message.requestKey)
 })
 
 internal fun decodeHistorySnapshot(rows: JSONArray): List<HermesMessage> = rows.objects().map { row ->
     HermesMessage(row.getString("role"), row.getString("text"), row.getLong("id"),
         row.array("attachments").objects(), timestamp = parseMessageTimestamp(row.opt("timestamp")),
         narration = row.optBoolean("narration"), nativeTurnId = row.optString("turnId").takeUnless { it.isBlank() || it == "null" },
-        editable = row.optBoolean("editable", true))
+        editable = row.optBoolean("editable", true),
+        requestKey = row.optString("requestKey").takeIf { it.isNotBlank() && it != "null" })
 }
 
 /** Pending submissions are temporary trailing rows, never position hints for native history. */
@@ -62,10 +64,30 @@ internal fun appendPendingHistory(history: List<HermesMessage>, pending: List<He
 }
 
 /** A current send remains visible until its native row arrives, even if an assistant row arrives first. */
-internal fun projectCurrentSubmission(history: List<HermesMessage>, message: HermesMessage, existingIds: Set<Long>): List<HermesMessage> {
+internal fun projectCurrentSubmission(history: List<HermesMessage>, message: HermesMessage, existingIds: Set<Long>,
+    usedNativeIds: MutableSet<Long> = mutableSetOf()): List<HermesMessage> {
     if (history.any { it.localKey == message.localKey }) return history
-    val boundary = history.indexOfFirst { it.serverId > 0 && it.serverId !in existingIds }
-        .takeIf { it >= 0 } ?: history.size
+    val equivalent = history.firstOrNull { row ->
+        if (row.role != "user" || row.serverId <= 0 || row.serverId in existingIds || row.serverId in usedNativeIds) return@firstOrNull false
+        if (row.text.replace("\r\n", "\n").trim() != message.text.replace("\r\n", "\n").trim()) return@firstOrNull false
+        if (message.attachments.isNotEmpty() && !row.attachments.map { it.optString("id") }
+                .containsAll(message.attachments.map { it.optString("id") })) return@firstOrNull false
+        if (row.requestKey != null) return@firstOrNull row.requestKey == message.localKey
+        // This is display reconciliation only. Delivery receipts and attachment
+        // binding still require their own evidence; do not infer either here.
+        val sent = message.timestamp ?: return@firstOrNull false
+        val saved = row.timestamp ?: return@firstOrNull false
+        message.delivery == null && saved in (sent - 2000L)..(sent + 10 * 60_000L)
+    }
+    if (equivalent != null) { usedNativeIds += equivalent.serverId; return history }
+    // A row absent from the pre-send snapshot can have been written *before* the
+    // user tapped Send (for example the preceding streamed assistant reply).
+    // Native order stays intact. Use a timestamp only when both sides have one;
+    // otherwise append the optimistic row until the native user item arrives.
+    val sentAt = message.timestamp ?: return history + message
+    val boundary = history.indexOfFirst { row ->
+        row.serverId > 0 && row.serverId !in existingIds && row.timestamp?.let { it > sentAt } == true
+    }.takeIf { it >= 0 } ?: history.size
     return history.toMutableList().apply { add(boundary, message) }
 }
 

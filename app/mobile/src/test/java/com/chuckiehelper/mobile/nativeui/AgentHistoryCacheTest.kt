@@ -84,6 +84,18 @@ class AgentHistoryCacheTest {
         assertEquals(history, withActiveNarrations(history, listOf(live), null))
     }
 
+    @Test fun finalStreamRemainsUntilHistoryContainsTheCompleteNativeItem() {
+        val item = "answer-item"
+        val partial = listOf(HermesMessage("assistant", "Hello", narrationMessageId(item)))
+        val live = "Hello world"
+        assertFalse(terminalHistoryContainsAssistant(partial, item, live))
+        val corrected = reconcilePendingAssistant(partial, item, live)
+        assertEquals(listOf(live), corrected.map { it.text })
+        assertEquals("", visiblePendingAssistant(corrected, item, live))
+        assertTrue(terminalHistoryContainsAssistant(corrected, item, live))
+        assertFalse(terminalHistoryContainsAssistant(emptyList(), item, live))
+    }
+
     @Test fun identicalTextInAnOlderTaskCannotHideCurrentNarration() {
         val history = listOf(HermesMessage("user", "旧任务", 90), HermesMessage("assistant", "正在检查", 2),
             HermesMessage("user", "当前任务", 70))

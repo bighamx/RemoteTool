@@ -37,6 +37,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             return Ok(result);
         }
         catch (InvalidOperationException error) { return Ok(new { available = false, message = error.Message }); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Ok(new { available = false, message = "上下文读取超时，请刷新重试" }); }
     }
     [HttpGet("sessions/{id}/activity")] public IActionResult SessionActivity(string id) {
         Response.Headers.CacheControl = "no-store";
@@ -192,7 +193,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             if (!upstream.IsSuccessStatusCode)
             {
                 Response.StatusCode = upstream.StatusCode == System.Net.HttpStatusCode.Unauthorized ? 502 : (int)upstream.StatusCode;
-                await Response.WriteAsJsonAsync(new { message = $"Hermes 请求失败（HTTP {(int)upstream.StatusCode}）" }, ct);
+                await WriteUpstreamError(payload, upstream.StatusCode, ct);
                 return;
             }
             // 登记「会话当前活跃 run」供多端共享（平板打开同一会话可挂载实时进度）。
@@ -295,9 +296,9 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     }
     [HttpPost("runs/{id}/steer")] public async Task Steer(string id, [FromBody] JsonElement body, CancellationToken ct) {
         var runId = Id(id);
+        var key = Request.Headers["Idempotency-Key"].ToString();
+        if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = "插话需要唯一请求标识", delivery = "rejected" }, ct); return; }
         if (body.TryGetProperty("attachment_ids", out var ids) && ids.GetArrayLength() > 0) {
-            var key = Request.Headers["Idempotency-Key"].ToString();
-            if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = "插话需要唯一请求标识" }, ct); return; }
             try {
                 using var status = await bridge.SendAsync(HttpMethod.Get, $"v1/runs/{runId}", null, null, ct);
                 if (!status.IsSuccessStatusCode) { Response.StatusCode = (int)status.StatusCode; await Response.WriteAsJsonAsync(new { message = "无法核对当前 Hermes 任务" }, ct); return; }
@@ -311,10 +312,28 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = error.Message }, ct); return;
             }
         }
-        await Forward(HttpMethod.Post, $"v1/runs/{runId}/steer", body, null, ct);
+        await Forward(HttpMethod.Post, $"v1/runs/{runId}/steer", body, key, ct);
     }
     [HttpPost("runs/{id}/approval")] public Task Approval(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"v1/runs/{Id(id)}/approval", body, null, ct);
     [HttpPost("responses")] public Task Responses([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "v1/responses", body, null, ct);
+
+    private async Task WriteUpstreamError(string payload, System.Net.HttpStatusCode status, CancellationToken ct) {
+        string? message = null, code = null, delivery = null;
+        try {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object) {
+                if (root.TryGetProperty("message", out var text) && text.ValueKind == JsonValueKind.String) message = text.GetString();
+                if (root.TryGetProperty("code", out var kind) && kind.ValueKind == JsonValueKind.String) code = kind.GetString();
+                if (root.TryGetProperty("delivery", out var state) && state.ValueKind == JsonValueKind.String) delivery = state.GetString();
+            }
+        } catch (JsonException) { }
+        message = !string.IsNullOrWhiteSpace(message) && message.Length <= 500 ? message : $"Hermes 请求失败（HTTP {(int)status}）";
+        code = code is { Length: <= 80 } && Regex.IsMatch(code, "^[a-zA-Z0-9_-]+$") ? code : null;
+        delivery = delivery is "accepted" or "rejected" or "unknown" ? delivery :
+            status is System.Net.HttpStatusCode.BadRequest or System.Net.HttpStatusCode.UnprocessableEntity ? "rejected" : "unknown";
+        await Response.WriteAsJsonAsync(new { message, code, delivery }, ct);
+    }
 
     private async Task Forward(HttpMethod method, string path, JsonElement? body, string? key, CancellationToken ct)
     {
@@ -325,7 +344,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             if (!upstream.IsSuccessStatusCode)
             {
                 Response.StatusCode = upstream.StatusCode == System.Net.HttpStatusCode.Unauthorized ? 502 : (int)upstream.StatusCode;
-                await Response.WriteAsJsonAsync(new { message = $"Hermes 请求失败（HTTP {(int)upstream.StatusCode}）" }, ct);
+                await WriteUpstreamError(await upstream.Content.ReadAsStringAsync(ct), upstream.StatusCode, ct);
                 return;
             }
             Response.StatusCode = (int)upstream.StatusCode;

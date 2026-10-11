@@ -14,6 +14,23 @@ import uuid
 from datetime import datetime, timezone
 # Select Hermes' managed runtime before consuming stdin; a runtime relaunch
 # must leave the request available to the replacement interpreter.
+# This helper is supervised by IIS. Use Hermes' committed dependencies without
+# attempting a source update/install as the service identity on every poll.
+os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
+import importlib.util
+import subprocess
+# Activation changes site-packages, but cannot change the running Python ABI.
+# Relaunch under the committed interpreter before reading the JSON request.
+_bootstrap = importlib.util.find_spec("hermes_bootstrap")
+if _bootstrap and _bootstrap.origin:
+    try:
+        from pm.environments import project_python
+    except ImportError:
+        project_python = None  # Older Hermes installations keep their original venv.
+    if project_python:
+        _python = project_python(Path(_bootstrap.origin).parent)
+        if _python.is_file() and Path(sys.executable).resolve() != _python.resolve():
+            sys.exit(subprocess.call([str(_python), str(Path(__file__).resolve())]))
 import hermes_bootstrap
 
 def main():
@@ -71,16 +88,17 @@ def main():
                 model = row.get("model") or ""
                 limit = config.get("context_length") or get_cached_context_length(model, config.get("base_url") or "")
                 if not limit:
-                    from hermes_cli.web_routers.models import get_model_info
-                    info = get_model_info()
-                    if info.get("model") == model: limit = info.get("effective_context_length")
+                    # Prefer local configuration/cache before a bounded metadata
+                    # lookup. A missing bound still permits displaying tokens.
+                    from hermes_cli.config import load_config
+                    global_model = load_config().get("model") or {}
+                    if isinstance(global_model, dict) and global_model.get("default") == model:
+                        limit = global_model.get("context_length") or get_cached_context_length(
+                            model, global_model.get("base_url") or "")
                 if not limit:
-                    try:
-                        from agent.model_metadata import get_model_context_length
-                        limit = get_model_context_length(model, config.get("base_url") or "")
-                    except Exception:
-                        limit = None
+                    limit = bounded_context_limit(model, config)
                 result = {"available": bool(messages) or not estimated, "tokens": tokens, "limit": limit, "estimated": estimated, "model": model}
+                if not result["available"]: result["message"] = "暂无消息"
             finally: db.close()
         print(json.dumps(result, ensure_ascii=True))
         return
@@ -163,6 +181,27 @@ def main():
         if isinstance(value, list): return [scrub(v) for v in value]
         return value
     print(json.dumps(scrub(result), ensure_ascii=True))
+
+def bounded_context_limit(model, config):
+    # Optional metadata may consult a remote provider. Never keep token reads
+    # waiting for it or allow a non-daemon executor to block process shutdown.
+    import threading
+    result = []
+    def resolve():
+        try:
+            from agent.model_metadata import get_model_context_length
+            from hermes_cli.config import load_config
+            global_model = load_config().get("model") or {}
+            if not isinstance(global_model, dict) or global_model.get("default", global_model.get("name")) != model:
+                global_model = {}
+            limit = get_model_context_length(model, config.get("base_url") or global_model.get("base_url") or "",
+                provider=config.get("provider") or global_model.get("provider") or "")
+            if isinstance(limit, int) and limit > 0: result.append(limit)
+        except Exception:
+            pass
+    worker = threading.Thread(target=resolve, daemon=True)
+    worker.start(); worker.join(3)
+    return result[0] if result else None
 
 def lookup_run(path, body):
     import re

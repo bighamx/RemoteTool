@@ -8,7 +8,8 @@ import org.json.JSONObject
 import java.util.UUID
 
 internal data class QueuedChatMessage(val key: String, val session: String, val text: String,
-    val files: List<JSONObject>, val nativeId: String? = null, val mode: String = "", val status: String = "等待入队")
+    val files: List<JSONObject>, val nativeId: String? = null, val mode: String = "", val status: String = "等待入队",
+    val accountId: String? = null)
 
 internal fun queueMayDispatch(running: Boolean, submitting: Boolean, uncertain: Boolean, editing: Boolean, paused: Boolean) =
     !running && !submitting && !uncertain && !editing && !paused
@@ -16,18 +17,20 @@ internal fun queueMayDispatch(running: Boolean, submitting: Boolean, uncertain: 
 internal fun restoreQueuedMessages(json: String): List<QueuedChatMessage> = runCatching {
     JSONArray(json).objects().map { row -> QueuedChatMessage(row.getString("key"),row.getString("session"),row.optString("text"),
         row.array("files").objects(),row.optString("nativeId").takeIf { it.isNotBlank() && it != "null" },row.optString("mode"),
-        if(row.optString("status")=="发送中") "发送结果待核对" else row.optString("status","等待入队")) }
+        if(row.optString("status")=="发送中") "发送结果待核对" else row.optString("status","等待入队"),
+        row.optString("accountId").takeIf { it.isNotBlank() && it != "null" }) }
 }.getOrDefault(emptyList())
 
 internal fun queuedMessagesJson(rows: List<QueuedChatMessage>): String = JSONArray(rows.map { row ->
     obj("key" to row.key,"session" to row.session,"text" to row.text,"files" to JSONArray(row.files),
-        "nativeId" to row.nativeId,"mode" to row.mode,"status" to row.status)
+        "nativeId" to row.nativeId,"mode" to row.mode,"status" to row.status,"accountId" to row.accountId)
 }).toString()
 
 internal class DeferredChatQueue(
     private val prefs: SharedPreferences, private val scope: CoroutineScope, private val agent: String,
     private val api: () -> NativeApi, private val session: () -> String?,
-    private val ready: () -> Boolean, private val dispatch: (QueuedChatMessage, JSONObject?) -> Unit,
+    private val ready: (String) -> Boolean, private val identity: () -> String?,
+    private val dispatch: (QueuedChatMessage, JSONObject?) -> Unit,
 ) {
     var entries by mutableStateOf(restoreQueuedMessages(prefs.getString("message_queue", "[]") ?: "[]"))
         private set
@@ -43,7 +46,8 @@ internal class DeferredChatQueue(
     fun enqueue(text: String, files: List<JSONObject>): Boolean {
         val id=session() ?: return false
         if (text.isBlank() && files.isEmpty())return false
-        val row=QueuedChatMessage(UUID.randomUUID().toString(),id,text.ifBlank { "请查看附件" },files)
+        val account=identity()?.takeIf { it.isNotBlank() } ?: return false
+        val row=QueuedChatMessage(UUID.randomUUID().toString(),id,text.ifBlank { "请查看附件" },files,accountId=account)
         entries=entries+row;save()
         return true
     }
@@ -51,7 +55,7 @@ internal class DeferredChatQueue(
         "session_id" to row.session,"input" to row.text,"attachment_ids" to JSONArray(row.files.map { it.getString("id") }))
     private suspend fun native(row: QueuedChatMessage, action: String) = api().json("/api/codex/sessions/${q(row.session)}/queue",body(row,action))
     fun edit(row: QueuedChatMessage, text: String, files: List<JSONObject>) {
-        if(busy || row.status.contains("待核对") || text.isBlank() && files.isEmpty())return
+        if(busy || row.status.contains("待核对") || row.accountId != identity() || text.isBlank() && files.isEmpty())return
         busy=true
         scope.launch {
             try {
@@ -83,36 +87,50 @@ internal class DeferredChatQueue(
             finally{busy=false}
         }
     }
-    fun tick() {
-        if(busy || session()==null)return
-        val current=visible
+    fun forgetUncertainNative(row: QueuedChatMessage) {
+        if (busy || row.mode != "native" || !row.status.contains("待核对") && !row.status.contains("待恢复") && !row.status.contains("所属账号")) return
+        accepted(row.key)
+    }
+    suspend fun tick(targetSession: String) {
+        if(busy)return
+        val current=entries.filter { it.session == targetSession }
         if(current.isEmpty())return
         busy=true
-        scope.launch {
-            try {
-                val originalSession=session()
+        try {
+                val originalSession=targetSession
                 var catalog: JSONObject?=null
                 if(agent=="codex" && current.any { it.mode != "local" })catalog=try{api().json("/api/codex/sessions/${q(originalSession!!)}/queue")}
                     catch(e: ApiRequestFailure){if(e.status==404) obj("mode" to "local") else throw e}
-                if(session()!=originalSession)return@launch
                 val nativeRows=catalog?.array("data")?.objects().orEmpty()
                 for(row in current) {
+                    val activeAccount=identity()
+                    if(activeAccount.isNullOrBlank())continue
+                    if(row.accountId!=activeAccount) {
+                        update(row.key){it.copy(status="队列所属账号已变化，请切回原账号或移除")}
+                        continue
+                    }
+                    if(row.mode.isEmpty() && row.status in setOf("入队结果待核对","入队状态待核对")) {
+                        val result=api().json("/api/codex/runs/lookup?key=${q(row.key)}")
+                        val sameSession=result.optBoolean("found") && result.optString("session_id")==row.session
+                        val existing=nativeRows.firstOrNull { it.optString("clientUserMessageId")==row.key }
+                        when {
+                            sameSession && result.optString("status") in setOf("started","completed","interrupted","failed","cancelled") &&
+                                result.optString("delivery")!="rejected" -> accepted(row.key)
+                            existing!=null -> update(row.key){it.copy(mode="native",nativeId=existing.getString("id"),status="等待任务结束")}
+                            sameSession && result.optString("delivery")=="rejected" -> update(row.key){it.copy(status="入队失败，请编辑或移除")}
+                            else -> update(row.key){it.copy(status="入队状态待核对")}
+                        }
+                        continue
+                    }
                     if(row.mode.isEmpty()) {
                         if(row.status.startsWith("入队失败"))continue
                         val mode=if(agent=="codex")catalog?.optString("mode","local") ?: "local" else "local"
                         if(mode=="native") {
                             val existing=nativeRows.firstOrNull { it.optString("clientUserMessageId")==row.key }
-                            // An uncertain add is reconciled by key; never blindly repeat it.
-                            if(row.status=="入队结果待核对" && existing==null) {
-                                val result=api().json("/api/codex/runs/lookup?key=${q(row.key)}")
-                                if(result.optBoolean("found") && result.optString("session_id")==row.session &&
-                                    result.optString("status") in setOf("started","completed","interrupted","failed"))accepted(row.key)
-                                continue
-                            }
                             if(existing!=null) update(row.key){it.copy(mode="native",nativeId=existing.getString("id"),status="等待任务结束")}
                             else {
                                 // Native admission can start immediately when idle. Allow editing first.
-                                if(paused || panelOpen && ready())continue
+                                if(paused || panelOpen && ready(originalSession))continue
                                 update(row.key){it.copy(status="入队结果待核对")}
                                 try {
                                     val response=native(row,"add").getJSONObject("queuedSubmission")
@@ -124,29 +142,37 @@ internal class DeferredChatQueue(
                                 }
                             }
                         } else update(row.key){it.copy(mode="local",status="等待任务结束")}
+                    } else if(row.mode=="native" && catalog?.optString("mode")=="local") {
+                        // The old native writer may still own this submission. Reconcile
+                        // its durable key; never fall through to a fresh local send.
+                        val result=api().json("/api/codex/runs/lookup?key=${q(row.key)}")
+                        if(result.optBoolean("found") && result.optString("session_id")==row.session &&
+                            result.optString("status") in setOf("started","completed","interrupted","failed","cancelled")) accepted(row.key)
+                        else update(row.key){it.copy(status="原生队列连接待恢复")}
                     } else if(row.mode=="native" && catalog?.optString("mode")=="native" && row.nativeId!=null &&
                         nativeRows.none { it.optString("id")==row.nativeId }) {
-                        // The authoritative native queue already consumed/deleted it. Never send a second copy.
-                        accepted(row.key)
+                        val result=api().json("/api/codex/runs/lookup?key=${q(row.key)}")
+                        if(result.optBoolean("found") && result.optString("session_id")==row.session &&
+                            result.optString("status") in setOf("started","completed","interrupted","failed","cancelled")) accepted(row.key)
+                        else update(row.key){it.copy(status="原生队列状态待核对")}
                     }
                 }
-                val row=visible.firstOrNull() ?: return@launch
+                val row=entries.firstOrNull { it.session == targetSession && it.accountId == identity() } ?: return
                 // Native queues drain automatically, including while the phone is offline.
-                if(row.mode=="native")return@launch
-                if(row.status!="等待任务结束" || panelOpen || paused || !ready())return@launch
+                if(row.mode=="native")return
+                if(row.status!="等待任务结束" || panelOpen || paused || !ready(targetSession))return
                 // Verify fresh server state. Missing/expired observations never mean idle.
                 val running=api().json("/api/$agent/sessions/${q(row.session)}/active-run")
-                if(running.optString("status") in setOf("started","submitting","running","queued"))return@launch
+                if(running.optString("status") in setOf("started","submitting","running","queued","stopping","waiting_for_approval"))return
                 val activity=api().json("/api/$agent/sessions/${q(row.session)}/activity")
-                if(!activity.optBoolean("available") || activity.optBoolean("running"))return@launch
-                if(session()!=row.session || panelOpen || paused || !ready())return@launch
+                if(!activity.optBoolean("available") || activity.optBoolean("running"))return
+                if(panelOpen || paused || !ready(targetSession))return
                 update(row.key){it.copy(status="发送中")}
                 dispatch(row,null)
-            } catch(e: CancellationException){throw e}
-            catch(e: Exception){
-                visible.firstOrNull { it.status=="发送中" }?.let{failed(it.key,writeWasRejected(e))}
+        } catch(e: CancellationException){throw e}
+        catch(e: Exception){
+                entries.firstOrNull { it.session==targetSession && it.status=="发送中" }?.let{failed(it.key,writeWasRejected(e))}
                 // Read failures retain durable entries and are retried by the next foreground observation.
-            } finally{busy=false}
-        }
+        } finally{busy=false}
     }
 }
