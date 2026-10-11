@@ -13,8 +13,7 @@ internal static class CodexToolHistory
             var name = item.S("tool", item.S("name", kind switch { "commandExecution" => "终端", "fileChange" => "fileChange", "webSearch" => "搜索", "imageView" => "查看图片", _ => kind }));
             JsonNode description = item["command"] ?? item["query"] ?? item["arguments"] ?? item["path"];
             if (kind == "fileChange") description = JsonValue.Create(string.Join("、", item.A("changes").Take(3).Select(change => change.S("path"))) + (item.A("changes").Count > 3 ? $" 等 {item.A("changes").Count} 个文件" : ""));
-            var status = item.S("status") switch { "failed" => "failed", "declined" or "interrupted" => "cancelled", "completed" => "completed", _ => turn.S("status") == "inProgress" ? "running" : "unknown" };
-            if (item["exitCode"] != null && item.L("exitCode") != 0) status = "failed";
+            var status = CodexToolEvent.Status(item, turn);
             tools.Add(ToolHistoryCache.Tool(item.S("id"), name, description, status));
         }
         return tools;

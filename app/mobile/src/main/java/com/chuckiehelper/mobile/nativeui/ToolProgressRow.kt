@@ -16,13 +16,22 @@ internal fun keepDrivePrefixTogether(value: String): String = drivePrefix.replac
 @Composable
 internal fun ToolProgressRow(name: String, description: String, status: String, maxLines: Int = 2) {
     val tool = when (name.lowercase()) { "commandexecution" -> "终端"; "filechange", "apply_patch" -> "文件修改"; else -> name }
-    val label = when (status) { "completed", "完成", "成功" -> "成功"; "failed", "失败" -> "失败";
-        "running", "执行中", "运行中", "正在运行" -> "正在运行"; "cancelled", "已取消" -> "已取消"; else -> "状态未知" }
+    val label = toolProgressStatusLabel(status)
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(listOf(tool, keepDrivePrefixTogether(description.replace(Regex("\\s+"), " ").trim()))
             .filter { it.isNotBlank() }.joinToString(" · "),
             Modifier.weight(1f).padding(end = 8.dp), style = MaterialTheme.typography.bodySmall, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
-        Text(label, style = MaterialTheme.typography.labelSmall,
+        if (label.isNotEmpty()) Text(label, style = MaterialTheme.typography.labelSmall,
             color = when (label) { "失败" -> MaterialTheme.colorScheme.error; "正在运行" -> MaterialTheme.colorScheme.primary; else -> MaterialTheme.colorScheme.onSurfaceVariant })
     }
+}
+
+internal fun toolProgressStatusLabel(status: String): String = when (status) {
+    "completed", "完成", "成功" -> "成功"
+    "failed", "失败" -> "失败"
+    "running", "执行中", "运行中", "正在运行" -> "正在运行"
+    "cancelled", "已取消" -> "已取消"
+    "状态待核对", "unknown" -> "待核对"
+    "进度" -> ""
+    else -> "状态未知"
 }

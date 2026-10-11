@@ -19,4 +19,9 @@ class ToolEventIdentityTest {
         assertEquals(rows, ambiguous.take(2).map { it.copy(type = "执行中") })
         assertEquals("完成", completeToolEvent(rows.take(1), "终端", null, false).single().type)
     }
+    @Test fun ambiguousCompletionIsLabeledAsPendingReview() {
+        assertEquals("待核对", toolProgressStatusLabel("状态待核对"))
+        assertEquals("待核对", toolProgressStatusLabel("unknown"))
+        assertEquals("", toolProgressStatusLabel("进度"))
+    }
 }

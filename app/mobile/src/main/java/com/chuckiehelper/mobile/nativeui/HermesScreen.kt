@@ -44,6 +44,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import org.json.JSONObject
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 
 @Composable
 fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
@@ -91,6 +92,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     var createCodex by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var stop by remember { mutableStateOf(false) }
+    var handover by remember { mutableStateOf(false) }
     var takeover by remember { mutableStateOf(false) }
     var filter by rememberSaveable { mutableStateOf("") }
     var pendingInfo by remember { mutableStateOf(false) }
@@ -542,8 +544,10 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         Modifier.weight(1f),
                                         style = MaterialTheme.typography.titleSmall,
                                     )
-                                    if (!model.requestingCompaction && (model.runId != null || agent == "hermes" && model.externalRunning))
+                                    if (!model.requestingCompaction && (model.runId != null || agent == "hermes" && model.externalRunning)) {
                                         TextButton(onClick = { stop = true }, enabled = !model.stopping) { Text(if (model.stopping) "正在停止" else "停止") }
+                                        if (agent == "codex") TextButton(onClick = { handover = true }, enabled = !model.stopping) { Text("转交桌面") }
+                                    }
                                     else if (!model.requestingCompaction && model.canTakeover) TextButton(onClick = { takeover = true }) { Text("中断并接管") }
                                 }
                                 if (!model.requestingCompaction) RunTimers(model.executionKey, model.executionTiming,
@@ -883,6 +887,12 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             model.stop()
             stop = false
         }
+    if (handover)
+        ConfirmDialog("转交到桌面 Codex", "正在执行的任务会被中断（已执行的操作不会撤销），随后释放会话写入权——之后可在桌面 Codex App 打开同一个会话继续。", { handover = false }) {
+            handover = false
+            model.handoverToDesktop()
+            list = true
+        }
     if (takeover) ConfirmDialog("中断并接管当前会话", "请求中断此会话在其他端的任务，已执行的操作不会撤销。确认原任务结束且会话可写入后，再由你发送保留的草稿。其他端已启动新任务时会取消接管。", { takeover = false }) {
         takeover = false; model.takeover()
     }
@@ -916,21 +926,31 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
 
 @Composable
 private fun SessionListScrollbar(state: LazyListState, modifier: Modifier = Modifier) {
-    // layoutInfo and firstVisibleItemIndex change every frame while scrolling; reading
-    // them in composition would recompose this whole composable per frame (that
-    // recomposition storm was the original flicker). The Canvas reads them inside the
-    // draw phase instead: draw invalidation never recomposes, and the thumb tracks
-    // the scroll exactly like a native scrollbar — no tween lag, no rubber-worm feel.
+    // Card heights vary, so visibleItemsInfo.size changes at item boundaries. Freeze
+    // the visible-slot estimate while scrolling; total count still tracks list changes.
+    var visibleSlots by remember(state) { mutableIntStateOf(0) }
+    LaunchedEffect(state) {
+        visibleSlots = snapshotFlow {
+            state.layoutInfo.let { it.totalItemsCount to it.visibleItemsInfo.size }
+        }.first { (total, visible) -> visible > 0 && total > visible }.second
+    }
     val thumbColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
     Canvas(modifier) {
         val layout = state.layoutInfo
         val total = layout.totalItemsCount
-        val visible = layout.visibleItemsInfo.size
-        if (visible == 0 || total <= visible) return@Canvas
-        val thumbHeight = (size.height * (visible.toFloat() / total).coerceIn(0.05f, 1f))
+        if (visibleSlots == 0 || layout.visibleItemsInfo.isEmpty() ||
+            !state.canScrollBackward && !state.canScrollForward) return@Canvas
+        val thumbHeight = (size.height * visibleSlots.toFloat() / total.coerceAtLeast(1))
             .coerceAtLeast(24.dp.toPx()).coerceAtMost(size.height)
-        val lastStart = (total - visible).coerceAtLeast(1)
-        val position = state.firstVisibleItemIndex.coerceIn(0, lastStart).toFloat() / lastStart
+        val first = layout.visibleItemsInfo.firstOrNull { it.index == state.firstVisibleItemIndex }
+        val fraction = state.firstVisibleItemScrollOffset.toFloat() /
+            ((first?.size ?: 1) + layout.mainAxisItemSpacing).coerceAtLeast(1)
+        val lastStart = (total - visibleSlots.coerceAtLeast(1)).coerceAtLeast(1)
+        val position = when {
+            !state.canScrollBackward -> 0f
+            !state.canScrollForward -> 1f
+            else -> ((state.firstVisibleItemIndex + fraction) / lastStart).coerceIn(0f, 1f)
+        }
         drawRoundRect(thumbColor, Offset(0f, (size.height - thumbHeight) * position),
             Size(size.width, thumbHeight), CornerRadius(size.width / 2f))
     }

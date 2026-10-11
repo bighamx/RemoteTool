@@ -2173,6 +2173,29 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
+    /** 放弃手机端所有权并把会话转交到桌面 Codex App：中断进行中的轮，释放 writer 锁。 */
+    fun handoverToDesktop() = launch {
+        val session = selectedId ?: return@launch
+        val connection = api
+        if (stopRequestInFlight) return@launch
+        stopRequestInFlight = true
+        setError(session, null)
+        try {
+            if (runId == null) attachServerActiveRun(session, required = true)
+            if (selectedId != session || api !== connection) return@launch
+            val id = runId ?: throw java.io.IOException("当前会话没有正在运行的任务，无需转交。")
+            if (runSession != session) throw java.io.IOException("当前任务不属于所选会话，请刷新后重试。")
+            val result = connection.json("$root/runs/$id/handover", obj())
+            if (selectedId != session || api !== connection) return@launch
+            clearRunTracking(session, id); stoppingRunId = null
+            state = if (result.optBoolean("interrupted")) "已中断并转交桌面" else "已转交桌面"
+            loadHistory(session); loadSelection(session)
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            setError(session, "转交失败：${connectionFailureMessage(e)}")
+        } finally { stopRequestInFlight = false }
+    }
+
     fun approve(choice: String) = launch {
         if (submitting) return@launch
         val id = runId ?: return@launch

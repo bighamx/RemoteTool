@@ -527,9 +527,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             var name = item.S("tool", item.S("name", kind switch { "commandExecution" => "终端", "fileChange" => "文件修改", "mcpToolCall" => "MCP", "webSearch" => "搜索", "imageView" => "查看图片", _ => kind }));
             var preview = item.S("command", item.S("query", item.S("arguments")));
             preview = Regex.Replace(preview, "\\s+", " "); if (preview.Length > 180) preview = preview[..180];
-            Emit(run, method.EndsWith("/started") ? "tool.started" : "tool.completed", ("tool", name),
-                ("item_id", item.S("id")), ("call_id", item.S("callId")),
-                ("preview", preview), ("error", item.S("status") is "failed" or "declined"));
+            Emit(run, method.EndsWith("/started") ? "tool.started" : "tool.completed",
+                CodexToolEvent.Fields(item, name, preview));
         } else if (method == "turn/completed") {
             var turn = p["turn"]; var status = turn.S("status");
             lock (gate) {
@@ -915,7 +914,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     var phase = completed ? "tool.completed" : "tool.started"; var id = item.S("id");
                     if (seenTools.GetValueOrDefault(id) == phase) continue; seenTools[id] = phase;
                     var preview = Regex.Replace(item.S("command", item.S("query", item.S("arguments"))), "\\s+", " "); if (preview.Length > 180) preview = preview[..180];
-                    Emit(run, phase, ("tool", item.S("tool", item.S("name", kind))), ("preview", preview), ("error", item.S("status") is "failed" or "declined"));
+                    Emit(run, phase, CodexToolEvent.Fields(item,
+                        item.S("tool", item.S("name", kind)), preview));
                 }
                 var request = snapshot.A("requests").FirstOrDefault(r => r["params"].S("turnId") == turn.S("turnId") && r.S("method") is "item/tool/requestUserInput" or "item/commandExecution/requestApproval" or "item/fileChange/requestApproval" or "item/permissions/requestApproval");
                 if (request != null) {
@@ -947,8 +947,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private static long MessageId(string id) => Convert.ToInt64(Hash(id)[..14], 16) + 1;
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
-        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 18), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("state_version", 18));
+        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 19), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("state_version", 19));
         if (path == "title-model") return method == "GET" ? titles.PublicConfig() : titles.Save(body);
         if (path == "title-model/test") return Obj(("title", await titles.Generate("修复手机会话的消息顺序与状态显示")));
         if (path == "title-model/generate") return Obj(("title", await titles.Generate(body.S("input"), context.RequestAborted)));
@@ -1238,6 +1238,24 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 if (state.S("status") == "started" && state.S("owner") == "desktop") await CodexDesktopSync.StopCompact(state.S("session_id"));
                 else if (state.S("turn_id").Length > 0 && state.S("status") == "started") await Runtime(state.S("session_id")).Call("turn/interrupt", Obj(("threadId", state.S("session_id")), ("turnId", state.S("turn_id"))));
                 return Obj(("stop_requested", state.S("status") == "started"), ("stopped", state.S("status") is not ("started" or "submitting")));
+            }
+            if (p[2] == "handover") {
+                // 放弃手机端所有权，把会话还给桌面 Codex App：中断进行中的轮（codex 的 writer
+                // 锁在 app-server 进程上，turn 跑完前任何客户端都无法写入），然后释放 bridge 持有的
+                // 会话连接——锁随进程消失，桌面立即能打开该会话继续。
+                if (state.S("status") == "started" && state.S("turn_id").Length > 0 && state.S("owner") != "desktop") {
+                    try { await Runtime(state.S("session_id")).Call("turn/interrupt", Obj(("threadId", state.S("session_id")), ("turnId", state.S("turn_id")))); }
+                    catch (CodexError) { /* Already interrupted or the runtime is gone; the wait below settles it. */ }
+                    for (var waited = 0; waited < 40; waited++) {
+                        await Task.Delay(250, context.RequestAborted);
+                        lock (gate) if (!active.ContainsKey(state.S("session_id"))) break;
+                        if (context.RequestAborted.IsCancellationRequested) break;
+                    }
+                }
+                await ReleaseSessionCore(state.S("session_id"));
+                lock (gate) { active.Remove(state.S("session_id")); }
+                await CodexDesktopSync.NotifyAvailable(new[] { state.S("session_id") });
+                return Obj(("released", true), ("interrupted", state.S("status") == "started"));
             }
             if (p[2] == "approval") {
                 var key = body.S("request_id"); ApprovalRequest saved;

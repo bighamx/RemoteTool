@@ -292,3 +292,4 @@ await HermesTitleChecks.Run();
 CodexHistoryCacheChecks.Run();
 CodexEventReplayChecks.Run();
 CodexNotificationScopeChecks.Run();
+CodexToolEventChecks.Run();
