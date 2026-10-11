@@ -5,6 +5,7 @@ import androidx.compose.runtime.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -1875,14 +1876,29 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         streamJob =
             viewModelScope.launch {
                 var reconnects = 0
+                var eventsGone = false
                 while (isActive && observation.active && runId == id) {
                     val started = activityClock()
                     try {
                         readEvents(connection, id, epoch)
                     } catch (e: CancellationException) {
                         throw e
+                    } catch (e: RunEventsGone) {
+                        // Gateway dropped the event transport for a still-running run (or it is
+                        // already terminal). Stop hammering /events; the status poller below stays
+                        // authoritative and loadHistory() keeps the message list current.
+                        eventsGone = true
+                        if (streamGapRun == id) streamGap = true
+                        watchedSession.let { launch { loadHistory(it) } }
                     } catch (_: Exception) {
                         /* Status polling remains authoritative; reconnect only this GET stream. */
+                    }
+                    if (runId != id) break
+                    if (eventsGone) {
+                        // Re-probe occasionally: a terminal run needs no stream, but if a later
+                        // observation re-attaches this run it calls watch() again anyway. Just idle.
+                        delay(5_000)
+                        continue
                     }
                     if (activityClock() - started >= 15_000) reconnects = 0
                     reconnects++
@@ -2009,7 +2025,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 .apply { if (seq >= 0) header("Last-Event-ID", seq.toString()) }
                 .build()
         try { connection.streamingResponse(request) { response ->
-            if (!response.isSuccessful) return@streamingResponse
+            if (!response.isSuccessful) {
+                // 404 = the gateway holds no event transport for this run (swept mid-run on
+                // long silent turns, or the run is already terminal). Retrying can never
+                // succeed; surface it so the reconnect loop degrades to history sync.
+                if (response.code == 404) throw RunEventsGone()
+                return@streamingResponse
+            }
             if (runId != id || api !== connection || !observation.active || epoch != observationEpoch) return@streamingResponse
             streamConnected = true
             withContext(Dispatchers.IO) {
@@ -2337,6 +2359,12 @@ fun statusLabel(value: String) =
         "interrupted" -> "已中断"
         else -> value
     }
+
+// Thrown when the runs/{id}/events SSE endpoint answers 404: the gateway holds no event
+// transport for this run (mid-run sweep on long silent turns, or the run is terminal).
+// The reconnect loop treats it as permanent and degrades to history sync instead of
+// retrying a request that can never succeed.
+private class RunEventsGone : IOException("run events stream gone (404)")
 
 class HermesSseParser {
     private val data = StringBuilder()
