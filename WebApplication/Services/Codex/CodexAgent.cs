@@ -512,9 +512,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var item = p["item"];
         if (method == "turn/started") { lock (gate) runs[run]!["turn_id"] = p["turn"].S("id"); Persist(); }
         else if (method == "item/agentMessage/delta") {
-            var delta = p.S("delta"); lock (gate) runs[run]!["output"] = runs[run].S("output") + delta;
+            var delta = p.S("delta");
             Emit(run, "message.delta", ("delta", delta), ("item_id", p.S("itemId")));
         } else if (method is "item/started" or "item/completed" && item.S("type") == "agentMessage") {
+            if (method == "item/completed" && item.S("phase") == "final_answer")
+                lock (gate) runs[run]!["output"] = item.S("text");
             Emit(run, method.EndsWith("/started") ? "message.started" : "message.completed", ("item_id", item.S("id")),
                 ("phase", item.S("phase")), ("text", item.S("text")), ("timestamp", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
         } else if (method is "item/started" or "item/completed" && item != null && item.S("type") is not ("userMessage" or "agentMessage" or "reasoning")) {
@@ -596,6 +598,25 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             await NotifyDesktop(new[] { thread.S("id") });
             return Obj(("session", session));
         } finally { settingsLock.Release(); }
+    }
+    /// <summary>放弃手机端所有权：中断进行中的轮，释放 bridge 持有的 writer（桌面即可打开会话继续）。</summary>
+    private async Task<JsonObject> HandoverSession(string session, JsonObject body, CancellationToken ct) {
+        var run = active.GetValueOrDefault(session);
+        if (run != null && runs[run].S("status") == "started" && runs[run].S("owner") != "desktop") {
+            var turnId = runs[run].S("turn_id");
+            if (turnId.Length > 0) {
+                try { await Runtime(session).Call("turn/interrupt", Obj(("threadId", session), ("turnId", turnId))); }
+                catch (CodexError) { /* Already interrupted or the runtime is gone; the wait below settles it. */ }
+                for (var waited = 0; waited < 40 && !ct.IsCancellationRequested; waited++) {
+                    await Task.Delay(250, ct);
+                    lock (gate) if (!active.ContainsKey(session)) break;
+                }
+            }
+            lock (gate) { if (runs[run].S("status") == "started") { runs[run]!["status"] = "interrupted"; Persist(); } active.Remove(session); }
+        }
+        await ReleaseSessionCore(session);
+        await CodexDesktopSync.NotifyAvailable(new[] { session });
+        return Obj(("released", true));
     }
     private async Task<JsonObject> CompactSession(string id, string key) {
         if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) throw new CodexError("压缩需要唯一请求标识");
@@ -894,7 +915,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 string turnId; lock (gate) turnId = runs[run].S("turn_id");
                 var turn = DesktopTurns(snapshot).LastOrDefault(t => (turnId.Length > 0 && t.S("turnId") == turnId) || t["params"].S("clientUserMessageId") == key);
                 if (turn == null) continue;
-                var text = string.Join("\n\n", turn.A("items").Where(item => item.S("type") == "agentMessage").Select(item => item.S("text")));
+                var text = CodexAssistantMessageStream.FinalAnswer(turn);
                 lock (gate) { runs[run]!["output"] = text; runs[run]!["turn_id"] = turn.S("turnId"); }
                 foreach (var change in assistantMessages.Update(turn)) {
                     var kind = change.S("event"); change.Remove("event");
@@ -1029,6 +1050,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             }
             if (p.Length == 3 && p[2] == "queue") return await Queue(p[1], method, body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "takeover" && method == "POST") return await TakeoverSession(p[1], body, context.RequestAborted);
+            if (p.Length == 3 && p[2] == "handover" && method == "POST") return await HandoverSession(p[1], body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "active-run" && method == "GET") return await FindActiveRun(p[1], context.RequestAborted);
             if (p.Length == 3 && p[2] == "desktop-activity" && method == "GET") return await CodexDesktopActivity.Read(p[1], context.RequestAborted);
             if (p.Length == 1 && method == "GET") {
@@ -1093,6 +1115,27 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 try { await rpc.Call("thread/name/set", Obj(("threadId", session), ("name", body.S("title")))); titles.Manual(session); }
                 finally { settingsLock.Release(); }
                 return Obj(("session", Obj(("id", session), ("title", body.S("title")))));
+            }
+            if (p.Length == 2 && method == "POST" && body.S("action") == "handover") {
+                // 会话级转交：不依赖 run——空闲会话也可能挂着 idle writer（thread/resume 后未释放），
+                // 桌面因此显示「已在另一个应用中打开」。进行中的轮先中断，再释放 bridge 持有的连接。
+                var run = active.GetValueOrDefault(session);
+                if (run != null && runs[run].S("status") == "started" && runs[run].S("owner") != "desktop") {
+                    var turnId = runs[run].S("turn_id");
+                    if (turnId.Length > 0) {
+                        try { await Runtime(session).Call("turn/interrupt", Obj(("threadId", session), ("turnId", turnId))); }
+                        catch (CodexError) { /* Already interrupted or the runtime is gone; the wait below settles it. */ }
+                        for (var waited = 0; waited < 40; waited++) {
+                            await Task.Delay(250, context.RequestAborted);
+                            lock (gate) if (!active.ContainsKey(session)) break;
+                            if (context.RequestAborted.IsCancellationRequested) break;
+                        }
+                    }
+                    lock (gate) { if (runs[run].S("status") == "started") { runs[run]!["status"] = "interrupted"; Persist(); } active.Remove(session); }
+                }
+                await ReleaseSessionCore(session);
+                await CodexDesktopSync.NotifyAvailable(new[] { session });
+                return Obj(("released", true));
             }
             if (p.Length == 3 && p[2] == "delete") {
                 await settingsLock.WaitAsync();
