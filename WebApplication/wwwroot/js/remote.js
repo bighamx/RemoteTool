@@ -43,6 +43,10 @@ class RemoteControl {
         this.currentStreamMode = 'none'; // 'none', 'h264', 'mjpeg'
         /** 实时流统计：FPS、缓冲延迟(ms)、接收速率(kbps)，由各拉流路径更新 */
         this.streamStats = { fps: 0, bufferDelayMs: 0, bitrateKbps: 0 };
+        // 实际采用的播放引擎（WebCodecs ≈ 最低延迟 / MSE ≈ 自带 ~150ms 缓冲 / video.src 兜底）
+        // 以及服务端实际抓屏方式（ddagrab=GPU≈50fps / gdigrab=GDI，4K 下只有 ~15fps）
+        this.playbackEngine = null;
+        this.captureMethod = null;
         this.streamStatsFrameCount = 0;
         this.streamStatsFrameCountStart = 0;
         this.streamStatsBytes = 0;
@@ -52,7 +56,10 @@ class RemoteControl {
             resolution: '1280x720',
             bitrate: '3M',
             maxrate: '5M',
-            crf: '18'
+            crf: '18',
+            // 帧率默认 60（实测 60 请求的到达节奏比 50 更匀，ddagrab 产出跟随屏幕变化量）。
+            // 30/50 仅在弱网或想省带宽时选。
+            fps: '60'
         };
 
         // 鼠标拖动状态
@@ -60,6 +67,10 @@ class RemoteControl {
         this.dragButton = 0;
         this.lastMoveTime = 0;
         this.moveThrottleMs = 16; // 约60fps的节流
+        // 鼠标移动合并（latest-wins）：同时只允许一条在途，避免输入队列积压
+        this.pendingRemoteMove = null;
+        this.moveInFlight = false;
+        this.moveAckTimer = null;
         // 全屏状态
         this.isFullscreen = false;
         // 可编辑的文本文件扩展名列表
@@ -131,6 +142,7 @@ class RemoteControl {
         if (inputWrap && inputEl) {
             if (isPrompt) {
                 inputWrap.style.display = 'block';
+                inputEl.type = options.inputType === 'password' ? 'password' : 'text';
                 inputEl.value = options.defaultValue ?? '';
                 inputEl.placeholder = options.placeholder ?? '';
                 inputEl.focus();
@@ -174,7 +186,8 @@ class RemoteControl {
                     if (isPrompt && inputEl) inputEl.removeEventListener('keydown', onKey);
                     this.hideDialog();
                     if (isPrompt && inputEl) {
-                        resolve(inputEl.value.trim());
+                        // 口令不能 trim（首尾空格可能是密码的一部分）
+                        resolve(options.inputType === 'password' ? inputEl.value : inputEl.value.trim());
                     } else {
                         resolve(true);
                     }
@@ -632,12 +645,23 @@ class RemoteControl {
                 this.qualitySettings.bitrate = e.target.value;
                 // 同时更新 maxrate 为略高于 bitrate 的值
                 const bitrateMap = {
+                    '30M': '35M', '25M': '30M', '20M': '25M', '15M': '20M',
                     '10M': '15M', '8M': '10M', '5M': '8M', '3M': '5M',
                     '2M': '3M', '1M': '2M', '500k': '1M'
                 };
                 this.qualitySettings.maxrate = bitrateMap[e.target.value] || '5M';
                 this.checkAndUpdatePreset();
                 console.log('Bitrate changed to:', e.target.value, 'maxrate:', this.qualitySettings.maxrate);
+            });
+        }
+
+        // 帧率下拉框事件（50 = 管线能跑满，队列不积压，延迟最低）
+        const fpsSelect = document.getElementById('fps-select');
+        if (fpsSelect) {
+            fpsSelect.addEventListener('change', (e) => {
+                this.qualitySettings.fps = e.target.value;
+                this.checkAndUpdatePreset();
+                console.log('FPS changed to:', e.target.value);
             });
         }
 
@@ -1267,10 +1291,13 @@ class RemoteControl {
     // 预设配置（供多个方法共用）
     getQualityPresets() {
         return {
-            ultra: { resolution: '1920x1080', bitrate: '8M', maxrate: '10M', crf: '18' },
-            high: { resolution: '1280x720', bitrate: '3M', maxrate: '5M', crf: '18' },
-            medium: { resolution: '1280x720', bitrate: '2M', maxrate: '3M', crf: '23' },
-            low: { resolution: '854x480', bitrate: '1M', maxrate: '2M', crf: '28' }
+            // 原生：resolution=original 不缩放，按实际桌面尺寸走零拷贝 GPU 管线
+            // （跳过 hwdownload + CPU 缩放，延迟最低、CPU 零开销）；码率需按分辨率给（1080p≈8M / 2K≈15M / 4K≈20-25M）。
+            native: { resolution: 'original', bitrate: '20M', maxrate: '25M', crf: '18', fps: '60' },
+            ultra: { resolution: '1920x1080', bitrate: '8M', maxrate: '10M', crf: '18', fps: '60' },
+            high: { resolution: '1280x720', bitrate: '3M', maxrate: '5M', crf: '18', fps: '60' },
+            medium: { resolution: '1280x720', bitrate: '2M', maxrate: '3M', crf: '23', fps: '60' },
+            low: { resolution: '854x480', bitrate: '1M', maxrate: '2M', crf: '28', fps: '30' }
         };
     }
 
@@ -1312,6 +1339,10 @@ class RemoteControl {
             // 同步更新码率下拉框
             const bitrateSelect = document.getElementById('bitrate-select');
             if (bitrateSelect) bitrateSelect.value = settings.bitrate;
+
+            // 同步更新帧率下拉框
+            const fpsSelect = document.getElementById('fps-select');
+            if (fpsSelect && settings.fps) fpsSelect.value = settings.fps;
 
             // 同步更新 CRF 滑块和显示值
             const crfSlider = document.getElementById('crf-value');
@@ -1372,6 +1403,99 @@ class RemoteControl {
         }
     }
 
+    /**
+     * 用 session-state 返回的真实桌面尺寸标注分辨率选项（不把 4K 写死：
+     * 1080p 的机器上「原生」就是 1080p，且 >= 原生的档位会被服务端按原生抓、跳过缩放）。
+     */
+    applyScreenLabels(w, h) {
+        if (!w || !h) return;
+        this.nativeScreenSize = { w, h };
+        const nativeOpt = document.getElementById('opt-native');
+        if (nativeOpt) nativeOpt.textContent = `原生 ${w}×${h}（零拷贝·最低延迟）`;
+        const sel = document.getElementById('resolution-select');
+        if (!sel) return;
+        for (const opt of sel.options) {
+            if (!opt.dataset.base) opt.dataset.base = opt.textContent.replace(/\s*（[^）]*）$/, '');
+            const m = /^(\d+)x(\d+)$/.exec(opt.value);
+            if (!m) { opt.textContent = opt.dataset.base; continue; }
+            const ow = parseInt(m[1], 10), oh = parseInt(m[2], 10);
+            opt.textContent = (ow >= w && oh >= h)
+                ? `${opt.dataset.base}（≥原生·按原生抓）`
+                : opt.dataset.base;
+        }
+    }
+
+    async ensureUnlocked() {
+        let state;
+        try {
+            const resp = await fetch('/api/input/session-state', {
+                headers: { 'Authorization': `Bearer ${this.token}` }
+            });
+            if (!resp.ok) return true; // 接口不可用时按旧行为放行
+            state = await resp.json();
+        } catch (e) {
+            console.warn('session-state query failed:', e);
+            return true;
+        }
+
+        // 顺带用真实分辨率刷新 UI 标注（同一份 session-state 数据，不额外请求）
+        if (state && state.width > 0 && state.height > 0) {
+            try { this.applyScreenLabels(state.width, state.height); } catch (e) { /* 标注失败不影响拉流 */ }
+        }
+
+        if (!state || state.locked !== true) return true;
+
+        const password = await this.showDialog(
+            `远程桌面当前处于锁定/登录界面（${state.desktop}）。输入该机器的登录口令以解锁：`,
+            '解锁远程屏幕',
+            { type: 'prompt', inputType: 'password', placeholder: 'Windows 登录口令 / PIN' }
+        );
+        if (password === null || password === '') {
+            this.showToast('已取消解锁', 'warning');
+            return false;
+        }
+
+        this.showToast('正在解锁…', 'info');
+        let result;
+        try {
+            const resp = await fetch('/api/input/unlock', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ password })
+            });
+            result = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                this.showToast(result.message || '解锁失败', 'error');
+                return false;
+            }
+        } catch (e) {
+            this.showToast('解锁请求失败: ' + e.message, 'error');
+            return false;
+        }
+
+        // 登录界面需要时间处理；最多轮询 8 秒
+        for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 800));
+            try {
+                const resp = await fetch('/api/input/session-state', {
+                    headers: { 'Authorization': `Bearer ${this.token}` }
+                });
+                if (!resp.ok) break;
+                const s = await resp.json();
+                if (s && s.locked === false) {
+                    this.showToast('解锁成功', 'success');
+                    return true;
+                }
+            } catch (e) { /* 继续轮询 */ }
+        }
+
+        this.showToast('口令已提交但屏幕仍处于锁定状态，请确认口令是否正确', 'error');
+        return false;
+    }
+
     async startStream() {
         if (this.streamActive) return;
 
@@ -1393,11 +1517,23 @@ class RemoteControl {
 
         console.log('Starting stream with quality settings:', this.qualitySettings);
 
+        // 屏幕锁定检查：锁屏时后端不会启动 FFmpeg，直接请用户输入口令解锁
+        const unlocked = await this.ensureUnlocked();
+        if (!unlocked) {
+            toggleBtn.classList.remove('btn-loading');
+            toggleBtn.disabled = false;
+            toggleBtn.textContent = '▶ 开始';
+            placeholder.style.display = 'block';
+            placeholder.textContent = '屏幕已锁定：输入口令后才能连接远程桌面';
+            return;
+        }
+
         const params = new URLSearchParams({
             resolution: this.qualitySettings.resolution,
             bitrate: this.qualitySettings.bitrate,
             maxrate: this.qualitySettings.maxrate,
-            crf: this.qualitySettings.crf
+            crf: this.qualitySettings.crf,
+            fps: this.qualitySettings.fps || '50'
         });
 
         // Strategy: WebCodecs (lowest latency) > MSE > Simple video.src
@@ -1468,7 +1604,7 @@ class RemoteControl {
 
     // Simple direct video.src streaming
     startSimpleStream(video, params) {
-        const streamUrl = `/api/stream?${params.toString()}`;
+        const streamUrl = `/api/stream?${params.toString()}&cursor=local`;
         console.log('Starting simple stream:', streamUrl);
 
         video.preload = 'none';
@@ -1607,8 +1743,19 @@ class RemoteControl {
         try {
             const ws = new WebSocket(url);
             ws.onopen = () => console.log('Input WS connected');
-            ws.onclose = () => { this.inputSocket = null; };
-            ws.onerror = () => { this.inputSocket = null; };
+            ws.onmessage = (ev) => {
+                // 鼠标移动的回执：放开「在途」标记并补发最新位置（合并中间点）
+                try {
+                    const msg = JSON.parse(ev.data);
+                    if (msg && msg.type === 'input-ack') {
+                        clearTimeout(this.moveAckTimer);
+                        this.moveInFlight = false;
+                        this.flushPendingMove();
+                    }
+                } catch (e) { /* 忽略非 JSON */ }
+            };
+            ws.onclose = () => { this.inputSocket = null; this.dropPendingMove(); };
+            ws.onerror = () => { this.inputSocket = null; this.dropPendingMove(); };
             this.inputSocket = ws;
         } catch (e) {
             console.warn('Input WS connect failed:', e);
@@ -1617,6 +1764,7 @@ class RemoteControl {
 
     /** 断开远程键鼠 WebSocket */
     disconnectInputSocket() {
+        this.dropPendingMove();
         if (this.inputSocket) {
             try {
                 this.inputSocket.close();
@@ -1668,10 +1816,12 @@ class RemoteControl {
     // MSE-based low-latency streaming for Chrome
     // WebCodecs low-latency streaming: fetch fMP4 -> mp4box.js demux -> VideoDecoder -> Canvas
     async startWebCodecsStream(canvas, params) {
-        const streamUrl = `/api/stream?${params.toString()}`;
+        const streamUrl = `/api/stream?${params.toString()}&cursor=local`;
         console.log('Starting WebCodecs stream:', streamUrl);
 
-        const ctx = canvas.getContext('2d');
+        // desynchronized:true = 让浏览器走低延迟合成路径（少一层 vsync 排队）；
+        // alpha:false = 省一层混合。远程控制要的是延迟，不是完美合成。
+        const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
 
         // Create VideoDecoder
         const decoder = new VideoDecoder({
@@ -1764,10 +1914,15 @@ class RemoteControl {
 
         // Fetch the stream and feed to mp4box
         const response = await fetch(streamUrl, {
-            headers: { 'Authorization': `Bearer ${this.token}` }
+            headers: { 'Authorization': `Bearer ${this.token}`, 'X-Stream-Mode': 'webcodecs' }
         });
+        this.playbackEngine = 'WebCodecs';
+        this.applyCaptureMethod(response.headers.get('X-Capture-Method'));
 
         if (!response.ok) {
+            if (response.status === 423) {
+                this.showToast('屏幕在连接过程中被锁定，请重新点击开始并输入口令', 'error');
+            }
             throw new Error(`Stream failed: ${response.status}`);
         }
 
@@ -1809,7 +1964,7 @@ class RemoteControl {
 
     // MSE-based low-latency streaming (fallback for browsers without WebCodecs)
     async startMSEStream(video, params) {
-        const streamUrl = `/api/stream?${params.toString()}`;
+        const streamUrl = `/api/stream?${params.toString()}&cursor=local`;
         console.log('Starting MSE stream:', streamUrl);
 
         // Check MSE support
@@ -1842,10 +1997,15 @@ class RemoteControl {
 
         // Fetch stream with ReadableStream API
         const response = await fetch(streamUrl, {
-            headers: { 'Authorization': `Bearer ${this.token}` }
+            headers: { 'Authorization': `Bearer ${this.token}`, 'X-Stream-Mode': 'mse' }
         });
+        this.playbackEngine = 'MSE';
+        this.applyCaptureMethod(response.headers.get('X-Capture-Method'));
 
         if (!response.ok) {
+            if (response.status === 423) {
+                this.showToast('屏幕在连接过程中被锁定，请重新点击开始并输入口令', 'error');
+            }
             throw new Error(`Stream failed: ${response.status}`);
         }
 
@@ -1967,6 +2127,16 @@ class RemoteControl {
         console.log('MSE stream started');
     }
 
+    /// <summary>记录服务端抓屏方式；回退到 gdigrab（GDI）时提示一次——4K 桌面下只有 ~15fps</summary>
+    applyCaptureMethod(method) {
+        if (!method) return;
+        this.captureMethod = method;
+        if (method !== 'gdigrab' || this._gdiHintShown) return;
+        this._gdiHintShown = true;
+        this.showToast('画面已回退为 GDI 抓屏（GPU 抓屏暂不可用，通常是显示器已关闭/待机或被远程软件占用），帧率会明显下降；移动一下鼠标可唤醒显示器并恢复', 'warning');
+        console.warn('capture method fell back to gdigrab:', method);
+    }
+
     updateModeIndicator(mode) {
         const indicator = document.getElementById('stream-mode-indicator');
         if (!indicator) return;
@@ -1975,7 +2145,9 @@ class RemoteControl {
 
         switch (mode) {
             case 'h264':
-                indicator.textContent = '已连接 (H.264)';
+                indicator.textContent = this.playbackEngine
+                    ? `已连接 (H.264 · ${this.playbackEngine})`
+                    : '已连接 (H.264)';
                 indicator.className = 'mode-indicator active-h264';
                 break;
             case 'mjpeg':
@@ -2002,6 +2174,7 @@ class RemoteControl {
         if (s.fps >= 0) parts.push(`FPS: ${Math.round(s.fps)}`);
         if (s.bufferDelayMs >= 0) parts.push(`缓冲: ${Math.round(s.bufferDelayMs)}ms`);
         if (s.bitrateKbps > 0) parts.push(`${(s.bitrateKbps / 1024).toFixed(2)} Mbps`);
+        if (this.captureMethod) parts.push(`抓屏: ${this.captureMethod === 'ddagrab' ? 'DX' : 'GDI'}`);
         el.textContent = parts.join(' · ');
         el.classList.add('visible');
     }
@@ -2080,6 +2253,7 @@ class RemoteControl {
         const rect = element.getBoundingClientRect();
         const x = (e.clientX - rect.left) / rect.width;
         const y = (e.clientY - rect.top) / rect.height;
+        this.dropPendingMove();
         this.sendInput('mouse-down', { x, y, button: e.button });
     }
 
@@ -2088,15 +2262,51 @@ class RemoteControl {
         /** 仅当用户点击过视频画面（焦点在流区域）时才实时发送鼠标移动 */
         if (!this.isStreamAreaFocused()) return;
 
-        const now = Date.now();
-        if (now - this.lastMoveTime < this.moveThrottleMs) return;
-        this.lastMoveTime = now;
-
         const element = e.target;
         const rect = element.getBoundingClientRect();
-        const x = (e.clientX - rect.left) / rect.width;
-        const y = (e.clientY - rect.top) / rect.height;
-        this.sendInput('mouse-move', { x, y });
+
+        // 只保留最新位置：拖动过程中的中间点对绝对坐标没有意义，
+        // 丢掉它们才不会让服务端输入队列无限积压（否则鼠标会越用越延迟）。
+        this.pendingRemoteMove = {
+            x: (e.clientX - rect.left) / rect.width,
+            y: (e.clientY - rect.top) / rect.height
+        };
+        this.flushPendingMove();
+    }
+
+    /**
+     * 发送鼠标移动：同一时刻只允许一条在途。
+     * 上一条的回执（input-ack）回来后，如果期间位置又变了，只补发最新那一条。
+     * 这样在服务端处理得慢时自动降为「能跑多快发多快」，而不会堆积。
+     */
+    flushPendingMove() {
+        if (this.moveInFlight || !this.pendingRemoteMove) return;
+        if (!this.inputSocket || this.inputSocket.readyState !== WebSocket.OPEN) return;
+
+        const move = this.pendingRemoteMove;
+        this.pendingRemoteMove = null;
+        this.moveInFlight = true;
+
+        try {
+            this.inputSocket.send(JSON.stringify({ type: 'mouse-move', x: move.x, y: move.y, ack: true }));
+        } catch (err) {
+            this.moveInFlight = false;
+            return;
+        }
+
+        // 兜底：回执丢失时不要把鼠标永久卡住
+        clearTimeout(this.moveAckTimer);
+        this.moveAckTimer = setTimeout(() => {
+            this.moveInFlight = false;
+            this.flushPendingMove();
+        }, 400);
+    }
+
+    /** 鼠标位置粘性操作（按下/抬起/点击）自带坐标，直接丢弃挂起的移动点 */
+    dropPendingMove() {
+        this.pendingRemoteMove = null;
+        clearTimeout(this.moveAckTimer);
+        this.moveInFlight = false;
     }
 
     handleRemoteMouseUp(e) {
@@ -2107,6 +2317,7 @@ class RemoteControl {
         const rect = element.getBoundingClientRect();
         const x = (e.clientX - rect.left) / rect.width;
         const y = (e.clientY - rect.top) / rect.height;
+        this.dropPendingMove(); // 抬起自带坐标，挂起的移动点无意义
         this.sendInput('mouse-up', { x, y, button: this.dragButton });
 
         const dx = Math.abs(e.clientX - this.dragStartX);

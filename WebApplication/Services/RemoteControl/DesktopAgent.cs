@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
@@ -20,7 +21,7 @@ public static class DesktopAgent
     /// <summary>
     /// 代理协议版本号（每次修改代理协议时递增，用于检测旧版本代理）
     /// </summary>
-    public const int ProtocolVersion = 5;
+    public const int ProtocolVersion = 20;
 
     /// <summary>
     /// 代理空闲超时时间（无连接时自动退出）
@@ -32,6 +33,8 @@ public static class DesktopAgent
 
     private static readonly SemaphoreSlim _launchLock = new(1, 1);
     private static readonly SemaphoreSlim CommandLock = new(1, 1);
+    /// <summary>复用中的代理连接（所有命令经 CommandLock 串行使用；断开后自动重建）。</summary>
+    private static NamedPipeClientStream? _sharedPipe;
     private static bool _agentLaunchAttempted;
     private static bool _legacyAgentDetected;
 
@@ -65,6 +68,63 @@ public static class DesktopAgent
         return TimeSpan.FromMinutes(minutes);
     }
 
+    /// <summary>
+    /// 降低 IPC 唤醒延迟。后台进程会被 Windows 电源管理降速（EcoQoS），
+    /// 实测管道单程交付出现 9-127ms 的抖动——鼠标移动这种每帧一条命令的路径对此极敏感。
+    /// 这里显式退出电源节流、略提优先级并保证线程池有常驻可用线程。
+    /// </summary>
+    private static void OptimizeIpcLatency()
+    {
+        try
+        {
+            var state = new ProcessPowerThrottlingState
+            {
+                Version = 1,               // PROCESS_POWER_THROTTLING_CURRENT_VERSION
+                ControlMask = 0x1,         // PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+                StateMask = 0              // 0 = 不启用降速（退出 EcoQoS）
+            };
+            var ok = SetProcessInformation(GetCurrentProcess(), 4 /* ProcessPowerThrottling */,
+                ref state, (uint)Marshal.SizeOf<ProcessPowerThrottlingState>());
+            Log($"退出电源节流: {(ok ? "成功" : $"失败 Win32 {Marshal.GetLastWin32Error()}")}");
+        }
+        catch (Exception ex)
+        {
+            Log($"退出电源节流异常: {ex.Message}");
+        }
+
+        try
+        {
+            Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.AboveNormal;
+            Log("进程优先级已设为 AboveNormal");
+        }
+        catch (Exception ex)
+        {
+            Log($"设置优先级失败: {ex.Message}");
+        }
+
+        try
+        {
+            ThreadPool.GetMinThreads(out var workers, out var io);
+            ThreadPool.SetMinThreads(Math.Max(workers, 16), Math.Max(io, 16));
+        }
+        catch { /* 忽略 */ }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessPowerThrottlingState
+    {
+        public uint Version;
+        public uint ControlMask;
+        public uint StateMask;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetProcessInformation(IntPtr hProcess, int infoClass,
+        ref ProcessPowerThrottlingState info, uint size);
+
     #region 服务端（在交互式会话中运行）
 
     /// <summary>
@@ -72,6 +132,7 @@ public static class DesktopAgent
     /// </summary>
     public static async Task RunServerAsync(CancellationToken ct)
     {
+        OptimizeIpcLatency();
         var idleTimeoutText = IdleTimeout == Timeout.InfiniteTimeSpan
             ? "disabled"
             : $"{IdleTimeout.TotalMinutes:0} min";
@@ -116,11 +177,15 @@ public static class DesktopAgent
                 lastActivity = DateTime.UtcNow;
                 Log("客户端已连接");
 
-                // 每个连接在当前循环中同步处理（简单可靠）
-                // 对于并发请求，多个管道实例会同时接受连接
+                // 同一条连接可连续处理多条命令：客户端复用连接以省掉每条命令的建连开销。
+                // 命令要求独占连接（start_ffmpeg，之后是原始字节流）或对端断开时结束本连接。
                 try
                 {
-                    await HandleConnectionAsync(pipeServer, systemService, ct);
+                    while (!ct.IsCancellationRequested && pipeServer.IsConnected
+                           && await HandleConnectionAsync(pipeServer, systemService, ct))
+                    {
+                        lastActivity = DateTime.UtcNow;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -142,13 +207,17 @@ public static class DesktopAgent
     }
 
     /// <summary>
-    /// 处理单个客户端连接
+    /// 处理单个客户端请求。返回 true 表示可在同一连接上继续处理下一条命令，
+    /// false 表示对端已断开或本命令已把连接转为独占模式（start_ffmpeg 原始字节流）。
     /// </summary>
-    private static async Task HandleConnectionAsync(
+    private static async Task<bool> HandleConnectionAsync(
         NamedPipeServerStream pipe, SystemService systemService, CancellationToken ct)
     {
+        var cmdWatch = System.Diagnostics.Stopwatch.StartNew();
+        var readWatch = System.Diagnostics.Stopwatch.StartNew();
         var requestBytes = await ReadMessageAsync(pipe, ct);
-        if (requestBytes == null || requestBytes.Length == 0) return;
+        var readMs = readWatch.Elapsed.TotalMilliseconds;
+        if (requestBytes == null || requestBytes.Length == 0) return false;
 
         var requestJson = Encoding.UTF8.GetString(requestBytes);
 
@@ -158,11 +227,11 @@ public static class DesktopAgent
         // Do not persist clipboard contents or typed text in diagnostics.
         if (type is not "screenshot" and not "mouse_move" and not "ping") Log($"收到命令: {type}");
 
-        // FFmpeg 流式命令需要特殊处理（长连接，不走请求-响应模式）
+        // FFmpeg 流式命令需要特殊处理（长连接，不走请求-响应模式）→ 本连接归还给调用方独占
         if (type == "start_ffmpeg")
         {
             await HandleStartFFmpegAsync(pipe, root, ct);
-            return;
+            return false;
         }
 
         byte[] response;
@@ -185,10 +254,15 @@ public static class DesktopAgent
                 "lock" => HandleLock(systemService),
                 "screen_bounds" => HandleScreenBounds(systemService),
                 "launch_ffmpeg" => HandleLaunchFFmpeg(root),
+                "session_state" => HandleSessionState(),
+                "unlock" => HandleUnlock(root),
+                // 唤醒显示器（注入无害 F15）：抓屏探测前调用——显示器关着时 DXGI 取不到帧，
+                // 先唤醒再探测才能选到 ddagrab（否则第一次起流会落到 gdigrab，4K 只有 ~15fps）
+                "wake_display" => HandleWakeDisplay(),
                 "enum_windows" => HandleEnumWindows(),
                 "clipboard_get" => HandleClipboardGet(systemService),
                 "clipboard_set" => HandleClipboardSet(root, systemService),
-                "ping" => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { ok = true, version = ProtocolVersion, pid = Environment.ProcessId, isSystem = System.Security.Principal.WindowsIdentity.GetCurrent().IsSystem })),
+                "ping" => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { ok = true, version = ProtocolVersion, pid = Environment.ProcessId, isSystem = AgentIsSystem })),
                 _ => ErrorResponse($"未知命令类型: {type}")
             };
             response = type == "ping" ? Dispatch() : await InputDesktopDispatcher.RunAsync(Dispatch);
@@ -199,7 +273,14 @@ public static class DesktopAgent
             response = ErrorResponse(ex.Message);
         }
 
+        var writeWatch = System.Diagnostics.Stopwatch.StartNew();
         await WriteMessageAsync(pipe, response, ct);
+        var writeMs = writeWatch.Elapsed.TotalMilliseconds;
+
+        // 慢命令诊断：正常应在个位数毫秒，超过 25ms 说明管道/桌面路径有问题
+        if (cmdWatch.ElapsedMilliseconds > 25)
+            Log($"命令 {type} 处理 {cmdWatch.ElapsedMilliseconds}ms (读 {readMs:F0} / 排队 {InputDesktopDispatcher.LastQueueWaitMs:F0} / 附加 {InputDesktopDispatcher.LastAttachMs:F0} / 动作 {InputDesktopDispatcher.LastActionMs:F0} / 写 {writeMs:F0})");
+        return true;
     }
 
     #region 命令处理器
@@ -322,6 +403,40 @@ public static class DesktopAgent
     /// 启动 FFmpeg 进程并返回 PID（不代理数据，FFmpeg 通过 TCP 直连 IIS）。
     /// 用于低延迟视频流场景。
     /// </summary>
+    /// <summary>
+    /// 抓屏期间的「保底唤醒」：每 45 秒注入一次无害按键 F15，覆盖「用户只是看着画面、
+    /// 连鼠标都不滑」的情况——否则显示器会按空闲超时关闭 → DXGI 抓屏(ddagrab)取不到帧 →
+    /// 回退 gdigrab，4K 下帧率从 ~54 掉到 ~15。
+    /// 与输入侧的 KeepDisplayAwake（每次定位后最多每秒一次真输入）互补：那个覆盖"在操作"，
+    /// 这个覆盖"在看但不操作"。抓屏进程一退出即自动停止。
+    /// </summary>
+    private static void StartCaptureKeepAlive(Process proc)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!proc.HasExited)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(45));
+                    if (proc.HasExited) break;
+                    try
+                    {
+                        await InputDesktopDispatcher.RunAsync(() =>
+                        {
+                            if (!string.Equals(InputDesktopDispatcher.CurrentDesktopName, "Default", StringComparison.OrdinalIgnoreCase))
+                                return Array.Empty<byte>();      // 锁屏时注入无意义（且唤醒不了）
+                            NativeDesktopInput.WakeKey();
+                            return Array.Empty<byte>();
+                        });
+                    }
+                    catch { /* 唤醒失败不影响抓屏 */ }
+                }
+            }
+            catch { /* 忽略 */ }
+        });
+    }
+
     private static byte[] HandleLaunchFFmpeg(JsonElement root)
     {
         var args = root.GetProperty("args").GetString() ?? "";
@@ -354,6 +469,7 @@ public static class DesktopAgent
                 return ErrorResponse("FFmpeg 进程启动返回 null");
 
             Console.WriteLine($"[DesktopAgent] FFmpeg 已启动 (PID: {proc.Id})");
+            StartCaptureKeepAlive(proc);
 
             // 后台读取 stderr 用于调试
             _ = Task.Run(async () =>
@@ -375,6 +491,192 @@ public static class DesktopAgent
         {
             return ErrorResponse($"FFmpeg 启动异常: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 返回当前输入桌面状态：Default = 用户桌面（已解锁），Winlogon = 锁屏/登录界面。
+    /// 必须经 InputDesktopDispatcher 执行（该线程有权限打开输入桌面）。
+    /// </summary>
+    /// <summary>注入一次无害按键唤醒显示器（DXGI 抓屏依赖输出处于呈现状态）。</summary>
+    private static byte[] HandleWakeDisplay()
+    {
+        try
+        {
+            if (string.Equals(InputDesktopDispatcher.CurrentDesktopName, "Default", StringComparison.OrdinalIgnoreCase))
+                NativeDesktopInput.WakeKey();
+            return Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { ok = true }));
+        }
+        catch (Exception ex) { return ErrorResponse(ex.Message); }
+    }
+
+    private static byte[] HandleSessionState()
+    {
+        var desktop = InputDesktopDispatcher.CurrentDesktopName;
+        var locked = !string.Equals(desktop, "Default", StringComparison.OrdinalIgnoreCase);
+        var s = ScreenInfo.Get();
+        return Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            ok = true,
+            desktop,
+            locked,
+            width = s.W,                 // 主显示器物理像素（ddagrab 只抓主输出）
+            height = s.H,
+            virtualWidth = s.VW,         // 全显示器拼接尺寸（gdigrab -i desktop 抓的是这个）
+            virtualHeight = s.VH
+        }));
+    }
+
+    /// <summary>
+    /// 交互会话的真实像素尺寸。⚠️ 必须 DPI 感知：DPI 虚拟化下（如 150% 缩放）GetSystemMetrics
+    /// 会返回 2560x1440 而不是 3840x2160，服务端会据此误判「需要缩放」——实测踩过。
+    /// 主显示器（ddagrab）与虚拟桌面（gdigrab）尺寸不同，分开上报，服务端按抓屏方式取用。
+    /// </summary>
+    internal static class ScreenInfo
+    {
+        private const int SM_CXSCREEN = 0, SM_CYSCREEN = 1,
+                          SM_CXVIRTUALSCREEN = 78, SM_CYVIRTUALSCREEN = 79;
+
+        [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
+        [DllImport("user32.dll", SetLastError = true)] private static extern bool SetProcessDPIAware();
+        [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetProcessDpiAwarenessContext(IntPtr value);
+
+        private static readonly object Gate = new();
+        private static bool _dpiDone;
+
+        public static (int W, int H, int VW, int VH) Get()
+        {
+            lock (Gate)
+            {
+                if (!_dpiDone)
+                {
+                    // -4 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2；失败再退老 API
+                    try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { }
+                    try { SetProcessDPIAware(); } catch { }
+                    _dpiDone = true;
+                }
+                return (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+                        GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
+            }
+        }
+    }
+
+    /// <summary>
+    /// 远程解锁：向当前输入桌面（锁屏时即 Winlogon 安全桌面）注入
+    /// 「唤醒 → 输入口令 → 回车». 调用线程必须已挂在输入桌面上
+    /// （即必须经 InputDesktopDispatcher.RunAsync 调用）。
+    /// </summary>
+    private static byte[] HandleUnlock(JsonElement root)
+    {
+        var password = root.GetProperty("password").GetString() ?? "";
+        if (password.Length == 0 || password.Length > 256)
+            return ErrorResponse("密码长度无效");
+
+        var (ok, error) = UnlockOnCurrentDesktop(password);
+        return ok ? OkResponse() : ErrorResponse(error!);
+    }
+
+    /// <summary>
+    /// 在「当前线程所在的输入桌面」上执行解锁注入（唤醒 + 口令 + 回车）。
+    /// 调用方负责把线程挂到目标桌面；密码不落日志。
+    /// </summary>
+    internal static (bool Ok, string? Error) UnlockOnCurrentDesktop(string password)
+    {
+        try
+        {
+            var inputDesktop = InputDesktopDispatcher.CurrentDesktopName;
+            Log($"unlock: 开始解锁流程 (desktop={inputDesktop})");
+
+            // 1) 唤醒：锁屏壁纸下按 Esc 唤出登录界面（不产生字符，不会误提交）
+            SubmitKeys(WakeSequence());
+            Thread.Sleep(700);
+
+            // 2) 逐字符输入口令 + 回车提交
+            var typed = TypeSequence(password);
+            SubmitKeys(typed);
+            Log($"unlock: 已注入唤醒键 + {typed.Length} 个输入事件");
+
+            return (true, null);
+        }
+        catch (Win32Exception ex)
+        {
+            Log($"unlock: 失败 Win32 {ex.NativeErrorCode}: {ex.Message}");
+            return (false, $"注入输入失败 (Win32 {ex.NativeErrorCode})。锁屏注入需要 SYSTEM 权限的代理进程。");
+        }
+        catch (Exception ex)
+        {
+            Log($"unlock: 失败 {ex.Message}");
+            return (false, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 安全桌面输入注入。SendInput 只作用于调用线程所在的桌面，
+    /// 因此本类所有方法都必须在 InputDesktopDispatcher 的桌面线程上调用。
+    /// ⚠️ x64 下 INPUT 的大小由 union 中最大的 MOUSEINPUT 决定（40 字节），
+    /// 只按 KEYBDINPUT 算成 32 字节会被 SendInput 以 Win32 87 (ERROR_INVALID_PARAMETER) 拒绝——
+    /// 所以这里必须保留完整的 union 形态（与 NativeDesktopInput 的布局一致）。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UnlockInputEvent { public uint Type; public Payload Data; }
+    [StructLayout(LayoutKind.Explicit)]
+    private struct Payload
+    {
+        [FieldOffset(0)] public MouseInput Mouse;
+        [FieldOffset(0)] public KeyboardInput Keyboard;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MouseInput
+    {
+        public int X, Y;
+        public uint Data, Flags, Time;
+        public UIntPtr ExtraInfo;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KeyboardInput
+    {
+        public ushort Vk;
+        public ushort Scan;
+        public uint Flags;
+        public uint Time;
+        public UIntPtr ExtraInfo;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint count, UnlockInputEvent[] inputs, int size);
+
+    private const uint KeyDown = 0;
+    private const uint KeyUp = 2;
+    private const uint Unicode = 4;
+
+    private static UnlockInputEvent Vk(ushort vk, uint flags)
+        => new() { Type = 1, Data = new Payload { Keyboard = new KeyboardInput { Vk = vk, Flags = flags } } };
+
+    private static UnlockInputEvent UnicodeChar(char c, uint flags)
+        => new() { Type = 1, Data = new Payload { Keyboard = new KeyboardInput { Scan = c, Flags = flags } } };
+
+    /// <summary>唤醒锁屏：Esc 唤出登录界面（不产生字符、不提交）。</summary>
+    private static UnlockInputEvent[] WakeSequence() => new[] { Vk(0x1B, KeyDown), Vk(0x1B, KeyUp) };
+
+    /// <summary>输入口令并回车提交。UNICODE 注入，不依赖键盘布局。</summary>
+    private static UnlockInputEvent[] TypeSequence(string password)
+    {
+        var list = new List<UnlockInputEvent>(password.Length * 2 + 4);
+        foreach (var c in password)
+        {
+            list.Add(UnicodeChar(c, Unicode | KeyDown));
+            list.Add(UnicodeChar(c, Unicode | KeyUp));
+        }
+        list.Add(Vk(0x0D, KeyDown));
+        list.Add(Vk(0x0D, KeyUp));
+        return list.ToArray();
+    }
+
+    /// <summary>实际发送；调用线程必须已挂在目标输入桌面上。</summary>
+    private static void SubmitKeys(UnlockInputEvent[] inputs)
+    {
+        if (inputs.Length == 0) return;
+        if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<UnlockInputEvent>()) != inputs.Length)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "SendInput 被拒绝");
     }
 
     /// <summary>
@@ -660,14 +962,11 @@ public static class DesktopAgent
     /// </summary>
     public static async Task EnsureAgentRunningAsync()
     {
-        Log("EnsureAgentRunningAsync 开始执行");
-        // 先尝试 ping
-        if (await TryPingAgentAsync())
-        {
-            Log("代理已在线，无需启动");
-            return;
-        }
+        // 热路径（每个键盘/点击命令都会走到），这里只做一次 ping，不写日志：
+        // 每次输入命令写 2 行日志会把命令从 0.3ms 拖到数百 ms。
+        if (await TryPingAgentAsync()) return;
 
+        Log("代理未响应 ping，进入启动/回收流程");
         await _launchLock.WaitAsync();
         try
         {
@@ -761,12 +1060,12 @@ public static class DesktopAgent
                 using var document = JsonDocument.Parse(response);
                 ok = document.RootElement.TryGetProperty("ok", out var result) && result.GetBoolean()
                     && document.RootElement.TryGetProperty("version", out var version) && version.GetInt32() >= ProtocolVersion;
-                if (ok && System.Security.Principal.WindowsIdentity.GetCurrent().IsSystem)
+                // ⚠️ WindowsIdentity.GetCurrent() 很贵（每次都要向 LSA 解析令牌），
+                // 而 ping 是每个输入命令都会走的热路径 —— 进程身份不会中途变化，缓存一次即可。
+                if (ok && CurrentProcessIsSystem)
                     ok = document.RootElement.TryGetProperty("isSystem", out var identity) && identity.GetBoolean();
                 if (!ok) _legacyAgentDetected = true;
             }
-            if (!ok)
-                Log("TryPingAgentAsync 失败：代理无响应");
             return ok;
         }
         catch (Exception ex)
@@ -774,6 +1073,18 @@ public static class DesktopAgent
             LogException("TryPingAgentAsync 异常", ex);
             return false;
         }
+    }
+
+    /// <summary>本进程是否以 SYSTEM 运行（缓存：每命令都查会拖慢输入链路）。</summary>
+    private static readonly bool CurrentProcessIsSystem = ResolveIsSystem();
+
+    /// <summary>代理自身是否以 SYSTEM 运行（缓存，ping 响应里返回）。</summary>
+    internal static readonly bool AgentIsSystem = ResolveIsSystem();
+
+    private static bool ResolveIsSystem()
+    {
+        try { return System.Security.Principal.WindowsIdentity.GetCurrent().IsSystem; }
+        catch { return false; }
     }
 
     private static void StopLegacyAgents()
@@ -1105,33 +1416,63 @@ public static class DesktopAgent
     }
 
     /// <summary>
-    /// 发送命令到代理并获取响应
+    /// 发送命令到代理并获取响应。
+    /// 复用同一条命名管道连接（旧实现每条命令都新建连接，本机实测单次往返 ~170ms，
+    /// 拖动鼠标 60 条/秒时输入队列完全消化不动）；连接断开时自动丢弃，下一条命令重连。
     /// </summary>
     private static async Task<byte[]?> SendCommandInternalAsync(string commandJson, TimeSpan timeout)
     {
         await CommandLock.WaitAsync();
         using var cts = new CancellationTokenSource(timeout);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            using var pipeClient = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-            await pipeClient.ConnectAsync((int)timeout.TotalMilliseconds, cts.Token);
+            var pipe = await EnsureConnectionAsync((int)timeout.TotalMilliseconds, cts.Token);
+            var tConnect = watch.ElapsedMilliseconds;
 
             var requestBytes = Encoding.UTF8.GetBytes(commandJson);
-            await WriteMessageAsync(pipeClient, requestBytes, cts.Token);
+            await WriteMessageAsync(pipe, requestBytes, cts.Token);
+            var response = await ReadMessageAsync(pipe, cts.Token);
 
-            return await ReadMessageAsync(pipeClient, cts.Token);
+            if (watch.ElapsedMilliseconds > 40)
+                Log($"命令往返耗时 {watch.ElapsedMilliseconds}ms (建连 {tConnect}ms, 载荷 {requestBytes.Length}B)");
+            if (response == null) ResetConnection(); // 对端已关闭
+            return response;
         }
         catch (OperationCanceledException)
         {
             Log($"命令超时, timeout={timeout.TotalMilliseconds}ms");
+            ResetConnection();
             return null;
         }
         catch (Exception ex)
         {
+            ResetConnection();
             LogException("发送桌面命令失败", ex);
             return null;
         }
         finally { CommandLock.Release(); }
+    }
+
+    /// <summary>取用共享的代理连接；不存在或已断开时新建并连接。</summary>
+    private static async Task<NamedPipeClientStream> EnsureConnectionAsync(int connectTimeoutMs, CancellationToken ct)
+    {
+        var existing = _sharedPipe;
+        if (existing is { IsConnected: true }) return existing;
+
+        ResetConnection();
+        var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await pipe.ConnectAsync(Math.Clamp(connectTimeoutMs, 500, 30000), ct);
+        _sharedPipe = pipe;
+        return pipe;
+    }
+
+    /// <summary>丢弃共享连接（对端关闭或出错时调用；下一条命令会重连）。</summary>
+    private static void ResetConnection()
+    {
+        var pipe = Interlocked.Exchange(ref _sharedPipe, null);
+        if (pipe == null) return;
+        try { pipe.Dispose(); } catch { /* 忽略 */ }
     }
 
     public static async Task SendNativeInputAsync(string kind, string text = "", int dx = 0, int dy = 0, int button = 0)
@@ -1141,6 +1482,78 @@ public static class DesktopAgent
         if (response == null) throw new IOException("Desktop input timed out");
         using var result = JsonDocument.Parse(response);
         if (!result.RootElement.GetProperty("ok").GetBoolean()) throw new InvalidOperationException(result.RootElement.GetProperty("error").GetString());
+    }
+
+    /// <summary>
+    /// 查询代理所在会话的输入桌面状态（Default=已解锁，Winlogon=锁屏/登录界面）。
+    /// 代理不可用时返回 null（调用方据此回退到本机判断）。
+    /// </summary>
+    public static async Task<(string Desktop, bool Locked)?> GetSessionStateAsync(CancellationToken ct = default)
+    {
+        await EnsureAgentRunningAsync();
+        var response = await SendCommandInternalAsync(JsonSerializer.Serialize(new { type = "session_state" }), TimeSpan.FromSeconds(5));
+        if (response == null) return null;
+        using var doc = JsonDocument.Parse(response);
+        if (!doc.RootElement.TryGetProperty("ok", out var ok) || !ok.GetBoolean()) return null;
+        var desktop = doc.RootElement.TryGetProperty("desktop", out var d) ? d.GetString() ?? "" : "";
+        var locked = doc.RootElement.TryGetProperty("locked", out var l) && l.GetBoolean();
+        return (desktop, locked);
+    }
+
+    /// <summary>
+    /// 交互会话的真实屏幕尺寸（代理上报，DPI 感知）。用于动态判断「请求的分辨率是否需要缩放」，
+    /// 从而决定要不要走零拷贝管线——不把任何具体分辨率（如 4K）写死。
+    /// 代理不可用/字段缺失时返回 null，调用方按「需要缩放」的保守路径处理。
+    /// </summary>
+    /// <summary>让代理注入一次无害按键唤醒显示器（显示器关着时 DXGI 抓屏取不到帧）。失败静默。</summary>
+    public static async Task WakeDisplayAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await EnsureAgentRunningAsync();
+            await SendCommandInternalAsync(JsonSerializer.Serialize(new { type = "wake_display" }), TimeSpan.FromSeconds(5));
+        }
+        catch { /* 唤醒失败不阻塞拉流 */ }
+    }
+
+    public static async Task<(int Width, int Height, int VirtualWidth, int VirtualHeight)?> GetScreenSizeAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await EnsureAgentRunningAsync();
+            var response = await SendCommandInternalAsync(JsonSerializer.Serialize(new { type = "session_state" }), TimeSpan.FromSeconds(5));
+            if (response == null) return null;
+            using var doc = JsonDocument.Parse(response);
+            var r = doc.RootElement;
+            if (!r.TryGetProperty("ok", out var ok) || !ok.GetBoolean()) return null;
+            int Get(string name) => r.TryGetProperty(name, out var v) && v.TryGetInt32(out var n) ? n : 0;
+            var w = Get("width"); var h = Get("height");
+            if (w <= 0 || h <= 0) return null;
+            var vw = Get("virtualWidth"); var vh = Get("virtualHeight");
+            return (w, h, vw > 0 ? vw : w, vh > 0 ? vh : h);
+        }
+        catch (Exception ex)
+        {
+            LogException("查询屏幕尺寸失败", ex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 通过代理向登录界面（锁屏时的 Winlogon 桌面）注入口令并回车，实现远程解锁。
+    /// 密码只经内存传递，不写日志。返回 (成功, 错误信息)。
+    /// </summary>
+    public static async Task<(bool Ok, string? Error)> UnlockWithPasswordAsync(string password, CancellationToken ct = default)
+    {
+        await EnsureAgentRunningAsync();
+        // 注入 + 登录界面处理时间，给足 15 秒
+        var response = await SendCommandInternalAsync(
+            JsonSerializer.Serialize(new { type = "unlock", password }), TimeSpan.FromSeconds(15));
+        if (response == null) return (false, "代理未响应（超时或未运行）");
+        using var doc = JsonDocument.Parse(response);
+        if (!doc.RootElement.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
+            return (false, doc.RootElement.TryGetProperty("error", out var e) ? e.GetString() : "未知错误");
+        return (true, null);
     }
 
     private static byte[] HandleNativeInput(JsonElement root)

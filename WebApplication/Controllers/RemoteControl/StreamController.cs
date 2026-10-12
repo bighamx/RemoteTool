@@ -79,6 +79,11 @@ public class StreamController : ControllerBase
     private static string? _cachedEncoder;
     private static string? _cachedEncoderParams;
     private static string? _cachedScreenCaptureInput;
+    /// <summary>缓存对应的 draw_mouse 值（0/1）——客户端本地画光标时需重新生成抓屏参数。</summary>
+    private static int _cachedScreenCaptureDrawMouse = 1;
+    /// <summary>缓存时刻。gdigrab 是「ddagrab 不可用」时的回退结果，只缓存 60 秒——
+    /// 好让 ddagrab 恢复后（如第三方串流程序退出）能自动重新用上 GPU 抓屏。</summary>
+    private static DateTime _cachedScreenCaptureAt = DateTime.MinValue;
     private static Version? _cachedFfmpegVersion;
     private static readonly object _cacheLock = new();
 
@@ -90,7 +95,7 @@ public class StreamController : ControllerBase
 
     private static readonly HashSet<string> AllowedBitrates = new()
     {
-        "250k", "500k", "1M", "2M", "3M", "4M", "5M", "8M", "10M", "15M", "20M"
+        "250k", "500k", "1M", "2M", "3M", "4M", "5M", "8M", "10M", "15M", "20M", "25M", "30M"
     };
 
     /// <summary>
@@ -107,6 +112,7 @@ public class StreamController : ControllerBase
         [FromQuery] string format = "mp4",
         [FromQuery] int fps = 60,
         [FromQuery] string colors = "full",
+        [FromQuery] string cursor = "local",
         CancellationToken cancellationToken = default)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
@@ -164,10 +170,35 @@ public class StreamController : ControllerBase
 
             // 先确定编码器，再根据编码器类型选择截屏方式
             var (encoder, encoderParams) = await GetEncoderAsync(crf, cancellationToken);
-            var (screenCaptureInput, captureMethod) = await GetScreenCaptureInputAsync(encoder, cancellationToken);
+            // cursor=local（默认）不把光标烧进视频，由网页用本地光标即时跟随——
+            // 这是「跟手」的关键：烧进画面的光标永远滞后一个完整视频往返。
+            // cursor=baked 保留旧行为（光标形状/状态与真实桌面一致）。
+            var drawMouse = string.Equals(cursor, "baked", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            var (screenCaptureInput, captureMethod) = await GetScreenCaptureInputAsync(encoder, drawMouse, cancellationToken);
             response.Headers["X-Capture-Method"] = captureMethod;
             AgentStartupLogger.Log("StreamCapture", $"Selected {captureMethod}, encoder={encoder}");
-            fps = new[] { 10, 15, 24, 30, 60 }.Contains(fps) ? fps : 60;
+
+            // 前端上报实际采用的播放引擎（webcodecs/mse/video）——三者延迟差异很大
+            // （WebCodecs 最低、MSE 自带 ~150ms 缓冲），查「为什么这次很卡」时要能从日志一眼分辨
+            var streamMode = Request.Headers.TryGetValue("X-Stream-Mode", out var sm) && sm.Count > 0 ? sm[0] : null;
+            if (!string.IsNullOrEmpty(streamMode))
+                AgentStartupLogger.Log("StreamCapture", $"播放引擎={streamMode}");
+
+            // 锁屏检测：锁屏时 gdigrab 拿不到输入桌面（Failed to capture image, error 5），
+            // 直接返回结构化 JSON 让前端弹密码框，而不是让 FFmpeg 起来再自杀。
+            var locked = await IsSessionLockedAsync(cancellationToken);
+            if (locked)
+            {
+                Response.Headers["X-Screen-Locked"] = "1";
+                Response.StatusCode = 423; // Locked
+                Response.ContentType = "application/json; charset=utf-8";
+                await Response.WriteAsync("{\"locked\":true,\"message\":\"屏幕已锁定，请输入密码解锁\"}", cancellationToken);
+                return;
+            }
+
+            // 50 放行以便按需选低帧率（ddagrab 的产出跟着屏幕变化量走，实测 60 请求并不比 50 差，
+            // 故默认仍是 60；30/50 是给弱网/省带宽用的）。非法值一律回 60。
+            fps = new[] { 10, 15, 24, 30, 50, 60 }.Contains(fps) ? fps : 60;
             colors = colors == "rgb565" ? "rgb565" : "full";
             screenCaptureInput = screenCaptureInput.Replace($"framerate={Framerate}", $"framerate={fps}")
                 .Replace($"-framerate {Framerate} ", $"-framerate {fps} ");
@@ -182,18 +213,47 @@ public class StreamController : ControllerBase
 
             var isSession0 = InteractiveProcessLauncher.IsRunningInSession0;
 
+            // 动态判定「是否需要缩放」——不把任何具体分辨率写死：
+            //   目标尺寸 >= 实际抓屏尺寸 → 不必缩放（含「请求放大」：放大纯属浪费 CPU，按源抓即可）
+            //   → 走零拷贝 GPU 管线（跳过 hwdownload + CPU 缩放）。
+            // 尺寸由代理按交互会话上报（DPI 感知），ddagrab 取主显示器、gdigrab 取虚拟桌面（全显示器）。
+            int srcW = 0, srcH = 0;
+            var sizeInfo = await DesktopAgent.GetScreenSizeAsync(cancellationToken);
+            if (sizeInfo is { } si)
+            {
+                (srcW, srcH) = captureMethod == "ddagrab"
+                    ? (si.Width, si.Height)
+                    : (si.VirtualWidth, si.VirtualHeight);
+                response.Headers["X-Capture-Source"] = $"{srcW}x{srcH}";
+            }
+
+            var noScaling = resolution == "original";
+            if (!noScaling && srcW > 0)
+            {
+                var parts = resolution.Split('x');
+                if (parts.Length == 2 && int.TryParse(parts[0], out var rw) && int.TryParse(parts[1], out var rh))
+                    noScaling = rw >= srcW && rh >= srcH;
+            }
+            if (noScaling && resolution != "original" && srcW > 0)
+                Console.WriteLine($"目标 {resolution} >= 源 {srcW}x{srcH} → 跳过缩放（等价原生，避免无用缩放/放大）");
+
             // Original quality retains the zero-copy GPU path. Other modes resize and
             // optionally quantize RGB before hardware encoding, preserving aspect ratio.
             var filters = new List<string>();
             if (captureMethod == "ddagrab") filters.AddRange(new[] { "hwdownload", "format=bgra" });
-            if (resolution != "original")
-                filters.Add($"scale={resolution.Replace('x', ':')}:force_original_aspect_ratio=decrease:force_divisible_by=2");
+            if (!noScaling)
+            {
+                // 缩放算法：4K→720p 时默认 bicubic 要吃掉约 15% 帧率（实测 35fps→41fps）。
+                // 远程控制优先低延迟/高帧率，ddagrab GPU 抓屏路径改用 fast_bilinear。
+                var scaleFlags = captureMethod == "ddagrab" ? ":flags=fast_bilinear" : "";
+                filters.Add($"scale={resolution.Replace('x', ':')}{scaleFlags}:force_original_aspect_ratio=decrease:force_divisible_by=2");
+            }
             if (colors == "rgb565")
                 filters.AddRange(new[] { "format=rgb24", "lutrgb=r='floor(val/8)*8':g='floor(val/4)*4':b='floor(val/8)*8'" });
             filters.Add("format=yuv420p");
             var vfArg = $"-vf {string.Join(',', filters)}";
             var pixFmtArg = "-pix_fmt yuv420p";
-            if (resolution == "original" && colors == "full" && captureMethod == "ddagrab") { vfArg = ""; pixFmtArg = ""; }
+            if (noScaling && colors == "full" && captureMethod == "ddagrab") { vfArg = ""; pixFmtArg = ""; }
             var gopSize = Math.Max(1, fps / 2);
             // frag_duration = 一帧时长（微秒），每帧立即输出一个分片
             var fragDuration = 1_000_000 / fps;
@@ -228,7 +288,9 @@ public class StreamController : ControllerBase
                     var port = ((System.Net.IPEndPoint)tcpListener.LocalEndpoint).Port;
 
                     // 2. 构建 FFmpeg 参数：输出到 TCP
-                    var ffmpegArgs = $"{ffmpegArgsBase} tcp://127.0.0.1:{port}";
+                    // tcp_nodelay=1 显式关闭 Nagle：ffmpeg 的该选项默认 false，
+                    // 而中转侧只对「服务端→ffmpeg」方向设了 NoDelay，这一半（ffmpeg→服务端）此前一直开着 Nagle。
+                    var ffmpegArgs = $"{ffmpegArgsBase} tcp://127.0.0.1:{port}?tcp_nodelay=1";
                     Console.WriteLine($"Session 0: FFmpeg TCP 直连模式，端口 {port}");
                     Console.WriteLine($"Starting FFmpeg {ffmpegArgs}");
 
@@ -452,6 +514,8 @@ public class StreamController : ControllerBase
                 }
                 catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
                 {
+                    // 首帧拿不到 → 当前抓屏方式很可能已不可用，清掉缓存让下一次请求重新探测（自愈）
+                    lock (_cacheLock) { _cachedScreenCaptureInput = null; }
                     Console.WriteLine("FFmpeg initial data timeout");
                     await WaitForStderrAsync(stderrTask);
                     Console.WriteLine($"Stderr: {stderrBuilder}");
@@ -627,14 +691,20 @@ public class StreamController : ControllerBase
     /// 软件编码器 = gdigrab（CPU 路径，避免 hwdownload GPU→CPU 转移开销）。
     /// </summary>
     private static async Task<(string input, string method)> GetScreenCaptureInputAsync(
-        string encoder, CancellationToken cancellationToken)
+        string encoder, int drawMouse, CancellationToken cancellationToken)
     {
         lock (_cacheLock)
         {
-            if (_cachedScreenCaptureInput != null && !InteractiveProcessLauncher.IsRunningInSession0)
+            // ⚠️ Session 0 不再强制每次重探：重探期间任何瞬时失败（例如第三方虚拟显示器/串流程序
+            // 短暂占用 DXGI 桌面复制）都会把整条流打到 gdigrab，4K 下只剩 ~15fps。
+            // 探测成功即缓存复用；若流真的起不来，下面的首帧超时分支会清缓存触发重探（自愈）。
+            if (_cachedScreenCaptureInput != null
+                && _cachedScreenCaptureDrawMouse == drawMouse)
             {
-                var method = _cachedScreenCaptureInput.Contains("ddagrab") ? "ddagrab" : "gdigrab";
-                return (_cachedScreenCaptureInput, method);
+                var cachedIsDdagrab = _cachedScreenCaptureInput.Contains("ddagrab");
+                // ddagrab 结果长期有效；gdigrab 只是回退，60 秒后重探一次（ddagrab 可能已恢复）
+                if (cachedIsDdagrab || (DateTime.UtcNow - _cachedScreenCaptureAt).TotalSeconds < 60)
+                    return (_cachedScreenCaptureInput, cachedIsDdagrab ? "ddagrab" : "gdigrab");
             }
         }
 
@@ -649,13 +719,13 @@ public class StreamController : ControllerBase
         // - ddagrab 使用 DXGI Desktop Duplication API，不受 DWM 刷新优化影响
         if (isHwEncoder && await TestDdagrabPipelineAsync(encoder, cancellationToken))
         {
-            screenCaptureInput = $"-f lavfi -i \"ddagrab=framerate={Framerate}:draw_mouse=1\"";
+            screenCaptureInput = $"-f lavfi -i \"ddagrab=framerate={Framerate}:draw_mouse={drawMouse}\"";
             captureMethod = "ddagrab";
-            Console.WriteLine($"Using ddagrab (DXGI) + {encoder} — 全 GPU 管线，零 CPU 开销，{Framerate}fps");
+            Console.WriteLine($"Using ddagrab (DXGI) + {encoder} — 全 GPU 管线，零 CPU 开销，{Framerate}fps，draw_mouse={drawMouse}");
         }
         else
         {
-            screenCaptureInput = $"-f gdigrab -framerate {Framerate} -rtbufsize 100M -thread_queue_size 512 -draw_mouse 1 -i desktop";
+            screenCaptureInput = $"-f gdigrab -framerate {Framerate} -rtbufsize 100M -thread_queue_size 512 -draw_mouse {drawMouse} -i desktop";
             captureMethod = "gdigrab";
 
             if (isHwEncoder)
@@ -667,6 +737,8 @@ public class StreamController : ControllerBase
         lock (_cacheLock)
         {
             _cachedScreenCaptureInput = screenCaptureInput;
+            _cachedScreenCaptureDrawMouse = drawMouse;
+            _cachedScreenCaptureAt = DateTime.UtcNow;
         }
 
         return (screenCaptureInput, captureMethod);
@@ -730,6 +802,11 @@ public class StreamController : ControllerBase
     // desktop agent used by the real stream, and re-probe when the input desktop changes.
     private static async Task<bool> TestInteractiveDdagrabAsync(string encoder, CancellationToken cancellationToken)
     {
+        // 先注入一次无害按键唤醒显示器：显示器处于关闭/待机时 DXGI 复制取不到帧，
+        // 若直接探测会误判 ddagrab 不可用 → 整条流落到 gdigrab（4K 只有 ~15fps）。
+        await DesktopAgent.WakeDisplayAsync(cancellationToken);
+        await Task.Delay(250, cancellationToken);
+
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
         var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
@@ -906,6 +983,32 @@ public class StreamController : ControllerBase
                 await stderrTask.WaitAsync(TimeSpan.FromSeconds(2));
             }
             catch { }
+        }
+    }
+
+    /// <summary>
+    /// 判断目标会话当前是否锁屏/断开。
+    /// Session 0 模式下 gdigrab 抓不到输入桌面而报 error 5，故用桌面名判断：
+    /// 交互会话里由 DesktopAgent 报告输入桌面名（Default=已解锁，Winlogon=锁屏）；
+    /// 非 Session 0（w3wp 就在用户会话）时本进程可直接问 Windows。
+    /// </summary>
+    private static async Task<bool> IsSessionLockedAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (InteractiveProcessLauncher.IsRunningInSession0)
+            {
+                var state = await DesktopAgent.GetSessionStateAsync(ct);
+                // 代理不可用时不阻断流（保持旧行为，让 FFmpeg 自身报错）
+                return state?.Locked == true;
+            }
+
+            return !string.Equals(InputDesktopDispatcher.CurrentDesktopName, "Default", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Stream] 锁屏检测失败（视为未锁定）: {ex.Message}");
+            return false;
         }
     }
 }

@@ -18,6 +18,14 @@ public static class InputWebSocketHandler
         var buffer = ArrayPool<byte>.Shared.Rent(4096);
         try
         {
+            // 输入通道建立时确保桌面代理在线：代理有 5 分钟空闲退出，
+            // 而鼠标/键盘命令不经过 EnsureAgentRunningAsync，代理死后没人会拉起它。
+            if (InteractiveProcessLauncher.IsRunningInSession0)
+            {
+                try { await DesktopAgent.EnsureAgentRunningAsync(); }
+                catch (Exception ex) { Console.WriteLine($"[InputWS] 唤醒桌面代理失败: {ex.Message}"); }
+            }
+
             while (webSocket.State == WebSocketState.Open && !ct.IsCancellationRequested)
             {
                 var json = await WebSocketTextReader.Read(webSocket, buffer, ct).ConfigureAwait(false);

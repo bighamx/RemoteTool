@@ -913,11 +913,35 @@ public class SystemService : ISystemControlService
             int y = bounds.Y + (int)(bounds.Height * normalizedY);
 
             SetCursorPos(x, y);
+            KeepDisplayAwake(x, y);   // 见方法注释：把"移动鼠标"补成真正的用户操作
         }
         catch (Exception ex)
         {
             Console.WriteLine($"SendMouseMove error: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 「保持唤醒」心跳：`SetCursorPos` 只挪光标、**不产生输入事件、不算用户操作**
+    /// （实测：光标移动后 GetLastInputInfo 的"距上次真实输入"停在 347 秒纹丝不动；
+    /// 而 SendInput 移动/键盘/点击都会立刻归零）。后果是长时间只滑鼠标不点不敲时，
+    /// 系统仍按空闲处理 → 显示器关闭 → DXGI 抓屏(ddagrab)取不到帧（帧率 ~54 → ~15），
+    /// 且屏幕关掉后单纯滑鼠标也唤不醒它。
+    /// 这里在每次定位后，**最多每秒一次**额外注入一次 SendInput 绝对移动（目标即当前落点，
+    /// 画面无位移），让系统认为"用户真的在操作" → 重置空闲计时器 + 唤醒显示器。
+    /// 选混合而非把定位整体改成 SendInput：本机实测 SendInput ~469µs/次（装全局低级钩子时更贵）、
+    /// SetCursorPos 仅 ~9µs；混合方案保留像素级精确的廉价定位，把注入成本压到 1/60。
+    /// </summary>
+    private const int WakeInputIntervalMs = 1000;
+    private static long _lastWakeInputTicks;
+
+    private static void KeepDisplayAwake(int x, int y)
+    {
+        var now = Environment.TickCount64;
+        var last = Interlocked.Read(ref _lastWakeInputTicks);
+        if (now - last < WakeInputIntervalMs) return;
+        if (Interlocked.CompareExchange(ref _lastWakeInputTicks, now, last) != last) return;  // 并发时只让一个线程注入
+        try { NativeDesktopInput.WakeInput(x, y); } catch { /* 唤醒失败不影响定位本身 */ }
     }
 
     /// <summary>

@@ -162,6 +162,7 @@
 
                 <label for="quality-preset">预设</label>
                 <select id="quality-preset" class="quality-select">
+                    <option value="native">原生（零拷贝）</option>
                     <option value="ultra">超高清</option>
                     <option value="high" selected>高清</option>
                     <option value="medium">标清</option>
@@ -170,6 +171,9 @@
                 </select>
                 <label for="resolution-select">分辨率</label>
                 <select id="resolution-select" class="quality-select">
+                    <option value="original" id="opt-native">原生（零拷贝·自动适配）</option>
+                    <option value="3840x2160">3840x2160</option>
+                    <option value="2560x1440">2560x1440 (2K)</option>
                     <option value="1920x1080">1920x1080</option>
                     <option value="1280x720" selected>1280x720</option>
                     <option value="854x480">854x480</option>
@@ -177,6 +181,9 @@
                 </select>
                 <label for="bitrate-select">码率</label>
                 <select id="bitrate-select" class="quality-select">
+                    <option value="25M">25M</option>
+                    <option value="20M">20M</option>
+                    <option value="15M">15M</option>
                     <option value="10M">10M</option>
                     <option value="8M">8M</option>
                     <option value="5M">5M</option>
@@ -184,6 +191,12 @@
                     <option value="2M">2M</option>
                     <option value="1M">1M</option>
                     <option value="500k">500k</option>
+                </select>
+                <label for="fps-select">帧率</label>
+                <select id="fps-select" class="quality-select">
+                    <option value="60" selected>60（默认·最高帧率）</option>
+                    <option value="50">50</option>
+                    <option value="30">30（省带宽）</option>
                 </select>
                 <label for="crf-value">质量</label>
                 <input type="range" id="crf-value" min="18" max="32" value="18" class="crf-slider">
