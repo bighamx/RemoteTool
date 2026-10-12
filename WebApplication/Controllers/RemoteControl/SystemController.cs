@@ -30,7 +30,7 @@ public class SystemController : ControllerBase
         try
         {
             _systemService.Shutdown();
-            return ApiResult(null, "System will shutdown in 5 seconds");
+            return ApiResult(null, OperatingSystem.IsMacOS() ? "关机操作已提交" : "System will shutdown in 5 seconds");
         }
         catch (Exception ex)
         {
@@ -44,7 +44,7 @@ public class SystemController : ControllerBase
         try
         {
             _systemService.Reboot();
-            return ApiResult(null, "System will reboot in 5 seconds");
+            return ApiResult(null, OperatingSystem.IsMacOS() ? "重启操作已提交" : "System will reboot in 5 seconds");
         }
         catch (Exception ex)
         {
@@ -139,11 +139,12 @@ public class SystemController : ControllerBase
     }
 
     [HttpGet("screenshot")]
-    public IActionResult GetScreenshot()
+    public async Task<IActionResult> GetScreenshot()
     {
         try
         {
-            var imageBytes = _systemService.CaptureScreen();
+            var imageBytes = await _systemService.CaptureScreenAsync();
+            Response.Headers.CacheControl = "no-store";
             if (imageBytes.Length == 0)
                 return ApiResult(null, "Failed to capture screenshot", false);
             return File(imageBytes, "image/jpeg");

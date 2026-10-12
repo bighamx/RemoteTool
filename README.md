@@ -1,5 +1,7 @@
 # RemoteTool
 
+> 本开发分支新增 macOS 基础适配和 H5 手机控制台：访问 `/mobile/`。安装、功能范围和实机验证步骤请阅读 [MACOS-H5.md](MACOS-H5.md)。Mac 桌面代理仍需要在 Mac 上编译并验证授权。
+
 <div align="center">
 
 **基于 .NET 8 的 Web 后台管理与远程控制服务**

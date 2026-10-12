@@ -116,6 +116,8 @@ builder.Services.AddSingleton<HermesCompaction>();
 
             // Configure JWT Authentication
             builder.Services.AddJwtAuthentication(builder.Configuration);
+            builder.Services.AddHttpClient();
+            builder.Services.AddSingleton<CloudflareAccessIdentity>();
 
             // Hangfire Services (Client, Server, Tasks)
             builder.Services.AddHangfireServices(builder.Configuration);
@@ -132,6 +134,27 @@ builder.Services.AddSingleton<HermesCompaction>();
 
             // 必须在管道最前使用，以便后续中间件看到正确的 Scheme/Host
             app.UseForwardedHeaders();
+
+            // Cloudflare Access SSO is opt-in and requires a valid signed assertion for
+            // the configured application and email. Keep the normal password login for
+            // local access and for deployments without Access.
+            app.Use(async (context, next) =>
+            {
+                var access = context.RequestServices.GetRequiredService<CloudflareAccessIdentity>();
+                var assertion = context.Request.Headers["Cf-Access-Jwt-Assertion"].ToString();
+                if (await access.AcceptAsync(assertion, context.RequestAborted))
+                {
+                    var auth = context.RequestServices.GetRequiredService<AuthService>();
+                    var token = auth.GenerateToken("admin");
+                    context.Request.Headers.Authorization = "Bearer " + token;
+                    if (!context.Request.Cookies.TryGetValue("access_token", out var existingToken) || !auth.ValidateToken(existingToken))
+                        context.Response.Cookies.Append("access_token", token, new CookieOptions {
+                            HttpOnly = true, Secure = context.Request.IsHttps, SameSite = SameSiteMode.Strict,
+                            Path = "/", Expires = DateTimeOffset.UtcNow.AddHours(24)
+                        });
+                }
+                await next();
+            });
 
             // 若在 Session 0（IIS）且配置了管理员凭据，创建“登录时以最高权限运行桌面代理”的计划任务（密码可来自配置或环境变量 REMOTECONTROL_ELEVATEDAGENT_PASSWORD）
             if (InteractiveProcessLauncher.IsRunningInSession0)
@@ -152,6 +175,7 @@ builder.Services.AddSingleton<HermesCompaction>();
                 app.UseExceptionHandler("/Home/Error");
             }
             app.UseStaticFiles();
+            app.MapGet("/mobile", () => Results.Redirect("/mobile/index.html"));
 
             app.UseRouting();
 
@@ -250,7 +274,7 @@ builder.Services.AddSingleton<HermesCompaction>();
                     return;
                 }
 
-                var systemService = context.RequestServices.GetRequiredService<SystemService>();
+                var systemService = context.RequestServices.GetRequiredService<ISystemControlService>();
                 context.Response.Headers["X-Chuckie-Input-Ack"] = "1";
                 var webSocket = await context.WebSockets.AcceptWebSocketAsync();
                 await InputWebSocketHandler.RunAsync(webSocket, systemService, context.RequestAborted);

@@ -11,11 +11,11 @@ namespace RemoteTool.WebApi.Controllers.RemoteControl;
 public class InputController : ControllerBase
     
 {
-    private readonly SystemService _systemService;
+    private readonly ISystemControlService _systemService;
 
     private IActionResult ApiError(string message)
         => BadRequest(new { message });
-    public InputController(SystemService systemService)
+    public InputController(ISystemControlService systemService)
     {
         _systemService = systemService;
     }
@@ -29,6 +29,12 @@ public class InputController : ControllerBase
         var kind = Request.Path.Value!.Split('/').Last();
         var text = request.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
         if (text.Length > 2048) return ApiError("Text is too long");
+        if (_systemService is MacSystemService mac) {
+            var payload = System.Text.Json.Nodes.JsonNode.Parse(request.GetRawText())!.AsObject(); payload["type"] = kind;
+            await mac.NativeAsync(System.Text.Json.JsonSerializer.SerializeToElement(payload));
+            return Ok(new { message = "Input sent" });
+        }
+        if (!OperatingSystem.IsWindows()) return StatusCode(501, new { message = "当前平台未实现桌面输入" });
         int Value(string name) => request.TryGetProperty(name, out var p) ? p.GetInt32() : 0;
         if (InteractiveProcessLauncher.IsRunningInSession0)
             await DesktopAgent.SendNativeInputAsync(kind, text, Value("dx"), Value("dy"), Value("button"));

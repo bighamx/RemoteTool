@@ -17,12 +17,14 @@ public class LinuxDockerService : IDockerService, IDisposable
 {
     private readonly DockerClient _client;
 
-    public LinuxDockerService()
+    public LinuxDockerService(IConfiguration configuration)
     {
         // 根据操作系统选择 Docker Socket 路径
         var dockerUri = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
             ? new Uri("npipe://./pipe/docker_engine")
-            : new Uri("unix:///var/run/docker.sock");
+            : new Uri(configuration["Docker:Host"] ?? (OperatingSystem.IsMacOS()
+                ? "unix://" + Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".docker", "run", "docker.sock")
+                : "unix:///var/run/docker.sock"));
 
         _client = new DockerClientConfiguration(dockerUri).CreateClient();
     }

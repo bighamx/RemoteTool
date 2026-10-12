@@ -645,6 +645,14 @@ public static class InteractiveProcessLauncher
     /// </summary>
     public static string GetDotnetPath()
     {
+        if (!OperatingSystem.IsWindows()) {
+            var host = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
+            if (!string.IsNullOrWhiteSpace(host) && File.Exists(host)) return host;
+            if (Path.GetFileName(Environment.ProcessPath) == "dotnet") return Environment.ProcessPath!;
+            foreach (var path in new[] { "/usr/local/share/dotnet/dotnet", "/opt/homebrew/bin/dotnet", "/usr/local/bin/dotnet", "/usr/bin/dotnet" })
+                if (File.Exists(path)) return path;
+            return "dotnet";
+        }
         // 优先使用环境变量
         var dotnetPath = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
         if (!string.IsNullOrEmpty(dotnetPath) && File.Exists(dotnetPath))

@@ -12,12 +12,12 @@ namespace RemoteTool.WebApi.Controllers.RemoteControl;
 public class StreamController : ControllerBase
 
 {
-    private readonly SystemService _systemService;
+    private readonly ISystemControlService _systemService;
     private const string Boundary = "frame";
 
     private IActionResult ApiError(string message)
             => BadRequest(new { message });
-    public StreamController(SystemService systemService)
+    public StreamController(ISystemControlService systemService)
     {
         _systemService = systemService;
     }
@@ -109,6 +109,11 @@ public class StreamController : ControllerBase
         [FromQuery] string colors = "full",
         CancellationToken cancellationToken = default)
     {
+        if (OperatingSystem.IsMacOS()) {
+            Response.StatusCode = 501;
+            await Response.WriteAsync("Mac 第一版请使用 /mobile 的 JPEG 桌面控制；H.264 尚未实现", cancellationToken);
+            return;
+        }
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
             Response.StatusCode = 503;

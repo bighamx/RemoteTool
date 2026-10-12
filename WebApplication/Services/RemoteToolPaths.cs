@@ -17,13 +17,15 @@ public static class RemoteToolPaths
     /// </summary>
     public static readonly string[] LegacyProductFolders = { "ChuckieHelper" };
 
-    public static string ProgramData => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), ProductFolder);
+    public static string ProgramData => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("REMOTETOOL_DATA_DIR"))
+        ? Path.GetFullPath(Environment.GetEnvironmentVariable("REMOTETOOL_DATA_DIR")!) : OperatingSystem.IsMacOS()
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", ProductFolder)
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), ProductFolder);
 
     /// <summary>Product data directory under an arbitrary base (used by tests and the migration).</summary>
     public static string Root(string baseFolder) => Path.Combine(baseFolder, ProductFolder);
 
-    public static string LocalData => Path.Combine(
+    public static string LocalData => OperatingSystem.IsMacOS() ? ProgramData : Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), ProductFolder);
 
     public static string TempData => Path.Combine(Path.GetTempPath(), ProductFolder);
@@ -43,8 +45,9 @@ public static class RemoteToolPaths
     public static string HermesKeyFile => Path.Combine(ProgramData, "hermes", "api-key.env");
 
     // Hermes itself remains a separate, user-owned installation.
-    public static string HermesHome => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "hermes");
+    public static string HermesHome => OperatingSystem.IsMacOS()
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".hermes")
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "hermes");
 
     public static string Sensors => Path.Combine(ProgramData, "sensors");
 

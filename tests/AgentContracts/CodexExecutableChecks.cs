@@ -3,6 +3,23 @@ using RemoteTool.WebApi.Services.Codex;
 internal static class CodexExecutableChecks
 {
     public static void Run() {
+        if (!OperatingSystem.IsWindows()) {
+            var fixture = Path.Combine(Path.GetTempPath(), "codex-native-" + Guid.NewGuid().ToString("N"));
+            var homeFolder = Path.Combine(fixture, ".codex"); Directory.CreateDirectory(homeFolder);
+            var executable = Path.Combine(fixture, "codex");
+            var savedPath = Environment.GetEnvironmentVariable("PATH");
+            try {
+                File.WriteAllText(executable, "#!/bin/sh\nexit 0\n"); File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                if (CodexExecutable.Complete(executable)) throw new Exception("Non-executable native CLI accepted");
+                File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                Environment.SetEnvironmentVariable("PATH", fixture);
+                if (CodexExecutable.Resolve("codex", homeFolder) != executable) throw new Exception("PATH lookup failed");
+                if (CodexExecutable.Resolve(executable, homeFolder) != executable) throw new Exception("Absolute native CLI lookup failed");
+                try { CodexExecutable.Resolve(Path.Combine(fixture,"missing"), homeFolder); throw new Exception("Missing configured CLI accepted"); }
+                catch (CodexError error) when (error.Delivery == "rejected") { }
+                Console.WriteLine("PASS: native CLI executable permissions, PATH and absolute-path resolution");
+            } finally { Environment.SetEnvironmentVariable("PATH", savedPath); Directory.Delete(fixture, true); }
+        }
         var profile = Path.Combine(Path.GetTempPath(), "codex-update-" + Guid.NewGuid().ToString("N"));
         var home = Path.Combine(profile, ".codex");
         var bundled = Path.Combine(profile, "AppData", "Local", "OpenAI", "Codex", "bin");

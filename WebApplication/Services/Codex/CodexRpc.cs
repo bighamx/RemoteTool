@@ -41,12 +41,25 @@ internal static class CodexJson
 internal static class CodexExecutable
 {
     public static bool Complete(string executable) => !string.IsNullOrWhiteSpace(executable) && File.Exists(executable) &&
-        (!executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
-         File.Exists(Path.Combine(Path.GetDirectoryName(executable)!, "codex-code-mode-host.exe")) &&
-         File.Exists(Path.Combine(Path.GetDirectoryName(executable)!, "codex-command-runner.exe")));
+        (executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+         ? File.Exists(Path.Combine(Path.GetDirectoryName(executable)!, "codex-code-mode-host.exe")) &&
+           File.Exists(Path.Combine(Path.GetDirectoryName(executable)!, "codex-command-runner.exe"))
+         : OperatingSystem.IsWindows() || (File.GetUnixFileMode(executable) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0);
 
     public static string Resolve(string executable, string home) {
         if (Complete(executable)) return executable;
+        if (!OperatingSystem.IsWindows() && (string.IsNullOrWhiteSpace(executable) || !executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))) {
+            if (!string.IsNullOrWhiteSpace(executable) && Path.IsPathFullyQualified(executable))
+                throw new CodexError("配置的 Codex 程序不存在或不可执行，请检查 Codex:Executable", 503, "codex_tools_missing", "rejected");
+            var name = string.IsNullOrWhiteSpace(executable) ? "codex" : executable;
+            foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator)
+                .Concat(new[] { "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/Applications/Codex.app/Contents/Resources" })) {
+                if (string.IsNullOrWhiteSpace(directory)) continue;
+                var candidate = Path.Combine(directory, name);
+                if (Complete(candidate) && (File.GetUnixFileMode(candidate) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0) return candidate;
+            }
+            throw new CodexError("找不到 Codex，请安装 CLI 并配置 Codex:Executable 的完整路径", 503, "codex_tools_missing", "rejected");
+        }
         var profile = Path.GetDirectoryName(Path.GetFullPath(home).TrimEnd(Path.DirectorySeparatorChar));
         var bundled = Path.Combine(profile!, "AppData", "Local", "OpenAI", "Codex", "bin");
         var replacement = Directory.Exists(bundled) ? Directory.EnumerateFiles(bundled, "codex.exe", SearchOption.AllDirectories)

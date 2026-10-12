@@ -95,8 +95,9 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
         if (await Ready(ct)) return;
         await startup.WaitAsync(ct);
         try {
-            var sid = InteractiveProcessLauncher.GetInteractiveUserSid();
+            var sid = OperatingSystem.IsWindows() ? InteractiveProcessLauncher.GetInteractiveUserSid() : null;
             Directory.CreateDirectory(folder);
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             if (OperatingSystem.IsWindows()) {
                 var acl = new DirectorySecurity();
                 acl.SetAccessRuleProtection(true, false);
@@ -146,6 +147,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
                 string.IsNullOrWhiteSpace(configuration[key]) ? fallback : configuration[key]!));
             var accountStore = ConfiguredPath("Codex:AccountStore", Path.Combine(profile, ".codex-switch"));
             Directory.CreateDirectory(accountStore);
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(accountStore, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             if (OperatingSystem.IsWindows()) {
                 var accountAcl = new DirectorySecurity();
                 accountAcl.SetAccessRuleProtection(true, false);
@@ -155,7 +157,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             }
             var home = ConfiguredPath("Codex:Home", Path.Combine(profile, ".codex"));
             var executable = configuration["Codex:Executable"];
-            if (!Codex.CodexExecutable.Complete(executable)) {
+            if (OperatingSystem.IsWindows() && !Codex.CodexExecutable.Complete(executable)) {
                 // The desktop app rotates bin/<hash> directories on update; a fresh download may
                 // briefly contain only codex.exe. Prefer directories that also carry the tool
                 // executables (code-mode host etc.) — a lone codex.exe cannot run tools.
@@ -174,8 +176,17 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
                 working_directory = ConfiguredPath("Codex:WorkingDirectory", Path.Combine(profile, "Documents", "Codex", "Mobile")),
                 attachments = Path.Combine(Path.GetDirectoryName(folder)!, "codex-attachments") }), ct);
             var command = $"dotnet \"{dll}\" --codex-bridge \"{configPath}\"";
-            var launch = InteractiveProcessLauncher.LaunchInInteractiveSession(command, Path.GetDirectoryName(dll));
-            if (!launch.Success) throw new InvalidOperationException("无法在桌面用户会话中启动 Codex，请先登录电脑桌面");
+            if (OperatingSystem.IsWindows()) {
+                var launch = InteractiveProcessLauncher.LaunchInInteractiveSession(command, Path.GetDirectoryName(dll));
+                if (!launch.Success) throw new InvalidOperationException("无法在桌面用户会话中启动 Codex，请先登录电脑桌面");
+            } else {
+                File.SetUnixFileMode(configPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                var start = new ProcessStartInfo(InteractiveProcessLauncher.GetDotnetPath()) {
+                    UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(dll)!
+                };
+                start.ArgumentList.Add(dll); start.ArgumentList.Add("--codex-bridge"); start.ArgumentList.Add(configPath);
+                using var worker = Process.Start(start) ?? throw new InvalidOperationException("无法启动 Codex 桥接进程");
+            }
             for (var i = 0; i < 80; i++) {
                 await Task.Delay(250, ct);
                 if (File.Exists(statusPath)) {

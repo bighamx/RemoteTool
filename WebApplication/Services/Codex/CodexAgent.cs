@@ -428,8 +428,12 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var item = p["item"];
         if (method == "turn/started") { lock (gate) runs[run]!["turn_id"] = p["turn"].S("id"); Persist(); }
         else if (method == "item/agentMessage/delta") {
-            var delta = p.S("delta"); lock (gate) runs[run]!["output"] = runs[run].S("output") + delta;
-            Emit(run, "message.delta", ("delta", delta), ("item_id", p.S("itemId")));
+            var delta = p.S("delta");
+            // Publish output and its SSE sequence together, so polling cannot double-count a delta.
+            lock (gate) {
+                runs[run]!["output"] = runs[run].S("output") + delta;
+                Emit(run, "message.delta", ("delta", delta), ("item_id", p.S("itemId")));
+            }
         } else if (method is "item/started" or "item/completed" && item.S("type") == "agentMessage") {
             Emit(run, method.EndsWith("/started") ? "message.started" : "message.completed", ("item_id", item.S("id")),
                 ("phase", item.S("phase")), ("text", item.S("text")), ("timestamp", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
@@ -911,7 +915,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             if (p.Length == 3 && p[2] == "active-run" && method == "GET") return await FindActiveRun(p[1], context.RequestAborted);
             if (p.Length == 3 && p[2] == "desktop-activity" && method == "GET") return await CodexDesktopActivity.Read(p[1], context.RequestAborted);
             if (p.Length == 1 && method == "GET") {
-                var request = Obj(("limit", 50), ("sortKey", "updated_at"), ("sourceKinds", new JsonArray("cli", "vscode", "appServer")));
+                var request = Obj(("limit", 50), ("sortKey", "updated_at"), ("sourceKinds", new JsonArray("cli", "vscode", "appServer")), ("modelProviders", new JsonArray()));
                 if (context.Request.Query["cursor"].Count > 0) request["cursor"] = context.Request.Query["cursor"].ToString();
                 var result = await rpc.Call("thread/list", request);
                 // Pins must remain reachable even when their activity falls outside page one.

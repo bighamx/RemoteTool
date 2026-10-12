@@ -2472,13 +2472,13 @@ class RemoteControl {
         // Linux 平台隐藏远程桌面视频流标签页（该功能已禁用）
         const screenshotTabBtn = document.querySelector('.tab[data-tab="screenshot"]');
         if (screenshotTabBtn) {
-            screenshotTabBtn.style.display = info.platform === 'Linux' ? 'none' : '';
+            screenshotTabBtn.style.display = info.platform !== 'Windows' ? 'none' : '';
         }
 
         // 根据平台动态设置终端类型选择框
         const terminalSelect = document.getElementById('terminal-type');
         if (terminalSelect) {
-            const isLinux = info.platform === 'Linux';
+            const isLinux = info.platform !== 'Windows';
             Array.from(terminalSelect.options).forEach(opt => {
                 if (isLinux) {
                     opt.style.display = opt.value === 'shell' ? '' : 'none';

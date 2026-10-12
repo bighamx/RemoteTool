@@ -255,7 +255,7 @@ try {
     snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
     Check(snapshot["activity"]["event_count"].GetValue<int>() == 0 && snapshot["activity"]["last_response_at"] == null, "new desktop task resets progress and response time");
     using (var writer = new FileStream(activityPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) {
-        Check(CodexRollout.IsRunning(temp, activityPath), "live writer plus start event proves desktop running on Windows");
+        Check(CodexRollout.IsRunning(temp, activityPath) == OperatingSystem.IsWindows(), "live-writer desktop detection is enabled only on Windows");
     }
     Check(!CodexRollout.IsRunning(temp, activityPath), "orphan start without a live writer is not a running task");
     for (var i = 0; i < 40; i++) File.AppendAllText(activityPath, Record("response_item", new() { ["type"] = "function_call", ["name"] = "test", ["call_id"] = "many-"+i, ["arguments"] = "{}" }, stamp+10000+i));
