@@ -425,6 +425,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     private val historyCache = AgentHistoryCache(application.noBackupFilesDir.resolve("conversation-history"), "$agent-$deviceId")
     var historyCacheStatus by mutableStateOf<String?>(null)
+    // 会话历史首次加载中（本地无任何数据可回放）：true 时对话区域显示大加载动画。
+    var historyLoading by mutableStateOf(false)
         private set
     private fun saveOfflineSessions() {
         prefs.edit().putString("offlineSessions", org.json.JSONArray(sessions.take(50)).toString()).apply()
@@ -1251,10 +1253,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         // 先回放上一次该会话的消息（如有缓存），网络刷新到位后替换 —— 消除「返回再进白屏等待」。
         cachedHistory[selectedId]?.let { cached ->
             messages = projectFinalSyncRows(cached, finalSyncStates, id)
-            historyCacheStatus = null
+            historyCacheStatus = null; historyLoading = false
             // 回放缓存后请求滚到底，否则打开会话停在缓存顶部等网络刷新
             scrollToLatestRequest++
-        } ?: run { messages = projectFinalSyncRows(emptyList(), finalSyncStates, id); historyCacheStatus = null }
+        } ?: run { messages = projectFinalSyncRows(emptyList(), finalSyncStates, id); historyCacheStatus = null; historyLoading = true }
         // 恢复该会话的后台 run 跟踪
         backgroundRuns.remove(id)?.let { resumed ->
             runId = resumed; runSession = id
@@ -1269,7 +1271,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 if (selectedId != id) return@launch
                 if (offline != null && messages.isEmpty()) {
                     cachedHistory[id] = offline; messages = projectFinalSyncRows(offline, finalSyncStates, id)
-                    historyCacheStatus = null; scrollToLatestRequest++
+                    historyCacheStatus = null; historyLoading = false; scrollToLatestRequest++
                 }
             }
             loadHistory(id)
@@ -1327,6 +1329,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             if (selectedId == id && api === connection && id in cachedHistory) historyCacheStatus = "离线缓存"
+            if (messages.isEmpty()) historyLoading = false
             throw e
         }
         if (id != selectedId || api !== connection) return
@@ -1426,6 +1429,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             reconcilePendingAssistant(withActiveNarrations(visibleHistory, liveNarrations(id), activeRun),
                 pendingItemId.takeIf { activeRun != null }, pendingText.takeIf { activeRun != null }.orEmpty()),
             finalSyncStates, id)
+        historyLoading = false
         withContext(Dispatchers.IO) { historyCache.write(id, history) }
         if (selectedId != id || api !== connection) return
         reconcileSteeringReceipts(id, connection)
@@ -2173,26 +2177,26 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
-    /** 放弃手机端所有权并把会话转交到桌面 Codex App：中断进行中的轮，释放 writer 锁。 */
-    fun handoverToDesktop() = launch {
-        val session = selectedId ?: return@launch
+    /** 放弃手机端所有权并把会话转交到桌面 Codex App：有 run 先中断，再释放 writer 锁（空闲会话同样适用）。 */
+    fun handoverSession(sessionId: String) = launch {
         val connection = api
         if (stopRequestInFlight) return@launch
         stopRequestInFlight = true
-        setError(session, null)
+        setError(sessionId, null)
         try {
-            if (runId == null) attachServerActiveRun(session, required = true)
-            if (selectedId != session || api !== connection) return@launch
-            val id = runId ?: throw java.io.IOException("当前会话没有正在运行的任务，无需转交。")
-            if (runSession != session) throw java.io.IOException("当前任务不属于所选会话，请刷新后重试。")
-            val result = connection.json("$root/runs/$id/handover", obj())
-            if (selectedId != session || api !== connection) return@launch
-            clearRunTracking(session, id); stoppingRunId = null
-            state = if (result.optBoolean("interrupted")) "已中断并转交桌面" else "已转交桌面"
-            loadHistory(session); loadSelection(session)
+            val id = if (runSession == sessionId) runId else backgroundRuns[sessionId]
+            val result = if (id != null)
+                connection.json("$root/runs/$id/handover", obj())
+            else
+                connection.json("$root/sessions/${q(sessionId)}/handover", obj("action" to "handover"))
+            if (api !== connection) return@launch
+            if (id != null) clearRunTracking(sessionId, id)
+            stoppingRunId = null
+            if (selectedId == sessionId) state = if (result.optBoolean("interrupted")) "已中断并转交桌面" else "已转交桌面"
+            loadHistory(sessionId); loadSelection(sessionId)
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
-            setError(session, "转交失败：${connectionFailureMessage(e)}")
+            setError(sessionId, "转交失败：${connectionFailureMessage(e)}")
         } finally { stopRequestInFlight = false }
     }
 
