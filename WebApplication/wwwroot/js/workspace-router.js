@@ -7,7 +7,7 @@
     };
     const sources = { home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes' };
     const assets = {
-        remote: { styles: ['remote.css', 'performance.css'], scripts: ['remote-nav.js', 'mp4box.all.min.js', 'performance.js', 'media-preview.js', 'remote.js'] },
+        remote: { styles: ['remote.css', 'performance.css', 'vendor/xterm/xterm.css'], scripts: ['remote-nav.js', 'mp4box.all.min.js', 'performance.js', 'media-preview.js', 'vendor/xterm/xterm.js', 'vendor/xterm/addon-fit.js', 'remote.js'] },
         jobs: { styles: ['workspace-pages.css'], scripts: ['web-api.js', 'jobs-page.js'] },
         codex: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'agent-workspace.js'] },
         hermes: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'agent-workspace.js'] }
@@ -41,7 +41,7 @@
     };
     const moduleKey = route => Object.hasOwn(remoteTabs, route) ? 'remote' : route;
     const openStyle = name => {
-        const path = `/css/${name}`;
+        const path = name.startsWith('vendor/') ? `/${name}` : `/css/${name}`;
         if (loadedStyles.has(path)) return pendingStyles.get(path) || Promise.resolve();
         loadedStyles.add(path);
         const loading = new Promise((resolve, reject) => {
@@ -54,7 +54,7 @@
         return loading;
     };
     const openScript = (name, root) => {
-        const path = `/js/${name}`;
+        const path = name.startsWith('vendor/') ? `/${name}` : `/js/${name}`;
         if (loadedScripts.has(path) && name !== 'agent-workspace.js') return pendingScripts.get(path) || Promise.resolve();
         loadedScripts.add(path);
         const loading = new Promise((resolve, reject) => {
