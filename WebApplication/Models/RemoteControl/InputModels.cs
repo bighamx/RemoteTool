@@ -38,3 +38,9 @@ public class KeyboardMultiRequest
     public int[] VkCodes { get; set; } = Array.Empty<int>();
     public bool IsKeyDown { get; set; }
 }
+
+/// <summary>远程解锁请求：口令用于注入锁屏登录界面，不落日志、不持久化。</summary>
+public class UnlockRequest
+{
+    public string? Password { get; set; }
+}

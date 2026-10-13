@@ -85,6 +85,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     }
     var renameChat by remember { mutableStateOf<JSONObject?>(null) }
     var deleteChat by remember { mutableStateOf<JSONObject?>(null) }
+    var handoverSession by remember { mutableStateOf<JSONObject?>(null) }
     var models by remember { mutableStateOf(false) }
     var providers by remember { mutableStateOf(false) }
     var titleModelDialog by remember { mutableStateOf(false) }
@@ -92,7 +93,6 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     var createCodex by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var stop by remember { mutableStateOf(false) }
-    var handover by remember { mutableStateOf(false) }
     var takeover by remember { mutableStateOf(false) }
     var filter by rememberSaveable { mutableStateOf("") }
     var pendingInfo by remember { mutableStateOf(false) }
@@ -267,11 +267,16 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             Column(Modifier.weight(1f).clickable(enabled = !list && model.selectedId != null) {
                 renameChat = obj("id" to model.selectedId, "title" to model.title)
             }) {
-                Text(
-                    if (list) "$agentName 会话" else model.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (list) "$agentName 会话" else model.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                    // 本地已有数据、正在同步最新历史：标题后的小型加载指示
+                    if (!list && model.historyLoading && model.messages.isNotEmpty())
+                        CircularProgressIndicator(Modifier.padding(start = 8.dp).size(14.dp), strokeWidth = 2.dp)
+                }
                 if (list) Text(
                     model.runtime,
                     style = MaterialTheme.typography.labelSmall,
@@ -418,6 +423,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         )
                                         DropdownMenuItem(text = { Text("修改名称") }, onClick = { actions = false; renameChat = session })
                                         if (model.hasPendingFor(session.getString("id"))) DropdownMenuItem(text = { Text("核对上次提交") }, onClick = { actions = false; pendingInfo = true })
+                                        if (agent == "codex") DropdownMenuItem(text = { Text("转交桌面") }, onClick = { actions = false; handoverSession = session })
                                         DropdownMenuItem(text = { Text("删除会话", color = MaterialTheme.colorScheme.error) }, onClick = { actions = false; deleteChat = session })
                                     }
                                 }
@@ -471,6 +477,12 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (model.messages.isEmpty() && model.historyLoading) {
+                // 首次加载且本地无数据：对话区域中央的大旋转加载动画，替代一片空白
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(42.dp), strokeWidth = 3.5.dp)
+                }
+            }
             LazyColumn(
                 Modifier.fillMaxSize(),
                 state = scroll,
@@ -544,10 +556,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         Modifier.weight(1f),
                                         style = MaterialTheme.typography.titleSmall,
                                     )
-                                    if (!model.requestingCompaction && (model.runId != null || agent == "hermes" && model.externalRunning)) {
+                                    if (!model.requestingCompaction && (model.runId != null || agent == "hermes" && model.externalRunning))
                                         TextButton(onClick = { stop = true }, enabled = !model.stopping) { Text(if (model.stopping) "正在停止" else "停止") }
-                                        if (agent == "codex") TextButton(onClick = { handover = true }, enabled = !model.stopping) { Text("转交桌面") }
-                                    }
                                     else if (!model.requestingCompaction && model.canTakeover) TextButton(onClick = { takeover = true }) { Text("中断并接管") }
                                 }
                                 if (!model.requestingCompaction) RunTimers(model.executionKey, model.executionTiming,
@@ -882,16 +892,16 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             deleteChat = null
         }
     }
+    handoverSession?.let { chat ->
+        ConfirmDialog("转交到桌面 Codex", "把“${chat.optString("title")}”的写入权交给桌面 Codex App：正在执行的任务会被中断（已执行的操作不会撤销），会话历史保留，之后在桌面打开同一会话即可继续。", { handoverSession = null }) {
+            model.handoverSession(chat.getString("id"))
+            handoverSession = null
+        }
+    }
     if (stop)
         ConfirmDialog("停止 $agentName 任务", "请求在安全中断点停止，不会撤销已经执行的操作。", { stop = false }) {
             model.stop()
             stop = false
-        }
-    if (handover)
-        ConfirmDialog("转交到桌面 Codex", "正在执行的任务会被中断（已执行的操作不会撤销），随后释放会话写入权——之后可在桌面 Codex App 打开同一个会话继续。", { handover = false }) {
-            handover = false
-            model.handoverToDesktop()
-            list = true
         }
     if (takeover) ConfirmDialog("中断并接管当前会话", "请求中断此会话在其他端的任务，已执行的操作不会撤销。确认原任务结束且会话可写入后，再由你发送保留的草稿。其他端已启动新任务时会取消接管。", { takeover = false }) {
         takeover = false; model.takeover()

@@ -1,4 +1,4 @@
-using ChuckieHelper.WebApi.Jobs;
+﻿using ChuckieHelper.WebApi.Jobs;
 using RemoteTool.WebApi.Services;
 using RemoteTool.WebApi.Services.RemoteControl;
 using RemoteTool.WebApi.Extensions;
@@ -143,6 +143,10 @@ builder.Services.AddSingleton<HermesCompaction>();
             });
 
             var app = builder.Build();
+            // The native task page no longer mounts Hangfire Dashboard. Existing
+            // recurring-job registrations and API actions still use the static
+            // Hangfire facade, so bind it to the DI storage before registering jobs.
+            JobStorage.Current = app.Services.GetRequiredService<JobStorage>();
 
             // 必须在管道最前使用，以便后续中间件看到正确的 Scheme/Host
             app.UseForwardedHeaders();
@@ -214,13 +218,8 @@ builder.Services.AddSingleton<HermesCompaction>();
                 }
             });
 
-            // Hangfire Dashboard
-            app.UseHangfireDashboard("/hangfire-inner", new DashboardOptions
-            {
-                DashboardTitle = "Hangfire 任务",
-                AppPath = null, // Set to null to hide the "Back to Site" link
-                Authorization = new[] { new RemoteTool.WebApi.Filters.HangfireAuthorizationFilter() }
-            });
+            // The /hangfire page uses authenticated native-jobs APIs.
+
 
             // 按实例名称注册 Hangfire 定时任务：Office 仅 DDNS，Home 注册全部
             var instanceName = (app.Configuration["InstanceName"] ?? "Home").Trim();

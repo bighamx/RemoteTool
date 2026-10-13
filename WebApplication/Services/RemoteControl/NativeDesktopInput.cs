@@ -52,4 +52,37 @@ internal static class NativeDesktopInput
             default: throw new ArgumentException("Unknown input action");
         }
     }
+
+    /// <summary>
+    /// 注入一次无害按键（F15 = VK 0x7E：没有程序会用到、不产生任何字符）——
+    /// 仅用于重置系统空闲计时器 / 唤醒已关闭的显示器（DXGI 抓屏依赖输出处于呈现状态）。
+    /// </summary>
+    internal static void WakeKey()
+    {
+        const ushort F15 = 0x7E;
+        Submit(new[]
+        {
+            new Input { Type = 1, Data = new Payload { Keyboard = new Keyboard { Key = F15, Flags = 0 } } },  // 按下
+            new Input { Type = 1, Data = new Payload { Keyboard = new Keyboard { Key = F15, Flags = 2 } } }   // 抬起
+        });
+    }
+
+    /// <summary>
+    /// 只注入一次「真实」鼠标移动事件（目标就是当前落点，画面不位移）。
+    /// 用途：`SetCursorPos` 不产生输入事件、不计入用户操作（实测把光标挪走后
+    /// `GetLastInputInfo` 的「距上次真实输入」纹丝不动），于是屏幕照样会因空闲而关闭 →
+    /// DXGI 抓屏(ddagrab)失效（帧率 ~54 → ~15），且关屏后滑动鼠标也唤不醒它。
+    /// 注入一次 SendInput 绝对移动即被系统视为真实操作：重置空闲计时器 + 唤醒显示器。
+    /// 绝对坐标归一化到 0..65535 并带 VIRTUALDESK，以正确覆盖多显示器虚拟桌面。
+    /// </summary>
+    internal static void WakeInput(int screenX, int screenY)
+    {
+        var vx = GetSystemMetrics(76);
+        var vy = GetSystemMetrics(77);
+        var vw = Math.Max(1, GetSystemMetrics(78));
+        var vh = Math.Max(1, GetSystemMetrics(79));
+        var nx = (int)((long)(screenX - vx) * 65535 / Math.Max(1, vw - 1));
+        var ny = (int)((long)(screenY - vy) * 65535 / Math.Max(1, vh - 1));
+        Submit(new[] { MouseEvent(0x0001u | 0x8000u | 0x4000u, nx, ny) });   // MOVE | ABSOLUTE | VIRTUALDESK
+    }
 }

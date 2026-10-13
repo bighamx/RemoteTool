@@ -293,3 +293,6 @@ CodexHistoryCacheChecks.Run();
 CodexEventReplayChecks.Run();
 CodexNotificationScopeChecks.Run();
 CodexToolEventChecks.Run();
+var streamedTurn = JsonNode.Parse("""{"items":[{"type":"agentMessage","phase":"commentary","text":"先检查改动"},{"type":"agentMessage","phase":"commentary","text":"测试通过"},{"type":"agentMessage","phase":"final_answer","text":"已提交推送"}]}""")!;
+if (CodexAssistantMessageStream.FinalAnswer(streamedTurn) != "已提交推送")
+    throw new Exception("Run output must contain only the final answer, never concatenated commentary");

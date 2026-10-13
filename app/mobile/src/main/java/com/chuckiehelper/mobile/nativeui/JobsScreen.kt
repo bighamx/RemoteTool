@@ -1,8 +1,10 @@
 package com.chuckiehelper.mobile.nativeui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -38,6 +40,7 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
             "deleted" to "删除",
             "servers" to "服务",
         )
+    val countedTabs = setOf("enqueued", "processing", "failed", "succeeded", "scheduled")
     LaunchedEffect(api, refresh, tab, offset, queue) {
         try {
             overview = api.json("/api/native-jobs/overview")
@@ -71,7 +74,11 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
     ) {
         if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         item {
-            FlowRowCompat {
+            val stats = overview?.optJSONObject("stats")
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 tabs.forEach { (state, title) ->
                     FilterChip(
                         tab == state,
@@ -79,7 +86,7 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
                             tab = state
                             offset = 0
                         },
-                        label = { Text(title) },
+                        label = { Text(if (state in countedTabs && stats != null) "$title ${stats.optLong(state)}" else title) },
                     )
                 }
             }
@@ -91,28 +98,6 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
             ) {
                 Text("Hangfire", style = MaterialTheme.typography.titleMedium)
                 IconButton(onClick = { refresh++ }) { Icon(Icons.Outlined.Refresh, "刷新") }
-            }
-        }
-        overview?.optJSONObject("stats")?.let { stats ->
-            item {
-                FlowRowCompat {
-                    listOf(
-                            "enqueued" to "排队",
-                            "processing" to "执行",
-                            "failed" to "失败",
-                            "succeeded" to "完成",
-                            "scheduled" to "延迟",
-                        )
-                        .forEach { (state, label) ->
-                            SuggestionChip(
-                                onClick = {
-                                    tab = state
-                                    offset = 0
-                                },
-                                label = { Text("$label ${stats.optLong(state)}") },
-                            )
-                        }
-                }
             }
         }
         if (error != null) item { ErrorPane(error) { refresh++ } }
@@ -128,7 +113,7 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Text(
-                            "下次（手机时间）：${displayTime(job.optString("nextExecution"))}",
+                            "下次执行：${displayTime(job.optString("nextExecution"))}",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Text(
@@ -144,18 +129,23 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
-                        FlowRowCompat {
-                            job.optString("lastJobId").takeIf { it.isNotBlank() && it != "null" }?.let { lastId ->
-                                TextButton(onClick = { detail = lastId }) { Text("上次执行 / 日志") }
+                        val lastId = job.optString("lastJobId").takeIf { it.isNotBlank() && it != "null" }
+                        Row(Modifier.fillMaxWidth()) {
+                            TextButton(onClick = { detail = lastId }, enabled = lastId != null,
+                                modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) {
+                                Text("日志", maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelMedium)
                             }
                             TextButton(
                                 onClick = {
                                     pending = "立即触发 $id？" to { action("/api/job/${q(id)}/trigger") }
-                                }
+                                }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp),
                             ) {
-                                Text("立即执行")
+                                Text("立即执行", maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelMedium)
                             }
-                            TextButton(onClick = { cron = job }) { Text("修改计划") }
+                            TextButton(onClick = { cron = job }, modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(0.dp)) {
+                                Text("修改计划", maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelMedium)
+                            }
                             TextButton(
                                 onClick = {
                                     pending =
@@ -163,9 +153,10 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
                                             {
                                                 action("/api/native-jobs/recurring/${q(id)}/delete")
                                             }
-                                }
+                                }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp),
                             ) {
-                                Text("删除", color = MaterialTheme.colorScheme.error)
+                                Text("删除", maxLines = 1, softWrap = false,
+                                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
                             }
                         }
                     }

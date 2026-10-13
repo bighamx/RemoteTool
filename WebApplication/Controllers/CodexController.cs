@@ -148,6 +148,7 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpGet("runs/{id}/events")] public Task Events(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"runs/{Id(id)}/events", null, ct);
     [HttpPost("runs/{id}/stop")] public Task Stop(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"runs/{Id(id)}/stop", JsonSerializer.SerializeToElement(new { }), ct);
     [HttpPost("runs/{id}/handover")] public Task Handover(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"runs/{Id(id)}/handover", JsonSerializer.SerializeToElement(new { }), ct);
+    [HttpPost("sessions/{id}/handover")] public Task HandoverSession(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/handover", JsonSerializer.SerializeToElement(new { action = "handover" }), ct);
     [HttpPost("runs/{id}/steer")] public Task Steer(string id, [FromBody] JsonElement body, CancellationToken ct) {
         var key = Request.Headers["Idempotency-Key"].ToString();
         if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; return Response.WriteAsJsonAsync(new { message = "插话需要唯一请求标识" }, ct); }

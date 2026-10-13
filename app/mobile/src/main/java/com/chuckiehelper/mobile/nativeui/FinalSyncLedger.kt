@@ -54,8 +54,17 @@ internal fun terminalSyncText(stream: String, phase: String, gap: Boolean, outpu
     return if (gap || stream.isBlank() || phase != "final_answer" || tail.length >= stream.length) tail else stream
 }
 
+// Older bridge versions exposed every commentary item plus the final answer as
+// one run.output. The native history already has those items separately.
+internal fun cumulativeRunOutputAlreadyInHistory(sync: FinalSyncState, history: List<HermesMessage>): Boolean {
+    if (sync.item != null || sync.turn == null || sync.text.isBlank()) return false
+    val items = history.filter { it.role == "assistant" && it.nativeTurnId == sync.turn }
+    return items.size > 1 && items.joinToString("\n\n") { it.text }.trim() == sync.text.trim()
+}
+
 internal fun finalSyncAcknowledged(sync: FinalSyncState, history: List<HermesMessage>): Boolean =
-    sync.canConfirm && terminalHistoryContainsAssistant(history, sync.item, sync.text, sync.turn, sync.startedAt)
+    cumulativeRunOutputAlreadyInHistory(sync, history) ||
+        sync.canConfirm && terminalHistoryContainsAssistant(history, sync.item, sync.text, sync.turn, sync.startedAt)
 
 internal fun retainFinalSync(states: List<FinalSyncState>, incoming: FinalSyncState): List<FinalSyncState> =
     states.filterNot { it.run == incoming.run } + incoming
@@ -67,6 +76,7 @@ internal fun reconcileFinalSync(states: List<FinalSyncState>, session: String,
 internal fun projectFinalSyncRows(rows: List<HermesMessage>, states: List<FinalSyncState>, session: String): List<HermesMessage> {
     val result = rows.filterNot { it.localKey?.startsWith("final-sync-") == true }.toMutableList()
     states.filter { it.session == session && it.text.isNotBlank() }.sortedBy { it.timestamp ?: Long.MAX_VALUE }.forEach { sync ->
+        if (cumulativeRunOutputAlreadyInHistory(sync, result)) return@forEach
         val native = exactFinalAssistant(result, sync.item, sync.turn, sync.text, sync.startedAt)
         if (native != null) {
             if (native.text.trim() == sync.text.trim()) return@forEach

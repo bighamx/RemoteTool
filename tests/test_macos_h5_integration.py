@@ -24,8 +24,8 @@ def out(obj):print(json.dumps(obj),flush=True)
 pending=None
 def finish(thread,turn,text):
     rows=read();item={'id':'assistant-'+turn,'type':'agentMessage','text':text};rows[thread]['turns'][-1]['items'].append(item);rows[thread]['turns'][-1]['status']='completed';rows[thread]['status']={'type':'idle'};write(rows)
-    out({'method':'item/agentMessage/delta','params':{'threadId':thread,'itemId':item['id'],'delta':text}})
-    out({'method':'item/completed','params':{'threadId':thread,'item':item}})
+    out({'method':'item/agentMessage/delta','params':{'threadId':thread,'turnId':turn,'itemId':item['id'],'delta':text}})
+    out({'method':'item/completed','params':{'threadId':thread,'turnId':turn,'item':item}})
     out({'method':'turn/completed','params':{'threadId':thread,'turn':{'id':turn,'status':'completed'}}})
 for line in sys.stdin:
     msg=json.loads(line);method=msg.get('method');p=msg.get('params',{});req=msg.get('id')
@@ -101,7 +101,7 @@ def main():
                 if status["status"] == "completed": break
                 time.sleep(.1)
             assert status["status"] == "completed", status
-            assert "中文" in status["output"]
+            assert "中文" in status["output"], status
             assert "message.delta" in request("/api/codex/runs/"+run+"/events")
             messages = request(f"/api/codex/sessions/{session}/messages")["data"]
             assert len([row for row in messages if row["role"] == "user"]) == 1

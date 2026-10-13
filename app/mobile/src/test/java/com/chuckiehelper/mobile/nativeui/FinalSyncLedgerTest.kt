@@ -5,6 +5,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FinalSyncLedgerTest {
+    @Test fun cumulativeRunOutputDoesNotRepeatNativeCommentary() {
+        val rows = listOf(
+            HermesMessage("assistant", "先检查改动", narrationMessageId("note-a"), nativeTurnId = "turn-a", narration = true),
+            HermesMessage("assistant", "测试通过", narrationMessageId("note-b"), nativeTurnId = "turn-a", narration = true),
+            HermesMessage("assistant", "已提交推送", narrationMessageId("final"), nativeTurnId = "turn-a"))
+        val cumulative = FinalSyncState("session", "run-a", null, "turn-a",
+            rows.joinToString("\n\n") { it.text }, 2_000L, 1_000L)
+        assertTrue(finalSyncAcknowledged(cumulative, rows))
+        assertEquals(rows, projectFinalSyncRows(rows, listOf(cumulative), "session"))
+        assertEquals(emptyList<FinalSyncState>(), reconcileFinalSync(listOf(cumulative), "session", rows))
+    }
+
     @Test fun emptyStreamCannotProveFinalHistoryIsComplete() {
         val commentary = HermesMessage("assistant", "正在检查", narrationMessageId("commentary"),
             nativeTurnId = "turn-a", timestamp = 1_100L)

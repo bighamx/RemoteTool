@@ -7,6 +7,9 @@ namespace RemoteTool.WebApi.Services.Codex;
 internal sealed class CodexAssistantMessageStream
 {
     private readonly Dictionary<string, (string Text, bool Completed)> seen = new();
+    public static string FinalAnswer(JsonNode turn) => turn.A("items").LastOrDefault(item =>
+        item.S("type") == "agentMessage" && item.S("phase") == "final_answer")?.S("text") ?? "";
+
     public IEnumerable<JsonObject> Update(JsonNode turn) {
         var items = turn.A("items");
         for (var i = 0; i < items.Count; i++) {
