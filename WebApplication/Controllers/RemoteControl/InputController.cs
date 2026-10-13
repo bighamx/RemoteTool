@@ -209,7 +209,9 @@ public class InputController : ControllerBase
                     available = status.GetProperty("screenRecording").GetBoolean(),
                     desktop = locked ? "Locked" : "Default", locked,
                     width = status.GetProperty("width").GetInt32(),
-                    height = status.GetProperty("height").GetInt32()
+                    height = status.GetProperty("height").GetInt32(),
+                    displayId = status.TryGetProperty("displayId", out var displayId) ? displayId.GetUInt32() : 0,
+                    displays = status.TryGetProperty("displays", out var displays) ? displays.Clone() : JsonSerializer.SerializeToElement(Array.Empty<object>())
                 });
             }
             catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException)
@@ -300,5 +302,3 @@ public class InputController : ControllerBase
         return (desktop, !string.Equals(desktop, "Default", StringComparison.OrdinalIgnoreCase));
     }
 }
-
-

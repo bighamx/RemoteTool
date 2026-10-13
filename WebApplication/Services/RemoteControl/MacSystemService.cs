@@ -60,6 +60,7 @@ public sealed class MacSystemService(MacDesktopBridge desktop) : ISystemControlS
     }
     public byte[] CaptureScreen() => Convert.FromBase64String(desktop.Call(new { type = "capture" }).GetProperty("jpeg").GetString()!);
     public async Task<byte[]> CaptureScreenAsync() => Convert.FromBase64String((await desktop.CallAsync(new { type = "capture" })).GetProperty("jpeg").GetString()!);
+    public async Task<byte[]> CaptureScreenAsync(uint displayId) => Convert.FromBase64String((await desktop.CallAsync(new { type = "capture", displayId })).GetProperty("jpeg").GetString()!);
     public Task<JsonElement> NativeAsync(JsonElement request) => desktop.CallAsync(request);
     private void Mouse(string type, double x, double y, int button = 0, int delta = 0) => desktop.Call(new { type, x, y, button, delta });
     public void SendMouseClick(double x,double y) => Mouse("click",x,y);

@@ -2,6 +2,7 @@
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="sqlite-net-pcl" Version="1.8.116" />
     <Compile Include="../../WebApplication/Services/RemoteToolPaths.cs" Link="RemoteToolPaths.cs" />
     <Using Include="Microsoft.Extensions.Configuration" />
     <Compile Include="../../WebApplication/Services/HermesBridge.cs" Link="HermesBridge.cs" />
@@ -29,6 +30,8 @@
     <Compile Include="../../WebApplication/Services/RemoteControl/FilePathPolicy.cs" Link="FilePathPolicy.cs" />
     <Compile Include="../../WebApplication/Services/RemoteControl/WebSocketTextReader.cs" Link="WebSocketTextReader.cs" />
       <Compile Include="../../WebApplication/Services/CompletedToolHistory.cs" Link="CompletedToolHistory.cs" />
+    <Compile Include="../../WebApplication/Services/AgentHistoryWindow.cs" Link="AgentHistoryWindow.cs" />
+    <Compile Include="../../WebApplication/Services/LatestSessionPreview.cs" Link="LatestSessionPreview.cs" />
     <Compile Include="../../WebApplication/Services/ToolHistoryCache.cs" Link="ToolHistoryCache.cs" />
 </ItemGroup>
 </Project>
