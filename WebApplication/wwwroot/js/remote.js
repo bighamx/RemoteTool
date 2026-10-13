@@ -716,10 +716,12 @@ class RemoteControl {
         // Terminal
         document.getElementById('terminal-toggle-btn').addEventListener('click', () => this.toggleTerminal());
         document.getElementById('clear-btn').addEventListener('click', () => this.clearTerminal());
+        document.getElementById('terminal-command-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.sendCommand();
+        });
         document.getElementById('terminal-input').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                this.sendCommand();
-            } else if (e.key === 'ArrowUp') {
+            if (e.key === 'ArrowUp') {
                 e.preventDefault();
                 this.navigateHistory('up');
             } else if (e.key === 'ArrowDown') {
@@ -2545,7 +2547,7 @@ class RemoteControl {
             toggleBtn.classList.remove('btn-primary');
             toggleBtn.classList.add('btn-danger');
             terminalSelect.disabled = true;  // 连接时禁用切换
-            output.innerHTML = '';
+            output.textContent = '已连接。输入命令后按回车或点“发送”。\n';
         };
 
         this.websocket.onmessage = (event) => {

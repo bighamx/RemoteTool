@@ -198,7 +198,7 @@ builder.Services.AddSingleton<HermesCompaction>();
                 app.UseExceptionHandler("/Home/Error");
             }
             app.UseStaticFiles();
-            app.MapGet("/mobile", () => Results.Redirect("/mobile/index.html"));
+            app.MapGet("/mobile", () => Results.Redirect("/"));
 
             app.UseRouting();
 

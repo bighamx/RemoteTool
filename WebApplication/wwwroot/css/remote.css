@@ -833,12 +833,24 @@
 
 .terminal-input {
     flex: 1;
+    min-width: 0;
     background: none;
     border: none;
     color: var(--terminal-text);
     font-family: inherit;
     font-size: 13px;
     outline: none;
+}
+
+.terminal-send-btn {
+    flex: none;
+    padding: 7px 12px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--accent-primary);
+    color: #10231f;
+    font: inherit;
+    cursor: pointer;
 }
 
 .terminal-status {
