@@ -63,6 +63,23 @@
     const userInfo = document.getElementById('user-info');
     if (userInfo && username) userInfo.textContent = username;
 
+    const installButton = document.getElementById('install-app-btn');
+    let installPrompt;
+    window.addEventListener('beforeinstallprompt', event => {
+        event.preventDefault();
+        installPrompt = event;
+        if (installButton) installButton.hidden = false;
+    });
+    installButton?.addEventListener('click', async () => {
+        if (!installPrompt) return;
+        await installPrompt.prompt();
+        installPrompt = null;
+        installButton.hidden = true;
+    });
+    window.addEventListener('appinstalled', () => { if (installButton) installButton.hidden = true; });
+    if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname)))
+        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) {
         logoutBtn.addEventListener('click', () => {
