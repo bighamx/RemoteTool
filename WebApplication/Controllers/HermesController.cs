@@ -192,6 +192,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             state["started_at"]?.GetValue<long>() ?? 0, id, state["revision"]?.ToString() ?? "");
         json = AgentHistoryWindow.Select(json, limit, from_id, older_before);
         json = AgentInteractiveMessages.Present(json);
+        json = AgentRuntimeNotes.Present(json);
         return Ok(attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}"));
     }
     [HttpPost("sessions/{id}/messages/{messageId}/attachments")] public IActionResult BindAttachments(string id, string messageId, [FromBody] JsonElement body)
