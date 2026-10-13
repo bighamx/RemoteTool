@@ -516,7 +516,9 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 }
                 items(messageItems, key = { it.key }) { item ->
                     val message = item.message
-                    if (message.role == "system") {
+                    if (message.role == "system" && message.nativeTurnId == "interaction") {
+                        InteractionCard(message, agentName)
+                    } else if (message.role == "system") {
                         Row(Modifier.fillMaxWidth().then(if (message.nativeTurnId == "toolSummary") Modifier.clickable { toolDetails = message.serverId.toString() } else Modifier)
                             .padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically) {
@@ -1097,6 +1099,69 @@ private fun RunTimers(runId: String?, timing: AgentRunTiming, responseLabel: Str
         }
     }
 }
+
+@Composable
+private fun InteractionCard(message: HermesMessage, agentName: String) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp)) {
+                Text("提问", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(8.dp))
+                message.interactions.forEachIndexed { index, entry ->
+                    if (index > 0) {
+                        HorizontalDivider(Modifier.padding(vertical = 10.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant)
+                    }
+                    val question = entry.optString("question")
+                    val answer = entry.optString("answer")
+                    val status = entry.optString("status")
+                    val choices = entry.optJSONArray("choices")?.let { array ->
+                        (0 until array.length()).map { array.optString(it) }
+                    }.orEmpty()
+                    if (question.isNotBlank())
+                        Text(question, style = MaterialTheme.typography.bodyMedium)
+                    if (choices.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            choices.forEach { choice ->
+                                val picked = choice == answer
+                                Surface(shape = MaterialTheme.shapes.small,
+                                    color = if (picked) MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceContainerHighest) {
+                                    Text(choice, Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (picked) MaterialTheme.colorScheme.onPrimaryContainer
+                                            else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row {
+                        Text("回答", style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            answer.ifBlank { when (status) { "answered" -> "已回答"; "declined" -> "已取消"; else -> "未回答" } },
+                            style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun FlowRow(
+    horizontalArrangement: Arrangement.Horizontal = Arrangement.Start,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+    content: @Composable () -> Unit,
+) = androidx.compose.foundation.layout.FlowRow(horizontalArrangement = horizontalArrangement,
+    verticalArrangement = verticalArrangement, content = { content() })
 
 @Composable
 private fun MessageBubble(

@@ -5,6 +5,13 @@ import org.json.JSONObject
 internal fun agentHistoryMessage(agent: String, row: JSONObject): HermesMessage? {
     val role = row.optString("role")
     val content = row.optString("content").takeUnless { it == "null" }.orEmpty()
+    if (role == "system" && row.optString("type") == "interaction") {
+        val entries = row.optJSONArray("interactions")?.objects().orEmpty()
+        if (entries.isEmpty()) return null
+        return HermesMessage("system", content, row.optLong("id"),
+            timestamp = parseMessageTimestamp(row.opt("timestamp")), editable = false,
+            nativeTurnId = "interaction", interactions = entries)
+    }
     if (role == "system" && row.optString("type") in setOf("contextCompaction", "toolSummary")) {
         return HermesMessage("system", content.ifBlank { "上下文压缩" }, row.optLong("id"),
             timestamp = parseMessageTimestamp(row.opt("timestamp")), editable = false,

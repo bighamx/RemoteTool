@@ -27,6 +27,8 @@ data class HermesMessage(
     val nativeTurnId: String? = null,
     val editable: Boolean = true,
     val requestKey: String? = null,
+    /** clarify / request_user_input cards: [{question, answer, status, choices[]}] for role=system type=interaction. */
+    val interactions: List<JSONObject> = emptyList(),
 )
 
 data class HermesEvent(val type: String, val text: String, val detail: String = "", val itemId: String? = null)
