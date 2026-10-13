@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Win32;
 
 namespace RemoteTool.WebApi.Services.RemoteControl;
@@ -14,12 +15,17 @@ public enum TerminalType
     Cmd
 }
 
-public class TerminalService
+public class TerminalService(IConfiguration configuration)
 {
     private readonly Dictionary<string, TerminalSession> _sessions = new();
 
     public async Task HandleWebSocketAsync(WebSocket webSocket, TerminalType terminalType = TerminalType.Shell)
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            await MacPtySession.RunAsync(webSocket, configuration);
+            return;
+        }
         var sessionId = Guid.NewGuid().ToString();
         var session = new TerminalSession(webSocket, terminalType);
         _sessions[sessionId] = session;
@@ -37,6 +43,91 @@ public class TerminalService
         {
             session.Dispose();
             _sessions.Remove(sessionId);
+        }
+    }
+}
+
+// The macOS helper owns a real pseudo-terminal. Its stdout is the terminal byte stream;
+// stdin uses length-framed input/resize messages so control data never reaches the shell.
+internal static class MacPtySession
+{
+    public static async Task RunAsync(WebSocket socket, IConfiguration configuration)
+    {
+        var desktopAgent = configuration["RemoteControl:MacAgentExecutable"];
+        var helper = configuration["RemoteControl:MacPtyExecutable"];
+        if (string.IsNullOrWhiteSpace(helper) && !string.IsNullOrWhiteSpace(desktopAgent))
+            helper = Path.Combine(Path.GetDirectoryName(desktopAgent)!, "RemoteToolPtyAgent");
+        if (string.IsNullOrWhiteSpace(helper) || !File.Exists(helper))
+        {
+            await socket.SendAsync(Encoding.UTF8.GetBytes("\r\n[Mac PTY helper 未安装，请重新构建桌面代理]\r\n"), WebSocketMessageType.Text, true, CancellationToken.None);
+            await socket.CloseAsync(WebSocketCloseStatus.InternalServerError, "PTY unavailable", CancellationToken.None);
+            return;
+        }
+
+        using var process = Process.Start(new ProcessStartInfo(helper) {
+            UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true,
+            RedirectStandardError = false, CreateNoWindow = true,
+            WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+        }) ?? throw new InvalidOperationException("无法启动 Mac PTY helper");
+        try
+        {
+            var output = PumpOutputAsync(process, socket);
+            var input = PumpInputAsync(process, socket);
+            await Task.WhenAny(output, input, process.WaitForExitAsync());
+        }
+        finally
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { }
+            if (socket.State == WebSocketState.Open)
+                try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); }
+                catch (WebSocketException) { }
+        }
+    }
+
+    private static async Task PumpOutputAsync(Process process, WebSocket socket)
+    {
+        var chars = new char[4096];
+        while (socket.State == WebSocketState.Open)
+        {
+            var count = await process.StandardOutput.ReadAsync(chars);
+            if (count == 0) break;
+            await socket.SendAsync(Encoding.UTF8.GetBytes(chars.AsSpan(0, count).ToString()), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+    }
+
+    private static async Task PumpInputAsync(Process process, WebSocket socket)
+    {
+        var buffer = new byte[65536];
+        while (socket.State == WebSocketState.Open)
+        {
+            var message = await WebSocketTextReader.Read(socket, buffer, CancellationToken.None);
+            if (message is null) break;
+            byte opcode = 1;
+            byte[] payload;
+            if (message.StartsWith('{'))
+            {
+                using var parsed = JsonDocument.Parse(message);
+                var root = parsed.RootElement;
+                var type = root.GetProperty("type").GetString();
+                if (type == "resize")
+                {
+                    var cols = Math.Clamp(root.GetProperty("cols").GetInt32(), 20, 500);
+                    var rows = Math.Clamp(root.GetProperty("rows").GetInt32(), 5, 200);
+                    payload = [(byte)cols, (byte)(cols >> 8), (byte)rows, (byte)(rows >> 8)];
+                    opcode = 2;
+                }
+                else if (type == "input") payload = Encoding.UTF8.GetBytes(root.GetProperty("data").GetString() ?? "");
+                else continue;
+            }
+            else payload = Encoding.UTF8.GetBytes(message + "\r");
+            if (payload.Length > 65536) continue;
+            var header = new byte[5];
+            header[0] = opcode;
+            BitConverter.TryWriteBytes(header.AsSpan(1), payload.Length);
+            await process.StandardInput.BaseStream.WriteAsync(header);
+            await process.StandardInput.BaseStream.WriteAsync(payload);
+            await process.StandardInput.BaseStream.FlushAsync();
         }
     }
 }

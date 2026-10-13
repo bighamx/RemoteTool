@@ -6,14 +6,14 @@
 
 | 功能 | 状态 |
 | --- | --- |
-| 工作台登录、概览、系统操作、命令终端 | 已实现；终端为按行协议，无 PTY；手机可点“发送”提交命令 |
+| 工作台登录、概览、系统操作、命令终端 | 已实现；Mac 终端使用 PTY，支持交互式程序、终端尺寸同步与手机快捷键 |
 | Codex 会话列表与对话 | 复用上游新版工作台；Mac 服务端已适配 Codex CLI |
 | 工作台主屏幕图标、独立窗口启动 | 根路径已配置 Web App Manifest、图标和 Service Worker；需要 HTTPS 或 localhost |
 | 文件、Docker、Compose、定时任务 | 复用原有工作台页面 |
 | macOS Codex CLI 桥接、用户数据目录、zsh | 已适配，需实机验证已安装 Codex 的协议版本 |
-| Mac 桌面代理、JPEG 主屏幕、触摸、拖拽、滚轮、按键、Unicode 文字、剪贴板 API | 已写入 Swift 源码，需 Mac 编译和授权验证 |
+| Mac 桌面代理、JPEG 多显示器切换、触摸、拖拽、滚轮、按键、Unicode 文字、剪贴板 API | 已写入 Swift 源码，需 Mac 编译和授权验证 |
 | 上游新版 Web 远程桌面 | Mac 使用已有 MJPEG 接口；锁屏时提示在电脑上解锁，Windows 继续使用 H.264 |
-| Mac H.264、音频、多屏切换、锁屏／登录界面 | 本版未实现或未保证 |
+| Mac H.264、音频、锁屏／登录界面 | 本版未实现或未保证 |
 | Mac 温度、风扇、每核 CPU 曲线 | 本版未实现；不伪造传感器数据 |
 | Hermes 聊天 | 使用上游工作台现有页面和 API |
 | Mac 与 Codex 桌面 App 同时写入同一会话 | 未实现桌面 IPC 协作；会话占用时先退出原写入客户端 |
@@ -83,7 +83,7 @@ dotnet run --project WebApplication --urls http://0.0.0.0:5104
 
 Mac 数据默认保存在 `~/Library/Application Support/RemoteTool`。`REMOTETOOL_DATA_DIR` 可以覆盖服务数据目录；不要指向已有 Codex 配置目录。服务应由已经登录桌面的普通用户启动，以复用该用户的 Codex 登录和桌面权限。Mac 的关机／重启不自动提权；权限不足会返回实际错误。
 
-2026-10-13 已在 Mac 实测：代理的屏幕录制和辅助功能权限均可用，能抓到 JPEG；真实 HTTP 服务的 Mac 锁屏状态和 MJPEG 路由通过独立临时配置的集成测试。新版工作台已在 Chrome 手机尺寸模拟器和公网 Chrome 中验证终端连接及命令回显。未测试锁屏状态下的桌面输入。
+已在双显示器 Mac 上实测：代理可列出两块屏幕并采集副屏 JPEG；390px Chrome 模拟视口可切换副屏，画面成功加载。PTY 可执行命令、同步终端尺寸，Ctrl+C 可中断长命令后继续使用 Shell。锁屏状态下的桌面输入仍需单独验证。
 
 ## 5. 实机验证顺序
 
@@ -109,6 +109,6 @@ python3 tests/test_macos_h5_integration.py
 
 集成测试使用临时目录和模拟 Codex，不调用真实模型，也不修改真实 Codex 账户。它验证 HTTP 登录／退出、页面入口、非 Windows 桥接启动、JSON-RPC 初始化、会话／任务去重、SSE 和审批。
 
-Linux 上的编译和模拟测试不能证明 Mac 系统 API、Swift 编译、真实 Agent 版本或浏览器权限已经通过。本版暂未接入 PTY、WebRTC 和原生 H.264 编码。
+Linux 上的编译和模拟测试不能证明 Mac 系统 API、Swift 编译、真实 Agent 版本或浏览器权限已经通过。本版暂未接入 WebRTC 和原生 H.264 编码。
 
-终端已在 Chrome 390px 手机模拟视口中验证连接、点击“发送”和回车提交，公网 Chrome 验证了终端命令回显。iPhone Safari 和实际 Mac 锁屏状态需要单独验证。
+终端已在 Chrome 390px 手机模拟视口中验证连接、发送、回车与 Ctrl+C。iPhone Safari 和实际 Mac 锁屏状态需要单独验证。

@@ -715,11 +715,19 @@ class RemoteControl {
 
         // Terminal
         document.getElementById('terminal-toggle-btn').addEventListener('click', () => this.toggleTerminal());
+        document.getElementById('display-select').addEventListener('change', (e) => {
+            this.selectedDisplayId = Number(e.target.value);
+            if (this.platform === 'macOS' && this.streamActive) this.startLegacyStream();
+        });
         document.getElementById('clear-btn').addEventListener('click', () => this.clearTerminal());
         document.getElementById('terminal-command-form').addEventListener('submit', (e) => {
             e.preventDefault();
             this.sendCommand();
         });
+        document.querySelectorAll('[data-pty-key]').forEach(button => button.addEventListener('click', () => {
+            const data = { interrupt: '\x03', tab: '\t', escape: '\x1b' }[button.dataset.ptyKey];
+            if (data) this.sendTerminalData(data);
+        }));
         document.getElementById('terminal-input').addEventListener('keydown', (e) => {
             if (e.key === 'ArrowUp') {
                 e.preventDefault();
@@ -1450,6 +1458,21 @@ class RemoteControl {
         if (state && state.width > 0 && state.height > 0) {
             try { this.applyScreenLabels(state.width, state.height); } catch (e) { /* 标注失败不影响拉流 */ }
         }
+        if (this.platform === 'macOS' && Array.isArray(state?.displays)) {
+            const select = document.getElementById('display-select');
+            const previous = this.selectedDisplayId;
+            select.replaceChildren(...state.displays.map(display => {
+                const option = document.createElement('option');
+                option.value = display.id;
+                option.textContent = `${display.name} · ${display.width}×${display.height}`;
+                return option;
+            }));
+            this.selectedDisplayId = state.displays.some(display => display.id === previous)
+                ? previous : state.displayId;
+            select.value = String(this.selectedDisplayId);
+            select.style.display = state.displays.length > 1 ? '' : 'none';
+            document.getElementById('display-select-label').style.display = select.style.display;
+        }
 
         if (!state || state.locked !== true) return true;
         if (this.platform === 'macOS') {
@@ -1659,7 +1682,7 @@ class RemoteControl {
         const video = document.getElementById('stream-video');
         const placeholder = document.getElementById('stream-placeholder');
 
-        img.src = `/api/stream/legacy?t=${Date.now()}`;
+        img.src = `/api/stream/legacy?t=${Date.now()}${this.selectedDisplayId ? `&displayId=${encodeURIComponent(this.selectedDisplayId)}` : ''}`;
         video.style.display = 'none';
         img.style.display = 'block';
         placeholder.style.display = 'none';
@@ -1794,7 +1817,7 @@ class RemoteControl {
     sendInput(type, payload = {}) {
         if (this.inputSocket && this.inputSocket.readyState === WebSocket.OPEN) {
             try {
-                this.inputSocket.send(JSON.stringify({ type, ...payload }));
+                this.inputSocket.send(JSON.stringify({ type, ...payload, ...(this.platform === 'macOS' && this.selectedDisplayId ? { displayId: this.selectedDisplayId } : {}) }));
             } catch (e) {
                 console.warn('Input WS send failed:', e);
             }
@@ -2305,7 +2328,8 @@ class RemoteControl {
         this.moveInFlight = true;
 
         try {
-            this.inputSocket.send(JSON.stringify({ type: 'mouse-move', x: move.x, y: move.y, ack: true }));
+            this.inputSocket.send(JSON.stringify({ type: 'mouse-move', x: move.x, y: move.y, ack: true,
+                ...(this.platform === 'macOS' && this.selectedDisplayId ? { displayId: this.selectedDisplayId } : {}) }));
         } catch (err) {
             this.moveInFlight = false;
             return;
@@ -2547,12 +2571,29 @@ class RemoteControl {
             toggleBtn.classList.remove('btn-primary');
             toggleBtn.classList.add('btn-danger');
             terminalSelect.disabled = true;  // 连接时禁用切换
-            output.textContent = '已连接。输入命令后按回车或点“发送”。\n';
+            if (this.platform === 'macOS' && window.Terminal && window.FitAddon) {
+                output.replaceChildren();
+                output.classList.add('pty-output');
+                this.ptyTerminal = new Terminal({ cursorBlink: true, convertEol: false, scrollback: 3000,
+                    fontSize: 13, theme: { background: '#101010', foreground: '#e8e8e8' } });
+                this.ptyFit = new FitAddon.FitAddon();
+                this.ptyTerminal.loadAddon(this.ptyFit);
+                this.ptyTerminal.open(output);
+                this.ptyTerminal.onData(data => this.sendTerminalData(data));
+                this.ptyTerminal.onResize(({ cols, rows }) => {
+                    if (this.websocket?.readyState === WebSocket.OPEN)
+                        this.websocket.send(JSON.stringify({ type: 'resize', cols, rows }));
+                });
+                this.ptyResize = new ResizeObserver(() => { if (output.clientWidth && output.clientHeight) this.ptyFit.fit(); });
+                this.ptyResize.observe(output);
+                this.ptyFit.fit();
+                document.getElementById('pty-keys').hidden = false;
+            } else output.textContent = '已连接。输入命令后按回车或点“发送”。\n';
         };
 
         this.websocket.onmessage = (event) => {
-            output.innerHTML += this.escapeHtml(event.data);
-            output.scrollTop = output.scrollHeight;
+            if (this.ptyTerminal) this.ptyTerminal.write(event.data);
+            else { output.innerHTML += this.escapeHtml(event.data); output.scrollTop = output.scrollHeight; }
         };
 
         this.websocket.onclose = () => {
@@ -2562,12 +2603,20 @@ class RemoteControl {
             toggleBtn.classList.remove('btn-danger');
             toggleBtn.classList.add('btn-primary');
             terminalSelect.disabled = false;  // 断开时启用切换
+            this.ptyResize?.disconnect();
+            this.ptyResize = null;
+            this.ptyTerminal?.dispose();
+            this.ptyTerminal = null;
+            this.ptyFit = null;
+            output.classList.remove('pty-output');
+            document.getElementById('pty-keys').hidden = true;
             this.websocket = null;
         };
 
         this.websocket.onerror = (error) => {
             console.error('WebSocket error:', error);
-            output.innerHTML += '\n[连接错误]\n';
+            if (this.ptyTerminal) this.ptyTerminal.write('\r\n[连接错误]\r\n');
+            else output.innerHTML += '\n[连接错误]\n';
         };
     }
 
@@ -2578,13 +2627,19 @@ class RemoteControl {
         }
     }
 
+    sendTerminalData(data) {
+        if (this.websocket?.readyState === WebSocket.OPEN && this.platform === 'macOS')
+            this.websocket.send(JSON.stringify({ type: 'input', data }));
+    }
+
     sendCommand() {
         const input = document.getElementById('terminal-input');
         const command = input.value;
 
         if (this.websocket && this.websocket.readyState === WebSocket.OPEN && command) {
             // 后端会实时返回完整输出（包括命令回显），无需前端手动回显
-            this.websocket.send(command);
+            if (this.platform === 'macOS') this.sendTerminalData(command + '\r');
+            else this.websocket.send(command);
 
             // 更新命令历史
             this.commandHistory.push(command);

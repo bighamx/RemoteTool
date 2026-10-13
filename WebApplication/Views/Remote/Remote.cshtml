@@ -4,10 +4,13 @@
 }
 @section Styles {
     <link rel="stylesheet" href="~/css/remote.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/vendor/xterm/xterm.css" />
     <link rel="stylesheet" href="~/css/performance.css" asp-append-version="true" />
 }
 @section Scripts {
     <script src="~/js/remote-nav.js" asp-append-version="true"></script>
+    <script src="~/vendor/xterm/xterm.js"></script>
+    <script src="~/vendor/xterm/addon-fit.js"></script>
     <script src="~/js/mp4box.all.min.js"></script>
     <script src="~/js/performance.js" asp-append-version="true"></script>
     <script src="~/js/media-preview.js" asp-append-version="true"></script>
@@ -149,6 +152,8 @@
             <div class="screenshot-controls">
                 <button id="stream-toggle-btn" class="btn btn-primary btn-sm">▶ 开始</button>
                 <button id="fullscreen-btn" class="btn btn-secondary btn-sm" title="全屏 (F11/Esc退出)">⛶</button>
+                <label for="display-select" id="display-select-label" style="display:none">显示器</label>
+                <select id="display-select" class="quality-select" style="display:none" aria-label="选择显示器"></select>
                 
                 <div class="shortcut-keys" style="display: inline-flex; gap: 4px; margin-left: 8px; margin-right: 8px;">
                     <button class="btn btn-secondary btn-sm remote-shortcut-btn" data-shortcut="win" title="发送 Win 键">Win</button>
@@ -220,6 +225,11 @@
                     <input type="text" id="terminal-input" class="terminal-input" placeholder="输入命令..." enterkeyhint="send" autocomplete="off" autocapitalize="off" spellcheck="false">
                     <button type="submit" class="terminal-send-btn">发送</button>
                 </form>
+                <div id="pty-keys" class="pty-keys" hidden>
+                    <button type="button" data-pty-key="interrupt">Ctrl+C</button>
+                    <button type="button" data-pty-key="tab">Tab</button>
+                    <button type="button" data-pty-key="escape">Esc</button>
+                </div>
             </div>
             <div class="terminal-status">
                 <select id="terminal-type" class="terminal-select" style="display: none;">
@@ -710,4 +720,3 @@
         </div>
     </div>
 </div>
-

@@ -17,13 +17,15 @@ final class Capture: NSObject, SCStreamOutput {
     private var latest: Data?
     private let context = CIContext()
     private var stream: SCStream?
+    private var currentDisplayID: CGDirectDisplayID?
 
-    func start() async throws {
+    func start(displayID: CGDirectDisplayID) async throws {
+        if stream != nil && currentDisplayID != displayID { await stop() }
         guard stream == nil else { return }
         guard !screenLocked() else { throw AgentError.message("Mac 当前已锁屏，请先解锁后再连接桌面") }
         guard CGPreflightScreenCaptureAccess() else { throw AgentError.message("请在系统设置中授予 RemoteTool Mac Agent 屏幕录制权限") }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else { throw AgentError.message("找不到当前主屏幕，请确认 Mac 已解锁且屏幕录制权限已开启") }
+        guard let display = content.displays.first(where: { $0.displayID == displayID }) else { throw AgentError.message("找不到所选显示器，请确认 Mac 已解锁且屏幕录制权限已开启") }
         let config = SCStreamConfiguration()
         config.width = min(1280, display.width)
         config.height = max(2, config.width * display.height / display.width)
@@ -34,6 +36,7 @@ final class Capture: NSObject, SCStreamOutput {
         try candidate.addStreamOutput(self, type: .screen, sampleHandlerQueue: DispatchQueue(label: "remote.capture"))
         try await candidate.startCapture()
         stream = candidate
+        currentDisplayID = displayID
     }
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, sampleBuffer.isValid, let buffer = sampleBuffer.imageBuffer else { return }
@@ -45,14 +48,15 @@ final class Capture: NSObject, SCStreamOutput {
     private func clear() { lock.lock(); latest=nil; lock.unlock() }
     func stop() async {
         if let current = stream { try? await current.stopCapture(); stream=nil }
+        currentDisplayID = nil
         clear()
     }
-    func jpeg() async throws -> Data {
+    func jpeg(displayID: CGDirectDisplayID) async throws -> Data {
         if screenLocked() {
             await stop()
             throw AgentError.message("Mac 当前已锁屏，请先解锁后再连接桌面")
         }
-        try await start()
+        try await start(displayID: displayID)
         for _ in 0..<30 {
             if let data = frame() { return data }
             try await Task.sleep(nanoseconds: 100_000_000)
@@ -88,6 +92,14 @@ enum AgentError: Error { case message(String) }
     ]
     private func number(_ request: [String:Any], _ name: String) -> Double { (request[name] as? NSNumber)?.doubleValue ?? 0 }
     private func post(_ event: CGEvent?) { event?.flags = flags; event?.post(tap: .cghidEventTap) }
+    private func displayID(_ request: [String:Any]) throws -> CGDirectDisplayID {
+        let id = (request["displayId"] as? NSNumber)?.uint32Value ?? CGMainDisplayID()
+        var displays = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(16, &displays, &count) == .success,
+              displays.prefix(Int(count)).contains(id) else { throw AgentError.message("所选显示器已断开") }
+        return id
+    }
     private func key(_ code: CGKeyCode, _ down: Bool) {
         if down { heldKeys.insert(code) } else { heldKeys.remove(code) }
         post(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down))
@@ -96,11 +108,18 @@ enum AgentError: Error { case message(String) }
         let type = r["type"] as? String ?? ""
         if type == "status" {
             let display = CGMainDisplayID()
+            var active = [CGDirectDisplayID](repeating: 0, count: 16)
+            var count: UInt32 = 0
+            _ = CGGetActiveDisplayList(16, &active, &count)
+            let displays: [[String:Any]] = active.prefix(Int(count)).enumerated().map { index, id in
+                ["id":id, "name":id == display ? "主屏幕" : "显示器 \(index + 1)",
+                 "width":CGDisplayPixelsWide(id), "height":CGDisplayPixelsHigh(id), "main":id == display]
+            }
             return ["screenRecording":CGPreflightScreenCaptureAccess(), "accessibility":AXIsProcessTrusted(),
                     "displayId":display, "sessionLocked":screenLocked(),
-                    "width":CGDisplayPixelsWide(display), "height":CGDisplayPixelsHigh(display)]
+                    "width":CGDisplayPixelsWide(display), "height":CGDisplayPixelsHigh(display), "displays":displays]
         }
-        if type == "capture" { return ["jpeg":try await capture.jpeg().base64EncodedString()] }
+        if type == "capture" { return ["jpeg":try await capture.jpeg(displayID: displayID(r)).base64EncodedString()] }
         if type == "stop-capture" { await capture.stop(); return ["ok":true] }
         if type == "clipboard-get" { return ["text":NSPasteboard.general.string(forType:.string) ?? ""] }
         if type == "clipboard-set" {
@@ -145,7 +164,7 @@ enum AgentError: Error { case message(String) }
             return ["ok":true]
         }
         let relative = ["mouse-relative","pointer-click","pointer-wheel"].contains(type)
-        let bounds = CGDisplayBounds(CGMainDisplayID())
+        let bounds = CGDisplayBounds(try displayID(r))
         let x = number(r,"x"), y = number(r,"y")
         if !relative && (!x.isFinite || !y.isFinite || x < 0 || x > 1 || y < 0 || y > 1) { throw AgentError.message("无效鼠标坐标") }
         var point = relative ? (CGEvent(source:nil)?.location ?? .zero) : CGPoint(x:bounds.minX+x*bounds.width,y:bounds.minY+y*bounds.height)

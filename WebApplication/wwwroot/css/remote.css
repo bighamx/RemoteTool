@@ -817,6 +817,19 @@
     color: var(--terminal-text);
 }
 
+.terminal-output.pty-output {
+    padding: 8px;
+    overflow: hidden;
+    white-space: normal;
+    word-break: normal;
+}
+
+.terminal-output.pty-output .xterm { height: 100%; }
+
+.pty-keys { display: flex; gap: 8px; padding: 0 12px 10px; background: var(--terminal-input-bg); }
+.pty-keys[hidden] { display: none; }
+.pty-keys button { padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px; color: var(--terminal-text); background: transparent; }
+
 .terminal-input-container {
     display: flex;
     align-items: center;

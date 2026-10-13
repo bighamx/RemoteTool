@@ -23,7 +23,7 @@ public class StreamController : ControllerBase
     }
 
     [HttpGet("legacy")]
-    public async Task LegacyGetStream(CancellationToken cancellationToken)
+    public async Task LegacyGetStream([FromQuery] uint? displayId, CancellationToken cancellationToken)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
@@ -44,7 +44,8 @@ public class StreamController : ControllerBase
             try
             {
                 // 使用异步版本以支持 Session 0
-                var imageBytes = await _systemService.CaptureScreenAsync();
+                var imageBytes = displayId is > 0 && _systemService is MacSystemService mac
+                    ? await mac.CaptureScreenAsync(displayId.Value) : await _systemService.CaptureScreenAsync();
 
                 if (imageBytes.Length > 0)
                 {
