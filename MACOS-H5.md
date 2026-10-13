@@ -74,7 +74,7 @@ dotnet run --project WebApplication --urls http://0.0.0.0:5104
 | `Codex:Home` | `/Users/你的用户名/.codex` |
 | `Codex:WorkingDirectory` | `/Users/你的用户名/Documents/Codex/Mobile` |
 | `RemoteControl:MacAgentExecutable` | 代理 `.app/Contents/MacOS/RemoteToolMacAgent` 的绝对路径 |
-| `CloudflareAccess:Team` / `Audience` / `Email` | 可选；配置后仅在 Access 签名 JWT 的应用和邮箱均匹配时自动登录 |
+| `CloudflareAccess:Team` / `Audience` / `Email` | 可选的旧式单邮箱配置；现在可在工作台“设置 → 身份验证”维护多个允许邮箱，同时配置任意标准 OIDC 提供方。OIDC 回调固定为外部站点的 `/access/callback`。 |
 | `Hermes:HomeDirectory` | Hermes 实际的数据目录 |
 | `Hermes:SourceDirectory` | Hermes 源码安装目录 |
 | `Hermes:PythonExecutable` | Hermes 虚拟环境中 `bin/python` 的绝对路径 |

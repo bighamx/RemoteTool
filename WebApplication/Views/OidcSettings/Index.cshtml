@@ -1,0 +1,53 @@
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "身份验证";
+}
+<div id="identity-settings-app" class="workspace-page identity-settings" v-cloak>
+    <div class="workspace-heading"><div><p class="eyebrow">REMOTE TOOL / IDENTITY</p><h1>身份验证</h1><p>分别管理 OIDC 提供方和 Cloudflare Access；现有密码登录保持可用。</p></div></div>
+    <p v-if="error" class="workspace-alert">{{error}}</p>
+    <p v-if="notice" class="workspace-alert">{{notice}}</p>
+    <div class="identity-tabs" role="tablist" aria-label="身份验证配置">
+        <button id="identity-tab-oidc" ref="oidcTab" type="button" role="tab" class="identity-tab" :class="{active:activeTab==='oidc'}" :aria-selected="activeTab==='oidc'" :tabindex="activeTab==='oidc'?0:-1" :disabled="saving" aria-controls="identity-panel-oidc" @@click="selectTab('oidc')" v-on:keydown="onTabKeydown">
+            <span><strong>OIDC 提供方</strong><small>管理第三方登录</small></span><em>{{providers.length}} 个</em>
+        </button>
+        <button id="identity-tab-access" ref="accessTab" type="button" role="tab" class="identity-tab" :class="{active:activeTab==='access'}" :aria-selected="activeTab==='access'" :tabindex="activeTab==='access'?0:-1" :disabled="saving" aria-controls="identity-panel-access" @@click="selectTab('access')" v-on:keydown="onTabKeydown">
+            <span><strong>Cloudflare Access</strong><small>管理入口自动登录</small></span><em>{{access.enabled?'已启用':'未启用'}}</em>
+        </button>
+    </div>
+    <section id="identity-panel-oidc" class="identity-panel" role="tabpanel" aria-labelledby="identity-tab-oidc" v-show="activeTab==='oidc'">
+        <div class="identity-panel-head"><div><h2>OIDC 提供方</h2><p>授权码 + PKCE · 统一回调地址 <code>{{callbackUrl}}</code></p></div><button class="btn btn-secondary" type="button" @@click="newProvider">添加提供方</button></div>
+        <div class="identity-provider-list" v-if="providers.length"><button v-for="item in providers" :key="item.id" type="button" class="identity-provider-item" :class="{selected:form && form.id===item.id}" @@click="editProvider(item)"><strong>{{item.name}}</strong><small>{{item.issuer}}</small><span>{{item.enabled?'已启用':'已停用'}}</span></button></div>
+        <p v-else>尚未配置 OIDC。添加任意符合标准的 OIDC 提供方即可开始使用。</p>
+        <form v-if="form" v-on:submit.prevent="saveProvider" class="identity-form">
+            <div class="identity-form-title"><h3>{{form.id?'编辑提供方':'添加提供方'}}</h3></div>
+            <label class="identity-wide">显示名称<input v-model.trim="form.name" required maxlength="80" placeholder="例如 公司账号"></label>
+            <label class="identity-wide">Issuer / Authority<input v-model.trim="form.issuer" required type="url" placeholder="https://id.example.com/"><small>ID Token 的 iss 必须与此值一致；生产环境仅接受 HTTPS。</small></label>
+            <label class="identity-check identity-wide"><input v-model="form.discovery" type="checkbox"> 使用 OIDC Discovery</label>
+            <label v-if="form.discovery" class="identity-wide">Discovery URL（可选）<input v-model.trim="form.discoveryUrl" type="url" placeholder="留空则使用 Issuer 的标准 well-known 地址"><small>提供方使用非标准 Discovery 路径时填写。</small></label>
+            <template v-else>
+                <label>Auth URL<input v-model.trim="form.authorizationUrl" required type="url" placeholder="https://id.example.com/authorize"></label>
+                <label>Token URL<input v-model.trim="form.tokenUrl" required type="url" placeholder="https://id.example.com/token"></label>
+                <label>Certificate / JWKS URL<input v-model.trim="form.certificateUrl" required type="url" placeholder="https://id.example.com/jwks"><small>支持 JWKS JSON 或 PEM 证书；公钥用于验证 ID Token，且会定期刷新。</small></label>
+                <label>UserInfo URL（可选）<input v-model.trim="form.userInfoUrl" :required="form.useUserInfo" type="url" placeholder="https://id.example.com/userinfo"></label>
+            </template>
+            <label>Client ID<input v-model.trim="form.clientId" required maxlength="200"></label>
+            <label>Client Secret<input v-model="form.clientSecret" type="password" :required="!form.id" autocomplete="new-password" :placeholder="form.id?'留空表示不修改':'从提供方创建客户端后填写'"></label>
+            <label class="identity-wide">Scopes（空格分隔）<input v-model="scopesText" required placeholder="openid profile email"><small>必须包含 openid；仅按提供方要求添加其他 scope。</small></label>
+            <label class="identity-check identity-wide"><input v-model="form.useUserInfo" type="checkbox"> 从 UserInfo 端点读取邮箱（仅当 ID Token 不含 email 且提供方支持 UserInfo 时启用）</label>
+            <label class="identity-wide">允许邮箱（每行一个）<textarea v-model="emailsText" required rows="4" placeholder="you@example.com"></textarea><small>仅这些邮箱可登录；所有获准用户目前拥有 RemoteTool 管理员权限。</small></label>
+            <label class="identity-check identity-wide"><input v-model="form.enabled" type="checkbox"> 启用此提供方</label>
+            <div class="identity-actions"><button class="btn btn-primary" type="submit" :disabled="saving">{{saving?'保存中…':'保存'}}</button><button v-if="form.id" type="button" class="btn btn-secondary" @@click="deleteProvider" :disabled="saving">删除</button></div>
+        </form>
+    </section>
+    <section id="identity-panel-access" class="identity-panel" role="tabpanel" aria-labelledby="identity-tab-access" v-show="activeTab==='access'">
+        <div class="identity-panel-head"><div><h2>Cloudflare Access</h2><p>独立于 OIDC 客户端；验证 Access 签名 JWT、应用 AUD 和允许邮箱。</p></div></div>
+        <p class="identity-hint">经 Cloudflare Access 保护的域名访问时自动登录；局域网直连仍使用密码或 OIDC。</p>
+        <form v-on:submit.prevent="saveAccess" class="identity-form">
+            <label class="identity-check identity-wide"><input v-model="access.enabled" type="checkbox"> 启用 Cloudflare Access 自动登录</label>
+            <label>Team 名称<input v-model.trim="access.team" placeholder="myteam"><small>只填 myteam，不填 .cloudflareaccess.com。</small></label>
+            <label>应用 Audience (AUD)<input v-model.trim="access.audience" placeholder="Access 应用的 AUD Tag"></label>
+            <label class="identity-wide">允许邮箱（每行一个）<textarea v-model="accessEmails" rows="4" placeholder="you@example.com"></textarea></label>
+            <div class="identity-actions"><button class="btn btn-primary" type="submit" :disabled="saving">保存 Access 配置</button></div>
+        </form>
+    </section>
+</div>

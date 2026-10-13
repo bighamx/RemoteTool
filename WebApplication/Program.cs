@@ -6,7 +6,10 @@ using Hangfire;
 using Hangfire.Console;
 using Hangfire.Storage.SQLite;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.IO.Compression;
@@ -128,7 +131,21 @@ builder.Services.AddSingleton<HermesCompaction>();
 
             // Configure JWT Authentication
             builder.Services.AddJwtAuthentication(builder.Configuration);
+            builder.Services.AddSingleton<OidcProviderStore>();
+            builder.Services.AddSingleton<OidcSchemeRegistry>();
+            builder.Services.AddSingleton<IConfigureOptions<OpenIdConnectOptions>, OidcOptionsSetup>();
+            builder.Services.AddAuthentication()
+                .AddCookie(OidcAuthentication.ExternalCookie, options => {
+                    options.Cookie.HttpOnly = true;
+                    options.Cookie.SameSite = SameSiteMode.Lax;
+                    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+                    options.ExpireTimeSpan = TimeSpan.FromMinutes(5);
+                })
+                // Registers the standard OIDC handler services. Named provider schemes are
+                // added at runtime by OidcSchemeRegistry; this scheme is never challenged.
+                .AddOpenIdConnect("oidc-bootstrap", options => options.SkipUnrecognizedRequests = true);
             builder.Services.AddHttpClient();
+            builder.Services.AddSingleton<AccessSettingsStore>();
             builder.Services.AddSingleton<CloudflareAccessIdentity>();
 
             // Hangfire Services (Client, Server, Tasks)
@@ -143,6 +160,7 @@ builder.Services.AddSingleton<HermesCompaction>();
             });
 
             var app = builder.Build();
+            app.Services.GetRequiredService<OidcSchemeRegistry>().Sync();
             // The native task page no longer mounts Hangfire Dashboard. Existing
             // recurring-job registrations and API actions still use the static
             // Hangfire facade, so bind it to the DI storage before registering jobs.
@@ -165,10 +183,10 @@ builder.Services.AddSingleton<HermesCompaction>();
             {
                 var access = context.RequestServices.GetRequiredService<CloudflareAccessIdentity>();
                 var assertion = context.Request.Headers["Cf-Access-Jwt-Assertion"].ToString();
-                if (await access.AcceptAsync(assertion, context.RequestAborted))
+                if (await access.ValidatedEmailAsync(assertion, context.RequestAborted) is { } email)
                 {
                     var auth = context.RequestServices.GetRequiredService<AuthService>();
-                    var token = auth.GenerateToken(context.RequestServices.GetRequiredService<IConfiguration>()["Auth:Username"] ?? "admin");
+                    var token = auth.GenerateToken(context.RequestServices.GetRequiredService<IConfiguration>()["Auth:Username"] ?? "admin", "cloudflare", email);
                     context.Request.Headers.Authorization = "Bearer " + token;
                     if (!context.Request.Cookies.TryGetValue("access_token", out var existingToken) || !auth.ValidateToken(existingToken))
                         context.Response.Cookies.Append("access_token", token, new CookieOptions {

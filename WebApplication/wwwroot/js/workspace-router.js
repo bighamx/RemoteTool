@@ -5,14 +5,15 @@
         system: 'controls', processes: 'processes', desktop: 'screenshot', terminal: 'terminal',
         docker: 'docker', 'docker/images': 'images', 'docker/compose': 'compose', files: 'files'
     };
-    const sources = { home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes' };
+    const sources = { home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
     const assets = {
         remote: { styles: ['remote.css', 'performance.css'], scripts: ['remote-nav.js', 'mp4box.all.min.js', 'performance.js', 'media-preview.js', 'remote.js'] },
         jobs: { styles: ['workspace-pages.css'], scripts: ['web-api.js', 'jobs-page.js'] },
         codex: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'agent-workspace.js'] },
-        hermes: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'agent-workspace.js'] }
+        hermes: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'agent-workspace.js'] },
+        identity: { styles: ['workspace-pages.css', 'identity-settings.css'], scripts: ['web-api.js', 'oidc-settings.js'] }
     };
-    const titles = { home: '总览', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes' };
+    const titles = { home: '总览', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes', identity: '身份验证' };
     const loadedScripts = new Set([...document.scripts].map(script => new URL(script.src, location.href).pathname));
     const loadedStyles = new Set([...document.querySelectorAll('link[rel="stylesheet"]')].map(link => new URL(link.href, location.href).pathname));
     const pendingScripts = new Map();

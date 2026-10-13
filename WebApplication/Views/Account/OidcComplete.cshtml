@@ -1,0 +1,12 @@
+@using System.Text.Json
+@{
+    Layout = null;
+    var email = (string)(ViewData["Email"] ?? "");
+    var destination = (string)(ViewData["ReturnUrl"] ?? "/");
+}
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>正在进入 RemoteTool</title></head>
+<body><p>登录成功，正在进入工作台…</p><script>
+localStorage.removeItem('token');
+localStorage.setItem('username', @Html.Raw(JsonSerializer.Serialize(email)));
+location.replace(@Html.Raw(JsonSerializer.Serialize(destination)));
+</script></body></html>

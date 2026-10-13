@@ -96,6 +96,10 @@
         [data-theme="light"] .btn-primary { color: white; }
 
         .error-message { color: var(--accent-danger); font-size: 14px; margin-top: 16px; text-align: center; min-height: 20px; }
+        .oidc-logins { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-color); }
+        .oidc-logins p { color: var(--text-secondary); font-size: 13px; margin-bottom: 10px; text-align: center; }
+        .oidc-logins a { display: block; padding: 11px; margin-top: 8px; border: 1px solid var(--border-color); border-radius: 11px; color: var(--text-primary); text-decoration: none; text-align: center; }
+        .oidc-logins a:hover { border-color: var(--accent-primary); }
     </style>
 </head>
 <body>
@@ -121,9 +125,25 @@
             <button type="submit" class="btn-primary">登录</button>
             <div id="login-error" class="error-message"></div>
         </form>
+        <div id="oidc-logins" class="oidc-logins" hidden><p>或使用身份提供方登录</p><div id="oidc-links"></div></div>
     </div>
 
     <script>
+        if (new URLSearchParams(location.search).has('oidcError'))
+            document.getElementById('login-error').textContent = '身份提供方登录失败，或该邮箱不在允许列表中。';
+        fetch('/api/auth/oidc/providers', { cache: 'no-store' }).then(response => response.ok ? response.json() : [])
+            .then(providers => {
+                if (!Array.isArray(providers) || !providers.length) return;
+                const container = document.getElementById('oidc-links');
+                const returnUrl = new URLSearchParams(location.search).get('ReturnUrl') || '/';
+                for (const provider of providers) {
+                    const link = document.createElement('a');
+                    link.href = '/api/auth/oidc/start/' + encodeURIComponent(provider.id) + '?returnUrl=' + encodeURIComponent(returnUrl);
+                    link.textContent = '使用 ' + provider.name + ' 登录';
+                    container.append(link);
+                }
+                document.getElementById('oidc-logins').hidden = false;
+            }).catch(() => {});
         document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const username = document.getElementById('username').value;

@@ -65,6 +65,13 @@ namespace RemoteTool.WebApi.Extensions
 
                 options.Events = new JwtBearerEvents
                 {
+                    OnTokenValidated = context =>
+                    {
+                        if (context.Principal is null ||
+                            !context.HttpContext.RequestServices.GetRequiredService<AuthService>().ValidateIdentity(context.Principal))
+                            context.Fail("身份提供方已停用或邮箱不再允许登录");
+                        return Task.CompletedTask;
+                    },
                     OnMessageReceived = context =>
                     {
                         // A verified Cloudflare Access assertion injects a fresh Bearer

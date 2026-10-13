@@ -32,7 +32,8 @@
     <PackageReference Include="System.Text.RegularExpressions" Version="4.3.1" />
     <PackageReference Include="SharpCompress" Version="0.48.0" />
     <PackageReference Include="System.Drawing.Common" Version="10.0.2" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.31" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="8.0.31" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation" Version="8.0.11" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.15.0" />
     <PackageReference Include="System.Management" Version="10.0.2" />
@@ -47,6 +48,7 @@
     </Content>
     <!-- 发布时复制 .cshtml，配合 Razor 运行时编译可在部署后修改视图实时生效 -->
     <Content Update="Views\**\*.cshtml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>

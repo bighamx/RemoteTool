@@ -6,29 +6,28 @@ namespace RemoteTool.WebApi.Services;
 
 // Optional single sign-on for a localhost origin published behind Cloudflare Access.
 // Access's signed assertion is verified before it can become a RemoteTool session.
-public sealed class CloudflareAccessIdentity(IConfiguration configuration, IHttpClientFactory clients)
+public sealed class CloudflareAccessIdentity(AccessSettingsStore settings, IHttpClientFactory clients)
 {
-    private readonly string? _team = configuration["CloudflareAccess:Team"]?.Trim().TrimEnd('/');
-    private readonly string? _audience = configuration["CloudflareAccess:Audience"]?.Trim();
-    private readonly string? _email = configuration["CloudflareAccess:Email"]?.Trim();
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private JsonWebKeySet? _keys;
     private DateTimeOffset _keysFetched;
+    private string? _keysTeam;
 
-    public bool Enabled => !string.IsNullOrEmpty(_team) && !string.IsNullOrEmpty(_audience) && !string.IsNullOrEmpty(_email);
+    public bool Enabled => settings.Read().Enabled;
 
-    public async Task<bool> AcceptAsync(string assertion, CancellationToken cancellationToken)
+    public async Task<string?> ValidatedEmailAsync(string assertion, CancellationToken cancellationToken)
     {
-        if (!Enabled || string.IsNullOrWhiteSpace(assertion)) return false;
+        var config = settings.Read();
+        if (!config.Enabled || string.IsNullOrWhiteSpace(assertion)) return null;
         try
         {
-            await RefreshKeysAsync(cancellationToken);
+            await RefreshKeysAsync(config.Team, cancellationToken);
             var principal = new JwtSecurityTokenHandler().ValidateToken(assertion, new TokenValidationParameters
             {
                 ValidateIssuer = true,
-                ValidIssuer = $"https://{_team}.cloudflareaccess.com",
+                ValidIssuer = $"https://{config.Team}.cloudflareaccess.com",
                 ValidateAudience = true,
-                ValidAudience = _audience,
+                ValidAudience = config.Audience,
                 ValidateLifetime = true,
                 RequireExpirationTime = true,
                 ValidateIssuerSigningKey = true,
@@ -37,24 +36,25 @@ public sealed class CloudflareAccessIdentity(IConfiguration configuration, IHttp
                 IssuerSigningKeys = _keys!.Keys
             }, out _);
             var email = principal.FindFirstValue(ClaimTypes.Email) ?? principal.FindFirstValue("email");
-            return string.Equals(email, _email, StringComparison.OrdinalIgnoreCase);
+            return email is not null && config.AllowedEmails.Contains(email, StringComparer.OrdinalIgnoreCase) ? email : null;
         }
         catch (Exception error) when (error is SecurityTokenException or HttpRequestException or OperationCanceledException or InvalidOperationException or ArgumentException)
         {
-            return false;
+            return null;
         }
     }
 
-    private async Task RefreshKeysAsync(CancellationToken cancellationToken)
+    private async Task RefreshKeysAsync(string team, CancellationToken cancellationToken)
     {
-        if (_keys != null && DateTimeOffset.UtcNow - _keysFetched < TimeSpan.FromHours(1)) return;
+        if (_keys != null && _keysTeam == team && DateTimeOffset.UtcNow - _keysFetched < TimeSpan.FromHours(1)) return;
         await _refreshLock.WaitAsync(cancellationToken);
         try
         {
-            if (_keys != null && DateTimeOffset.UtcNow - _keysFetched < TimeSpan.FromHours(1)) return;
-            using var response = await clients.CreateClient().GetAsync($"https://{_team}.cloudflareaccess.com/cdn-cgi/access/certs", cancellationToken);
+            if (_keys != null && _keysTeam == team && DateTimeOffset.UtcNow - _keysFetched < TimeSpan.FromHours(1)) return;
+            using var response = await clients.CreateClient().GetAsync($"https://{team}.cloudflareaccess.com/cdn-cgi/access/certs", cancellationToken);
             response.EnsureSuccessStatusCode();
             _keys = new JsonWebKeySet(await response.Content.ReadAsStringAsync(cancellationToken));
+            _keysTeam = team;
             _keysFetched = DateTimeOffset.UtcNow;
         }
         finally { _refreshLock.Release(); }
