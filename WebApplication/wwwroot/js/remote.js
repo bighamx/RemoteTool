@@ -1479,6 +1479,10 @@ class RemoteControl {
             document.getElementById('display-select-label').style.display = select.style.display;
         }
 
+        if (this.platform === 'macOS' && state?.available === false) {
+            this.showToast(state.message || '请在系统设置中授予 RemoteTool Mac Agent 屏幕录制权限', 'error');
+            return false;
+        }
         if (!state || state.locked !== true) return true;
         if (this.platform === 'macOS') {
             this.showToast('Mac 已锁屏，请先在电脑上解锁', 'warning');

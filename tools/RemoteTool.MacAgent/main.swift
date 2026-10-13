@@ -67,7 +67,7 @@ final class Capture: NSObject, SCStreamOutput {
 enum AgentError: Error { case message(String) }
 
 @MainActor final class Agent {
-    private let capture = Capture()
+    private var captures: [CGDirectDisplayID: Capture] = [:]
     private var heldKeys = Set<CGKeyCode>()
     private var heldMouse: CGMouseButton?
     private var flags: CGEventFlags {
@@ -119,8 +119,17 @@ enum AgentError: Error { case message(String) }
                     "displayId":display, "sessionLocked":screenLocked(),
                     "width":CGDisplayPixelsWide(display), "height":CGDisplayPixelsHigh(display), "displays":displays]
         }
-        if type == "capture" { return ["jpeg":try await capture.jpeg(displayID: displayID(r)).base64EncodedString()] }
-        if type == "stop-capture" { await capture.stop(); return ["ok":true] }
+        if type == "capture" {
+            let id = try displayID(r)
+            let capture = captures[id] ?? Capture()
+            captures[id] = capture
+            return ["jpeg":try await capture.jpeg(displayID: id).base64EncodedString()]
+        }
+        if type == "stop-capture" {
+            for capture in captures.values { await capture.stop() }
+            captures.removeAll()
+            return ["ok":true]
+        }
         if type == "clipboard-get" { return ["text":NSPasteboard.general.string(forType:.string) ?? ""] }
         if type == "clipboard-set" {
             NSPasteboard.general.clearContents(); NSPasteboard.general.setString(r["text"] as? String ?? "", forType:.string); return ["ok":true]

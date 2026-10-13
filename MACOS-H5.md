@@ -41,6 +41,8 @@ open tools/RemoteTool.MacAgent/build/RemoteToolMacAgent.app --args --permissions
 
 默认是本机 ad-hoc 签名。保持代理 App 的路径和签名身份稳定；重新构建或移动 App 后可能需要重新授权。发布给其他人时，应使用自己的 Developer ID 签名并公证。可设置 `MAC_AGENT_SIGN_IDENTITY` 指定签名身份。
 
+若由 launchd 等后台服务启动，须从实际运行的工作台检查 `api/input/session-state` 的 `available`；从终端直接运行代理获得权限，不代表后台服务也获得了屏幕录制权限。未授权时工作台会在连接桌面前提示，需在 macOS 隐私设置中授权后重启服务。
+
 ## 3. 生成配置并启动
 
 ```bash

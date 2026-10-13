@@ -13,13 +13,15 @@ public class StreamController : ControllerBase
 
 {
     private readonly ISystemControlService _systemService;
+    private readonly ILogger<StreamController> _logger;
     private const string Boundary = "frame";
 
     private IActionResult ApiError(string message)
             => BadRequest(new { message });
-    public StreamController(ISystemControlService systemService)
+    public StreamController(ISystemControlService systemService, ILogger<StreamController> logger)
     {
         _systemService = systemService;
+        _logger = logger;
     }
 
     [HttpGet("legacy")]
@@ -37,6 +39,7 @@ public class StreamController : ControllerBase
         var boundaryBytes = Encoding.ASCII.GetBytes($"\r\n--{Boundary}\r\nContent-Type: image/jpeg\r\n\r\n");
         const int targetFrameTimeMs = 33; // 30 FPS = 33.33ms per frame
 
+        var reportedCaptureError = false;
         while (!cancellationToken.IsCancellationRequested)
         {
             var frameStopwatch = Stopwatch.StartNew();
@@ -68,9 +71,12 @@ public class StreamController : ControllerBase
             {
                 break;
             }
-            catch (Exception)
+            catch (Exception error)
             {
-                // Ignore transient errors
+                if (OperatingSystem.IsMacOS() && !reportedCaptureError) {
+                    _logger.LogWarning(error, "Mac desktop capture failed for display {DisplayId}", displayId);
+                    reportedCaptureError = true;
+                }
                 await Task.Delay(500, cancellationToken);
             }
         }
