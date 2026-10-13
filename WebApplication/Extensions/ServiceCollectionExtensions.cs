@@ -17,11 +17,17 @@ namespace RemoteTool.WebApi.Extensions
             services.AddSingleton<AuthService>();
             services.AddSingleton<SystemService>();
             services.AddSingleton<TerminalService>();
+            services.AddSingleton<MacDesktopBridge>();
             
             if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
             {
                 services.AddSingleton<ISystemControlService, SystemService>();
                 services.AddSingleton<IDockerService, DockerService>();
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                services.AddSingleton<ISystemControlService, MacSystemService>();
+                services.AddSingleton<IDockerService, LinuxDockerService>();
             }
             else
             {
@@ -61,6 +67,10 @@ namespace RemoteTool.WebApi.Extensions
                 {
                     OnMessageReceived = context =>
                     {
+                        // A verified Cloudflare Access assertion injects a fresh Bearer
+                        // token for this request. Do not replace it with an old cookie.
+                        if (context.Request.Headers.Authorization.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                            return Task.CompletedTask;
                         var accessToken = context.Request.Query["access_token"];
                         if (string.IsNullOrEmpty(accessToken))
                         {
@@ -99,7 +109,8 @@ namespace RemoteTool.WebApi.Extensions
                 .UseTypeResolver(HangfireTypeResolver.Resolve)
                 .UseRecommendedSerializerSettings()
                 .UseConsole()
-                .UseSQLiteStorage("hangfire.db"));
+                .UseSQLiteStorage(configuration["Hangfire:Database"] ?? (OperatingSystem.IsMacOS()
+                    ? Path.Combine(RemoteToolPaths.ProgramData, "hangfire.db") : "hangfire.db")));
 
             // 任务均为低频定时批处理，固定 4 个 worker 即可，默认按 CPU 核数开太多
             services.AddHangfireServer(options => options.WorkerCount = 4);

@@ -1720,4 +1720,9 @@
         min-height: 55px;
         font-size: 14px
     }
+
+.agent-sessions-backdrop,
+.agent-sessions-close {
+    display: none
+}
 }

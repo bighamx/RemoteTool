@@ -217,10 +217,11 @@
         <div id="terminal-tab" class="tab-content">
             <div class="terminal-container">
                 <div id="terminal-output" class="terminal-output"></div>
-                <div class="terminal-input-container">
+                <form id="terminal-command-form" class="terminal-input-container">
                     <span class="prompt">></span>
-                    <input type="text" id="terminal-input" class="terminal-input" placeholder="输入命令...">
-                </div>
+                    <input type="text" id="terminal-input" class="terminal-input" placeholder="输入命令..." enterkeyhint="send" autocomplete="off" autocapitalize="off" spellcheck="false">
+                    <button type="submit" class="terminal-send-btn">发送</button>
+                </form>
             </div>
             <div class="terminal-status">
                 <select id="terminal-type" class="terminal-select" style="display: none;">
@@ -711,5 +712,4 @@
         </div>
     </div>
 </div>
-
 

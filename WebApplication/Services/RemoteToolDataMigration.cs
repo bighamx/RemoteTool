@@ -35,10 +35,17 @@ public static class RemoteToolDataMigration
     };
 
     public static void Migrate()
-        => Migrate(
+    {
+        if (OperatingSystem.IsMacOS()) {
+            Directory.CreateDirectory(RemoteToolPaths.ProgramData);
+            File.SetUnixFileMode(RemoteToolPaths.ProgramData, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            return;
+        }
+        Migrate(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             Path.GetTempPath());
+    }
 
     /// <summary>Roots are parameters so the relocation can be exercised against fixtures.</summary>
     public static void Migrate(string commonDataRoot, string localDataRoot, string tempRoot)

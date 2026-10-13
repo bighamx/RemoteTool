@@ -3,6 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#10151d">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="RemoteTool">
+    <link rel="manifest" href="~/manifest.webmanifest" asp-append-version="true" />
+    <link rel="apple-touch-icon" href="~/mobile/icon-192.png" />
     <title>@ViewBag.Title · RemoteTool</title>
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/helper/lib/viewuiplus.css" asp-append-version="true" />
@@ -30,6 +36,7 @@
                     <div class="topbar-title"><small>REMOTE TOOL / 工作台</small><strong id="workspace-topbar-title" data-default="@ViewBag.Title" v-cloak>{{currentTitle}}</strong></div>
                 </div>
                 <div class="header-right">
+                    <button id="install-app-btn" class="btn btn-secondary btn-sm" type="button" aria-label="安装应用" title="安装应用" hidden>安装</button>
                     <button id="theme-toggle" class="btn btn-secondary btn-sm" title="切换主题">☀️</button>
                     <span id="user-info"></span>
                     <button id="logout-btn" class="btn btn-secondary btn-sm">退出</button>

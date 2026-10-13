@@ -716,10 +716,12 @@ class RemoteControl {
         // Terminal
         document.getElementById('terminal-toggle-btn').addEventListener('click', () => this.toggleTerminal());
         document.getElementById('clear-btn').addEventListener('click', () => this.clearTerminal());
+        document.getElementById('terminal-command-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.sendCommand();
+        });
         document.getElementById('terminal-input').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                this.sendCommand();
-            } else if (e.key === 'ArrowUp') {
+            if (e.key === 'ArrowUp') {
                 e.preventDefault();
                 this.navigateHistory('up');
             } else if (e.key === 'ArrowDown') {
@@ -1455,6 +1457,10 @@ class RemoteControl {
         }
 
         if (!state || state.locked !== true) return true;
+        if (this.platform === 'macOS') {
+            this.showToast('Mac 已锁屏，请先在电脑上解锁', 'warning');
+            return false;
+        }
 
         const password = await this.showDialog(
             `远程桌面当前处于锁定/登录界面（${state.desktop}）。输入该机器的登录口令以解锁：`,
@@ -1547,8 +1553,13 @@ class RemoteControl {
             fps: this.qualitySettings.fps || '50'
         });
 
-        // Strategy: WebCodecs (lowest latency) > MSE > Simple video.src
+        // Mac Agent currently provides JPEG frames; the Windows H.264 route is unavailable.
         let started = false;
+        if (this.platform === 'macOS') {
+            this.startLegacyStream();
+            this.updateModeIndicator('mjpeg');
+            started = true;
+        }
 
         // 1. Try WebCodecs + Canvas (Chrome/Edge, ~60ms latency)
         if (!started && 'VideoDecoder' in window && typeof MP4Box !== 'undefined') {
@@ -2541,7 +2552,7 @@ class RemoteControl {
             toggleBtn.classList.remove('btn-primary');
             toggleBtn.classList.add('btn-danger');
             terminalSelect.disabled = true;  // 连接时禁用切换
-            output.innerHTML = '';
+            output.textContent = '已连接。输入命令后按回车或点“发送”。\n';
         };
 
         this.websocket.onmessage = (event) => {
@@ -2691,7 +2702,7 @@ class RemoteControl {
             });
         }
 
-        // Linux 平台隐藏远程桌面视频流标签页（该功能已禁用）
+        // Linux 没有桌面代理；Mac 使用 MJPEG，Windows 使用 H.264。
         const screenshotTabBtn = document.querySelector('.tab[data-tab="screenshot"]');
         if (screenshotTabBtn) {
             screenshotTabBtn.style.display = info.platform === 'Linux' ? 'none' : '';
@@ -2700,7 +2711,7 @@ class RemoteControl {
         // 根据平台动态设置终端类型选择框
         const terminalSelect = document.getElementById('terminal-type');
         if (terminalSelect) {
-            const isLinux = info.platform === 'Linux';
+            const isLinux = info.platform !== 'Windows';
             Array.from(terminalSelect.options).forEach(opt => {
                 if (isLinux) {
                     opt.style.display = opt.value === 'shell' ? '' : 'none';

@@ -14,7 +14,8 @@ public sealed class HermesManagement(IConfiguration configuration)
         var home = configuration["Hermes:HomeDirectory"]
             ?? RemoteToolPaths.HermesHome;
         var source = configuration["Hermes:SourceDirectory"] ?? Path.Combine(home, "hermes-agent");
-        var python = Path.Combine(source, "venv", "Scripts", "python.exe");
+        var python = configuration["Hermes:PythonExecutable"] ?? (OperatingSystem.IsWindows()
+            ? Path.Combine(source, "venv", "Scripts", "python.exe") : Path.Combine(source, "venv", "bin", "python"));
         var script = Path.Combine(Path.GetDirectoryName(RemoteControl.InteractiveProcessLauncher.GetApplicationDllPath())!, "hermes", "hermes_management.py");
         if (!File.Exists(python) || !File.Exists(script)) throw new InvalidOperationException("服务端尚未安装 Hermes 模型管理组件");
         var operationGate = action == "compress_session" ? compressionGate : action == "session_context" ? contextGate : gate;

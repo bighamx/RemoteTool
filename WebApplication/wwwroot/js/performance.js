@@ -2,6 +2,7 @@
     'use strict';
     const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const percent = value => Number.isFinite(value) ? `${Math.round(value)}%` : '不可用';
+    const gigabytes = value => Number.isFinite(value) ? value.toFixed(1) : '—';
     const rate = value => { let n = Math.max(0, value || 0), unit = 0; while (n >= 1024 && unit < 3) { n /= 1024; unit++; } return `${n.toFixed(unit ? 1 : 0)} ${['B/s','KB/s','MB/s','GB/s'][unit]}`; };
     let colors = ['#49b7e8','#a58bfa','#4ecdb2','#f2b66f','#ec86ab'];
 
@@ -103,7 +104,7 @@
             };
             const hardwareCards = this.options.details === false ? '' : `
                 <article class="perf-card perf-gpu-card"><header><div><h3>显卡</h3><p>GPU 占用 · 显存 · 温度 · 驱动</p></div></header>${(info.gpus || []).map(g => `<section class="perf-device"><h4>${escape(g.name)}</h4>${facts([['占用', g.usagePercent >= 0 ? percent(g.usagePercent) : '不可用'], ['显存', g.memoryMB > 0 ? `${g.memoryUsedMB >= 0 ? `${g.memoryUsedMB} / ` : ''}${g.memoryMB} MB` : '不可用'], ...gpuTemperatures(g), ['驱动', g.driverVersion || '—']])}${g.memoryMB > 0 && g.memoryUsedMB >= 0 ? `<progress aria-label="显存占用" max="${g.memoryMB}" value="${g.memoryUsedMB}"></progress>` : ''}</section>`).join('') || '<div class="perf-empty">未检测到显卡</div>'}</article>
-                <article class="perf-card perf-disk-card"><header><div><h3>磁盘空间</h3><p>分区容量与可用空间</p></div></header><div class="perf-disk-grid">${(info.drives || []).map(d => `<section class="perf-device"><div class="perf-device-heading"><h4>${escape(d.name)}</h4><span>${escape(d.driveFormat || '')} · ${percent(d.usagePercent)}</span></div><div class="perf-footer">已用 ${escape(d.usedGB)} / ${escape(d.totalGB)} GB · 可用 ${escape(d.freeGB)} GB</div><progress aria-label="${escape(d.name)} 空间占用" max="100" value="${Number.isFinite(d.usagePercent) ? d.usagePercent : 0}"></progress></section>`).join('') || '<div class="perf-empty">未检测到磁盘</div>'}</div></article>`;
+                <article class="perf-card perf-disk-card"><header><div><h3>磁盘空间</h3><p>分区容量与可用空间</p></div></header><div class="perf-disk-grid">${(info.drives || []).map(d => `<section class="perf-device"><div class="perf-device-heading"><h4>${escape(d.name)}</h4><span>${escape(d.driveFormat || '')} · ${percent(d.usagePercent)}</span></div><div class="perf-footer">已用 ${gigabytes(d.usedGB)} / ${gigabytes(d.totalGB)} GB · 可用 ${gigabytes(d.freeGB)} GB</div><progress aria-label="${escape(d.name)} 空间占用" max="100" value="${Number.isFinite(d.usagePercent) ? d.usagePercent : 0}"></progress></section>`).join('') || '<div class="perf-empty">未检测到磁盘</div>'}</div></article>`;
             const adapters = (info.networkAdapters || []).map(n => `<section class="perf-device"><h4>${escape(n.name)}</h4>${facts([['连接速率', n.speedMbps >= 1000 ? `${n.speedMbps / 1000} Gbps` : `${n.speedMbps || 0} Mbps`], ...(n.macAddress ? [['MAC', n.macAddress]] : [])])}</section>`).join('');
             this.layoutObserver.disconnect();
             this.element.innerHTML = `${this.options.heading === false ? '' : `<div class="perf-heading"><div><h2>系统监控</h2><p>实时采样 · 历史保留 15 分钟</p></div><select class="perf-range" aria-label="历史时间范围"><option value="60">最近 60 秒</option><option value="300">最近 5 分钟</option><option value="900">最近 15 分钟</option></select></div>`}

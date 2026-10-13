@@ -44,6 +44,7 @@ public class TerminalService
 public class TerminalSession : IDisposable
 {
     private readonly WebSocket _webSocket;
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly TerminalType _terminalType;
     private Process? _process;
     private bool _disposed;
@@ -55,7 +56,7 @@ public class TerminalSession : IDisposable
     {
         _webSocket = webSocket;
         _terminalType = terminalType;
-        _useUtf8 = RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || IsSystemUtf8Enabled();
+        _useUtf8 = !OperatingSystem.IsWindows() || IsSystemUtf8Enabled();
         if (!_useUtf8 && RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             _systemEncoding = GetSystemDefaultEncoding();
         else
@@ -133,7 +134,7 @@ public class TerminalSession : IDisposable
         _process.Start();
 
         // 统一初始设置（Shell 不发送编码/清屏命令）
-        if (_terminalType == TerminalType.Shell)
+        if (_terminalType == TerminalType.Shell || !OperatingSystem.IsWindows())
         {
             // Linux/Shell：不发送任何初始化命令，保持原生 shell
         }
@@ -174,16 +175,17 @@ public class TerminalSession : IDisposable
             WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
         };
 
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || _terminalType == TerminalType.Shell)
+        if (!OperatingSystem.IsWindows() || _terminalType == TerminalType.Shell)
         {
-            // Linux 或显式选择 Shell：使用 /bin/bash -i（交互式），UTF-8
+            // The Web terminal sends complete lines over pipes, not a PTY. On macOS,
+            // an interactive zsh loads prompt plugins that cannot run with TERM=dumb.
             var utf8 = new UTF8Encoding(false);
-            startInfo.FileName = RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? "/bin/bash" : "cmd.exe";
-            startInfo.Arguments = RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? "-i" : "/Q /K";
+            startInfo.FileName = OperatingSystem.IsMacOS() ? "/bin/zsh" : OperatingSystem.IsLinux() ? "/bin/bash" : "cmd.exe";
+            startInfo.Arguments = OperatingSystem.IsMacOS() ? "-s" : OperatingSystem.IsLinux() ? "-i" : "/Q /K";
             startInfo.StandardInputEncoding = utf8;
             startInfo.StandardOutputEncoding = utf8;
             startInfo.StandardErrorEncoding = utf8;
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            if (!OperatingSystem.IsWindows())
                 startInfo.WorkingDirectory = Environment.GetEnvironmentVariable("HOME") ?? "/";
         }
         else if (_terminalType == TerminalType.PowerShell)
@@ -273,7 +275,7 @@ public class TerminalSession : IDisposable
                 if (result.MessageType == WebSocketMessageType.Text && _process != null && !_process.HasExited)
                 {
                     var command = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    var lineEnd = RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? "\n" : "\r\n";
+                    var lineEnd = !OperatingSystem.IsWindows() ? "\n" : "\r\n";
 
                     if (_terminalType == TerminalType.Shell || RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
                     {
@@ -319,6 +321,8 @@ public class TerminalSession : IDisposable
 
     private async Task SendMessageAsync(string message)
     {
+        await _sendGate.WaitAsync();
+        try {
         if (_webSocket.State == WebSocketState.Open)
         {
             try
@@ -326,11 +330,12 @@ public class TerminalSession : IDisposable
                 var bytes = Encoding.UTF8.GetBytes(message);
                 await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
             }
-            catch (WebSocketException)
+            catch (Exception error) when (error is WebSocketException or ObjectDisposedException or InvalidOperationException)
             {
                 // Connection closed
             }
         }
+        } finally { _sendGate.Release(); }
     }
 
     public void Dispose()

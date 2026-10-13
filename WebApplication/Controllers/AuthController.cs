@@ -59,6 +59,13 @@ public class AuthController : ControllerBase
         var username = User.Identity?.Name ?? "Unknown";
         return Ok(new { username, authenticated = true });
     }
+
+    [HttpPost("logout")]
+    public IActionResult Logout()
+    {
+        Response.Cookies.Delete("access_token", new CookieOptions { Path = "/", Secure = Request.IsHttps, SameSite = SameSiteMode.Strict });
+        return Ok(new { success = true });
+    }
 }
 
 public class LoginRequest
