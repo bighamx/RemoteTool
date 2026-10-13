@@ -177,10 +177,11 @@ public class TerminalSession : IDisposable
 
         if (!OperatingSystem.IsWindows() || _terminalType == TerminalType.Shell)
         {
-            // Linux 或显式选择 Shell：使用 /bin/bash -i（交互式），UTF-8
+            // The Web terminal sends complete lines over pipes, not a PTY. On macOS,
+            // an interactive zsh loads prompt plugins that cannot run with TERM=dumb.
             var utf8 = new UTF8Encoding(false);
             startInfo.FileName = OperatingSystem.IsMacOS() ? "/bin/zsh" : OperatingSystem.IsLinux() ? "/bin/bash" : "cmd.exe";
-            startInfo.Arguments = !OperatingSystem.IsWindows() ? "-i" : "/Q /K";
+            startInfo.Arguments = OperatingSystem.IsMacOS() ? "-s" : OperatingSystem.IsLinux() ? "-i" : "/Q /K";
             startInfo.StandardInputEncoding = utf8;
             startInfo.StandardOutputEncoding = utf8;
             startInfo.StandardErrorEncoding = utf8;
