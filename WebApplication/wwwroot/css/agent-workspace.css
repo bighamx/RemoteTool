@@ -38,6 +38,7 @@
     --accent-primary:#006b59;--border-color:#cad6d0;
 }
 .agent-sessions{background:var(--bg-primary);border-right-color:var(--border-color)}
+.agent-sessions-backdrop,.agent-sessions-close{display:none}
 .agent-inspector{background:var(--bg-secondary);border-left-color:var(--border-color)}
 .agent-pane-head{padding:22px 18px 16px;gap:14px}
 .agent-pane-identity{display:flex;align-items:center;gap:11px;min-width:0}
@@ -96,6 +97,8 @@
 @media(max-width:1150px){.agent-workspace{grid-template-columns:270px minmax(0,1fr)}.agent-inspector{display:none}}
 @media(max-width:760px){
     .agent-workspace{display:block}.agent-sessions{width:min(330px,88vw);border-right:1px solid var(--border-color)}
+    .agent-sessions-backdrop{display:block;position:absolute;inset:0;z-index:9;background:#0008}
+    .agent-sessions-close{display:block;flex:none;width:30px;height:30px;border:0;border-radius:8px;color:var(--text-primary);background:var(--bg-tertiary);font-size:22px;line-height:1;cursor:pointer}
     .agent-conversation-head{min-height:60px;padding:8px 12px}.agent-conversation-icon{width:34px;height:34px}.agent-conversation-icon img{width:22px;height:22px}
     .agent-conversation-title{gap:7px}.agent-conversation-title h2{font-size:14px}.agent-conversation-title small{max-width:45vw}
     .agent-head-trailing{gap:2px}.agent-status-pill{display:none}.agent-mobile-sessions{width:30px;font-size:20px}

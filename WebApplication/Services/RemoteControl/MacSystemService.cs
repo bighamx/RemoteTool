@@ -50,7 +50,7 @@ public sealed class MacSystemService(MacDesktopBridge desktop) : ISystemControlS
             TotalMemoryMB = total / 1048576, AvailableMemoryMB = available / 1048576, UsedMemoryMB = Math.Max(0, total - available) / 1048576,
             MemoryUsagePercent = (int)Math.Clamp(100d * (total - available) / total, 0, 100),
             CpuUsagePercent = cpu.Success ? (int)Math.Clamp(double.Parse(cpu.Groups[1].Value, CultureInfo.InvariantCulture) + double.Parse(cpu.Groups[2].Value, CultureInfo.InvariantCulture), 0, 100) : 0 };
-        foreach (var drive in DriveInfo.GetDrives()) { try { if (drive.IsReady && drive.TotalSize > 0) info.Drives.Add(new() {
+        foreach (var drive in DriveInfo.GetDrives().Where(d => d.Name == "/" || d.Name.StartsWith("/Volumes/", StringComparison.Ordinal))) { try { if (drive.IsReady && drive.TotalSize > 0) info.Drives.Add(new() {
             Name = drive.Name, TotalGB = drive.TotalSize / 1073741824d, FreeGB = drive.AvailableFreeSpace / 1073741824d,
             UsedGB = (drive.TotalSize - drive.AvailableFreeSpace) / 1073741824d, DriveFormat = drive.DriveFormat,
             UsagePercent = (int)(100d * (drive.TotalSize - drive.AvailableFreeSpace) / drive.TotalSize) }); } catch (IOException) { } }

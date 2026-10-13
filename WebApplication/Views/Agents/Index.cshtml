@@ -11,8 +11,9 @@
     <script src="~/js/agent-workspace.js" asp-append-version="true"></script>
 }
 <div id="agent-app" class="agent-workspace" data-agent="@ViewBag.Agent" v-cloak>
+    <div v-if="sessionsOpen" class="agent-sessions-backdrop" @@click="sessionsOpen=false"></div>
     <aside class="agent-sessions" :class="{'mobile-open':sessionsOpen}">
-        <div class="agent-pane-head"><div class="agent-pane-identity"><span class="agent-brand-icon"><img :src="agent==='codex'?'/icons/codex.png':'/icons/hermes.svg'" :alt="agentName"></span><div><small>会话列表</small><h2>{{agentName}}</h2></div></div><i-button type="primary" size="small" icon="md-add" @@click="openCreateDialog">新建</i-button></div>
+        <div class="agent-pane-head"><div class="agent-pane-identity"><span class="agent-brand-icon"><img :src="agent==='codex'?'/icons/codex.png':'/icons/hermes.svg'" :alt="agentName"></span><div><small>会话列表</small><h2>{{agentName}}</h2></div></div><i-button type="primary" size="small" icon="md-add" @@click="openCreateDialog">新建</i-button><button class="agent-sessions-close" type="button" @@click="sessionsOpen=false" aria-label="收起会话列表">×</button></div>
         <div class="agent-search"><i-input v-model="search" search placeholder="搜索会话" clearable></i-input></div>
         <div v-if="listError" class="agent-inline-error">{{listError}} <i-button size="small" @@click="refreshSessions">重试</i-button></div>
         <div class="agent-session-list">
@@ -23,7 +24,7 @@
     </aside>
     <section class="agent-conversation">
         <div class="agent-conversation-head">
-            <div class="agent-conversation-title"><button class="agent-mobile-sessions" type="button" @@click="sessionsOpen=!sessionsOpen" aria-label="显示会话列表">☰</button><span class="agent-conversation-icon"><img :src="agent==='codex'?'/icons/codex.png':'/icons/hermes.svg'" :alt="agentName"></span><div><h2>{{selected?.title || agentName}}</h2><small>{{selected?.cwd || statusText}}</small></div></div>
+            <div class="agent-conversation-title"><button class="agent-mobile-sessions" type="button" @@click="sessionsOpen=!sessionsOpen" :aria-expanded="sessionsOpen" aria-label="显示会话列表">☰</button><span class="agent-conversation-icon"><img :src="agent==='codex'?'/icons/codex.png':'/icons/hermes.svg'" :alt="agentName"></span><div><h2>{{selected?.title || agentName}}</h2><small>{{selected?.cwd || statusText}}</small></div></div>
             <div class="agent-head-trailing"><span class="agent-status-pill"><span></span>{{statusText}}</span><details class="agent-session-actions"><summary aria-label="会话操作" title="会话操作">⋮</summary><div><button type="button" @@click="refreshAll">刷新会话</button><button type="button" @@click="renameSession">重命名</button><button type="button" @@click="togglePin">{{selected?.pinned?'取消置顶':'置顶会话'}}</button><button type="button" class="danger" @@click="deleteSession">删除会话</button></div></details></div>
         </div>
         <div v-if="error" class="agent-banner error" role="alert">{{error}} <button type="button" @@click="error=''">×</button></div>

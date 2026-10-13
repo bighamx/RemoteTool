@@ -76,6 +76,7 @@
 [data-theme="light"] .perf-chart svg { color: #57606a; }
 [data-theme="light"] .perf-card { box-shadow: 0 2px 8px #1d385408; }
 @media (max-width: 680px) {
+    .perf-disk-grid { grid-template-columns: minmax(0, 1fr); }
     .perf-grid { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; gap: 12px; }
     .perf-grid > .perf-card, .perf-grid > .perf-details { grid-row-end: auto !important; margin-bottom: 0; }
     .perf-card { padding: 15px; }
