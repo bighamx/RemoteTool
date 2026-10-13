@@ -199,6 +199,26 @@ public class InputController : ControllerBase
     [HttpGet("session-state")]
     public async Task<IActionResult> SessionState()
     {
+        if (_systemService is MacSystemService mac)
+        {
+            try
+            {
+                var status = await mac.NativeAsync(JsonSerializer.SerializeToElement(new { type = "status" }));
+                var locked = status.GetProperty("sessionLocked").GetBoolean();
+                return Ok(new {
+                    available = status.GetProperty("screenRecording").GetBoolean(),
+                    desktop = locked ? "Locked" : "Default", locked,
+                    width = status.GetProperty("width").GetInt32(),
+                    height = status.GetProperty("height").GetInt32()
+                });
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException)
+            {
+                return Ok(new { available = false, message = ex.Message });
+            }
+        }
+        if (!OperatingSystem.IsWindows())
+            return Ok(new { available = false, message = "当前平台没有远程桌面" });
         var size = await DesktopAgent.GetScreenSizeAsync();
 
         if (InteractiveProcessLauncher.IsRunningInSession0)
@@ -233,6 +253,8 @@ public class InputController : ControllerBase
     [HttpPost("unlock")]
     public async Task<IActionResult> Unlock([FromBody] UnlockRequest request)
     {
+        if (!OperatingSystem.IsWindows())
+            return StatusCode(501, new { message = "macOS 锁屏需在电脑上解锁" });
         var password = request.Password ?? "";
         if (password.Length == 0) return ApiError("密码不能为空");
         if (password.Length > 256) return ApiError("密码过长");
@@ -278,6 +300,5 @@ public class InputController : ControllerBase
         return (desktop, !string.Equals(desktop, "Default", StringComparison.OrdinalIgnoreCase));
     }
 }
-
 
 

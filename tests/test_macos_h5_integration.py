@@ -63,6 +63,9 @@ def main():
                    Codex__Executable=str(mock), Codex__Home=str(home), Codex__AccountStore=str(folder / "accounts"),
                    Codex__WorkingDirectory=str(folder / "work"), REMOTETOOL_DATA_DIR=str(folder / "data"),
                    DOTNET_HOST_PATH=DOTNET, Hangfire__Database=str(folder / "hangfire.db"), ASPNETCORE_URLS=f"http://127.0.0.1:{port}")
+        mac_agent = ROOT / "tools/RemoteTool.MacAgent/build/RemoteToolMacAgent.app/Contents/MacOS/RemoteToolMacAgent"
+        if sys.platform == "darwin" and mac_agent.exists():
+            env["RemoteControl__MacAgentExecutable"] = str(mac_agent)
         log = open(folder / "server.log", "w+")
         process = subprocess.Popen([DOTNET, str(ROOT / "WebApplication/bin/Debug/net8.0/WebApplication.dll")],
                                    cwd=ROOT / "WebApplication", env=env, stdout=log, stderr=log, start_new_session=True)
@@ -86,8 +89,23 @@ def main():
             except urllib.error.HTTPError as error: assert error.code == 401
             request("/api/auth/login", {"username":"fixture","password":"fixture-only-password"})
             assert request("/api/auth/me")["authenticated"]
+            assert "app-shell" in request("/remote/index")
+            assert "app-shell" in request("/agents/codex")
+            assert "app-shell" in request("/hangfire")
             expected_platform = "macOS" if sys.platform == "darwin" else "Windows" if sys.platform == "win32" else "Linux"
             assert request("/api/platform/capabilities")["platform"] == expected_platform
+            if sys.platform == "darwin" and mac_agent.exists():
+                info = request("/api/system/info")["data"]
+                assert info["platform"] == "macOS" and info["totalMemoryMB"] > 0, info
+                assert request("/api/system/processes")["data"]
+                state = request("/api/input/session-state")
+                assert state["available"] and not state["locked"] and state["width"] > 0, state
+                assert request("/api/input/mouse-relative", {"dx":0,"dy":0})["message"] == "Input sent"
+                try: request("/api/input/unlock", {"password":"unused"}); raise AssertionError("Mac accepted Windows unlock")
+                except urllib.error.HTTPError as error: assert error.code == 501
+                with client.open(base + "/api/stream/legacy", timeout=15) as stream:
+                    assert stream.headers.get_content_type() == "multipart/x-mixed-replace"
+                    assert b"\xff\xd8" in stream.read(1024)
             assert request("/api/codex/capabilities")["sessions"]
             created = request("/api/codex/sessions", {"project_mode":"none","title":"H5 fixture"})
             session = created["session"]["id"]

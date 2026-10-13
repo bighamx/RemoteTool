@@ -168,7 +168,7 @@ builder.Services.AddSingleton<HermesCompaction>();
                 if (await access.AcceptAsync(assertion, context.RequestAborted))
                 {
                     var auth = context.RequestServices.GetRequiredService<AuthService>();
-                    var token = auth.GenerateToken("admin");
+                    var token = auth.GenerateToken(context.RequestServices.GetRequiredService<IConfiguration>()["Auth:Username"] ?? "admin");
                     context.Request.Headers.Authorization = "Bearer " + token;
                     if (!context.Request.Cookies.TryGetValue("access_token", out var existingToken) || !auth.ValidateToken(existingToken))
                         context.Response.Cookies.Append("access_token", token, new CookieOptions {

@@ -1,6 +1,6 @@
-# macOS 与 H5 第一版
+# macOS 服务端与网页适配
 
-本分支保留 .NET 8，新增 `/mobile/` 手机控制台和 macOS 服务实现。基于上游 `5286982`，未向上游仓库推送。
+本地 `macos-server` 分支保留 .NET 8、`/mobile/` 手机控制台和 macOS 服务实现，已合入上游 `ee3c694`（2026-10-13）的新版 Web 工作台。旧版运行服务尚未切换到这个分支；未向上游仓库推送。
 
 ## 本版范围
 
@@ -14,6 +14,7 @@
 | 文件、Docker、Compose、定时任务 | 复用原有网页，从“更多工具”进入 |
 | macOS Codex CLI 桥接、用户数据目录、zsh | 已适配，需实机验证已安装 Codex 的协议版本 |
 | Mac 桌面代理、JPEG 主屏幕、触摸、拖拽、滚轮、按键、Unicode 文字、剪贴板 API | 已写入 Swift 源码，需 Mac 编译和授权验证 |
+| 上游新版 Web 远程桌面 | Mac 使用已有 MJPEG 接口；锁屏时提示在电脑上解锁，Windows 继续使用 H.264 |
 | Mac H.264、音频、多屏切换、锁屏／登录界面 | 本版未实现或未保证 |
 | Mac 温度、风扇、每核 CPU 曲线 | 本版未实现；不伪造传感器数据 |
 | H5 Hermes 原生聊天、Markdown 富文本、聊天附件、模型切换、消息队列 | 本版尚未提供 UI；保留原有 API 和 Android 功能 |
@@ -83,6 +84,8 @@ dotnet run --project WebApplication --urls http://0.0.0.0:5104
 | `Docker:Host` | `unix:///Users/你的用户名/.docker/run/docker.sock` |
 
 Mac 数据默认保存在 `~/Library/Application Support/RemoteTool`。`REMOTETOOL_DATA_DIR` 可以覆盖服务数据目录；不要指向已有 Codex 配置目录。服务应由已经登录桌面的普通用户启动，以复用该用户的 Codex 登录和桌面权限。Mac 的关机／重启不自动提权；权限不足会返回实际错误。
+
+2026-10-13 已在这台 Mac 实测：代理的屏幕录制和辅助功能权限均可用，主屏幕为 2304×1296，能抓到 JPEG；真实 HTTP 服务的 Mac 锁屏状态和 MJPEG 路由通过独立临时配置的集成测试。未测试真实鼠标、键盘输入，也未测试锁屏状态下的行为。
 
 ## 5. 实机验证顺序
 

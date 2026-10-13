@@ -48,6 +48,10 @@ final class Capture: NSObject, SCStreamOutput {
         clear()
     }
     func jpeg() async throws -> Data {
+        if screenLocked() {
+            await stop()
+            throw AgentError.message("Mac 当前已锁屏，请先解锁后再连接桌面")
+        }
         try await start()
         for _ in 0..<30 {
             if let data = frame() { return data }
@@ -90,7 +94,12 @@ enum AgentError: Error { case message(String) }
     }
     func handle(_ r: [String:Any]) async throws -> [String:Any] {
         let type = r["type"] as? String ?? ""
-        if type == "status" { return ["screenRecording":CGPreflightScreenCaptureAccess(), "accessibility":AXIsProcessTrusted(), "displayId":CGMainDisplayID(), "sessionLocked":screenLocked()] }
+        if type == "status" {
+            let display = CGMainDisplayID()
+            return ["screenRecording":CGPreflightScreenCaptureAccess(), "accessibility":AXIsProcessTrusted(),
+                    "displayId":display, "sessionLocked":screenLocked(),
+                    "width":CGDisplayPixelsWide(display), "height":CGDisplayPixelsHigh(display)]
+        }
         if type == "capture" { return ["jpeg":try await capture.jpeg().base64EncodedString()] }
         if type == "stop-capture" { await capture.stop(); return ["ok":true] }
         if type == "clipboard-get" { return ["text":NSPasteboard.general.string(forType:.string) ?? ""] }
@@ -106,6 +115,7 @@ enum AgentError: Error { case message(String) }
             }
             return ["ok":true]
         }
+        guard !screenLocked() else { throw AgentError.message("Mac 当前已锁屏，请先解锁后再控制桌面") }
         if type == "key" {
             guard let code = keys[r["code"] as? String ?? ""] else { throw AgentError.message("不支持的物理按键") }
             key(code, r["isKeyDown"] as? Bool ?? false); return ["ok":true]
