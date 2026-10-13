@@ -7,6 +7,16 @@ namespace RemoteTool.WebApi.Services;
 
 public sealed class CodexSessionActivity(IConfiguration configuration)
 {
+    public long LastMessageTime(string id) {
+        try {
+            var home = configuration["Codex:Home"];
+            if (string.IsNullOrWhiteSpace(home)) {
+                var connection = Path.Combine(RemoteToolPaths.CodexBridge, "connection.json");
+                home = File.Exists(connection) ? JsonNode.Parse(File.ReadAllText(connection)).S("home") : "";
+            }
+            return string.IsNullOrWhiteSpace(home) ? 0 : CodexRolloutMessageTimes.LatestSessionMessageTime(home, id, "");
+        } catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { return 0; }
+    }
     public JsonObject Read(string id) {
         var result = Obj(("session_id", id), ("available", false), ("running", false));
         try {

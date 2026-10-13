@@ -1,4 +1,4 @@
-document.addEventListener('DOMContentLoaded',()=>{
+(window.RemoteToolOnReady || (callback => document.addEventListener('DOMContentLoaded', callback))) (()=>{
     const image=document.getElementById('preview-image'),stage=document.getElementById('image-preview'),video=document.getElementById('preview-video');
     if(!image||!stage||!video)return;
     let scale=1,x=0,y=0,pointers=new Map(),pinch=null;

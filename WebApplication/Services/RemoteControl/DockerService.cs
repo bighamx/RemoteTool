@@ -968,7 +968,7 @@ public class DockerService : IDockerService
     /// </summary>
     private async Task<string> ExecuteDockerCommandAsync(string arguments, int timeoutSeconds = 10)
     {
-        return await ExecuteCommandAsync("docker", arguments, timeoutSeconds);
+        return await ExecuteCommandAsync(DockerExecutable.Path, arguments, timeoutSeconds);
     }
 
     /// <summary>
@@ -1001,7 +1001,7 @@ public class DockerService : IDockerService
         {
             return ("docker", $"compose {arguments}");
         }
-        return ("docker-compose", arguments);
+        return (DockerExecutable.ComposePath, arguments);
     }
 
     /// <summary>
@@ -1157,7 +1157,7 @@ public class DockerService : IDockerService
             var output = await ExecuteDockerCommandAsync("info --format json");
             if (string.IsNullOrEmpty(output))
             {
-                return new DockerSystemInfo();
+                throw new InvalidOperationException("Docker CLI 或 daemon 暂不可用；请检查 Docker Desktop 和服务进程的 DockerPath 配置。");
             }
 
             using var document = JsonDocument.Parse(output);
@@ -1177,7 +1177,7 @@ public class DockerService : IDockerService
         catch (Exception ex)
         {
             Console.WriteLine($"GetSystemInfo error: {ex.Message}");
-            return new DockerSystemInfo();
+            throw new InvalidOperationException("无法读取 Docker 服务状态；请检查 Docker Desktop、DockerPath 和服务身份对 docker_engine 管道的权限。", ex);
         }
     }
 }

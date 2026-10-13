@@ -2,19 +2,19 @@
     const shellNav = document.getElementById('shell-nav');
     if (shellNav && window.Vue && window.ViewUIPlus) {
         const shell = Vue.createApp({ data: () => ({ groups: [
-            { title: '概览', items: [{ key: 'home', href: '/', icon: '/icons/home.svg', label: '总览' }] },
+            { title: '概览', items: [{ key: 'home', href: '/#/', icon: '/icons/home.svg', label: '总览' }] },
             { title: '设备管理', items: [
-                { key: 'controls', href: '/remote/index#tab=controls', icon: '/icons/speed.svg', label: '系统与监控' },
-                { key: 'processes', href: '/remote/index#tab=processes', icon: '/icons/memory.svg', label: '进程' },
-                { key: 'screenshot', href: '/remote/index#tab=screenshot', icon: '/icons/desktop_windows.svg', label: '远程桌面' },
-                { key: 'terminal', href: '/remote/index#tab=terminal', icon: '/icons/terminal.svg', label: '终端' },
-                { key: 'docker', href: '/remote/index#tab=docker', icon: '/icons/layers.svg', label: 'Docker' },
-                { key: 'files', href: '/remote/index#tab=files', icon: '/icons/folder.svg', label: '文件' }
+                { key: 'controls', href: '/#/system', icon: '/icons/speed.svg', label: '系统与监控' },
+                { key: 'processes', href: '/#/processes', icon: '/icons/memory.svg', label: '进程' },
+                { key: 'screenshot', href: '/#/desktop', icon: '/icons/desktop_windows.svg', label: '远程桌面' },
+                { key: 'terminal', href: '/#/terminal', icon: '/icons/terminal.svg', label: '终端' },
+                { key: 'docker', href: '/#/docker', icon: '/icons/layers.svg', label: 'Docker' },
+                { key: 'files', href: '/#/files', icon: '/icons/folder.svg', label: '文件' }
             ] },
             { title: '自动化与智能体', items: [
-                { key: 'hangfire', href: '/hangfire', icon: '/icons/schedule.svg', label: '定时任务' },
-                { key: 'codex', href: '/agents/codex', icon: '/icons/codex.png', label: 'Codex' },
-                { key: 'hermes', href: '/agents/hermes', icon: '/icons/hermes.svg', label: 'Hermes' }
+                { key: 'hangfire', href: '/#/jobs', icon: '/icons/schedule.svg', label: '定时任务' },
+                { key: 'codex', href: '/#/codex', icon: '/icons/codex.png', label: 'Codex' },
+                { key: 'hermes', href: '/#/hermes', icon: '/icons/hermes.svg', label: 'Hermes' }
             ] }
         ] }) });
         shell.use(ViewUIPlus);
@@ -26,13 +26,12 @@
             data: () => ({ currentTitle: titleNode.dataset.default || 'RemoteTool' }),
             methods: {
                 sync() {
-                    if (!location.pathname.toLowerCase().startsWith('/remote')) return;
-                    const tab = new URLSearchParams(location.hash.slice(1)).get('tab') || 'controls';
-                    this.currentTitle = ({ controls:'系统与监控', processes:'进程管理', screenshot:'远程桌面', terminal:'命令终端', docker:'Docker', images:'Docker', compose:'Docker', files:'文件管理' })[tab] || '远程管理';
+                    const route = location.hash.match(/^#\/([^?]*)/)?.[1] || 'home';
+                    this.currentTitle = ({ home:'总览', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes' })[route] || 'RemoteTool';
                 }
             },
-            mounted() { this.sync(); window.addEventListener('hashchange', this.sync); window.addEventListener('remote-tab-change', this.sync); },
-            beforeUnmount() { window.removeEventListener('hashchange', this.sync); window.removeEventListener('remote-tab-change', this.sync); }
+            mounted() { this.sync(); window.addEventListener('hashchange', this.sync); window.addEventListener('workspace-route-change', this.sync); },
+            beforeUnmount() { window.removeEventListener('hashchange', this.sync); window.removeEventListener('workspace-route-change', this.sync); }
         });
         titleApp.use(ViewUIPlus);
         titleApp.mount(titleNode);
@@ -109,7 +108,9 @@
     function updateNavigation() {
         const path = location.pathname.toLowerCase();
         let current = 'home';
-        if (path.startsWith('/agents/')) current = path.includes('hermes') ? 'hermes' : 'codex';
+        const route = location.hash.match(/^#\/([^?]*)/)?.[1];
+        if (route) current = ({home:'home',system:'controls',processes:'processes',desktop:'screenshot',terminal:'terminal',docker:'docker','docker/images':'docker','docker/compose':'docker',files:'files',jobs:'hangfire',codex:'codex',hermes:'hermes'})[route] || 'home';
+        else if (path.startsWith('/agents/')) current = path.includes('hermes') ? 'hermes' : 'codex';
         else if (path.startsWith('/hangfire')) current = 'hangfire';
         else if (path.startsWith('/remote')) {
             const tab = new URLSearchParams(location.hash.slice(1)).get('tab') || 'controls';
@@ -122,6 +123,7 @@
         });
     }
     window.addEventListener('hashchange', updateNavigation);
+    window.addEventListener('workspace-route-change', updateNavigation);
     window.addEventListener('remote-tab-change', updateNavigation);
     updateNavigation();
 });

@@ -1263,6 +1263,10 @@
     overflow-y: auto;
 }
 
+.processes-initial-loading{display:flex;min-height:clamp(240px,45vh,520px);flex-direction:column;align-items:center;justify-content:center;gap:18px;color:var(--text-secondary);font-size:14px}
+.processes-initial-loading[hidden],.processes-loading-spinner[hidden]{display:none!important}
+.processes-loading-spinner{width:62px;height:62px;border:5px solid var(--border-color);border-top-color:var(--accent-primary);border-radius:50%;animation:refreshSpin .9s linear infinite}
+
 .processes-table {
     width: 100%;
     border-collapse: collapse;

@@ -37,8 +37,23 @@ public static class CompletedToolHistory
         for (var index = 0; index < groups.Count; index++) {
             var group = groups[index];
             foreach (var row in group) {
-                if (index >= active) { output.Add(row?.DeepClone()); continue; }
-                if (row?["role"]?.ToString() == "tool") continue;
+                if (index >= active) {
+                    // The live turn keeps its rows verbatim so clients can render in-flight
+                    // narration and tool progress. Raw tool output rows are the exception: they
+                    // are large, machine-only payloads and were shown as "工具" bubbles in the
+                    // history (the user reported them as noise). Interactive rows stay (see below).
+                    if (row?["role"]?.ToString() == "tool" && !AgentHistoryWindow.Interactive(row)) continue;
+                    output.Add(row?.DeepClone()); continue;
+                }
+                // Interactive tool rows carry the only copy of a clarify/question prompt and the
+                // user's answer; keep them. Ordinary tool rows are dropped and summarised instead.
+                if (row?["role"]?.ToString() == "tool") {
+                    if (!AgentHistoryWindow.Interactive(row)) continue;
+                    var interactive = row?.DeepClone();
+                    if (interactive is JsonObject item) { item.Remove("tool_calls"); }
+                    output.Add(interactive);
+                    continue;
+                }
                 if (row?["role"]?.ToString() == "assistant" && string.IsNullOrWhiteSpace(row?["content"]?.ToString()) &&
                     row?["attachments"] is not JsonArray { Count: > 0 }) continue;
                 var copy = row?.DeepClone();

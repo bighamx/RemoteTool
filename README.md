@@ -1,7 +1,5 @@
 # RemoteTool
 
-> 本开发分支新增 macOS 服务端适配，并在根路径的 Web 工作台支持手机浏览器与 PWA 安装。安装、功能范围和实机验证步骤请阅读 [MACOS-H5.md](MACOS-H5.md)。Mac 桌面代理需要在 Mac 上编译并授权。
-
 <div align="center">
 
 **基于 .NET 8 的 Web 后台管理与远程控制服务**
@@ -17,6 +15,8 @@
 
 ## 🖥️ 系统支持
 本项目支持 Windows 和 Linux 操作系统。
+
+> 本仓库新增 macOS 服务端适配，并在根路径的 Web 工作台支持手机浏览器与 PWA 安装。安装、功能范围和实机验证步骤请阅读 [MACOS-H5.md](MACOS-H5.md)。Mac 桌面代理需要在 Mac 上编译并授权。
 
 配套 **RemoteTool Android App** 支持 Android 8.0 及以上，采用 Kotlin / Jetpack Compose 原生界面，通过本项目的服务端 API 管理电脑。
 
@@ -174,8 +174,10 @@ dotnet run
 
 4. **访问服务**
 
-- 主页：`http://localhost:5104/`
-- Hangfire 面板：`http://localhost:5104/hangfire`
+- 单页工作台：`http://localhost:5104/#/`。左侧导航切换总览、远程管理、任务、Codex、Hermes 时不刷新整页，例如终端 `/#/terminal`、远程桌面 `/#/desktop`、任务 `/#/jobs`。
+- 旧地址 `/remote/index#tab=...`、`/hangfire`、`/agents/codex`、`/agents/hermes` 仍可作为书签访问，并会跳转到工作台地址。
+
+Windows 上若 Docker Desktop 安装在交互用户目录，IIS 可能找不到 `docker.exe`。可在私有 `appsettings.json` 配置 `RemoteControl:DockerPath` 和 `RemoteControl:DockerComposePath`，指向服务账户可读取的 CLI 副本；未配置时优先查找 `%ProgramData%\RemoteTool\tools`。`/api/docker/info` 应返回服务端版本，连接失败会显示错误，不再把失败当作 0 个容器。FFmpeg 同样可通过 `RemoteControl:FFmpegPath` 指定。
 
 ---
 

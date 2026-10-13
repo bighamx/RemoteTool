@@ -180,12 +180,9 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     val messageRows = model.messages
     val messageItems = remember(messageRows) { chatMessageItems(messageRows) }
     val sessionsScroll = model.sessionsListState
-    val filteredSessions = remember(model.sessions, filter) {
-        model.orderedSessions.filter {
-            it.optString("title").contains(filter, true) ||
-                it.optString("latest_user_message", it.optString("preview")).contains(filter, true)
-        }
-    }
+    val searchingSessions = filter.isNotBlank()
+    LaunchedEffect(filter) { model.searchSessions(filter) }
+    val filteredSessions = if (searchingSessions) model.sessionSearchResults else model.orderedSessions
     val sessionsDragged by sessionsScroll.interactionSource.collectIsDraggedAsState()
     LaunchedEffect(sessionsDragged) { if (sessionsDragged) model.sessionsListTouched = true }
     var latestRequest by remember(model.selectedId, list) { mutableStateOf(0L) }
@@ -352,9 +349,23 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 filter,
                 { filter = it },
                 label = { Text("搜索会话") },
+                placeholder = { Text("搜索标题和历史消息") },
+                trailingIcon = {
+                    if (filter.isNotEmpty()) IconButton(onClick = { filter = "" }) {
+                        Icon(Icons.Outlined.Close, contentDescription = "清空搜索")
+                    }
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
             )
+            if (searchingSessions && model.sessionSearchLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (searchingSessions && model.sessionSearchError != null) {
+                Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(model.sessionSearchError!!, Modifier.weight(1f), color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { model.searchSessions(filter) }) { Text("重试") }
+                }
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 Modifier.fillMaxSize().padding(end = 8.dp),
@@ -362,7 +373,9 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (model.sessions.isEmpty() && !model.loading)
+                if (searchingSessions && filteredSessions.isEmpty() && !model.sessionSearchLoading && model.sessionSearchError == null)
+                    item { Text("没有匹配的会话或历史消息") }
+                if (!searchingSessions && model.sessions.isEmpty() && !model.loading)
                     item { Text("暂无会话。点击 + 开始与 $agentName 对话。") }
                 items(
                     filteredSessions,
@@ -405,7 +418,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         }
                                     }
                                     Text(
-                                        session.optString("latest_user_message", session.optString("preview")),
+                                        if (searchingSessions && session.optString("search_snippet").isNotBlank()) session.optString("search_snippet")
+                                        else session.optString("latest_user_message", session.optString("preview")),
                                         style = MaterialTheme.typography.bodySmall,
                                         maxLines = 2,
                                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
@@ -466,7 +480,9 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         }
                     }
                 }
-                if (model.hasMore)
+                if (searchingSessions && model.sessionSearchHasMore)
+                    item { TextButton(onClick = { model.moreSearchSessions() }, enabled = !model.sessionSearchLoading) { Text("加载更多搜索结果") } }
+                if (!searchingSessions && model.hasMore)
                     item { TextButton(onClick = { model.moreSessions() }) { Text("加载更多会话") } }
             }
             SessionListScrollbar(sessionsScroll, Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(4.dp).padding(vertical = 12.dp))
@@ -500,7 +516,9 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 }
                 items(messageItems, key = { it.key }) { item ->
                     val message = item.message
-                    if (message.role == "system") {
+                    if (message.role == "system" && message.nativeTurnId == "interaction") {
+                        InteractionCard(message, agentName)
+                    } else if (message.role == "system") {
                         Row(Modifier.fillMaxWidth().then(if (message.nativeTurnId == "toolSummary") Modifier.clickable { toolDetails = message.serverId.toString() } else Modifier)
                             .padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically) {
@@ -1081,6 +1099,69 @@ private fun RunTimers(runId: String?, timing: AgentRunTiming, responseLabel: Str
         }
     }
 }
+
+@Composable
+private fun InteractionCard(message: HermesMessage, agentName: String) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp)) {
+                Text("提问", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(8.dp))
+                message.interactions.forEachIndexed { index, entry ->
+                    if (index > 0) {
+                        HorizontalDivider(Modifier.padding(vertical = 10.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant)
+                    }
+                    val question = entry.optString("question")
+                    val answer = entry.optString("answer")
+                    val status = entry.optString("status")
+                    val choices = entry.optJSONArray("choices")?.let { array ->
+                        (0 until array.length()).map { array.optString(it) }
+                    }.orEmpty()
+                    if (question.isNotBlank())
+                        Text(question, style = MaterialTheme.typography.bodyMedium)
+                    if (choices.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            choices.forEach { choice ->
+                                val picked = choice == answer
+                                Surface(shape = MaterialTheme.shapes.small,
+                                    color = if (picked) MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceContainerHighest) {
+                                    Text(choice, Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (picked) MaterialTheme.colorScheme.onPrimaryContainer
+                                            else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row {
+                        Text("回答", style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            answer.ifBlank { when (status) { "answered" -> "已回答"; "declined" -> "已取消"; else -> "未回答" } },
+                            style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun FlowRow(
+    horizontalArrangement: Arrangement.Horizontal = Arrangement.Start,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+    content: @Composable () -> Unit,
+) = androidx.compose.foundation.layout.FlowRow(horizontalArrangement = horizontalArrangement,
+    verticalArrangement = verticalArrangement, content = { content() })
 
 @Composable
 private fun MessageBubble(

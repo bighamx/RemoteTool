@@ -12,15 +12,46 @@ namespace RemoteTool.WebApi.Controllers;
 public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, HermesSessionActivity activity, HermesTitleService titles) : ControllerBase
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效的会话或任务标识");
+    [HttpGet("sessions/search")] public async Task<IActionResult> SearchSessions([FromQuery] string query, [FromQuery] int offset = 0, CancellationToken ct = default) {
+        query = query?.Trim();
+        if (string.IsNullOrEmpty(query) || query.Length > 500 || offset < 0) return BadRequest(new { message = "搜索参数无效" });
+        Response.Headers.CacheControl = "no-store";
+        try { return Ok(await management.Invoke("session_search", JsonSerializer.SerializeToElement(new { query, offset }), ct)); }
+        catch (Exception error) when (error is InvalidOperationException or IOException) { return StatusCode(503, new { message = error.Message }); }
+    }
     [HttpGet("capabilities")] public async Task<IActionResult> Capabilities(CancellationToken ct) {
         try {
-        using var upstream = await bridge.SendAsync(HttpMethod.Get, "v1/capabilities", null, null, ct);
-        if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 能力" });
-        var result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
+        var result = new System.Text.Json.Nodes.JsonObject { ["attachments"] = true, ["message_actions"] = true };
+        try {
+            using var upstream = await bridge.SendAsync(HttpMethod.Get, "v1/capabilities", null, null, ct);
+            if (upstream.IsSuccessStatusCode) result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
+            else result["channel"] = false;
+        } catch (Exception error) when (error is InvalidOperationException or HttpRequestException or IOException) { result["channel"] = false; }
         result["chuckie_features"] = new System.Text.Json.Nodes.JsonObject { ["attachment_steering"] = true, ["external_session_activity"] = true, ["message_actions"] = true };
+        // The loopback API Server is a separate switch in the user's .env and can be off
+        // while the channel is reachable. Surface it so clients can prompt instead of
+        // silently losing the ability to address runs owned by other clients.
+        try {
+            var status = await management.Invoke("api_server_status", null, ct);
+            result["api_server"] = status.TryGetProperty("data", out var data)
+                ? System.Text.Json.Nodes.JsonNode.Parse(data.GetRawText())
+                : System.Text.Json.Nodes.JsonNode.Parse(status.GetRawText());
+        } catch (Exception error) when (error is InvalidOperationException or IOException or OperationCanceledException) {
+            result["api_server"] = new System.Text.Json.Nodes.JsonObject { ["enabled"] = false, ["unknown"] = true };
+        }
         return Ok(result);
         } catch (Exception error) when (error is InvalidOperationException or HttpRequestException or IOException) {
             return StatusCode(503, new { message = error is InvalidOperationException ? error.Message : "无法访问本机 Hermes" });
+        }
+    }
+    [HttpPost("api-server")] public async Task<IActionResult> EnableApiServer([FromBody] JsonElement body, CancellationToken ct) {
+        Response.Headers.CacheControl = "no-store";
+        try {
+            var restart = body.ValueKind == JsonValueKind.Object && body.TryGetProperty("restart", out var flag) && flag.ValueKind == JsonValueKind.True;
+            var result = await management.Invoke("enable_api_server", JsonSerializer.SerializeToElement(new { restart }), ct);
+            return Ok(result);
+        } catch (Exception error) when (error is InvalidOperationException or IOException or OperationCanceledException) {
+            return StatusCode(503, new { message = error.Message });
         }
     }
     [HttpGet("sessions/{id}/context")] public async Task<IActionResult> SessionContext(string id, CancellationToken ct) {
@@ -160,6 +191,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         json = CompletedToolHistory.Reduce(json, state["running"]?.GetValue<bool>() == true,
             state["started_at"]?.GetValue<long>() ?? 0, id, state["revision"]?.ToString() ?? "");
         json = AgentHistoryWindow.Select(json, limit, from_id, older_before);
+        json = AgentInteractiveMessages.Present(json);
         return Ok(attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}"));
     }
     [HttpPost("sessions/{id}/messages/{messageId}/attachments")] public IActionResult BindAttachments(string id, string messageId, [FromBody] JsonElement body)

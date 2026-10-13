@@ -551,7 +551,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var result = Obj(("id", thread.S("id")), ("title", thread.S("name", thread.S("preview", "未命名会话"))),
         ("preview", thread.S("preview")), ("cwd", thread.S("cwd")), ("source", thread.S("source", "codex")),
         ("model", thread.S("model")), ("project_id", thread?["projectId"]), ("message_count", thread.A("turns").Count), ("status", thread?["status"]));
-        result["last_active"] = (thread?["updatedAt"] ?? thread?["updated_at"] ?? thread?["createdAt"] ?? thread?["created_at"])?.DeepClone();
+        var messageTime = CodexRolloutMessageTimes.LatestSessionMessageTime(home, thread.S("id"), thread.S("path"));
+        result["last_active"] = messageTime > 0 ? JsonValue.Create(messageTime)
+            : (thread?["createdAt"] ?? thread?["created_at"])?.DeepClone();
         result["pinned"] = sessionPins.Contains(thread.S("id"));
         if (thread["status"].S("type") != "active" && CodexRollout.IsRunning(home, RolloutPath(thread))) result["status"] = Obj(("type", "active"), ("activeFlags", new JsonArray()));
         return result;
@@ -972,8 +974,25 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private static long MessageId(string id) => Convert.ToInt64(Hash(id)[..14], 16) + 1;
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
-        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 19), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("state_version", 19));
+        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 20), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("native_session_search", true), ("state_version", 20));
+        if (path == "sessions/search" && method == "GET") {
+            var query = context.Request.Query["query"].ToString().Trim();
+            if (query.Length is < 1 or > 500) throw new CodexError("搜索关键词应为 1 至 500 字", 400);
+            var request = Obj(("searchTerm", query), ("limit", 50), ("sortKey", "recency_at"));
+            if (context.Request.Query["cursor"].Count > 0) request["cursor"] = context.Request.Query["cursor"].ToString();
+            JsonObject result;
+            try { result = await rpc.Call("thread/search", request, context.RequestAborted); }
+            catch (CodexError error) when (error.Message.Contains("method", StringComparison.OrdinalIgnoreCase)) {
+                throw new CodexError("此设备的 Codex 版本暂不支持原生搜索，请更新 Codex", 501);
+            }
+            var rows = new JsonArray();
+            foreach (var hit in result.A("data")) {
+                if (hit["thread"] is not JsonObject thread) continue;
+                var row = Session(thread); row["search_snippet"] = hit.S("snippet"); rows.Add(row);
+            }
+            return Obj(("data", rows), ("next_cursor", result["nextCursor"]), ("has_more", result.S("nextCursor").Length > 0));
+        }
         if (path == "title-model") return method == "GET" ? titles.PublicConfig() : titles.Save(body);
         if (path == "title-model/test") return Obj(("title", await titles.Generate("修复手机会话的消息顺序与状态显示")));
         if (path == "title-model/generate") return Obj(("title", await titles.Generate(body.S("input"), context.RequestAborted)));

@@ -33,11 +33,130 @@ if _bootstrap and _bootstrap.origin:
             sys.exit(subprocess.call([str(_python), str(Path(__file__).resolve())]))
 import hermes_bootstrap
 
+def _restart_gateway_process(home):
+    """Restart the Hermes gateway without inheriting this IIS-supervised process tree.
+
+    Called only after a verified API_SERVER_ENABLED=1 write. The gateway serves the
+    very session that may be running this helper, so a naive in-tree restart would be
+    killed with its caller. The API Server does not require a gateway restart to serve
+    /v1/runs, so a detached, delayed restart is deliberate.
+    """
+    if os.name == "nt":
+        exe = Path(home) / "bin" / "hermes.exe"
+        if exe.is_file():
+            creation = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+            subprocess.Popen([str(exe), "gateway", "restart"], cwd=str(exe.parent),
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=creation, close_fds=True)
+            return "hermes gateway restart"
+    return None
+
+
+def api_server_action(action, body):
+    """Detect or enable Hermes' loopback API Server in the user's .env.
+
+    The managed poller runs as the service identity and cannot reach the interactive
+    user's .env, so this helper (which runs as the user) reports state and edits the
+    file, but never reboots the gateway unless the caller explicitly asks (restart=true).
+    """
+    from hermes_constants import get_hermes_home
+    home = get_hermes_home()
+    env_path = home / ".env"
+    text = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    wanted = {"API_SERVER_ENABLED": "1", "API_SERVER_HOST": "127.0.0.1", "API_SERVER_PORT": "8642"}
+    current = {}
+    lines = text.split("\n")
+    for field in list(wanted) + ["API_SERVER_KEY"]:
+        for line in lines:
+            key, _, value = line.partition("=")
+            if key.strip() == field and value:
+                current[field] = value.strip().strip('"').strip("'")
+                break
+    api = {
+        "enabled": current.get("API_SERVER_ENABLED", "").strip() in {"1", "true", "yes", "on"},
+        "host": current.get("API_SERVER_HOST", ""),
+        "port": current.get("API_SERVER_PORT", ""),
+        "key_set": bool(current.get("API_SERVER_KEY", "")),
+        "env_file": str(env_path),
+    }
+    if action == "api_server_status":
+        return {"data": api}
+    live = {
+        "enabled": api["enabled"],
+        "complete": api["enabled"] and bool(api["host"]) and bool(api["port"]) and api["key_set"],
+    }
+    if not live["complete"]:
+        # Write missing fields and mint a key when absent; never overwrite an existing key.
+        generated = None
+        if not env_path.exists():
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+            lines = []
+        for field, value in wanted.items():
+            if field in current:
+                continue
+            existing = [i for i, line in enumerate(lines) if line.strip().startswith(field + "=")]
+            if existing:
+                lines[existing[0]] = f"{field}={value}"
+            else:
+                lines.append(f"{field}={value}")
+        if not api["key_set"]:
+            generated = "hk-" + uuid.uuid4().hex + uuid.uuid4().hex
+            existing = [i for i, line in enumerate(lines) if line.strip().startswith("API_SERVER_KEY=")]
+            if existing:
+                lines[existing[0]] = f"API_SERVER_KEY={generated}"
+            else:
+                lines.append(f"API_SERVER_KEY={generated}")
+        backup = home / "backups" / "chuckie-helper" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup.mkdir(parents=True, exist_ok=True)
+        if env_path.exists():
+            shutil.copy2(env_path, backup / ".env")
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        live = {"enabled": True, "complete": True}
+        api.update({"enabled": True, "host": api["host"] or "127.0.0.1", "port": api["port"] or "8642", "key_set": True})
+    restart_command = None
+    if body.get("restart") is True:
+        restart_command = _restart_gateway_process(home)
+    return {"data": {**api, "restarted": restart_command is not None, "restart_command": restart_command}}
+
+
 def main():
     request = json.load(sys.stdin)
     action = request.get("action")
-    if action not in {"providers", "save_provider", "default_model", "model_info", "model_reasoning", "session_context", "compress_session", "run_lookup", "message_action"}:
+    if action == "session_search":
+        with contextlib.redirect_stdout(io.StringIO()):
+            from hermes_state import SessionDB
+            body = request.get("body") or {}
+            query, offset = str(body.get("query") or "").strip(), int(body.get("offset") or 0)
+            if not query or len(query) > 500 or offset < 0:
+                raise ValueError("Invalid search")
+            db = SessionDB()
+            try:
+                titles = db.list_sessions_rich(search_query=query, order_by_last_active=True, limit=51, offset=offset)
+                hits = db.search_messages(query, role_filter=["user", "assistant"], limit=51, offset=offset,
+                    sort="newest", fields=["session_id", "snippet", "timestamp"])
+                rows = {}
+                for row in titles[:50]:
+                    rows[row["id"]] = dict(row)
+                for hit in hits[:50]:
+                    session_id = db.resolve_resume_session_id(hit["session_id"])
+                    if session_id not in rows:
+                        row = db.get_session(session_id)
+                        if not row or row.get("hidden") or row.get("archived"):
+                            continue
+                        rows[session_id] = dict(row)
+                    rows[session_id].setdefault("search_snippet", hit.get("snippet") or "")
+                result = {"data": list(rows.values()), "has_more": len(titles) > 50 or len(hits) > 50,
+                    "offset": offset, "limit": 50}
+            finally:
+                db.close()
+        print(json.dumps(result, ensure_ascii=True))
+        return
+    if action not in {"providers", "save_provider", "default_model", "model_info", "model_reasoning", "session_context", "compress_session", "run_lookup", "message_action", "api_server_status", "enable_api_server"}:
         raise ValueError("Unsupported settings operation")
+    if action in {"api_server_status", "enable_api_server"}:
+        result = api_server_action(action, request.get("body") or {})
+        print(json.dumps(result, ensure_ascii=True))
+        return
     if action == "message_action":
         with contextlib.redirect_stdout(io.StringIO()):
             from hermes_state import SessionDB

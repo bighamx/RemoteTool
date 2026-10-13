@@ -11,6 +11,9 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效会话或任务标识");
     [HttpGet("capabilities")] public Task Capabilities(CancellationToken ct) => Forward(HttpMethod.Get, "capabilities", null, ct);
+    [HttpGet("sessions/search")] public Task SearchSessions([FromQuery] string query, [FromQuery] string cursor, CancellationToken ct) =>
+        Forward(HttpMethod.Get, $"sessions/search?query={Uri.EscapeDataString(query ?? "")}" +
+            (string.IsNullOrEmpty(cursor) ? "" : $"&cursor={Uri.EscapeDataString(cursor)}"), null, ct);
     [HttpGet("projects")] public Task Projects(CancellationToken ct) => Forward(HttpMethod.Get, "projects", null, ct);
     [HttpGet("model-options")] public Task Models(CancellationToken ct) => Forward(HttpMethod.Get, "model-options", null, ct);
     [HttpGet("providers")] public Task Providers(CancellationToken ct) => Forward(HttpMethod.Get, "providers", null, ct);
@@ -75,10 +78,19 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
             if (upstream.IsSuccessStatusCode) {
                 var live = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(timeout.Token));
                 if (live?["available"]?.GetValue<bool>() == true) {
-                    if (live["activity_id"]?.ToString() != result["activity_id"]?.ToString()) {
-                        result["progress"] = new System.Text.Json.Nodes.JsonArray(); result["event_count"] = 0; result["last_response_at"] = null;
+                    // The desktop IPC is a per-client view: it only knows the turns the desktop app
+                    // started, so a turn driven by another client (CLI, VS Code extension, another
+                    // app-server) is invisible to it. When the shared rollout/lock verdict says a turn
+                    // is running, never let that view downgrade it to idle. Desktop may still confirm
+                    // running=true, in which case its activity_id is the more precise one.
+                    var localRunning = result["running"]?.GetValue<bool>() == true;
+                    var desktopRunning = live["running"]?.GetValue<bool>() == true;
+                    if (!localRunning || desktopRunning) {
+                        if (live["activity_id"]?.ToString() != result["activity_id"]?.ToString()) {
+                            result["progress"] = new System.Text.Json.Nodes.JsonArray(); result["event_count"] = 0; result["last_response_at"] = null;
+                        }
+                        foreach (var field in new[] { "available", "running", "activity_id", "kind", "started_at", "phase_started_at" }) result[field] = live[field]?.DeepClone();
                     }
-                    foreach (var field in new[] { "available", "running", "activity_id", "kind", "started_at", "phase_started_at" }) result[field] = live[field]?.DeepClone();
                     result["observed_only"] = true; result["source"] = "desktop";
                     if (result["running"]?.GetValue<bool>() != true) { result["progress"] = new System.Text.Json.Nodes.JsonArray(); result["event_count"] = 0; }
                 }
@@ -192,6 +204,13 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
                 HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>()?.DisableBuffering();
                 using var reader = new StreamReader(await upstream.Content.ReadAsStreamAsync(ct));
                 while (await reader.ReadLineAsync(ct) is { } line) { await Response.WriteAsync(line + "\n", ct); await Response.Body.FlushAsync(ct); }
+            } else if ((path == "sessions" || path.StartsWith("sessions?", StringComparison.Ordinal)) && upstream.IsSuccessStatusCode) {
+                var payload = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
+                foreach (var row in payload["data"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray()) {
+                    var timestamp = activity.LastMessageTime(row?["id"]?.ToString() ?? "");
+                    if (row != null) row["last_active"] = timestamp > 0 ? System.Text.Json.Nodes.JsonValue.Create(timestamp) : null;
+                }
+                await Response.WriteAsJsonAsync(payload, ct);
             } else if (path == "capabilities" && upstream.IsSuccessStatusCode) {
                 var payload = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
                 payload["chuckie_features"] = new System.Text.Json.Nodes.JsonObject { ["external_session_activity"] = true };
