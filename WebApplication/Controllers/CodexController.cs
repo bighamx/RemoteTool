@@ -46,18 +46,16 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     }
     [HttpPost("sessions/{id}/rewind")] public Task Rewind(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/rewind", body, ct);
     [HttpPost("sessions/{id}/model")] public Task SetModel(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/model", body, ct);
-    [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 30, CancellationToken ct = default) {
+    [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 100, [FromQuery] string from_id = null, [FromQuery] string older_before = null, CancellationToken ct = default) {
         using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{Id(id)}/messages", null, ct);
         if (!upstream.IsSuccessStatusCode) return StatusCode((int)upstream.StatusCode, System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)));
         var json = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct));
-        var rows = json?["data"] as System.Text.Json.Nodes.JsonArray;
-        if (rows != null) {
-            var keep = Math.Clamp(limit, 1, 500);
-            json["data"] = new System.Text.Json.Nodes.JsonArray(rows.Skip(Math.Max(0, rows.Count - keep)).Select(row => row?.DeepClone()).ToArray());
-        }
+        json = AgentHistoryWindow.Select(json, limit, from_id, older_before);
         return Ok(attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}"));
     }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
+    [HttpGet("sessions/{id}/tools/{summaryId}")] public Task ToolDetails(string id, string summaryId, [FromQuery] int offset, CancellationToken ct) =>
+        Forward(HttpMethod.Get, $"sessions/{Id(id)}/tools/{Id(summaryId)}?offset={Math.Max(0, offset)}", null, ct);
     [HttpGet("sessions/{id}/queue")] public Task Queue(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"sessions/{Id(id)}/queue", null, ct);
     [HttpPost("sessions/{id}/queue")] public Task QueueAction(string id, [FromBody] JsonElement body, CancellationToken ct) {
         var normalized = System.Text.Json.Nodes.JsonNode.Parse(body.GetRawText())!.AsObject();
@@ -122,9 +120,34 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpGet("sessions/{id}/active-run")] public Task ActiveRun(string id, CancellationToken ct) =>
         Forward(HttpMethod.Get, $"sessions/{Id(id)}/active-run", null, ct);
     [HttpGet("runs/{id}")] public Task Status(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"runs/{Id(id)}", null, ct);
-    [HttpGet("runs/lookup")] public Task Lookup([FromQuery] string key, CancellationToken ct) => Forward(HttpMethod.Get, "runs/lookup?key=" + Uri.EscapeDataString(Id(key)), null, ct);
+    [HttpGet("runs/lookup")] public async Task Lookup([FromQuery] string key, CancellationToken ct) {
+        if (!Regex.IsMatch(key ?? "", "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = "无效的请求标识" }, ct); return; }
+        // The IIS host can read the bridge's durable steering journal even while
+        // an older, already-running bridge binary is finishing a desktop task.
+        if (SteeringReceipt(key) is { } receipt) { await Response.WriteAsJsonAsync(receipt, ct); return; }
+        await Forward(HttpMethod.Get, "runs/lookup?key=" + Uri.EscapeDataString(key), null, ct);
+    }
+    private static object SteeringReceipt(string key) {
+        try {
+            var path = Path.Combine(RemoteToolPaths.CodexState, "runs.json");
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var document = JsonDocument.Parse(stream);
+            object match = null;
+            foreach (var run in document.RootElement.EnumerateObject()) {
+                if (!run.Value.TryGetProperty("steering_requests", out var requests) || requests.ValueKind != JsonValueKind.Object ||
+                    !requests.TryGetProperty(key, out var saved)) continue;
+                if (match != null) return new { found = true, kind = "steering", delivery = "unknown" };
+                var status = saved.TryGetProperty("status", out var state) ? state.GetString() : "";
+                var session = run.Value.TryGetProperty("session_id", out var id) ? id.GetString() : "";
+                match = new { found = true, kind = "steering", run_id = run.Name, session_id = session,
+                    status, delivery = status == "accepted" ? "accepted" : status == "rejected" ? "rejected" : "unknown" };
+            }
+            return match;
+        } catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { return null; }
+    }
     [HttpGet("runs/{id}/events")] public Task Events(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"runs/{Id(id)}/events", null, ct);
     [HttpPost("runs/{id}/stop")] public Task Stop(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"runs/{Id(id)}/stop", JsonSerializer.SerializeToElement(new { }), ct);
+    [HttpPost("runs/{id}/handover")] public Task Handover(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"runs/{Id(id)}/handover", JsonSerializer.SerializeToElement(new { }), ct);
     [HttpPost("runs/{id}/steer")] public Task Steer(string id, [FromBody] JsonElement body, CancellationToken ct) {
         var key = Request.Headers["Idempotency-Key"].ToString();
         if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; return Response.WriteAsJsonAsync(new { message = "插话需要唯一请求标识" }, ct); }

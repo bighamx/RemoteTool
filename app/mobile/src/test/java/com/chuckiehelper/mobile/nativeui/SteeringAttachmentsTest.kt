@@ -13,14 +13,26 @@ class SteeringAttachmentsTest {
         assertEquals("image-id", merged.last().attachments.single().getString("id"))
         assertEquals("正在发送", merged.last().delivery)
     }
-    @Test fun repeatedTextBindsEachAttachmentToItsOwnCanonicalMessage() {
-        val first = SteeringMessage("key1", "session", "看图", setOf(1), 1, attachments = listOf(JSONObject().put("id", "image-1")))
-        val second = first.copy(key = "key2", attachments = listOf(JSONObject().put("id", "image-2")))
-        val history = listOf(HermesMessage("user", "看图", 2), HermesMessage("user", "看图", 3))
+    @Test fun repeatedTextBindsOnlyWhenEachSendHasOneTimeBoundCandidate() {
+        val first = SteeringMessage("key1", "session", "看图", setOf(1), 1, delivery = "已送达", timestamp = 1000,
+            attachments = listOf(JSONObject().put("id", "image-1")))
+        val second = first.copy(key = "key2", timestamp = 200000, attachments = listOf(JSONObject().put("id", "image-2")))
+        val history = listOf(
+            HermesMessage("user", "看图", 2, attachments = first.attachments, timestamp = 2000),
+            HermesMessage("user", "看图", 3, attachments = second.attachments, timestamp = 201000))
         val (pending, accepted) = reconcileSteeringMessages(history, listOf(first, second))
         assertTrue(pending.isEmpty())
         assertEquals(listOf(2L, 3L), accepted.map { it.second.serverId })
         assertEquals(listOf("image-1", "image-2"), accepted.map { it.first.attachments.single().getString("id") })
+    }
+    @Test fun ambiguousRepeatedHistoryNeverBindsAnAttachmentToTheWrongRow() {
+        val steer = SteeringMessage("key", "session", "看图", emptySet(), 0, delivery = "已送达", timestamp = 1000,
+            attachments = listOf(JSONObject().put("id", "new-image")))
+        val history = listOf(HermesMessage("user", "看图", 2, timestamp = 1500),
+            HermesMessage("user", "看图", 3, timestamp = 1600))
+        val (pending, accepted) = reconcileSteeringMessages(history, listOf(steer))
+        assertEquals(listOf(steer), pending)
+        assertTrue(accepted.isEmpty())
     }
     @Test fun failedSteeringKeepsItsAttachmentForRetryAndHistoryCannotAcknowledgeIt() {
         val steer = SteeringMessage("key", "session", "看图", setOf(1), 1, delivery = "发送失败", attachments = listOf(JSONObject().put("id", "image")))

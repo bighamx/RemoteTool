@@ -36,7 +36,8 @@ public sealed class HermesTitleService {
     private async Task Generate(string id, string input) {
         try {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(40));
-            var title = (await titleRequest("title-model/generate", Obj(("input", input)), timeout.Token)).S("title");
+            var title = CodexTitleGenerator.DirectTitle(input) ??
+                (await titleRequest("title-model/generate", Obj(("input", input)), timeout.Token)).S("title");
             await rename.WaitAsync();
             try {
                 using var info = await bridge.SendAsync(HttpMethod.Get, "api/sessions/" + id, null, null, CancellationToken.None);

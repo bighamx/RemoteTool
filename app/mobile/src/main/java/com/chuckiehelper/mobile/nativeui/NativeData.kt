@@ -80,6 +80,7 @@ class NativeApi(
     companion object {
         val client =
             OkHttpClient.Builder()
+                .addInterceptor(JsonRequestCompression())
                 .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
                 .readTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
                 .followRedirects(false)

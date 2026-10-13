@@ -15,6 +15,12 @@ internal static class TitleModelChecks {
             using var listener = new HttpListener(); listener.Prefixes.Add($"http://127.0.0.1:{port}/"); listener.Start();
             var config = new JsonObject { ["enabled"] = true, ["base_url"] = $"http://127.0.0.1:{port}/v1", ["model"] = "cheap-model", ["api_key"] = "test-private-key", ["api_mode"] = "chat_completions" };
             void Check(bool result) { if (!result) throw new Exception("Title model contract failed"); }
+            Check(CodexTitleGenerator.DirectTitle("  小鸡游戏 \n 测试 ") == "小鸡游戏 测试");
+            Check(CodexTitleGenerator.DirectTitle(new string('中', 19)) == new string('中', 19));
+            Check(CodexTitleGenerator.DirectTitle(new string('中', 20)) == null);
+            var emojiTitle = string.Concat(Enumerable.Repeat("😀", 19));
+            Check(CodexTitleGenerator.DirectTitle(emojiTitle) == emojiTitle);
+            Check(CodexTitleGenerator.DirectTitle("  \n ") == null);
             config["prompt"] = "Custom concise title instruction";
             var saved = generator.Save(config);
             Check(saved["prompt"].ToString() == "Custom concise title instruction");
@@ -59,7 +65,7 @@ internal static class TitleModelChecks {
             try { await generate; throw new Exception("Expected provider failure"); } catch (CodexError error) { Check(error.Code == "title_model_failed" && !error.Message.Contains("test-private-key")); }
             generator.Save(new JsonObject { ["clear_api_key"] = true }); Check(!generator.PublicConfig()["has_api_key"].GetValue<bool>());
             generator.Save(new JsonObject { ["prompt"] = "" }); Check(generator.PublicConfig()["prompt"].ToString() == CodexTitleGenerator.DefaultPrompt);
-            Console.WriteLine("Title model checks passed: both transports, input/output budget, no key echo, no replay, manual rename, provider failure");
+            Console.WriteLine("Title model checks passed: short direct titles, both transports, input/output budget, no key echo, no replay, manual rename, provider failure");
         } finally { Directory.Delete(folder, true); }
     }
 }

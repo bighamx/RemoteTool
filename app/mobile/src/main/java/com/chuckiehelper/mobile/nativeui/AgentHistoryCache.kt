@@ -38,14 +38,16 @@ internal class AgentHistoryCache(private val root: File, private val scope: Stri
 internal fun encodeHistorySnapshot(messages: List<HermesMessage>) = JSONArray(messages.map { message ->
     obj("role" to message.role, "text" to message.text, "id" to message.serverId,
         "attachments" to JSONArray(message.attachments), "timestamp" to message.timestamp,
-        "narration" to message.narration, "turnId" to message.nativeTurnId, "editable" to message.editable)
+        "narration" to message.narration, "turnId" to message.nativeTurnId, "editable" to message.editable,
+        "requestKey" to message.requestKey)
 })
 
 internal fun decodeHistorySnapshot(rows: JSONArray): List<HermesMessage> = rows.objects().map { row ->
     HermesMessage(row.getString("role"), row.getString("text"), row.getLong("id"),
         row.array("attachments").objects(), timestamp = parseMessageTimestamp(row.opt("timestamp")),
         narration = row.optBoolean("narration"), nativeTurnId = row.optString("turnId").takeUnless { it.isBlank() || it == "null" },
-        editable = row.optBoolean("editable", true))
+        editable = row.optBoolean("editable", true),
+        requestKey = row.optString("requestKey").takeIf { it.isNotBlank() && it != "null" })
 }
 
 /** Pending submissions are temporary trailing rows, never position hints for native history. */
@@ -62,10 +64,30 @@ internal fun appendPendingHistory(history: List<HermesMessage>, pending: List<He
 }
 
 /** A current send remains visible until its native row arrives, even if an assistant row arrives first. */
-internal fun projectCurrentSubmission(history: List<HermesMessage>, message: HermesMessage, existingIds: Set<Long>): List<HermesMessage> {
+internal fun projectCurrentSubmission(history: List<HermesMessage>, message: HermesMessage, existingIds: Set<Long>,
+    usedNativeIds: MutableSet<Long> = mutableSetOf()): List<HermesMessage> {
     if (history.any { it.localKey == message.localKey }) return history
-    val boundary = history.indexOfFirst { it.serverId > 0 && it.serverId !in existingIds }
-        .takeIf { it >= 0 } ?: history.size
+    val equivalent = history.firstOrNull { row ->
+        if (row.role != "user" || row.serverId <= 0 || row.serverId in existingIds || row.serverId in usedNativeIds) return@firstOrNull false
+        if (row.text.replace("\r\n", "\n").trim() != message.text.replace("\r\n", "\n").trim()) return@firstOrNull false
+        if (message.attachments.isNotEmpty() && !row.attachments.map { it.optString("id") }
+                .containsAll(message.attachments.map { it.optString("id") })) return@firstOrNull false
+        if (row.requestKey != null) return@firstOrNull row.requestKey == message.localKey
+        // This is display reconciliation only. Delivery receipts and attachment
+        // binding still require their own evidence; do not infer either here.
+        val sent = message.timestamp ?: return@firstOrNull false
+        val saved = row.timestamp ?: return@firstOrNull false
+        message.delivery == null && saved in (sent - 2000L)..(sent + 10 * 60_000L)
+    }
+    if (equivalent != null) { usedNativeIds += equivalent.serverId; return history }
+    // A row absent from the pre-send snapshot can have been written *before* the
+    // user tapped Send (for example the preceding streamed assistant reply).
+    // Native order stays intact. Use a timestamp only when both sides have one;
+    // otherwise append the optimistic row until the native user item arrives.
+    val sentAt = message.timestamp ?: return history + message
+    val boundary = history.indexOfFirst { row ->
+        row.serverId > 0 && row.serverId !in existingIds && row.timestamp?.let { it > sentAt } == true
+    }.takeIf { it >= 0 } ?: history.size
     return history.toMutableList().apply { add(boundary, message) }
 }
 
@@ -83,13 +105,31 @@ internal fun withActiveNarrations(history: List<HermesMessage>, narrations: List
             row.serverId == narrationMessageId(it.messageId) && narrationCovers(it.text, row.text) }
         if (live != null && live.text.length > row.text.length) row.copy(text = live.text) else row
     }
+    val firstNativeTime = liveRows.firstNotNullOfOrNull { it.timestamp.takeIf { _ -> it.serverId > 0 } }
     val overlays = active.filter { note ->
-        val anchor = liveRows.indexOfFirst { it.role == "user" && (
-            note.anchor > 0 && it.serverId == note.anchor || note.userKey != null && it.localKey == note.userKey) }
-        val end = if (anchor >= 0) (anchor + 1 until liveRows.size).firstOrNull { liveRows[it].role == "user" } ?: liveRows.size else 0
+        val anchor = narrationAnchorIndex(liveRows, note)
+        // A long-running task can outlive the last-30-message window. Its earlier
+        // replayed events belong before that window, never after the newest reply.
+        if (firstNativeTime != null && note.timestamp < firstNativeTime && anchor < 0) return@filter false
+        val end = if (anchor >= 0) (anchor + 1 until liveRows.size).firstOrNull { liveRows[it].role == "user" } ?: liveRows.size
+            else liveRows.indexOfFirst { it.role == "user" && it.timestamp?.let { at -> at > note.timestamp } == true }
+                .takeIf { it >= 0 } ?: liveRows.size
         liveRows.withIndex().none { (index, row) -> row.role == "assistant" && (
             note.messageId != null && row.serverId == narrationMessageId(note.messageId) ||
-                note.messageId == null && anchor >= 0 && index in (anchor + 1 until end) && narrationCovers(row.text, note.text)) }
-    }.map { note -> HermesMessage("assistant", note.text, localKey = note.key, timestamp = note.timestamp, narration = true) }
-    return liveRows + overlays
+                note.messageId == null && index in (anchor + 1 until end) &&
+                    (anchor >= 0 || firstNativeTime != null && row.timestamp != null &&
+                        note.userTimestamp?.let { row.timestamp >= it } == true) && narrationCovers(row.text, note.text)) }
+    }.sortedWith(compareBy<AssistantNarration> { it.timestamp }.thenBy { it.sequence ?: Long.MAX_VALUE })
+    val rows = liveRows.toMutableList()
+    overlays.forEach { note ->
+        val anchor = narrationAnchorIndex(rows, note)
+        val start = (anchor + 1).coerceAtLeast(0)
+        val end = (start until rows.size).firstOrNull { rows[it].role == "user" &&
+            (anchor >= 0 || rows[it].timestamp?.let { at -> at > note.timestamp } == true) } ?: rows.size
+        // Insert only transient rows. Preserve the exact relative order of every native row,
+        // including undated rows and timestamps that differ slightly from append order.
+        val position = (start until end).firstOrNull { rows[it].timestamp?.let { at -> at > note.timestamp } == true } ?: end
+        rows.add(position, HermesMessage("assistant", note.text, localKey = note.key, timestamp = note.timestamp, narration = true))
+    }
+    return rows
 }

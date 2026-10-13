@@ -245,6 +245,34 @@ public sealed class HermesAttachments
         var inheritedMessages = InheritedMap(session);
         if (result["data"] is JsonArray rows) foreach (var row in rows)
         {
+            if (row?["role"]?.ToString() == "assistant") {
+                var files = row["attachments"] as JsonArray ?? new JsonArray();
+                foreach (var source in AssistantMediaPaths.Read(row["content"]?.ToString() ?? "").Distinct().Take(32)) {
+                    try {
+                        var info = new FileInfo(source);
+                        if (!info.Exists || info.Length > 500L * 1024 * 1024 || info.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+                        var folder = Path.GetFullPath(Folder(session)) + Path.DirectorySeparatorChar;
+                        var target = source;
+                        if (!source.StartsWith(folder, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) {
+                            // Snapshot explicit delivery markers; never change or serve the project original directly.
+                            var version = Identifier(source + "|" + info.LastWriteTimeUtc.Ticks + "|" + info.Length)[..32];
+                            target = Path.Combine(folder, "media", version + "_" + info.Name);
+                            lock (bindingLock) {
+                                if (!File.Exists(target)) {
+                                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                                    var temporary = Path.Combine(Path.GetDirectoryName(target)!, ".chuckie-" + Guid.NewGuid().ToString("N"));
+                                    try { File.Copy(source, temporary, true); File.Move(temporary, target, true); }
+                                    finally { if (File.Exists(temporary)) File.Delete(temporary); }
+                                }
+                            }
+                        }
+                        var metadata = JsonSerializer.SerializeToNode(Metadata(session, target))!.AsObject();
+                        metadata["mediaPath"] = source.Replace('\\', '/');
+                        if (!files.Any(file => file?["id"]?.ToString() == metadata["id"]!.ToString())) files.Add(metadata);
+                    } catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { }
+                }
+                if (files.Count > 0) row["attachments"] = files;
+            }
             if (map.TryGetValue(row!["id"]!.ToString(), out var ids))
                 row["attachments"] = JsonSerializer.SerializeToNode(ids.Select(id => { try { return Metadata(session, Resolve(session, id)); } catch (FileNotFoundException) { return null; } }).Where(value => value != null).ToArray());
             else if (inheritedMessages[row["id"]!.ToString()] is JsonArray references)
@@ -252,11 +280,11 @@ public sealed class HermesAttachments
                     try { return JsonSerializer.SerializeToNode(Metadata(session, Resolve(session, reference!["id"]!.ToString()))); }
                     catch (FileNotFoundException) { return null; }
                 }).Where(file => file != null).ToArray());
-            else if (agent == "codex" && row["role"]?.ToString() == "user") {
+            else if (row["role"]?.ToString() == "user") {
                 // Native queues can drain while the phone is offline. Build() persists
                 // the uploaded file paths in the user item, independently of phone binding.
                 var content = (row["content"]?.ToString() ?? "").Replace("\r\n", "\n");
-                const string marker = "\n\n附件文件：\n";
+                var marker = agent == "codex" ? "\n\n附件文件：\n" : "\n\n[ChuckieHelper 持久附件]\n";
                 var start = content.LastIndexOf(marker, StringComparison.Ordinal);
                 if (start < 0) continue;
                 // Only files enumerated from this session are eligible, never arbitrary
@@ -264,8 +292,10 @@ public sealed class HermesAttachments
                 nativeFiles ??= Paths(session).ToDictionary(file => file, file => file,
                     OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
                 var attached = content[(start + marker.Length)..].Split('\n')
-                    .Select(line => line.Trim()).Where(line => line.Length > 2 && line[0] == '"' && line[^1] == '"')
-                    .Select(line => nativeFiles.GetValueOrDefault(line[1..^1])).Where(file => file != null)
+                    .Select(line => line.Trim()).Select(line => agent == "codex"
+                        ? line.Length > 2 && line[0] == '"' && line[^1] == '"' ? line[1..^1] : null
+                        : line.Contains('：') ? line[(line.IndexOf('：') + 1)..].Trim().Trim('"') : null)
+                    .Select(path => path == null ? null : nativeFiles.GetValueOrDefault(path)).Where(file => file != null)
                     .Distinct().Take(8).Select(file => Metadata(session, file)).ToArray();
                 if (attached.Length > 0) row["attachments"] = JsonSerializer.SerializeToNode(attached);
             }

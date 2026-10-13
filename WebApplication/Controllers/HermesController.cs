@@ -9,7 +9,7 @@ using RemoteTool.WebApi.Services.Codex;
 namespace RemoteTool.WebApi.Controllers;
 
 [ApiController, Authorize, Route("api/hermes")]
-public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, IConfiguration configuration, HermesSessionActivity activity, HermesTitleService titles) : ControllerBase
+public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, HermesSessionActivity activity, HermesTitleService titles) : ControllerBase
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效的会话或任务标识");
     [HttpGet("capabilities")] public async Task<IActionResult> Capabilities(CancellationToken ct) {
@@ -37,6 +37,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             return Ok(result);
         }
         catch (InvalidOperationException error) { return Ok(new { available = false, message = error.Message }); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Ok(new { available = false, message = "上下文读取超时，请刷新重试" }); }
     }
     [HttpGet("sessions/{id}/activity")] public IActionResult SessionActivity(string id) {
         Response.Headers.CacheControl = "no-store";
@@ -150,16 +151,15 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         await Response.WriteAsync(await response.Content.ReadAsStringAsync(ct), ct);
     }
     [HttpDelete("sessions/{id}"), HttpPost("sessions/{id}/delete")] public Task DeleteSession(string id, CancellationToken ct) => Forward(HttpMethod.Delete, $"api/sessions/{Id(id)}", null, null, ct);
-    [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 30, CancellationToken ct = default)
+    [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 100, [FromQuery] string from_id = null, [FromQuery] string older_before = null, CancellationToken ct = default)
     {
         using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions/{Id(id)}/messages?inline_images=false", null, null, ct);
         if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 会话历史" });
         var json = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct));
-        var rows = json?["data"] as System.Text.Json.Nodes.JsonArray;
-        if (rows != null) {
-            var keep = Math.Clamp(limit, 1, 500);
-            json["data"] = new System.Text.Json.Nodes.JsonArray(rows.Skip(Math.Max(0, rows.Count - keep)).Select(row => row?.DeepClone()).ToArray());
-        }
+        var state = activity.Read(id);
+        json = CompletedToolHistory.Reduce(json, state["running"]?.GetValue<bool>() == true,
+            state["started_at"]?.GetValue<long>() ?? 0, id, state["revision"]?.ToString() ?? "");
+        json = AgentHistoryWindow.Select(json, limit, from_id, older_before);
         return Ok(attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}"));
     }
     [HttpPost("sessions/{id}/messages/{messageId}/attachments")] public IActionResult BindAttachments(string id, string messageId, [FromBody] JsonElement body)
@@ -193,7 +193,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             if (!upstream.IsSuccessStatusCode)
             {
                 Response.StatusCode = upstream.StatusCode == System.Net.HttpStatusCode.Unauthorized ? 502 : (int)upstream.StatusCode;
-                await Response.WriteAsJsonAsync(new { message = $"Hermes 请求失败（HTTP {(int)upstream.StatusCode}）" }, ct);
+                await WriteUpstreamError(payload, upstream.StatusCode, ct);
                 return;
             }
             // 登记「会话当前活跃 run」供多端共享（平板打开同一会话可挂载实时进度）。
@@ -263,6 +263,18 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         catch (KeyNotFoundException) { Response.StatusCode = 404; await Response.WriteAsJsonAsync(new { message = "压缩任务不存在" }, ct); }
     }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
+    [HttpGet("sessions/{id}/tools/{summaryId}")] public async Task<IActionResult> ToolDetails(string id, string summaryId, [FromQuery] int offset = 0, CancellationToken ct = default) {
+        var session = Id(id); var key = Id(summaryId); var state = activity.Read(session);
+        var revision = state["revision"]?.ToString() ?? "";
+        var cached = ToolHistoryCache.Read("hermes", session, key, offset, true, revision);
+        if (cached != null) return Ok(cached);
+        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions/{session}/messages?inline_images=false", null, null, ct);
+        if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取工具记录" });
+        CompletedToolHistory.Reduce(JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)), state["running"]?.GetValue<bool>() == true,
+            state["started_at"]?.GetValue<long>() ?? 0, session, revision);
+        var result = ToolHistoryCache.Read("hermes", session, key, offset, false, revision);
+        return result != null ? Ok(result) : NotFound(new { message = "该轮记录已变化或不再存在，请刷新会话" });
+    }
     [HttpPost("sessions/{id}/files")]
     [RequestSizeLimit(501L * 1024 * 1024)]
     [RequestFormLimits(MultipartBodyLengthLimit = 501L * 1024 * 1024)]
@@ -284,9 +296,9 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     }
     [HttpPost("runs/{id}/steer")] public async Task Steer(string id, [FromBody] JsonElement body, CancellationToken ct) {
         var runId = Id(id);
+        var key = Request.Headers["Idempotency-Key"].ToString();
+        if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = "插话需要唯一请求标识", delivery = "rejected" }, ct); return; }
         if (body.TryGetProperty("attachment_ids", out var ids) && ids.GetArrayLength() > 0) {
-            var key = Request.Headers["Idempotency-Key"].ToString();
-            if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = "插话需要唯一请求标识" }, ct); return; }
             try {
                 using var status = await bridge.SendAsync(HttpMethod.Get, $"v1/runs/{runId}", null, null, ct);
                 if (!status.IsSuccessStatusCode) { Response.StatusCode = (int)status.StatusCode; await Response.WriteAsJsonAsync(new { message = "无法核对当前 Hermes 任务" }, ct); return; }
@@ -300,10 +312,28 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = error.Message }, ct); return;
             }
         }
-        await Forward(HttpMethod.Post, $"v1/runs/{runId}/steer", body, null, ct);
+        await Forward(HttpMethod.Post, $"v1/runs/{runId}/steer", body, key, ct);
     }
     [HttpPost("runs/{id}/approval")] public Task Approval(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"v1/runs/{Id(id)}/approval", body, null, ct);
     [HttpPost("responses")] public Task Responses([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "v1/responses", body, null, ct);
+
+    private async Task WriteUpstreamError(string payload, System.Net.HttpStatusCode status, CancellationToken ct) {
+        string? message = null, code = null, delivery = null;
+        try {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object) {
+                if (root.TryGetProperty("message", out var text) && text.ValueKind == JsonValueKind.String) message = text.GetString();
+                if (root.TryGetProperty("code", out var kind) && kind.ValueKind == JsonValueKind.String) code = kind.GetString();
+                if (root.TryGetProperty("delivery", out var state) && state.ValueKind == JsonValueKind.String) delivery = state.GetString();
+            }
+        } catch (JsonException) { }
+        message = !string.IsNullOrWhiteSpace(message) && message.Length <= 500 ? message : $"Hermes 请求失败（HTTP {(int)status}）";
+        code = code is { Length: <= 80 } && Regex.IsMatch(code, "^[a-zA-Z0-9_-]+$") ? code : null;
+        delivery = delivery is "accepted" or "rejected" or "unknown" ? delivery :
+            status is System.Net.HttpStatusCode.BadRequest or System.Net.HttpStatusCode.UnprocessableEntity ? "rejected" : "unknown";
+        await Response.WriteAsJsonAsync(new { message, code, delivery }, ct);
+    }
 
     private async Task Forward(HttpMethod method, string path, JsonElement? body, string? key, CancellationToken ct)
     {
@@ -314,7 +344,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             if (!upstream.IsSuccessStatusCode)
             {
                 Response.StatusCode = upstream.StatusCode == System.Net.HttpStatusCode.Unauthorized ? 502 : (int)upstream.StatusCode;
-                await Response.WriteAsJsonAsync(new { message = $"Hermes 请求失败（HTTP {(int)upstream.StatusCode}）" }, ct);
+                await WriteUpstreamError(await upstream.Content.ReadAsStringAsync(ct), upstream.StatusCode, ct);
                 return;
             }
             Response.StatusCode = (int)upstream.StatusCode;

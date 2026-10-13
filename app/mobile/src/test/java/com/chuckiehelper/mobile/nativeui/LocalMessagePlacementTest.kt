@@ -4,6 +4,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LocalMessagePlacementTest {
+    @Test fun actualSubmissionProjectionDoesNotJumpAheadOfEarlierSavedAssistant() {
+        val old = HermesMessage("user", "start", 900, timestamp = 1000)
+        val earlier = HermesMessage("assistant", "saved after send", 7, timestamp = 2000)
+        val pending = HermesMessage("user", "interjection", localKey = "send", timestamp = 3000)
+        assertEquals(listOf(old, earlier, pending), projectCurrentSubmission(listOf(old, earlier), pending, setOf(900)))
+    }
+    @Test fun currentSubmissionPrecedesNewerNativeReplyWhenTimesAreKnown() {
+        val old = HermesMessage("user", "start", 900, timestamp = 1000)
+        val reply = HermesMessage("assistant", "next reply", 7, timestamp = 4000)
+        val pending = HermesMessage("user", "interjection", localKey = "send", timestamp = 3000)
+        assertEquals(listOf(old, pending, reply), projectCurrentSubmission(listOf(old, reply), pending, setOf(900)))
+    }
     @Test fun newlySavedOlderNarrationRemainsBeforeTheLaterInterjection() {
         val start=HermesMessage("user", "start", 900, timestamp=1000)
         val narration=HermesMessage("assistant", "22:57 reply", 7, timestamp=2000, narration=true)

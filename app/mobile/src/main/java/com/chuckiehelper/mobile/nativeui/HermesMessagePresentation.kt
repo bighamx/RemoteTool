@@ -47,6 +47,8 @@ fun presentHermesMessage(text: String, attached: List<JSONObject>, available: Li
         }
         val expectedOutbox = Regex("/outbox/([^/]+)/").find(path)?.groupValues?.get(1)
         val file = candidates.firstOrNull {
+            it.optString("mediaPath").replace('\\', '/').equals(path, ignoreCase = true)
+        } ?: candidates.firstOrNull {
             val key = it.optString("messageKey")
             key.isNotBlank() && path.contains("/outbox/$key/")
         } ?: candidates.singleOrNull().takeIf { expectedOutbox == null }

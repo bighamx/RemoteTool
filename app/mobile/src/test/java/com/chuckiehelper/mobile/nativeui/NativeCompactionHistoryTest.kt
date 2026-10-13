@@ -4,6 +4,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NativeCompactionHistoryTest {
+    @Test fun toolSummaryIsVisibleAndCannotBeEdited() {
+        val row = obj("id" to 42, "role" to "system", "type" to "toolSummary", "content" to "调用了 12 次工具")
+        val message = agentHistoryMessage("hermes", row)!!
+        assertEquals("调用了 12 次工具", message.text)
+        assertEquals("toolSummary", message.nativeTurnId)
+        assertFalse(message.editable)
+    }
     @Test fun nativeOrderSurvivesMissingTimesAndLegacyOverlays() {
         val native = listOf(
             obj("id" to 90, "role" to "user", "content" to "继续"),

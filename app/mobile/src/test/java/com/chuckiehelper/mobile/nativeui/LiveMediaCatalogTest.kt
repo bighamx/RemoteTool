@@ -3,6 +3,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LiveMediaCatalogTest {
+    @Test fun explicitMediaPathsDisambiguateIdenticalNames() {
+        val first = file("a").put("mediaPath", "D:/first/icon.png").put("messageKey", "")
+        val second = file("b").put("mediaPath", "D:/second/icon.png").put("messageKey", "")
+        val display = presentHermesMessage("MEDIA:D:/second/icon.png", listOf(first, second), emptyList())
+        assertTrue(display.unavailable.isEmpty())
+        assertEquals("", display.text)
+    }
     private val message = "图片已生成\nMEDIA:C:\\ProgramData\\outbox\\current\\icon.png"
     private fun file(key: String) = obj("id" to key,"name" to "icon.png","messageKey" to key,"mime" to "image/png","url" to "/file/$key")
     @Test fun interimImageRequestsAFilesRefreshBeforeTheTaskCompletes() {

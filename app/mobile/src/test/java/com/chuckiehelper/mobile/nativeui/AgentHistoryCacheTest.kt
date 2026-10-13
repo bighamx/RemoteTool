@@ -5,6 +5,34 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AgentHistoryCacheTest {
+    @Test fun replayedNarrationsOutsideCurrentWindowCannotReappearAtTheBottom() {
+        val history = listOf(HermesMessage("assistant", "22:58 回复", 100, timestamp = 58000),
+            HermesMessage("user", "22:59 请求", 101, timestamp = 59000),
+            HermesMessage("assistant", "22:59 回复", 102, timestamp = 59100))
+        val old = AssistantNarration("narration-old", "s", "22:46 旁白", 1, "原始请求", 46000,
+            userTimestamp = 45000, run = "running", streamed = true)
+        assertEquals(history, withActiveNarrations(history, listOf(old), "running"))
+    }
+
+    @Test fun restoredActiveNarrationIsInsertedBeforeLaterNativeRows() {
+        val history = listOf(HermesMessage("user", "请求", 100, timestamp = 1000),
+            HermesMessage("assistant", "较晚回复", 101, timestamp = 3000),
+            HermesMessage("user", "下一条请求", 102, timestamp = 4000))
+        val note = AssistantNarration("narration-live", "s", "中途旁白", 100, "请求", 2000,
+            userTimestamp = 1000, run = "running")
+        val result = withActiveNarrations(history, listOf(note), "running")
+        assertEquals(listOf("请求", "中途旁白", "较晚回复", "下一条请求"), result.map { it.text })
+        assertEquals(history, result.filter { it.serverId > 0 })
+    }
+
+    @Test fun nativeNarrationIsAcknowledgedEvenWhenItsUserHasLeftTheWindow() {
+        val history = listOf(HermesMessage("assistant", "已保存旁白", 100, timestamp = 2000),
+            HermesMessage("assistant", "较晚回复", 101, timestamp = 3000))
+        val note = AssistantNarration("narration-live", "s", "已保存旁白", 1, "窗口外请求", 2100,
+            userTimestamp = 1000, run = "running", streamed = true)
+        assertEquals(history, withActiveNarrations(history, listOf(note), "running"))
+    }
+
     @Test fun restartUsesSnapshotAndServerReplacementNeverKeepsStaleRows() {
         val root = Files.createTempDirectory("history-cache-test").toFile()
         try {
@@ -54,6 +82,38 @@ class AgentHistoryCacheTest {
             run = "current", messageId = id, streamed = true)
         assertEquals(listOf("正在检查运行中的服务"), withActiveNarrations(history, listOf(live), "current").map { it.text })
         assertEquals(history, withActiveNarrations(history, listOf(live), null))
+    }
+
+    @Test fun finalStreamRemainsUntilHistoryContainsTheCompleteNativeItem() {
+        val item = "answer-item"
+        val partial = listOf(HermesMessage("assistant", "Hello", narrationMessageId(item)))
+        val live = "Hello world"
+        assertFalse(terminalHistoryContainsAssistant(partial, item, live))
+        val corrected = reconcilePendingAssistant(partial, item, live)
+        assertEquals(listOf(live), corrected.map { it.text })
+        assertEquals("", visiblePendingAssistant(corrected, item, live))
+        assertTrue(terminalHistoryContainsAssistant(corrected, item, live))
+        assertFalse(terminalHistoryContainsAssistant(emptyList(), item, live))
+    }
+
+    @Test fun oldIdenticalAssistantCannotConfirmOrReceiveCurrentFinalFiles() {
+        val old = HermesMessage("assistant", "已完成", 91, timestamp = 1_000L)
+        assertFalse(terminalHistoryContainsAssistant(listOf(old), null, "已完成", startedAt = 2_000L))
+        assertEquals(null, exactFinalAssistant(listOf(old), null, null, "已完成", 2_000L))
+        val current = HermesMessage("assistant", "已完成", 92, timestamp = 2_100L)
+        assertTrue(terminalHistoryContainsAssistant(listOf(old, current), null, "已完成", startedAt = 2_000L))
+        assertEquals(current, exactFinalAssistant(listOf(old, current), null, null, "已完成", 2_000L))
+        assertEquals(null, exactFinalAssistant(listOf(old, current, current.copy(serverId = 93)), null, null,
+            "已完成", 2_000L))
+    }
+
+    @Test fun finalFilesRequireCurrentNativeTurnWhenAvailable() {
+        val previous = HermesMessage("assistant", "结果", 91, nativeTurnId = "old")
+        val partial = HermesMessage("assistant", "还在处理", 93, nativeTurnId = "current")
+        val current = HermesMessage("assistant", "结果", 92, nativeTurnId = "current")
+        assertEquals(null, exactFinalAssistant(listOf(previous), null, "current"))
+        assertEquals(null, exactFinalAssistant(listOf(previous, partial), null, "current", "结果"))
+        assertEquals(current, exactFinalAssistant(listOf(previous, partial, current), null, "current", "结果"))
     }
 
     @Test fun identicalTextInAnOlderTaskCannotHideCurrentNarration() {

@@ -43,6 +43,7 @@ internal sealed partial class CodexAgent
                 request["input"] = CodexAttachmentInput.Build(body.S("input"), body.A("attachment_paths"), settings.S("attachments"), session);
                 string queuedRun = null;
                 if (action == "add") {
+                    ct.ThrowIfCancellationRequested();
                     var key = body.S("key");
                     if (!System.Text.RegularExpressions.Regex.IsMatch(key,"^[a-zA-Z0-9_-]{16,120}$"))throw new CodexError("缺少队列消息标识");
                     request["clientUserMessageId"] = key;
@@ -50,18 +51,18 @@ internal sealed partial class CodexAgent
                     lock (gate) {
                         var old = runs.FirstOrDefault(entry=>entry.Value.S("key")==key);
                         if(old.Value!=null)throw new CodexError("此队列消息已提交，请刷新队列核对",409);
-                        runs[queuedRun]=Obj(("run_id",queuedRun),("session_id",session),("key",key),("status","queued"),
+                        runs[queuedRun]=Obj(("run_id",queuedRun),("session_id",session),("key",key),("status","queued"),("delivery","unknown"),
                             ("native_queue",true),("output",""),("enqueued_at",DateTimeOffset.UtcNow.ToUnixTimeSeconds()));Persist();
                     }
                 }
                 else request["queuedSubmissionId"] = body.S("id");
                 try {
                     var result = await queueRpc.Call("thread/queue/" + action, request, ct);
-                    if(queuedRun!=null)lock(gate){runs[queuedRun]!["native_queue_id"]=result["queuedSubmission"].S("id");Persist();}
+                    if(queuedRun!=null)lock(gate){runs[queuedRun]!["native_queue_id"]=result["queuedSubmission"].S("id");runs[queuedRun]!["delivery"]="accepted";Persist();}
                     if (action == "add") _ = StartQueuedIfIdle(session);
                     return result;
                 } catch(CodexError error) {
-                    if(queuedRun!=null)lock(gate){runs[queuedRun]!["status"]=error.Delivery=="rejected"?"failed":"acceptance_unknown";Persist();}
+                    if(queuedRun!=null)lock(gate){runs[queuedRun]!["status"]=error.Delivery=="rejected"?"failed":"acceptance_unknown";runs[queuedRun]!["delivery"]=error.Delivery=="rejected"?"rejected":"unknown";Persist();}
                     throw;
                 }
             }

@@ -9,6 +9,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using System.IO.Compression;
+using Microsoft.AspNetCore.ResponseCompression;
 
 
 namespace RemoteTool.WebApi
@@ -85,6 +87,16 @@ namespace RemoteTool.WebApi
 
             // Add services to the container.
             builder.Services.AddControllersWithViews().AddRazorRuntimeCompilation();
+            builder.Services.AddRequestDecompression();
+            builder.Services.AddResponseCompression(options => {
+                options.EnableForHttps = true;
+                options.Providers.Add<BrotliCompressionProvider>();
+                options.Providers.Add<GzipCompressionProvider>();
+                // SSE must stay unbuffered; binary media and range responses use their original encoding.
+                options.MimeTypes = new[] { "application/json", "application/problem+json", "text/plain", "text/css", "application/javascript", "text/html" };
+            });
+            builder.Services.Configure<BrotliCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
+            builder.Services.Configure<GzipCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
 
             // 注册编码提供程序以支持 GBK (需 NuGet 安装 System.Text.Encoding.CodePages)
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -134,6 +146,13 @@ builder.Services.AddSingleton<HermesCompaction>();
 
             // 必须在管道最前使用，以便后续中间件看到正确的 Scheme/Host
             app.UseForwardedHeaders();
+            app.UseRequestDecompression();
+            app.UseResponseCompression();
+            app.Use(async (context, next) => {
+                if (context.Request.Path.StartsWithSegments("/api"))
+                    context.Response.Headers["X-RemoteTool-Request-Compression"] = "gzip";
+                await next();
+            });
 
             // Cloudflare Access SSO is opt-in and requires a valid signed assertion for
             // the configured application and email. Keep the normal password login for

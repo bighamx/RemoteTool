@@ -8,6 +8,59 @@ var count = 0;
 void Check(bool valid, string name) { if (!valid) throw new Exception(name); count++; }
 JsonElement Body(string session, string[] ids = null) => JsonSerializer.SerializeToElement(new { session_id = session, input = "测试", attachment_ids = ids ?? [] });
 try {
+    var simplified = ToolHistoryCache.HermesTools(new JsonNode[] {
+        new JsonObject { ["id"] = 1, ["role"] = "assistant", ["tool_calls"] = new JsonArray(
+            new JsonObject { ["id"] = "patch", ["function"] = new JsonObject { ["name"] = "apply_patch", ["arguments"] = "*** Begin Patch\n*** Update File: app.kt\nsecret patch body\n*** End Patch" } },
+            new JsonObject { ["id"] = "shell", ["function"] = new JsonObject { ["name"] = "terminal", ["arguments"] = "{\"command\":\"build\"}" } }) },
+        new JsonObject { ["id"] = 2, ["role"] = "tool", ["tool_call_id"] = "shell", ["content"] = "{\"exit_code\":1}" }
+    }, false);
+    Check(simplified[0]["category"].ToString() == "file_change" && simplified[0]["description"].ToString() == "app.kt", "patch details contain paths but no patch body");
+    Check(simplified[0]["status"].ToString() == "unknown" && simplified[1]["status"].ToString() == "failed", "missing output stays unknown and nonzero exit is failure");
+    var toolSummary = ToolHistoryCache.Summary("fixture", simplified, null);
+    Check(toolSummary["tools"].GetValue<int>() == 1 && toolSummary["file_changes"].GetValue<int>() == 1, "separate tool and file modification counts");
+    var many = new JsonArray(Enumerable.Range(0, 61).Select(index => (JsonNode)ToolHistoryCache.Tool(index.ToString(), "terminal", JsonValue.Create("build"), "completed")).ToArray());
+    ToolHistoryCache.Save("hermes", "cache-check", "1", many, false, "v1");
+    Check(ToolHistoryCache.Read("hermes", "cache-check", "1", 0, true, "v1")["data"].AsArray().Count == 50, "tool details are paged without raw output");
+    Check(ToolHistoryCache.Read("hermes", "cache-check", "1", 50, true, "v1")["data"].AsArray().Count == 11, "tool detail second page remains accessible");
+    Check(ToolHistoryCache.Read("hermes", "cache-check", "1", 0, true, "v2") == null, "source revision invalidates cached details");
+    Check(ToolHistoryCache.Read("hermes", "other-session", "1", 0, true, "v1") == null, "cache cannot leak across sessions");
+    ToolHistoryCache.Keep("hermes", "cache-check", new());
+    Check(ToolHistoryCache.Read("hermes", "cache-check", "1", 0, true, "v1") == null, "removed turns are purged after rewind");
+    Directory.CreateDirectory(fixture);
+    var sourceVersion = Path.Combine(fixture, "source-version.txt"); File.WriteAllText(sourceVersion, "old");
+    ToolHistoryCache.Save("codex", "cache-check", "1", many, false, path: sourceVersion);
+    Check(ToolHistoryCache.Read("codex", "cache-check", "1", 0, true) != null, "unchanged source returns cached data");
+    File.WriteAllText(sourceVersion, "new longer source");
+    Check(ToolHistoryCache.Read("codex", "cache-check", "1", 0, true) == null, "source rewrite invalidates cached detail even without a message read");
+    JsonNode ToolFixture() => new JsonObject { ["data"] = new JsonArray(
+        new JsonObject { ["id"] = 1, ["role"] = "user", ["content"] = "first", ["timestamp"] = 1 },
+        new JsonObject { ["id"] = 2, ["role"] = "assistant", ["content"] = "", ["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "call-a" }) },
+        new JsonObject { ["id"] = 3, ["role"] = "tool", ["tool_call_id"] = "call-a", ["content"] = "large result" },
+        new JsonObject { ["id"] = 4, ["role"] = "assistant", ["content"] = "done", ["timestamp"] = 2 },
+        new JsonObject { ["id"] = 5, ["role"] = "user", ["content"] = "second", ["timestamp"] = 3 },
+        new JsonObject { ["id"] = 6, ["role"] = "assistant", ["content"] = "", ["tool_calls"] = new JsonArray(new JsonObject { ["id"] = "call-b" }) },
+        new JsonObject { ["id"] = 7, ["role"] = "tool", ["tool_call_id"] = "call-b", ["content"] = "live result", ["timestamp"] = 4 }) };
+    var finished = CompletedToolHistory.Reduce(ToolFixture(), false)["data"].AsArray();
+    Check(finished.All(row => row["role"].ToString() != "tool" && row["tool_calls"] == null), "completed history sends no tool details");
+    Check(finished.Count(row => row["type"]?.ToString() == "toolSummary") == 2 && finished.Where(row => row["type"]?.ToString() == "toolSummary").All(row => row["tool_count"].GetValue<int>() == 1), "completed calls counted once despite matching results");
+    var activeTools = CompletedToolHistory.Reduce(ToolFixture(), true, 3000)["data"].AsArray();
+    Check(activeTools.Any(row => row["id"]?.ToString() == "7" && row["content"]?.ToString() == "live result"), "active turn keeps tool results");
+    Check(activeTools.Any(row => row["id"]?.ToString() == "6" && row["tool_calls"] != null), "active turn keeps tool arguments");
+    Check(activeTools.Count(row => row["type"]?.ToString() == "toolSummary") == 1, "only completed turn gets tool summary");
+    var raw = new JsonArray();
+    for (var index = 1; index <= 120; index++) {
+        raw.Add(new JsonObject { ["id"] = index * 10, ["role"] = "user", ["content"] = "message " + index });
+        for (var tool = 1; tool <= 4; tool++) raw.Add(new JsonObject { ["id"] = index * 10 + tool, ["role"] = "tool", ["content"] = "hidden" });
+    }
+    JsonNode Window(string from = null, string older = null) => AgentHistoryWindow.Select(new JsonObject { ["data"] = raw.DeepClone() }, 100, from, older);
+    var recent = Window();
+    Check(recent["data"].AsArray().Count(AgentHistoryWindow.Visible) == 100, "100 visible messages exclude tool rows");
+    Check(recent["oldest_id"].ToString() == "210" && recent["has_more"].GetValue<bool>(), "stable native cursor points to first included message");
+    var expanded = Window(older: "210");
+    Check(expanded["data"].AsArray().Count(AgentHistoryWindow.Visible) == 120 && !expanded["has_more"].GetValue<bool>(), "older page expands a canonical window to the start");
+    Check(Window(from: "10")["data"].AsArray().Count == raw.Count, "refresh retains the expanded canonical range");
+    Check(Window(from: "removed")["oldest_id"].ToString() == "210", "removed rewind anchor falls back to current history");
+    Check(expanded["data"].AsArray().Select(row => row["id"].ToString()).SequenceEqual(raw.Select(row => row["id"].ToString())), "native order remains unchanged");
     foreach (var agent in new[] { "codex", "hermes" }) {
         var root = Path.Combine(fixture, agent);
         var store = new HermesAttachments(agent, root);
@@ -76,6 +129,19 @@ try {
                 "an explicit empty binding remains authoritative over native inference");
         }
         store.PrepareRun(Body(session, [id]), key);
+        if (agent == "hermes") {
+            var uploadedPath = store.Resolve(session, id);
+            var uploadInput = Body(session, [id]);
+            var prepared = JsonNode.Parse(store.PrepareRun(uploadInput, key).GetRawText());
+            var text = prepared["input"] is JsonValue ? prepared["input"].ToString() : prepared["input"][0]["content"][0]["text"].ToString();
+            JsonNode Recover(string sid, string content) => store.AddMessageAttachments(sid, new JsonObject {
+                ["data"] = new JsonArray(new JsonObject { ["id"] = 99, ["role"] = "user", ["content"] = content }) }.ToJsonString())["data"][0];
+            Check(Recover(session, text)["attachments"][0]["id"].ToString() == id, "Hermes restores native persistent attachments without phone binding");
+            Check(Recover(session, text.Replace("\n", "\r\n"))["attachments"][0]["id"].ToString() == id, "Hermes attachment recovery tolerates CRLF");
+            var steer = store.PrepareHermesSteer(uploadInput, session, key).GetProperty("input").GetString();
+            Check(Recover(session, steer)["attachments"][0]["id"].ToString() == id, "Hermes quoted steering attachments recover after reconnect");
+            Check(Recover("other-hermes", text)["attachments"] == null, "Hermes cannot recover another session's uploaded files");
+        }
         store.PrepareCodexRun(Body(session, [id]), key);
         store.PrepareHermesSteer(Body(session, [id]), session, key);
         Check(!Directory.Exists(Path.Combine(folder, "outbox")), agent + " using uploads still creates no speculative output folders");
@@ -90,6 +156,20 @@ try {
         catch (IOException) { Check(!Directory.Exists(store.Folder("failed-upload")), agent + " aborted upload leaves no file or empty session folder"); }
         try { store.PrepareCodexRun(Body("invalid-attachment", ["missing"]), key); throw new Exception("invalid attachment accepted"); }
         catch (FileNotFoundException) { Check(!Directory.Exists(store.Folder("invalid-attachment")), agent + " rejected run leaves no folders"); }
+        var source = Path.Combine(fixture, "project-" + agent, "音效 one.mp3");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)); File.WriteAllText(source, "audio snapshot");
+        JsonNode Media(string role, string text) => store.AddMessageAttachments("media-test", new JsonObject {
+            ["data"] = new JsonArray(new JsonObject { ["id"] = 100, ["role"] = role, ["content"] = text }) }.ToJsonString())["data"][0];
+        Check(Media("user", "MEDIA:" + source)["attachments"] == null, agent + " user examples never import files");
+        Check(Media("assistant", "```text\nMEDIA:" + source + "\n```")["attachments"] == null, agent + " fenced examples never import files");
+        Check(!Directory.Exists(store.Folder("media-test")), agent + " examples create no folders");
+        var imported = Media("assistant", "已生成\nMEDIA:" + source)["attachments"][0];
+        Check(imported["name"].ToString() == "音效 one.mp3" && imported["mediaPath"].ToString() == source.Replace('\\', '/'), agent + " project MEDIA becomes an exact-path attachment");
+        Check(File.ReadAllText(store.Resolve("media-test", imported["id"].ToString())) == "audio snapshot", agent + " imported content resolves without exposing the original");
+        Check(Media("assistant", "MEDIA:" + source)["attachments"][0]["id"].ToString() == imported["id"].ToString(), agent + " repeated refresh keeps stable attachment identity");
+        Check(store.List("media-test").Length == 1, agent + " repeated refresh does not duplicate copied files");
+        File.WriteAllText(source, "updated audio snapshot");
+        Check(Media("assistant", "MEDIA:" + source)["attachments"][0]["id"].ToString() != imported["id"].ToString(), agent + " source changes produce a new immutable snapshot");
     }
 } finally { if (Directory.Exists(fixture)) Directory.Delete(fixture, true); }
 Console.WriteLine($"Attachment storage checks: {count} passed");
