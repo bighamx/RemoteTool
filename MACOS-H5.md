@@ -1,23 +1,21 @@
 # macOS 服务端与网页适配
 
-本地 `macos-server` 分支保留 .NET 8、`/mobile/` 手机控制台和 macOS 服务实现，已合入上游 `ee3c694`（2026-10-13）的新版 Web 工作台。旧版运行服务尚未切换到这个分支；未向上游仓库推送。
+`macos-server` 分支在上游新版 Web 工作台上提供 macOS 服务端适配。入口是 `/`；旧 `/mobile/` 会跳转到工作台。
 
 ## 本版范围
 
 | 功能 | 状态 |
 | --- | --- |
-| H5 登录、概览、系统操作、命令终端 | 已实现；终端为按行协议，无 PTY |
-| H5 Codex 会话列表、分页、搜索、项目选择、新建、改名、历史 | 已实现 |
-| H5 Codex 发送、SSE 进度、停止、审批／问题回答 | 已实现 |
-| H5 请求去重、刷新恢复、结果不确定时禁止自动重发 | 已实现；每个浏览器跟踪一条提交 |
-| H5 主屏幕图标、独立窗口启动 | 已实现 Web App Manifest、图标和 Service Worker；需要 HTTPS 或 localhost |
-| 文件、Docker、Compose、定时任务 | 复用原有网页，从“更多工具”进入 |
+| 工作台登录、概览、系统操作、命令终端 | 已实现；终端为按行协议，无 PTY；手机可点“发送”提交命令 |
+| Codex 会话列表与对话 | 复用上游新版工作台；Mac 服务端已适配 Codex CLI |
+| 工作台主屏幕图标、独立窗口启动 | 根路径已配置 Web App Manifest、图标和 Service Worker；需要 HTTPS 或 localhost |
+| 文件、Docker、Compose、定时任务 | 复用原有工作台页面 |
 | macOS Codex CLI 桥接、用户数据目录、zsh | 已适配，需实机验证已安装 Codex 的协议版本 |
 | Mac 桌面代理、JPEG 主屏幕、触摸、拖拽、滚轮、按键、Unicode 文字、剪贴板 API | 已写入 Swift 源码，需 Mac 编译和授权验证 |
 | 上游新版 Web 远程桌面 | Mac 使用已有 MJPEG 接口；锁屏时提示在电脑上解锁，Windows 继续使用 H.264 |
 | Mac H.264、音频、多屏切换、锁屏／登录界面 | 本版未实现或未保证 |
 | Mac 温度、风扇、每核 CPU 曲线 | 本版未实现；不伪造传感器数据 |
-| H5 Hermes 原生聊天、Markdown 富文本、聊天附件、模型切换、消息队列 | 本版尚未提供 UI；保留原有 API 和 Android 功能 |
+| Hermes 聊天 | 使用上游工作台现有页面和 API |
 | Mac 与 Codex 桌面 App 同时写入同一会话 | 未实现桌面 IPC 协作；会话占用时先退出原写入客户端 |
 
 ## 1. 在 Mac 上准备环境
@@ -52,7 +50,7 @@ dotnet run --project WebApplication --urls http://127.0.0.1:5104
 
 脚本会询问登录账号密码、生成 JWT 密钥，并探测 Codex 和已构建的 Mac 代理。已有 `appsettings.json` 时不会覆盖。
 
-电脑浏览器打开：`http://127.0.0.1:5104/mobile/`。
+电脑浏览器打开：`http://127.0.0.1:5104/`。
 
 手机局域网访问时使用：
 
@@ -60,11 +58,11 @@ dotnet run --project WebApplication --urls http://127.0.0.1:5104
 dotnet run --project WebApplication --urls http://0.0.0.0:5104
 ```
 
-手机打开 `http://Mac的局域网IP:5104/mobile/`。使用同源 Cookie 登录，不需要把 Codex 端口暴露给手机。首次启动时按 macOS 提示允许局域网连接／防火墙访问。
+手机打开 `http://Mac的局域网IP:5104/`。使用同源 Cookie 登录，不需要把 Codex 端口暴露给手机。首次启动时按 macOS 提示允许局域网连接／防火墙访问。
 
 远程访问请通过已有 VPN 或 HTTPS 反向代理。JPEG H5 控制链路不依赖 WebCodecs；原有 Windows 高帧率播放仍有其浏览器与安全上下文要求。
 
-手机访问 HTTPS 入口后，Android Chrome 在满足安装条件时会触发原生 PWA 安装事件，页面右上角才显示 `＋`；点它会弹出“安装应用”，而非创建网页快捷方式。首次访问需在页面点按一次并停留约 30 秒；也可在 Chrome 菜单选择“安装应用”。iPhone Safari 使用“分享 → 添加到主屏幕”。安装后以独立窗口启动；断网时只显示连接提示，设备控制仍需联网访问 Mac 服务。手机布局参照 Android 原生版的顶栏、底部导航以及 Codex 会话列表→对话详情。
+手机访问 HTTPS 入口后，Android Chrome 在满足安装条件时会显示工作台的“安装应用”按钮，也可在 Chrome 菜单选择安装。iPhone Safari 使用“分享 → 添加到主屏幕”。安装后以独立窗口启动；断网时只显示连接提示，设备控制仍需联网访问 Mac 服务。
 
 ## 4. 可选配置
 
@@ -85,7 +83,7 @@ dotnet run --project WebApplication --urls http://0.0.0.0:5104
 
 Mac 数据默认保存在 `~/Library/Application Support/RemoteTool`。`REMOTETOOL_DATA_DIR` 可以覆盖服务数据目录；不要指向已有 Codex 配置目录。服务应由已经登录桌面的普通用户启动，以复用该用户的 Codex 登录和桌面权限。Mac 的关机／重启不自动提权；权限不足会返回实际错误。
 
-2026-10-13 已在这台 Mac 实测：代理的屏幕录制和辅助功能权限均可用，主屏幕为 2304×1296，能抓到 JPEG；真实 HTTP 服务的 Mac 锁屏状态和 MJPEG 路由通过独立临时配置的集成测试。未测试真实鼠标、键盘输入，也未测试锁屏状态下的行为。
+2026-10-13 已在 Mac 实测：代理的屏幕录制和辅助功能权限均可用，能抓到 JPEG；真实 HTTP 服务的 Mac 锁屏状态和 MJPEG 路由通过独立临时配置的集成测试。新版工作台已在 Chrome 手机尺寸模拟器和公网 Chrome 中验证终端连接及命令回显。未测试锁屏状态下的桌面输入。
 
 ## 5. 实机验证顺序
 
@@ -104,8 +102,6 @@ Mac 数据默认保存在 `~/Library/Application Support/RemoteTool`。`REMOTETO
 
 ```bash
 dotnet build WebApplication/WebApplication.csproj
-node --test tests/mobile-core.test.mjs
-node tests/mobile-browser.test.cjs
 dotnet run --project tests/AgentContracts
 dotnet run --project tests/BridgeStartup -- WebApplication/bin/Debug/net8.0/WebApplication.dll
 python3 tests/test_macos_h5_integration.py
@@ -115,4 +111,4 @@ python3 tests/test_macos_h5_integration.py
 
 Linux 上的编译和模拟测试不能证明 Mac 系统 API、Swift 编译、真实 Agent 版本或浏览器权限已经通过。本版暂未接入 PTY、WebRTC 和原生 H.264 编码。
 
-浏览器测试需要 Playwright 和 Chromium；可用 `REMOTETOOL_TEST_CHROME` 指向浏览器程序。测试检查 390px 手机布局、Cookie 登录、会话显示、发送、桌面输入、终端及结果不确定时的刷新恢复。已在 Linux 的 Chromium Headless Shell 通过；iPhone Safari 和实际 Mac 权限需要单独验证。
+终端已在 Chrome 390px 手机模拟视口中验证连接、点击“发送”和回车提交，公网 Chrome 验证了终端命令回显。iPhone Safari 和实际 Mac 锁屏状态需要单独验证。

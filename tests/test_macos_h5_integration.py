@@ -84,11 +84,11 @@ def main():
                     if process.poll() is not None: raise RuntimeError("Host exited during startup")
                     time.sleep(.15)
             else: raise RuntimeError("Host startup timeout")
-            assert "手机控制台" in request("/mobile/")
             try: request("/api/platform/capabilities"); raise AssertionError("Unauthenticated API accepted")
             except urllib.error.HTTPError as error: assert error.code == 401
             request("/api/auth/login", {"username":"fixture","password":"fixture-only-password"})
             assert request("/api/auth/me")["authenticated"]
+            assert "app-shell" in request("/mobile/")
             assert "app-shell" in request("/remote/index")
             assert "app-shell" in request("/agents/codex")
             assert "app-shell" in request("/hangfire")

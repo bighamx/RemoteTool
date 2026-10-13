@@ -120,7 +120,7 @@ public class StreamController : ControllerBase
     {
         if (OperatingSystem.IsMacOS()) {
             Response.StatusCode = 501;
-            await Response.WriteAsync("Mac 第一版请使用 /mobile 的 JPEG 桌面控制；H.264 尚未实现", cancellationToken);
+            await Response.WriteAsync("Mac 网页工作台请使用 JPEG 桌面控制；H.264 尚未实现", cancellationToken);
             return;
         }
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))

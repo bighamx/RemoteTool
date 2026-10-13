@@ -1,6 +1,6 @@
 # RemoteTool
 
-> 本开发分支新增 macOS 基础适配和 H5 手机控制台：访问 `/mobile/`。安装、功能范围和实机验证步骤请阅读 [MACOS-H5.md](MACOS-H5.md)。Mac 桌面代理仍需要在 Mac 上编译并验证授权。
+> 本开发分支新增 macOS 服务端适配，并在根路径的 Web 工作台支持手机浏览器与 PWA 安装。安装、功能范围和实机验证步骤请阅读 [MACOS-H5.md](MACOS-H5.md)。Mac 桌面代理需要在 Mac 上编译并授权。
 
 <div align="center">
 
