@@ -78,10 +78,19 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
             if (upstream.IsSuccessStatusCode) {
                 var live = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(timeout.Token));
                 if (live?["available"]?.GetValue<bool>() == true) {
-                    if (live["activity_id"]?.ToString() != result["activity_id"]?.ToString()) {
-                        result["progress"] = new System.Text.Json.Nodes.JsonArray(); result["event_count"] = 0; result["last_response_at"] = null;
+                    // The desktop IPC is a per-client view: it only knows the turns the desktop app
+                    // started, so a turn driven by another client (CLI, VS Code extension, another
+                    // app-server) is invisible to it. When the shared rollout/lock verdict says a turn
+                    // is running, never let that view downgrade it to idle. Desktop may still confirm
+                    // running=true, in which case its activity_id is the more precise one.
+                    var localRunning = result["running"]?.GetValue<bool>() == true;
+                    var desktopRunning = live["running"]?.GetValue<bool>() == true;
+                    if (!localRunning || desktopRunning) {
+                        if (live["activity_id"]?.ToString() != result["activity_id"]?.ToString()) {
+                            result["progress"] = new System.Text.Json.Nodes.JsonArray(); result["event_count"] = 0; result["last_response_at"] = null;
+                        }
+                        foreach (var field in new[] { "available", "running", "activity_id", "kind", "started_at", "phase_started_at" }) result[field] = live[field]?.DeepClone();
                     }
-                    foreach (var field in new[] { "available", "running", "activity_id", "kind", "started_at", "phase_started_at" }) result[field] = live[field]?.DeepClone();
                     result["observed_only"] = true; result["source"] = "desktop";
                     if (result["running"]?.GetValue<bool>() != true) { result["progress"] = new System.Text.Json.Nodes.JsonArray(); result["event_count"] = 0; }
                 }
