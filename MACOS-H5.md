@@ -7,13 +7,13 @@
 | 功能 | 状态 |
 | --- | --- |
 | 工作台登录、概览、系统操作、命令终端 | 已实现；Mac 终端使用 PTY，支持交互式程序、终端尺寸同步与手机快捷键 |
-| Codex 会话列表与对话 | 复用上游新版工作台；Mac 服务端已适配 Codex CLI |
+| Codex 会话列表与对话 | 复用上游新版工作台；Mac 服务端已适配 Codex CLI，完成的助手回复支持 Markdown |
 | 工作台主屏幕图标、独立窗口启动 | 根路径已配置 Web App Manifest、图标和 Service Worker；需要 HTTPS 或 localhost |
 | 文件、Docker、Compose、定时任务 | 复用原有工作台页面 |
 | macOS Codex CLI 桥接、用户数据目录、zsh | 已适配，需实机验证已安装 Codex 的协议版本 |
-| Mac 桌面代理、JPEG 多显示器切换、触摸、拖拽、滚轮、按键、Unicode 文字、剪贴板 API | 已写入 Swift 源码，需 Mac 编译和授权验证 |
-| 上游新版 Web 远程桌面 | Mac 使用已有 MJPEG 接口；锁屏时提示在电脑上解锁，Windows 继续使用 H.264 |
-| Mac H.264、音频、锁屏／登录界面 | 本版未实现或未保证 |
+| Mac 桌面代理、多显示器切换、触摸、拖拽、滚轮、按键、Unicode 文字、剪贴板 API | 已写入 Swift 源码，需 Mac 编译和授权验证 |
+| 上游新版 Web 远程桌面 | Mac 使用 ScreenCaptureKit NV12 → VideoToolbox H.264，最高 1920 宽、20 FPS、目标 3 Mbps；支持手机双指缩放／平移，MJPEG 保留为回退；锁屏时提示在电脑上解锁 |
+| Mac 音频、锁屏远程解锁、网络自适应码率 | 本版未实现 |
 | Mac 温度、风扇、每核 CPU 曲线 | 本版未实现；不伪造传感器数据 |
 | Hermes 聊天 | 使用上游工作台现有页面和 API |
 | Mac 与 Codex 桌面 App 同时写入同一会话 | 未实现桌面 IPC 协作；会话占用时先退出原写入客户端 |
@@ -24,6 +24,7 @@
 - Codex CLI，先在 Mac 终端中完成安装和登录，验证 `codex --version` 和 `codex app-server --help`。
 - Python 3，用于生成配置。
 - 如需桌面控制：macOS 12.3+，Xcode Command Line Tools。不同 macOS / Xcode 版本仍需实机测试。
+- H.264 桌面流需要提供 `h264_videotoolbox` 编码器的 FFmpeg；可通过 `REMOTETOOL_FFMPEG_PATH` 指定绝对路径。
 - 如需容器管理：启动 Docker Desktop。默认读取 `~/.docker/run/docker.sock`；可用 `Docker:Host` 配置实际 Socket URI。
 
 ## 2. 构建桌面代理（可选）
@@ -62,7 +63,7 @@ dotnet run --project WebApplication --urls http://0.0.0.0:5104
 
 手机打开 `http://Mac的局域网IP:5104/`。使用同源 Cookie 登录，不需要把 Codex 端口暴露给手机。首次启动时按 macOS 提示允许局域网连接／防火墙访问。
 
-远程访问请通过已有 VPN 或 HTTPS 反向代理。JPEG H5 控制链路不依赖 WebCodecs；原有 Windows 高帧率播放仍有其浏览器与安全上下文要求。
+远程访问请通过已有 VPN 或 HTTPS 反向代理。H.264 优先使用 WebCodecs，其次使用 MSE；不支持时回退到 MJPEG。WebCodecs 需要 HTTPS 或 localhost 安全上下文。
 
 手机访问 HTTPS 入口后，Android Chrome 在满足安装条件时会显示工作台的“安装应用”按钮，也可在 Chrome 菜单选择安装。iPhone Safari 使用“分享 → 添加到主屏幕”。安装后以独立窗口启动；断网时只显示连接提示，设备控制仍需联网访问 Mac 服务。
 
@@ -75,6 +76,7 @@ dotnet run --project WebApplication --urls http://0.0.0.0:5104
 | `Codex:Executable` | `command -v codex` 输出的绝对路径 |
 | `Codex:Home` | `/Users/你的用户名/.codex` |
 | `Codex:WorkingDirectory` | `/Users/你的用户名/Documents/Codex/Mobile` |
+| `RemoteControl:FFmpegPath` | FFmpeg 的绝对路径；也可使用 `REMOTETOOL_FFMPEG_PATH` 环境变量 |
 | `RemoteControl:MacAgentExecutable` | 代理 `.app/Contents/MacOS/RemoteToolMacAgent` 的绝对路径 |
 | `CloudflareAccess:Team` / `Audience` / `Email` | 可选；配置后仅在 Access 签名 JWT 的应用和邮箱均匹配时自动登录 |
 | `Hermes:HomeDirectory` | Hermes 实际的数据目录 |
@@ -85,7 +87,7 @@ dotnet run --project WebApplication --urls http://0.0.0.0:5104
 
 Mac 数据默认保存在 `~/Library/Application Support/RemoteTool`。`REMOTETOOL_DATA_DIR` 可以覆盖服务数据目录；不要指向已有 Codex 配置目录。服务应由已经登录桌面的普通用户启动，以复用该用户的 Codex 登录和桌面权限。Mac 的关机／重启不自动提权；权限不足会返回实际错误。
 
-已在双显示器 Mac 上实测：代理可列出两块屏幕并采集副屏 JPEG；390px Chrome 模拟视口可切换副屏，画面成功加载。PTY 可执行命令、同步终端尺寸，Ctrl+C 可中断长命令后继续使用 Shell。锁屏状态下的桌面输入仍需单独验证。
+已在双显示器 Mac 上实测：两块屏幕均可输出 1920×1080 H.264；390px Chrome 手机模拟视口可切换副屏、缩放／平移，放大后的输入坐标通过检查。静止画面样本约 0.65 Mbps，动态画面流量和操作延迟仍需按实际网络测试。PTY 可执行命令、同步终端尺寸，Ctrl+C 可中断长命令后继续使用 Shell。锁屏状态下的桌面输入仍需单独验证。
 
 ## 5. 实机验证顺序
 
@@ -111,6 +113,6 @@ python3 tests/test_macos_h5_integration.py
 
 集成测试使用临时目录和模拟 Codex，不调用真实模型，也不修改真实 Codex 账户。它验证 HTTP 登录／退出、页面入口、非 Windows 桥接启动、JSON-RPC 初始化、会话／任务去重、SSE 和审批。
 
-Linux 上的编译和模拟测试不能证明 Mac 系统 API、Swift 编译、真实 Agent 版本或浏览器权限已经通过。本版暂未接入 WebRTC 和原生 H.264 编码。
+Linux 上的编译和模拟测试不能证明 Mac 系统 API、Swift 编译、真实 Agent 版本或浏览器权限已经通过。本版暂未接入 WebRTC、音频或网络自适应码率；H.264 使用 FFmpeg 的 VideoToolbox 硬件编码器。
 
 终端已在 Chrome 390px 手机模拟视口中验证连接、发送、回车与 Ctrl+C。iPhone Safari 和实际 Mac 锁屏状态需要单独验证。

@@ -40,6 +40,10 @@ class RemoteControl {
         this.pickerCurrentPath = null;
         // previewObjectUrl 不再需要，视频和图片均通过 URL 直接加载
         this.streamActive = false;
+        this.streamZoom = 1;
+        this.streamPanX = 0;
+        this.streamPanY = 0;
+        this.streamTouchGesture = null;
         this.currentStreamMode = 'none'; // 'none', 'h264', 'mjpeg'
         /** 实时流统计：FPS、缓冲延迟(ms)、接收速率(kbps)，由各拉流路径更新 */
         this.streamStats = { fps: 0, bufferDelayMs: 0, bitrateKbps: 0 };
@@ -717,8 +721,20 @@ class RemoteControl {
         document.getElementById('terminal-toggle-btn').addEventListener('click', () => this.toggleTerminal());
         document.getElementById('display-select').addEventListener('change', (e) => {
             this.selectedDisplayId = Number(e.target.value);
-            if (this.platform === 'macOS' && this.streamActive) this.startLegacyStream();
+            if (this.platform === 'macOS' && this.streamActive) {
+                this.stopStream();
+                this.resetStreamZoom();
+                this.startStream();
+            }
         });
+        document.getElementById('mac-zoom-in').addEventListener('click', () => this.setStreamZoom(this.streamZoom * 1.5));
+        document.getElementById('mac-zoom-out').addEventListener('click', () => this.setStreamZoom(this.streamZoom / 1.5));
+        document.getElementById('mac-zoom-reset').addEventListener('click', () => this.resetStreamZoom());
+        const zoomSurface = document.getElementById('screenshot-container');
+        zoomSurface.addEventListener('touchstart', (e) => this.startStreamTouchGesture(e), { passive: false });
+        zoomSurface.addEventListener('touchmove', (e) => this.moveStreamTouchGesture(e), { passive: false });
+        zoomSurface.addEventListener('touchend', () => { this.streamTouchGesture = null; });
+        zoomSurface.addEventListener('touchcancel', () => { this.streamTouchGesture = null; });
         document.getElementById('clear-btn').addEventListener('click', () => this.clearTerminal());
         document.getElementById('terminal-command-form').addEventListener('submit', (e) => {
             e.preventDefault();
@@ -1398,6 +1414,7 @@ class RemoteControl {
         if (container) {
             container.classList.add('fullscreen');
             this.isFullscreen = true;
+            this.setStreamZoom(this.streamZoom);
             if (btn) btn.textContent = '⛶ 退出全屏';
 
             // 显示退出提示
@@ -1418,6 +1435,7 @@ class RemoteControl {
         if (container) {
             container.classList.remove('fullscreen');
             this.isFullscreen = false;
+            this.setStreamZoom(this.streamZoom);
             if (btn) btn.textContent = '⛶ 全屏';
 
             console.log('Exited fullscreen mode');
@@ -1579,14 +1597,11 @@ class RemoteControl {
             crf: this.qualitySettings.crf,
             fps: this.qualitySettings.fps || '50'
         });
-
-        // Mac Agent currently provides JPEG frames; the Windows H.264 route is unavailable.
-        let started = false;
-        if (this.platform === 'macOS') {
-            this.startLegacyStream();
-            this.updateModeIndicator('mjpeg');
-            started = true;
+        if (this.platform === 'macOS' && this.selectedDisplayId) {
+            params.set('displayId', this.selectedDisplayId);
         }
+
+        let started = false;
 
         // 1. Try WebCodecs + Canvas (Chrome/Edge, ~60ms latency)
         if (!started && 'VideoDecoder' in window && typeof MP4Box !== 'undefined') {
@@ -1617,8 +1632,13 @@ class RemoteControl {
         // 3. Fallback to simple video.src
         if (!started) {
             try {
-                this.startSimpleStream(video, params);
-                video.style.display = 'block';
+                if (this.platform === 'macOS') {
+                    this.startLegacyStream();
+                    this.updateModeIndicator('mjpeg');
+                } else {
+                    this.startSimpleStream(video, params);
+                    video.style.display = 'block';
+                }
                 placeholder.style.display = 'none';
                 started = true;
             } catch (e2) {
@@ -1649,6 +1669,48 @@ class RemoteControl {
         } else {
             this.startStream();
         }
+    }
+
+    setStreamZoom(zoom, panX = this.streamPanX, panY = this.streamPanY) {
+        const container = document.getElementById('screenshot-container');
+        this.streamZoom = Math.max(1, Math.min(4, zoom));
+        const maxX = container.clientWidth * (this.streamZoom - 1) / 2;
+        const maxY = container.clientHeight * (this.streamZoom - 1) / 2;
+        this.streamPanX = Math.max(-maxX, Math.min(maxX, panX));
+        this.streamPanY = Math.max(-maxY, Math.min(maxY, panY));
+        const transform = `translate(${this.streamPanX}px, ${this.streamPanY}px) scale(${this.streamZoom})`;
+        for (const id of ['stream-canvas', 'stream-video', 'stream-img']) {
+            document.getElementById(id).style.transform = transform;
+        }
+        document.getElementById('mac-zoom-reset').textContent = this.streamZoom === 1 ? '适应' : `${Math.round(this.streamZoom * 100)}%`;
+    }
+
+    resetStreamZoom() { this.setStreamZoom(1, 0, 0); }
+
+    startStreamTouchGesture(e) {
+        if (this.platform !== 'macOS' || e.touches.length !== 2) return;
+        e.preventDefault();
+        const a = e.touches[0], b = e.touches[1];
+        this.streamTouchGesture = {
+            distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+            x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2,
+            zoom: this.streamZoom, panX: this.streamPanX, panY: this.streamPanY
+        };
+    }
+
+    moveStreamTouchGesture(e) {
+        if (this.platform !== 'macOS' || e.touches.length !== 2) return;
+        if (!this.streamTouchGesture) this.startStreamTouchGesture(e);
+        const start = this.streamTouchGesture;
+        if (!start) return;
+        e.preventDefault();
+        const a = e.touches[0], b = e.touches[1];
+        const zoom = Math.max(1, Math.min(4, start.zoom * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / Math.max(1, start.distance)));
+        const rect = document.getElementById('screenshot-container').getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2, centerY = rect.top + rect.height / 2;
+        this.setStreamZoom(zoom,
+            start.panX + (a.clientX + b.clientX) / 2 - start.x + (start.x - centerX) * (1 - zoom / start.zoom),
+            start.panY + (a.clientY + b.clientY) / 2 - start.y + (start.y - centerY) * (1 - zoom / start.zoom));
     }
 
     // Simple direct video.src streaming
@@ -2223,7 +2285,7 @@ class RemoteControl {
         if (s.fps >= 0) parts.push(`FPS: ${Math.round(s.fps)}`);
         if (s.bufferDelayMs >= 0) parts.push(`缓冲: ${Math.round(s.bufferDelayMs)}ms`);
         if (s.bitrateKbps > 0) parts.push(`${(s.bitrateKbps / 1024).toFixed(2)} Mbps`);
-        if (this.captureMethod) parts.push(`抓屏: ${this.captureMethod === 'ddagrab' ? 'DX' : 'GDI'}`);
+        if (this.captureMethod) parts.push(`抓屏: ${this.platform === 'macOS' ? 'Mac' : this.captureMethod === 'ddagrab' ? 'DX' : 'GDI'}`);
         el.textContent = parts.join(' · ');
         el.classList.add('visible');
     }
@@ -2761,10 +2823,21 @@ class RemoteControl {
             });
         }
 
-        // Linux 没有桌面代理；Mac 使用 MJPEG，Windows 使用 H.264。
+        // Mac 目前使用固定的低带宽 H.264 档位，隐藏只作用于 Windows 的画质选项。
         const screenshotTabBtn = document.querySelector('.tab[data-tab="screenshot"]');
         if (screenshotTabBtn) {
             screenshotTabBtn.style.display = info.platform === 'Linux' ? 'none' : '';
+        }
+        const macQuality = document.getElementById('mac-stream-quality');
+        if (macQuality) macQuality.style.display = info.platform === 'macOS' ? '' : 'none';
+        const macZoom = document.getElementById('mac-zoom-controls');
+        if (macZoom) macZoom.style.display = info.platform === 'macOS' ? '' : 'none';
+        document.getElementById('screenshot-container')?.classList.toggle('mac-zoom-enabled', info.platform === 'macOS');
+        for (const id of ['quality-preset', 'resolution-select', 'bitrate-select', 'fps-select', 'crf-value', 'crf-display']) {
+            const control = document.getElementById(id);
+            if (control) control.style.display = info.platform === 'macOS' ? 'none' : '';
+            const label = document.querySelector(`label[for="${id}"]`);
+            if (label) label.style.display = info.platform === 'macOS' ? 'none' : '';
         }
 
         // 根据平台动态设置终端类型选择框

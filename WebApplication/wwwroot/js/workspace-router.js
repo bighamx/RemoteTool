@@ -9,7 +9,7 @@
     const assets = {
         remote: { styles: ['remote.css', 'performance.css', 'vendor/xterm/xterm.css'], scripts: ['remote-nav.js', 'mp4box.all.min.js', 'performance.js', 'media-preview.js', 'vendor/xterm/xterm.js', 'vendor/xterm/addon-fit.js', 'remote.js'] },
         jobs: { styles: ['workspace-pages.css'], scripts: ['web-api.js', 'jobs-page.js'] },
-        codex: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'agent-workspace.js'] },
+        codex: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-workspace.js'] },
         hermes: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'agent-workspace.js'] }
     };
     const titles = { home: '总览', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes' };

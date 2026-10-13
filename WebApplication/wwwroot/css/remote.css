@@ -718,6 +718,9 @@
     box-shadow: 0 0 0 2px #22c55e;
 }
 
+.screenshot-container.mac-zoom-enabled { touch-action: none; }
+#mac-zoom-controls { display: inline-flex; gap: 4px; }
+
 /* 全屏模式样式 */
 .screenshot-container.fullscreen {
     position: fixed;

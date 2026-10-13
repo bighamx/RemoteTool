@@ -154,6 +154,11 @@
             <div class="screenshot-controls">
                 <button id="stream-toggle-btn" class="btn btn-primary btn-sm">▶ 开始</button>
                 <button id="fullscreen-btn" class="btn btn-secondary btn-sm" title="全屏 (F11/Esc退出)">⛶</button>
+                <span id="mac-zoom-controls" style="display:none">
+                    <button id="mac-zoom-out" class="btn btn-secondary btn-sm" type="button" aria-label="缩小桌面画面">－</button>
+                    <button id="mac-zoom-reset" class="btn btn-secondary btn-sm" type="button" aria-label="适应窗口">适应</button>
+                    <button id="mac-zoom-in" class="btn btn-secondary btn-sm" type="button" aria-label="放大桌面画面">＋</button>
+                </span>
                 <label for="display-select" id="display-select-label" style="display:none">显示器</label>
                 <select id="display-select" class="quality-select" style="display:none" aria-label="选择显示器"></select>
                 
@@ -204,6 +209,7 @@
                 <label for="crf-value">质量</label>
                 <input type="range" id="crf-value" min="18" max="32" value="18" class="crf-slider">
                 <span id="crf-display" class="crf-value">18</span>
+                <span id="mac-stream-quality" style="display:none">Mac · H.264 · 最高 1920 宽 · 20 FPS · 双指移动/缩放</span>
                 <span id="stream-mode-indicator" class="mode-indicator">未连接</span>
                 <span id="stream-stats" class="stream-stats" title="实时视频速率、缓冲延迟" aria-hidden="true"></span>
             </div>

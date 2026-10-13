@@ -7,11 +7,22 @@
     const receiptKey = id => `remotetool:web:pending:${agent}:${id}`;
     const terminal = new Set(['completed','failed','cancelled','interrupted','acceptance_unknown']);
     const previewSupport = new Map();
+    const markdown = agent === 'codex' && window.markdownit
+        ? window.markdownit({ html: false, breaks: true, linkify: true }) : null;
+    const markdownCache = new Map();
+    if (markdown) {
+        markdown.disable('image');
+        markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
+            tokens[index].attrSet('target', '_blank');
+            tokens[index].attrSet('rel', 'noopener noreferrer');
+            return renderer.renderToken(tokens, index, options);
+        };
+    }
     let streamAbort = null;
     let timelineResizeObserver = null;
     let scrollRestoreTimer = null;
     const app = Vue.createApp({
-        data: () => ({ agent, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
+        data: () => ({ agent, markdownReady: !!markdown, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null,
             activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0,
@@ -80,6 +91,7 @@
             unresolvedMedia(message) {return this.mediaMatches(message).filter(marker=>!marker.file);},
             linkedMediaIds(message) {return new Set(this.mediaFiles(message).map(file=>file.id));},
             messageBody(message) {const text=this.messageText(message);const markers=this.mediaMarkers(text);if(message.role!=='assistant'||!markers.length)return text;const lines=new Set(markers.map(marker=>marker.index));return text.replaceAll('\r\n','\n').split('\n').filter((_,index)=>!lines.has(index)).join('\n').trim();},
+            renderMarkdown(text) {if(!markdown)return '';if(!markdownCache.has(text)){if(markdownCache.size>=200)markdownCache.clear();markdownCache.set(text,markdown.render(text));}return markdownCache.get(text);},
             mediaName(path) {return String(path||'').replaceAll('\\','/').split('/').at(-1)||'附件';},
             mediaKind(file) {const mime=file.mime||'';return mime.startsWith('audio/')?'音频':mime.startsWith('video/')?'视频':mime.startsWith('image/')?'图片':'文件';},
             canPreviewFile(file) {const mime=String(file?.mime||'').split(';')[0].trim().toLowerCase();if(['image/png','image/jpeg','image/gif','image/webp','image/avif','text/plain','application/json','application/pdf'].includes(mime))return true;if(!mime.startsWith('video/')&&!mime.startsWith('audio/'))return false;if(!previewSupport.has(mime))previewSupport.set(mime,!!document.createElement(mime.startsWith('video/')?'video':'audio').canPlayType(mime));return previewSupport.get(mime);},

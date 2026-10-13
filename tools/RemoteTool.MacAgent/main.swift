@@ -5,6 +5,8 @@ import ApplicationServices
 import ImageIO
 import CoreMedia
 import CoreGraphics
+import CoreVideo
+import Darwin
 
 // stdout is exclusively the JSONL protocol. No input or clipboard content is logged.
 private func screenLocked() -> Bool {
@@ -29,7 +31,7 @@ final class Capture: NSObject, SCStreamOutput {
         let config = SCStreamConfiguration()
         config.width = min(1280, display.width)
         config.height = max(2, config.width * display.height / display.width)
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 5)
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 15)
         config.queueDepth = 2
         config.showsCursor = true
         let candidate = SCStream(filter: SCContentFilter(display: display, excludingWindows: []), configuration: config, delegate: nil)
@@ -62,6 +64,72 @@ final class Capture: NSObject, SCStreamOutput {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         throw AgentError.message("尚未收到桌面画面，请检查授权和登录状态")
+    }
+}
+
+// A separate process writes ScreenCaptureKit's NV12 pixels directly to the
+// encoder. RTV1 + little-endian width/height precedes the raw video frames.
+final class RawCapture: NSObject, SCStreamOutput {
+    private var stream: SCStream?
+    private var headerWritten = false
+    private var packed = [UInt8]()
+
+    func start(displayID: CGDirectDisplayID, maxWidth: Int, fps: Int) async throws {
+        guard !screenLocked() else { throw AgentError.message("Mac 当前已锁屏") }
+        guard CGPreflightScreenCaptureAccess() else { throw AgentError.message("缺少屏幕录制权限") }
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
+            throw AgentError.message("找不到所选显示器")
+        }
+        let config = SCStreamConfiguration()
+        config.width = max(2, min(maxWidth, display.width) & ~1)
+        config.height = max(2, (config.width * display.height / display.width) & ~1)
+        config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
+        config.queueDepth = 2
+        config.showsCursor = true
+        let candidate = SCStream(filter: SCContentFilter(display: display, excludingWindows: []), configuration: config, delegate: nil)
+        try candidate.addStreamOutput(self, type: .screen, sampleHandlerQueue: DispatchQueue(label: "remote.raw.capture"))
+        try await candidate.startCapture()
+        stream = candidate
+    }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .screen, sampleBuffer.isValid, let pixel = sampleBuffer.imageBuffer,
+              CVPixelBufferGetPixelFormatType(pixel) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+              CVPixelBufferGetPlaneCount(pixel) == 2 else { return }
+        let width = CVPixelBufferGetWidth(pixel), height = CVPixelBufferGetHeight(pixel)
+        guard width > 0, height > 0, width % 2 == 0, height % 2 == 0 else { return }
+        if !headerWritten {
+            var header = Data("RTV1".utf8)
+            var w = UInt32(width).littleEndian, h = UInt32(height).littleEndian
+            withUnsafeBytes(of: &w) { header.append(contentsOf: $0) }
+            withUnsafeBytes(of: &h) { header.append(contentsOf: $0) }
+            FileHandle.standardOutput.write(header)
+            headerWritten = true
+        }
+        CVPixelBufferLockBaseAddress(pixel, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixel, .readOnly) }
+        let size = width * height * 3 / 2
+        if packed.count != size { packed = [UInt8](repeating: 0, count: size) }
+        packed.withUnsafeMutableBytes { destination in
+            guard let dest = destination.baseAddress else { return }
+            for plane in 0..<2 {
+                guard let source = CVPixelBufferGetBaseAddressOfPlane(pixel, plane) else { return }
+                let rows = plane == 0 ? height : height / 2
+                let stride = CVPixelBufferGetBytesPerRowOfPlane(pixel, plane)
+                let offset = plane == 0 ? 0 : width * height
+                for row in 0..<rows {
+                    memcpy(dest.advanced(by: offset + row * width), source.advanced(by: row * stride), width)
+                }
+            }
+            var sent = 0
+            while sent < size {
+                let count = Darwin.write(STDOUT_FILENO, dest.advanced(by: sent), size - sent)
+                if count <= 0 { return }
+                sent += count
+            }
+        }
     }
 }
 enum AgentError: Error { case message(String) }
@@ -206,6 +274,22 @@ enum AgentError: Error { case message(String) }
 
 @main struct RemoteToolMacAgent {
     static func main() async {
+        if CommandLine.arguments.contains("--raw-stream") {
+            let args = CommandLine.arguments
+            let id = args.count > 2 ? UInt32(args[2]) : nil
+            let width = args.count > 3 ? Int(args[3]) : nil
+            let fps = args.count > 4 ? Int(args[4]) : nil
+            guard let id, let width, let fps,
+                  (640...2560).contains(width), (5...30).contains(fps) else { return }
+            let capture = RawCapture()
+            do {
+                try await capture.start(displayID: id, maxWidth: width, fps: fps)
+                while true { try await Task.sleep(nanoseconds: 1_000_000_000) }
+            } catch {
+                FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
+            }
+            return
+        }
         if CommandLine.arguments.contains("--permissions") {
             CGRequestScreenCaptureAccess()
             _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String:true] as CFDictionary)

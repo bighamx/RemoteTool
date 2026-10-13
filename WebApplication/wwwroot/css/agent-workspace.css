@@ -268,7 +268,14 @@
 }
 
 .agent-message.from-user {
+    width: fit-content;
+    max-width: min(85%, 720px);
     margin-left: auto
+}
+
+.agent-message.from-agent {
+    width: min(100%, 860px);
+    max-width: 100%
 }
 
 .agent-message-meta {
@@ -1413,6 +1420,36 @@
     font-size: 13px;
     line-height: 1.65
 }
+
+.agent-markdown {
+    min-width: 0;
+    white-space: normal
+}
+
+.agent-markdown > :first-child { margin-top: 0 }
+.agent-markdown > :last-child { margin-bottom: 0 }
+.agent-markdown p,
+.agent-markdown ul,
+.agent-markdown ol,
+.agent-markdown blockquote,
+.agent-markdown pre,
+.agent-markdown table { margin: 0 0 12px }
+.agent-markdown h1,
+.agent-markdown h2,
+.agent-markdown h3 { margin: 18px 0 8px; line-height: 1.35 }
+.agent-markdown h1 { font-size: 19px }
+.agent-markdown h2 { font-size: 17px }
+.agent-markdown h3 { font-size: 15px }
+.agent-markdown ul,
+.agent-markdown ol { padding-left: 22px }
+.agent-markdown a { color: var(--accent-primary); text-decoration: underline; overflow-wrap: anywhere }
+.agent-markdown code { padding: 1px 4px; border-radius: 4px; background: var(--bg-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace }
+.agent-markdown pre { max-width: 100%; padding: 12px; overflow-x: auto; border-radius: 9px; background: var(--bg-secondary); white-space: pre }
+.agent-markdown pre code { padding: 0; background: transparent; white-space: pre }
+.agent-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; white-space: nowrap }
+.agent-markdown th,
+.agent-markdown td { padding: 6px 9px; border: 1px solid var(--border-color) }
+.agent-markdown blockquote { padding-left: 11px; border-left: 3px solid var(--border-color); color: var(--text-secondary) }
 
 .agent-message:not(:has(.agent-message-surface)) .agent-message-text {
     padding: 13px 15px;
