@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="~/css/performance.css" asp-append-version="true" />
 }
 @section Scripts {
+    <script src="~/js/remote-nav.js" asp-append-version="true"></script>
     <script src="~/js/mp4box.all.min.js"></script>
     <script src="~/js/performance.js" asp-append-version="true"></script>
     <script src="~/js/media-preview.js" asp-append-version="true"></script>
@@ -14,16 +15,11 @@
 }
 
 @section Tabs {
-    <nav class="tabs">
-        <button class="tab active" data-tab="controls">系统控制</button>
-        <button class="tab" data-tab="processes">进程管理</button>
-        <button class="tab" data-tab="screenshot">远程控制</button>
-        <button class="tab" data-tab="terminal">命令终端</button>
-        <button class="tab" data-tab="docker">容器管理</button>
-        <button class="tab" data-tab="images">镜像管理</button>
-        <button class="tab" data-tab="compose">Compose</button>
-        <button class="tab" data-tab="files">文件管理</button>
-    </nav>
+    <div class="remote-section-heading" id="remote-nav-app" v-cloak>
+        <nav class="tabs docker-subtabs" aria-label="Docker 子功能">
+            <button v-for="item in tabs" :key="item.key" class="tab" :data-tab="item.key" :hidden="!item.docker" :class="{active:current===item.key}" @@click="switchTo(item.key)">{{item.label}}</button>
+        </nav>
+    </div>
 }
 
 <!-- SVG Icon Symbols -->

@@ -6,20 +6,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - RemoteTool</title>
+    <title>登录 · RemoteTool</title>
+    <script>document.documentElement.dataset.theme = localStorage.getItem('theme') || 'dark';</script>
     <style>
         :root {
-            --bg-primary: #0d1117;
-            --bg-secondary: #161b22;
-            --bg-tertiary: #21262d;
-            --text-primary: #e6edf3;
-            --text-secondary: #8b949e;
-            --accent-primary: #58a6ff;
+            --bg-primary: #10151d;
+            --bg-secondary: #1b2431;
+            --bg-tertiary: #24313b;
+            --text-primary: #edf4f3;
+            --text-secondary: #bccacb;
+            --accent-primary: #61dbc4;
             --accent-danger: #f85149;
-            --border-color: #30363d;
-            --border-radius: 12px;
+            --border-color: #30414a;
+            --border-radius: 20px;
             --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
             --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        [data-theme="light"] {
+            --bg-primary: #f5f8fa;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #edf3f1;
+            --text-primary: #172b29;
+            --text-secondary: #455e5a;
+            --accent-primary: #006b59;
+            --border-color: #cad6d0;
+            --shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -28,11 +39,13 @@
             background: var(--bg-primary);
             color: var(--text-primary);
             min-height: 100vh;
+            padding: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
-            background: linear-gradient(135deg, var(--bg-primary) 0%, #0a0e12 100%);
+            background: radial-gradient(circle at 50% 20%, #1d3937 0%, var(--bg-primary) 52%);
         }
+        [data-theme="light"] body { background: radial-gradient(circle at 50% 20%, #dceee7 0%, var(--bg-primary) 55%); }
 
         .login-card {
             background: var(--bg-secondary);
@@ -45,11 +58,10 @@
         }
 
         .login-header { text-align: center; margin-bottom: 32px; }
-        .login-header .logo svg { color: var(--accent-primary); margin-bottom: 16px; }
+        .login-header .logo { display: grid; place-items: center; width: 58px; height: 58px; margin: 0 auto 18px; border-radius: 18px; background: linear-gradient(145deg, #61dbc4, #2c9c89); color: #10231f; font-size: 28px; font-weight: 750; }
         .login-header h1 {
             font-size: 28px; font-weight: 600; margin-bottom: 8px;
-            background: linear-gradient(135deg, var(--accent-primary), #a855f7);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            color: var(--text-primary);
         }
         .login-header p { color: var(--text-secondary); font-size: 14px; }
 
@@ -59,22 +71,23 @@
             width: 100%; padding: 12px 16px;
             background: var(--bg-tertiary);
             border: 1px solid var(--border-color);
-            border-radius: 8px;
+            border-radius: 11px;
             color: var(--text-primary);
             font-size: 14px;
             transition: var(--transition);
         }
         .form-group input:focus {
             outline: none; border-color: var(--accent-primary);
-            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+            box-shadow: 0 0 0 3px rgba(97, 219, 196, 0.18);
         }
 
         .btn-primary {
-            width: 100%; padding: 12px; border-radius: 8px; font-size: 14px; font-weight: 500;
+            width: 100%; padding: 12px; border-radius: 12px; font-size: 14px; font-weight: 700;
             border: none; cursor: pointer; transition: var(--transition);
-            background: linear-gradient(135deg, var(--accent-primary), #3b82f6); color: white;
+            background: var(--accent-primary); color: #10231f;
         }
-        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(88, 166, 255, 0.3); }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(97, 219, 196, 0.25); }
+        [data-theme="light"] .btn-primary { color: white; }
 
         .error-message { color: var(--accent-danger); font-size: 14px; margin-top: 16px; text-align: center; min-height: 20px; }
     </style>
@@ -87,19 +100,19 @@
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
                 </svg>
             </div>
-            <h1>Chuckie Tool</h1>
-            <p>大火腿的远程管理系统</p>
+            <h1>RemoteTool</h1>
+            <p>设备管理与智能体工作台</p>
         </div>
         <form id="login-form">
             <div class="form-group">
-                <label for="username">Username</label>
+                <label for="username">用户名</label>
                 <input type="text" id="username" name="username" required autocomplete="username">
             </div>
             <div class="form-group">
-                <label for="password">Password</label>
+                <label for="password">密码</label>
                 <input type="password" id="password" name="password" required autocomplete="current-password">
             </div>
-            <button type="submit" class="btn-primary">Login</button>
+            <button type="submit" class="btn-primary">登录</button>
             <div id="login-error" class="error-message"></div>
         </form>
     </div>
@@ -130,10 +143,10 @@
                         : '/';
                     window.location.href = safeReturnUrl;
                 } else {
-                    errorDiv.textContent = data.message || 'Login failed';
+                    errorDiv.textContent = data.message || '登录失败';
                 }
             } catch (error) {
-                errorDiv.textContent = 'Connection failed';
+                errorDiv.textContent = '连接失败';
             }
         });
     </script>

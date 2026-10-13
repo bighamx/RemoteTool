@@ -282,7 +282,7 @@ namespace RemoteTool.Lib.Tool
 
         public long downloaded { get; set; }
         public long downloaded_session { get; set; }
-        public int eta { get; set; }
+        public long eta { get; set; }
         public bool f_l_piece_prio { get; set; }
         public bool force_start { get; set; }
         public bool has_metadata { get; set; }

@@ -47,6 +47,10 @@ class RemoteControl {
         // 以及服务端实际抓屏方式（ddagrab=GPU≈50fps / gdigrab=GDI，4K 下只有 ~15fps）
         this.playbackEngine = null;
         this.captureMethod = null;
+        // 光标由谁画：只有「有真实指针（鼠标/触控板）」的设备才让服务端别烧光标、由本地光标即时跟随；
+        // 纯触摸设备（手机 App 原生播放 / 手机浏览器 / WebView）没有本机指针，必须让服务端烧进画面，
+        // 否则远程控制时看不到任何光标。
+        this.cursorMode = (window.matchMedia && window.matchMedia('(hover: hover)').matches) ? 'local' : 'baked';
         this.streamStatsFrameCount = 0;
         this.streamStatsFrameCountStart = 0;
         this.streamStatsBytes = 0;
@@ -1225,6 +1229,8 @@ class RemoteControl {
 
         // 记录当前 tab
         this.currentTab = tabName;
+        window.remoteControl = this;
+        window.dispatchEvent(new Event('remote-tab-change'));
 
         // 切换到非 controls 页签时停止系统信息自动刷新
         if (tabName !== 'controls') {
@@ -1604,7 +1610,7 @@ class RemoteControl {
 
     // Simple direct video.src streaming
     startSimpleStream(video, params) {
-        const streamUrl = `/api/stream?${params.toString()}&cursor=local`;
+        const streamUrl = `/api/stream?${params.toString()}&cursor=${this.cursorMode}`;
         console.log('Starting simple stream:', streamUrl);
 
         video.preload = 'none';
@@ -1816,7 +1822,7 @@ class RemoteControl {
     // MSE-based low-latency streaming for Chrome
     // WebCodecs low-latency streaming: fetch fMP4 -> mp4box.js demux -> VideoDecoder -> Canvas
     async startWebCodecsStream(canvas, params) {
-        const streamUrl = `/api/stream?${params.toString()}&cursor=local`;
+        const streamUrl = `/api/stream?${params.toString()}&cursor=${this.cursorMode}`;
         console.log('Starting WebCodecs stream:', streamUrl);
 
         // desynchronized:true = 让浏览器走低延迟合成路径（少一层 vsync 排队）；
@@ -1964,7 +1970,7 @@ class RemoteControl {
 
     // MSE-based low-latency streaming (fallback for browsers without WebCodecs)
     async startMSEStream(video, params) {
-        const streamUrl = `/api/stream?${params.toString()}&cursor=local`;
+        const streamUrl = `/api/stream?${params.toString()}&cursor=${this.cursorMode}`;
         console.log('Starting MSE stream:', streamUrl);
 
         // Check MSE support
@@ -5852,6 +5858,7 @@ volumes:
 let app;
 document.addEventListener('DOMContentLoaded', () => {
     app = new RemoteControl();
+    window.remoteControl = app;
     // 文件管理器“在当前目录运行控制台”按钮功能
     app.loadSystemInfo();
 

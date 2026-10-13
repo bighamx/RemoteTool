@@ -112,7 +112,10 @@ public class StreamController : ControllerBase
         [FromQuery] string format = "mp4",
         [FromQuery] int fps = 60,
         [FromQuery] string colors = "full",
-        [FromQuery] string cursor = "local",
+        // 默认把光标烧进画面（旧行为）：手机 App 是原生播放（H264Decoder→GL 纹理）、触摸设备没有本机指针，
+        // 若默认不烧光标，远程控制时画面上什么都看不到。网页端在有真实指针（鼠标/触控板）时才显式请求 cursor=local，
+        // 换取「本地光标即时跟随」——这是桌面浏览器的体验优化，不该由服务端当默认强加给所有客户端。
+        [FromQuery] string cursor = "baked",
         CancellationToken cancellationToken = default)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
