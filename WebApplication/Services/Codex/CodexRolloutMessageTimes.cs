@@ -54,8 +54,12 @@ internal static class CodexRolloutMessageTimes
     private static readonly object gate = new();
     private static readonly Dictionary<string,State> cache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string,(DateTime Checked,string[] Paths)> histories = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string,(long Length,long Modified,long Timestamp)> activityCache = new(StringComparer.OrdinalIgnoreCase);
     public static Snapshot ReadSession(string home,string session,string original) {
-        if(!System.Text.RegularExpressions.Regex.IsMatch(session??"", "^[a-zA-Z0-9_-]{1,160}$"))return new();
+        return Snapshot.Merge(SessionPaths(home,session,original).Select(path=>Read(home,path)));
+    }
+    private static string[] SessionPaths(string home,string session,string original) {
+        if(!System.Text.RegularExpressions.Regex.IsMatch(session??"", "^[a-zA-Z0-9_-]{1,160}$"))return Array.Empty<string>();
         try {
             var root=Path.Combine(home,"sessions");
             var key=Path.GetFullPath(home)+"|"+session;
@@ -70,9 +74,46 @@ internal static class CodexRolloutMessageTimes
                     histories[key]=(DateTime.UtcNow,paths);
                 }
             }
-            return Snapshot.Merge(paths.Concat(string.IsNullOrWhiteSpace(original)?Array.Empty<string>():new[]{original})
-                .Distinct(StringComparer.OrdinalIgnoreCase).Select(path=>Read(home,path)));
-        } catch(Exception error) when(error is IOException or UnauthorizedAccessException or ArgumentException) {return Read(home,original);}
+            return paths.Concat(string.IsNullOrWhiteSpace(original)?Array.Empty<string>():new[]{original})
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        } catch(Exception error) when(error is IOException or UnauthorizedAccessException or ArgumentException) {
+            return string.IsNullOrWhiteSpace(original)?Array.Empty<string>():new[]{original};
+        }
+    }
+    public static long LatestSessionMessageTime(string home,string session,string original) =>
+        SessionPaths(home,session,original).Select(path=>LatestMessageTime(home,path)).DefaultIfEmpty(0).Max();
+    private static long LatestMessageTime(string home,string path) {
+        try {
+            if(!RemoteControl.FilePathPolicy.IsWithin(home,path,false))return 0;
+            var file=new FileInfo(path);if(!file.Exists)return 0;
+            lock(gate) if(activityCache.TryGetValue(file.FullName,out var known) && known.Length==file.Length && known.Modified==file.LastWriteTimeUtc.Ticks)return known.Timestamp;
+            using var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete);
+            long latest=0;
+            // Usually one small tail contains the last message; settings-only appends
+            // cannot change its timestamp. Expand only when the tail contains no messages.
+            for(long amount=65536;;amount=Math.Min(stream.Length,amount*4)) {
+                var start=Math.Max(0,stream.Length-amount);stream.Seek(start,SeekOrigin.Begin);
+                using var reader=new StreamReader(stream,leaveOpen:true);
+                if(start>0)reader.ReadLine();
+                while(reader.ReadLine() is {} line) {
+                    if(!line.Contains("response_item"))continue;
+                    try {
+                        using var json=JsonDocument.Parse(line);var record=json.RootElement;
+                        if(!record.TryGetProperty("type",out var type)||type.GetString()!="response_item"||!record.TryGetProperty("payload",out var payload)||
+                            !payload.TryGetProperty("type",out var kind)||kind.GetString()!="message"||!payload.TryGetProperty("role",out var role)||role.GetString() is not ("user" or "assistant"))continue;
+                        if(role.GetString()=="user" && payload.TryGetProperty("content",out var parts) && parts.ValueKind==JsonValueKind.Array) {
+                            var text=string.Join('\n',parts.EnumerateArray().Where(part=>part.TryGetProperty("text",out _)).Select(part=>part.GetProperty("text").GetString()));
+                            var hasImage=parts.EnumerateArray().Any(part=>part.TryGetProperty("type",out var partType)&&partType.GetString() is "input_image" or "image" or "localImage");
+                            if(!hasImage && LatestSessionPreview.Text(text,true).Length==0)continue;
+                        }
+                        if(record.TryGetProperty("timestamp",out var time)&&DateTimeOffset.TryParse(time.GetString(),out var at))latest=Math.Max(latest,at.ToUnixTimeMilliseconds());
+                    }catch(JsonException) { }
+                }
+                if(latest>0||start==0)break;
+            }
+            lock(gate) {if(activityCache.Count>=512)activityCache.Clear();activityCache[file.FullName]=(file.Length,file.LastWriteTimeUtc.Ticks,latest);}
+            return latest;
+        }catch(Exception error)when(error is IOException or UnauthorizedAccessException or ArgumentException){return 0;}
     }
     public static Snapshot Read(string home,string path) {
         try {

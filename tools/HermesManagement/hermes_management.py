@@ -36,6 +36,35 @@ import hermes_bootstrap
 def main():
     request = json.load(sys.stdin)
     action = request.get("action")
+    if action == "session_search":
+        with contextlib.redirect_stdout(io.StringIO()):
+            from hermes_state import SessionDB
+            body = request.get("body") or {}
+            query, offset = str(body.get("query") or "").strip(), int(body.get("offset") or 0)
+            if not query or len(query) > 500 or offset < 0:
+                raise ValueError("Invalid search")
+            db = SessionDB()
+            try:
+                titles = db.list_sessions_rich(search_query=query, order_by_last_active=True, limit=51, offset=offset)
+                hits = db.search_messages(query, role_filter=["user", "assistant"], limit=51, offset=offset,
+                    sort="newest", fields=["session_id", "snippet", "timestamp"])
+                rows = {}
+                for row in titles[:50]:
+                    rows[row["id"]] = dict(row)
+                for hit in hits[:50]:
+                    session_id = db.resolve_resume_session_id(hit["session_id"])
+                    if session_id not in rows:
+                        row = db.get_session(session_id)
+                        if not row or row.get("hidden") or row.get("archived"):
+                            continue
+                        rows[session_id] = dict(row)
+                    rows[session_id].setdefault("search_snippet", hit.get("snippet") or "")
+                result = {"data": list(rows.values()), "has_more": len(titles) > 50 or len(hits) > 50,
+                    "offset": offset, "limit": 50}
+            finally:
+                db.close()
+        print(json.dumps(result, ensure_ascii=True))
+        return
     if action not in {"providers", "save_provider", "default_model", "model_info", "model_reasoning", "session_context", "compress_session", "run_lookup", "message_action"}:
         raise ValueError("Unsupported settings operation")
     if action == "message_action":

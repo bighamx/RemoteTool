@@ -11,6 +11,9 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效会话或任务标识");
     [HttpGet("capabilities")] public Task Capabilities(CancellationToken ct) => Forward(HttpMethod.Get, "capabilities", null, ct);
+    [HttpGet("sessions/search")] public Task SearchSessions([FromQuery] string query, [FromQuery] string cursor, CancellationToken ct) =>
+        Forward(HttpMethod.Get, $"sessions/search?query={Uri.EscapeDataString(query ?? "")}" +
+            (string.IsNullOrEmpty(cursor) ? "" : $"&cursor={Uri.EscapeDataString(cursor)}"), null, ct);
     [HttpGet("projects")] public Task Projects(CancellationToken ct) => Forward(HttpMethod.Get, "projects", null, ct);
     [HttpGet("model-options")] public Task Models(CancellationToken ct) => Forward(HttpMethod.Get, "model-options", null, ct);
     [HttpGet("providers")] public Task Providers(CancellationToken ct) => Forward(HttpMethod.Get, "providers", null, ct);
@@ -192,6 +195,13 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
                 HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>()?.DisableBuffering();
                 using var reader = new StreamReader(await upstream.Content.ReadAsStreamAsync(ct));
                 while (await reader.ReadLineAsync(ct) is { } line) { await Response.WriteAsync(line + "\n", ct); await Response.Body.FlushAsync(ct); }
+            } else if ((path == "sessions" || path.StartsWith("sessions?", StringComparison.Ordinal)) && upstream.IsSuccessStatusCode) {
+                var payload = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
+                foreach (var row in payload["data"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray()) {
+                    var timestamp = activity.LastMessageTime(row?["id"]?.ToString() ?? "");
+                    if (row != null) row["last_active"] = timestamp > 0 ? System.Text.Json.Nodes.JsonValue.Create(timestamp) : null;
+                }
+                await Response.WriteAsJsonAsync(payload, ct);
             } else if (path == "capabilities" && upstream.IsSuccessStatusCode) {
                 var payload = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
                 payload["chuckie_features"] = new System.Text.Json.Nodes.JsonObject { ["external_session_activity"] = true };

@@ -129,7 +129,7 @@
         }
     }
     window.PerformanceDashboard = {mount:(element,options)=>new Dashboard(element,options)};
-    document.addEventListener('DOMContentLoaded', () => {
+    (window.RemoteToolOnReady || (callback => document.addEventListener('DOMContentLoaded', callback))) (() => {
         const element = document.querySelector('[data-performance-dashboard]');
         if (!element) return;
         element.performanceDashboard = new Dashboard(element, {

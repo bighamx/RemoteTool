@@ -12,6 +12,13 @@ namespace RemoteTool.WebApi.Controllers;
 public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, HermesSessionActivity activity, HermesTitleService titles) : ControllerBase
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效的会话或任务标识");
+    [HttpGet("sessions/search")] public async Task<IActionResult> SearchSessions([FromQuery] string query, [FromQuery] int offset = 0, CancellationToken ct = default) {
+        query = query?.Trim();
+        if (string.IsNullOrEmpty(query) || query.Length > 500 || offset < 0) return BadRequest(new { message = "搜索参数无效" });
+        Response.Headers.CacheControl = "no-store";
+        try { return Ok(await management.Invoke("session_search", JsonSerializer.SerializeToElement(new { query, offset }), ct)); }
+        catch (Exception error) when (error is InvalidOperationException or IOException) { return StatusCode(503, new { message = error.Message }); }
+    }
     [HttpGet("capabilities")] public async Task<IActionResult> Capabilities(CancellationToken ct) {
         try {
         using var upstream = await bridge.SendAsync(HttpMethod.Get, "v1/capabilities", null, null, ct);

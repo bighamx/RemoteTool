@@ -172,8 +172,10 @@ dotnet run
 
 4. **访问服务**
 
-- 主页：`http://localhost:5104/`
-- Hangfire 面板：`http://localhost:5104/hangfire`
+- 单页工作台：`http://localhost:5104/#/`。左侧导航切换总览、远程管理、任务、Codex、Hermes 时不刷新整页，例如终端 `/#/terminal`、远程桌面 `/#/desktop`、任务 `/#/jobs`。
+- 旧地址 `/remote/index#tab=...`、`/hangfire`、`/agents/codex`、`/agents/hermes` 仍可作为书签访问，并会跳转到工作台地址。
+
+Windows 上若 Docker Desktop 安装在交互用户目录，IIS 可能找不到 `docker.exe`。可在私有 `appsettings.json` 配置 `RemoteControl:DockerPath` 和 `RemoteControl:DockerComposePath`，指向服务账户可读取的 CLI 副本；未配置时优先查找 `%ProgramData%\RemoteTool\tools`。`/api/docker/info` 应返回服务端版本，连接失败会显示错误，不再把失败当作 0 个容器。FFmpeg 同样可通过 `RemoteControl:FFmpegPath` 指定。
 
 ---
 

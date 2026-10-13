@@ -46,6 +46,7 @@
 
 <div id="remote-page" class="page active">
     <main class="content">
+        <div id="docker-connection-error" class="workspace-alert" role="alert" hidden></div>
         <!-- Controls Tab -->
         <div id="controls-tab" class="tab-content active">
             <div class="controls-grid">
@@ -122,7 +123,8 @@
                 </div>
             </div>
             <div class="processes-table-container">
-                <table class="processes-table">
+                <div id="processes-initial-loading" class="processes-initial-loading" role="status" aria-live="polite" hidden><span class="processes-loading-spinner" aria-hidden="true"></span><span class="processes-loading-label">正在加载进程…</span></div>
+                <table class="processes-table" id="processes-table">
                     <thead>
                         <tr>
                             <th class="th-type sortable" data-sort="type">类型 <span class="sort-arrow"></span></th>

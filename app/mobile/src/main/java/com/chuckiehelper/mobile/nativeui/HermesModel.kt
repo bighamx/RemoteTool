@@ -40,6 +40,52 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private val watchOwner = "$agent-$deviceId"
     private lateinit var api: NativeApi
     val sessionsListState = LazyListState()
+    var sessionSearchQuery by mutableStateOf("")
+        private set
+    var sessionSearchResults by mutableStateOf<List<JSONObject>>(emptyList())
+        private set
+    var sessionSearchLoading by mutableStateOf(false)
+        private set
+    var sessionSearchError by mutableStateOf<String?>(null)
+        private set
+    var sessionSearchHasMore by mutableStateOf(false)
+        private set
+    private var sessionSearchCursor: String? = null
+    private var sessionSearchOffset = 0
+    private var sessionSearchEpoch = 0L
+    private var sessionSearchJob: Job? = null
+    fun searchSessions(query: String) {
+        sessionSearchQuery = query.trim()
+        sessionSearchEpoch++; sessionSearchJob?.cancel()
+        sessionSearchResults = emptyList(); sessionSearchError = null; sessionSearchHasMore = false
+        sessionSearchCursor = null; sessionSearchOffset = 0
+        sessionSearchLoading = sessionSearchQuery.isNotEmpty()
+        if (sessionSearchQuery.isNotEmpty()) readSessionSearch(false)
+    }
+    fun moreSearchSessions() { if (!sessionSearchLoading && sessionSearchHasMore) readSessionSearch(true) }
+    private fun readSessionSearch(append: Boolean) {
+        val query = sessionSearchQuery; val epoch = sessionSearchEpoch
+        sessionSearchLoading = true; sessionSearchError = null
+        sessionSearchJob = viewModelScope.launch {
+            try {
+                if (!append) delay(350)
+                if (!this@HermesModel::api.isInitialized) throw IOException("尚未连接设备")
+                val connection = api
+                val suffix = if (agent == "codex") sessionSearchCursor?.let { "&cursor=${q(it)}" }.orEmpty()
+                    else "&offset=$sessionSearchOffset"
+                val result = connection.json("$root/sessions/search?query=${q(query)}$suffix")
+                if (epoch != sessionSearchEpoch || api !== connection) return@launch
+                val rows = result.array("data").objects()
+                noteSessionActivities(rows, activityClock())
+                sessionSearchResults = mergeSessionPage(if (append) sessionSearchResults else emptyList(), rows) { it.optString("id") }
+                sessionSearchHasMore = result.optBoolean("has_more")
+                sessionSearchCursor = result.optString("next_cursor").takeIf { it.isNotBlank() && it != "null" }
+                sessionSearchOffset = result.optInt("offset", sessionSearchOffset) + result.optInt("limit", 50)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (epoch == sessionSearchEpoch) sessionSearchError = e.message ?: "原生搜索失败，请更新该设备服务端后重试" }
+            finally { if (epoch == sessionSearchEpoch) sessionSearchLoading = false }
+        }
+    }
     var sessionsListTouched by mutableStateOf(false)
     var sessions by mutableStateOf<List<JSONObject>>(runCatching {
         org.json.JSONArray(prefs.getString("offlineSessions", "[]")).objects()
@@ -786,6 +832,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     fun bind(value: NativeApi) {
         if (this::api.isInitialized && api.base == value.base) return
+        sessionSearchEpoch++; sessionSearchJob?.cancel()
+        sessionSearchResults = emptyList(); sessionSearchLoading = false; sessionSearchError = null; sessionSearchHasMore = false
         historyOldestId = null; historyHasMore = false; historyLoadingEarlier = false
         filesReadEpoch++; filesReadJob?.cancel(); filesReadJob = null; filesRefreshPending = false
         loginJob?.cancel(); loginJob = null; loginInfo = null; loginVisible = false; loginStarting = false; loginError = null
@@ -797,6 +845,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 readConnectionError = null
             }
         })
+        if (sessionSearchQuery.isNotEmpty()) searchSessions(sessionSearchQuery)
         sessionActivities = emptyMap()
         contextCache.clear()
         contextReadJob?.cancel(); contextReadJob = null; contextReadSession = null
