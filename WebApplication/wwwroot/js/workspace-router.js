@@ -58,7 +58,10 @@
         if (loadedScripts.has(path) && name !== 'agent-workspace.js') return pendingScripts.get(path) || Promise.resolve();
         loadedScripts.add(path);
         const loading = new Promise((resolve, reject) => {
-            const script = document.createElement('script'); script.src = path;
+            const script = document.createElement('script');
+            // agent-workspace.js 由路由按需加载、不进服务端布局，没有 asp-append-version 时间戳；
+            // 带上构建时间，避免部署后浏览器仍执行缓存的旧脚本（曾导致改了 JS 刷新无效、报错行号对不上）。
+            script.src = name === 'agent-workspace.js' ? `${path}?v=${encodeURIComponent(document.body?.dataset.build || '')}` : path;
             if (root) script.dataset.agentRootId = root.id;
             script.onload = () => { pendingScripts.delete(path); resolve(); };
             script.onerror = () => { pendingScripts.delete(path); loadedScripts.delete(path); reject(new Error(`脚本加载失败：${name}`)); };
