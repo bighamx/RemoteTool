@@ -5,6 +5,8 @@ import ApplicationServices
 import ImageIO
 import CoreMedia
 import CoreGraphics
+import CoreVideo
+import Darwin
 
 // stdout is exclusively the JSONL protocol. No input or clipboard content is logged.
 private func screenLocked() -> Bool {
@@ -17,23 +19,26 @@ final class Capture: NSObject, SCStreamOutput {
     private var latest: Data?
     private let context = CIContext()
     private var stream: SCStream?
+    private var currentDisplayID: CGDirectDisplayID?
 
-    func start() async throws {
+    func start(displayID: CGDirectDisplayID) async throws {
+        if stream != nil && currentDisplayID != displayID { await stop() }
         guard stream == nil else { return }
         guard !screenLocked() else { throw AgentError.message("Mac 当前已锁屏，请先解锁后再连接桌面") }
         guard CGPreflightScreenCaptureAccess() else { throw AgentError.message("请在系统设置中授予 RemoteTool Mac Agent 屏幕录制权限") }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else { throw AgentError.message("找不到当前主屏幕，请确认 Mac 已解锁且屏幕录制权限已开启") }
+        guard let display = content.displays.first(where: { $0.displayID == displayID }) else { throw AgentError.message("找不到所选显示器，请确认 Mac 已解锁且屏幕录制权限已开启") }
         let config = SCStreamConfiguration()
         config.width = min(1280, display.width)
         config.height = max(2, config.width * display.height / display.width)
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 5)
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 15)
         config.queueDepth = 2
         config.showsCursor = true
         let candidate = SCStream(filter: SCContentFilter(display: display, excludingWindows: []), configuration: config, delegate: nil)
         try candidate.addStreamOutput(self, type: .screen, sampleHandlerQueue: DispatchQueue(label: "remote.capture"))
         try await candidate.startCapture()
         stream = candidate
+        currentDisplayID = displayID
     }
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, sampleBuffer.isValid, let buffer = sampleBuffer.imageBuffer else { return }
@@ -45,14 +50,15 @@ final class Capture: NSObject, SCStreamOutput {
     private func clear() { lock.lock(); latest=nil; lock.unlock() }
     func stop() async {
         if let current = stream { try? await current.stopCapture(); stream=nil }
+        currentDisplayID = nil
         clear()
     }
-    func jpeg() async throws -> Data {
+    func jpeg(displayID: CGDirectDisplayID) async throws -> Data {
         if screenLocked() {
             await stop()
             throw AgentError.message("Mac 当前已锁屏，请先解锁后再连接桌面")
         }
-        try await start()
+        try await start(displayID: displayID)
         for _ in 0..<30 {
             if let data = frame() { return data }
             try await Task.sleep(nanoseconds: 100_000_000)
@@ -60,10 +66,76 @@ final class Capture: NSObject, SCStreamOutput {
         throw AgentError.message("尚未收到桌面画面，请检查授权和登录状态")
     }
 }
+
+// A separate process writes ScreenCaptureKit's NV12 pixels directly to the
+// encoder. RTV1 + little-endian width/height precedes the raw video frames.
+final class RawCapture: NSObject, SCStreamOutput {
+    private var stream: SCStream?
+    private var headerWritten = false
+    private var packed = [UInt8]()
+
+    func start(displayID: CGDirectDisplayID, maxWidth: Int, fps: Int) async throws {
+        guard !screenLocked() else { throw AgentError.message("Mac 当前已锁屏") }
+        guard CGPreflightScreenCaptureAccess() else { throw AgentError.message("缺少屏幕录制权限") }
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
+            throw AgentError.message("找不到所选显示器")
+        }
+        let config = SCStreamConfiguration()
+        config.width = max(2, min(maxWidth, display.width) & ~1)
+        config.height = max(2, (config.width * display.height / display.width) & ~1)
+        config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
+        config.queueDepth = 2
+        config.showsCursor = true
+        let candidate = SCStream(filter: SCContentFilter(display: display, excludingWindows: []), configuration: config, delegate: nil)
+        try candidate.addStreamOutput(self, type: .screen, sampleHandlerQueue: DispatchQueue(label: "remote.raw.capture"))
+        try await candidate.startCapture()
+        stream = candidate
+    }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .screen, sampleBuffer.isValid, let pixel = sampleBuffer.imageBuffer,
+              CVPixelBufferGetPixelFormatType(pixel) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+              CVPixelBufferGetPlaneCount(pixel) == 2 else { return }
+        let width = CVPixelBufferGetWidth(pixel), height = CVPixelBufferGetHeight(pixel)
+        guard width > 0, height > 0, width % 2 == 0, height % 2 == 0 else { return }
+        if !headerWritten {
+            var header = Data("RTV1".utf8)
+            var w = UInt32(width).littleEndian, h = UInt32(height).littleEndian
+            withUnsafeBytes(of: &w) { header.append(contentsOf: $0) }
+            withUnsafeBytes(of: &h) { header.append(contentsOf: $0) }
+            FileHandle.standardOutput.write(header)
+            headerWritten = true
+        }
+        CVPixelBufferLockBaseAddress(pixel, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixel, .readOnly) }
+        let size = width * height * 3 / 2
+        if packed.count != size { packed = [UInt8](repeating: 0, count: size) }
+        packed.withUnsafeMutableBytes { destination in
+            guard let dest = destination.baseAddress else { return }
+            for plane in 0..<2 {
+                guard let source = CVPixelBufferGetBaseAddressOfPlane(pixel, plane) else { return }
+                let rows = plane == 0 ? height : height / 2
+                let stride = CVPixelBufferGetBytesPerRowOfPlane(pixel, plane)
+                let offset = plane == 0 ? 0 : width * height
+                for row in 0..<rows {
+                    memcpy(dest.advanced(by: offset + row * width), source.advanced(by: row * stride), width)
+                }
+            }
+            var sent = 0
+            while sent < size {
+                let count = Darwin.write(STDOUT_FILENO, dest.advanced(by: sent), size - sent)
+                if count <= 0 { return }
+                sent += count
+            }
+        }
+    }
+}
 enum AgentError: Error { case message(String) }
 
 @MainActor final class Agent {
-    private let capture = Capture()
+    private var captures: [CGDirectDisplayID: Capture] = [:]
     private var heldKeys = Set<CGKeyCode>()
     private var heldMouse: CGMouseButton?
     private var flags: CGEventFlags {
@@ -88,6 +160,14 @@ enum AgentError: Error { case message(String) }
     ]
     private func number(_ request: [String:Any], _ name: String) -> Double { (request[name] as? NSNumber)?.doubleValue ?? 0 }
     private func post(_ event: CGEvent?) { event?.flags = flags; event?.post(tap: .cghidEventTap) }
+    private func displayID(_ request: [String:Any]) throws -> CGDirectDisplayID {
+        let id = (request["displayId"] as? NSNumber)?.uint32Value ?? CGMainDisplayID()
+        var displays = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(16, &displays, &count) == .success,
+              displays.prefix(Int(count)).contains(id) else { throw AgentError.message("所选显示器已断开") }
+        return id
+    }
     private func key(_ code: CGKeyCode, _ down: Bool) {
         if down { heldKeys.insert(code) } else { heldKeys.remove(code) }
         post(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down))
@@ -96,12 +176,28 @@ enum AgentError: Error { case message(String) }
         let type = r["type"] as? String ?? ""
         if type == "status" {
             let display = CGMainDisplayID()
+            var active = [CGDirectDisplayID](repeating: 0, count: 16)
+            var count: UInt32 = 0
+            _ = CGGetActiveDisplayList(16, &active, &count)
+            let displays: [[String:Any]] = active.prefix(Int(count)).enumerated().map { index, id in
+                ["id":id, "name":id == display ? "主屏幕" : "显示器 \(index + 1)",
+                 "width":CGDisplayPixelsWide(id), "height":CGDisplayPixelsHigh(id), "main":id == display]
+            }
             return ["screenRecording":CGPreflightScreenCaptureAccess(), "accessibility":AXIsProcessTrusted(),
                     "displayId":display, "sessionLocked":screenLocked(),
-                    "width":CGDisplayPixelsWide(display), "height":CGDisplayPixelsHigh(display)]
+                    "width":CGDisplayPixelsWide(display), "height":CGDisplayPixelsHigh(display), "displays":displays]
         }
-        if type == "capture" { return ["jpeg":try await capture.jpeg().base64EncodedString()] }
-        if type == "stop-capture" { await capture.stop(); return ["ok":true] }
+        if type == "capture" {
+            let id = try displayID(r)
+            let capture = captures[id] ?? Capture()
+            captures[id] = capture
+            return ["jpeg":try await capture.jpeg(displayID: id).base64EncodedString()]
+        }
+        if type == "stop-capture" {
+            for capture in captures.values { await capture.stop() }
+            captures.removeAll()
+            return ["ok":true]
+        }
         if type == "clipboard-get" { return ["text":NSPasteboard.general.string(forType:.string) ?? ""] }
         if type == "clipboard-set" {
             NSPasteboard.general.clearContents(); NSPasteboard.general.setString(r["text"] as? String ?? "", forType:.string); return ["ok":true]
@@ -145,7 +241,7 @@ enum AgentError: Error { case message(String) }
             return ["ok":true]
         }
         let relative = ["mouse-relative","pointer-click","pointer-wheel"].contains(type)
-        let bounds = CGDisplayBounds(CGMainDisplayID())
+        let bounds = CGDisplayBounds(try displayID(r))
         let x = number(r,"x"), y = number(r,"y")
         if !relative && (!x.isFinite || !y.isFinite || x < 0 || x > 1 || y < 0 || y > 1) { throw AgentError.message("无效鼠标坐标") }
         var point = relative ? (CGEvent(source:nil)?.location ?? .zero) : CGPoint(x:bounds.minX+x*bounds.width,y:bounds.minY+y*bounds.height)
@@ -178,6 +274,22 @@ enum AgentError: Error { case message(String) }
 
 @main struct RemoteToolMacAgent {
     static func main() async {
+        if CommandLine.arguments.contains("--raw-stream") {
+            let args = CommandLine.arguments
+            let id = args.count > 2 ? UInt32(args[2]) : nil
+            let width = args.count > 3 ? Int(args[3]) : nil
+            let fps = args.count > 4 ? Int(args[4]) : nil
+            guard let id, let width, let fps,
+                  (640...2560).contains(width), (5...30).contains(fps) else { return }
+            let capture = RawCapture()
+            do {
+                try await capture.start(displayID: id, maxWidth: width, fps: fps)
+                while true { try await Task.sleep(nanoseconds: 1_000_000_000) }
+            } catch {
+                FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
+            }
+            return
+        }
         if CommandLine.arguments.contains("--permissions") {
             CGRequestScreenCaptureAccess()
             _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String:true] as CFDictionary)

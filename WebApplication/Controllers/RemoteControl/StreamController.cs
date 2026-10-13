@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using System.Buffers.Binary;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RemoteTool.WebApi.Services.RemoteControl;
@@ -13,17 +15,21 @@ public class StreamController : ControllerBase
 
 {
     private readonly ISystemControlService _systemService;
+    private readonly ILogger<StreamController> _logger;
+    private readonly IConfiguration _configuration;
     private const string Boundary = "frame";
 
     private IActionResult ApiError(string message)
             => BadRequest(new { message });
-    public StreamController(ISystemControlService systemService)
+    public StreamController(ISystemControlService systemService, ILogger<StreamController> logger, IConfiguration configuration)
     {
         _systemService = systemService;
+        _logger = logger;
+        _configuration = configuration;
     }
 
     [HttpGet("legacy")]
-    public async Task LegacyGetStream(CancellationToken cancellationToken)
+    public async Task LegacyGetStream([FromQuery] uint? displayId, CancellationToken cancellationToken)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
@@ -35,8 +41,13 @@ public class StreamController : ControllerBase
         response.Headers.Append("Content-Type", $"multipart/x-mixed-replace; boundary={Boundary}");
 
         var boundaryBytes = Encoding.ASCII.GetBytes($"\r\n--{Boundary}\r\nContent-Type: image/jpeg\r\n\r\n");
-        const int targetFrameTimeMs = 33; // 30 FPS = 33.33ms per frame
+        // The Mac agent captures at 15 FPS. Poll a little faster to pick up each new
+        // frame, but never send the same JPEG repeatedly (the old 30 FPS loop did).
+        var macStream = OperatingSystem.IsMacOS();
+        var targetFrameTimeMs = macStream ? 50 : 33;
+        byte[]? lastFrame = null;
 
+        var reportedCaptureError = false;
         while (!cancellationToken.IsCancellationRequested)
         {
             var frameStopwatch = Stopwatch.StartNew();
@@ -44,19 +55,21 @@ public class StreamController : ControllerBase
             try
             {
                 // 使用异步版本以支持 Session 0
-                var imageBytes = await _systemService.CaptureScreenAsync();
+                var imageBytes = displayId is > 0 && _systemService is MacSystemService mac
+                    ? await mac.CaptureScreenAsync(displayId.Value) : await _systemService.CaptureScreenAsync();
 
-                if (imageBytes.Length > 0)
+                if (imageBytes.Length > 0 && (!macStream || lastFrame is null || !imageBytes.AsSpan().SequenceEqual(lastFrame)))
                 {
                     await response.Body.WriteAsync(boundaryBytes, cancellationToken);
                     await response.Body.WriteAsync(imageBytes, cancellationToken);
                     await response.Body.FlushAsync(cancellationToken);
+                    if (macStream) lastFrame = imageBytes;
                 }
 
                 frameStopwatch.Stop();
                 var frameTimeMs = (int)frameStopwatch.ElapsedMilliseconds;
 
-                // Only wait if frame transmission is faster than target FPS (30 FPS)
+                // Wait until the next poll without slowing the Windows stream.
                 if (frameTimeMs < targetFrameTimeMs)
                 {
                     var delayMs = targetFrameTimeMs - frameTimeMs;
@@ -67,9 +80,12 @@ public class StreamController : ControllerBase
             {
                 break;
             }
-            catch (Exception)
+            catch (Exception error)
             {
-                // Ignore transient errors
+                if (OperatingSystem.IsMacOS() && !reportedCaptureError) {
+                    _logger.LogWarning(error, "Mac desktop capture failed for display {DisplayId}", displayId);
+                    reportedCaptureError = true;
+                }
                 await Task.Delay(500, cancellationToken);
             }
         }
@@ -105,6 +121,7 @@ public class StreamController : ControllerBase
 
     [HttpGet]
     public async Task GetStream(
+        [FromQuery] uint? displayId = null,
         [FromQuery] string resolution = "1280x720",
         [FromQuery] string bitrate = "3M",
         [FromQuery] string maxrate = "5M",
@@ -119,8 +136,7 @@ public class StreamController : ControllerBase
         CancellationToken cancellationToken = default)
     {
         if (OperatingSystem.IsMacOS()) {
-            Response.StatusCode = 501;
-            await Response.WriteAsync("Mac 网页工作台请使用 JPEG 桌面控制；H.264 尚未实现", cancellationToken);
+            await StreamMacH264(displayId, cancellationToken);
             return;
         }
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
@@ -465,6 +481,142 @@ public class StreamController : ControllerBase
 
             await WaitForStderrAsync(stderrTask);
             process?.Dispose();
+        }
+    }
+
+    private async Task StreamMacH264(uint? displayId, CancellationToken cancellationToken)
+    {
+        if (_systemService is not MacSystemService mac || !await CheckFfmpegAvailableAsync(cancellationToken)) {
+            Response.StatusCode = 503;
+            await Response.WriteAsync("Mac H.264 编码器不可用", cancellationToken);
+            return;
+        }
+        var executable = _configuration["RemoteControl:MacAgentExecutable"];
+        if (string.IsNullOrWhiteSpace(executable) || !System.IO.File.Exists(executable)) {
+            Response.StatusCode = 503;
+            await Response.WriteAsync("Mac 桌面代理不可用", cancellationToken);
+            return;
+        }
+
+        uint selectedDisplay;
+        try {
+            var status = await mac.NativeAsync(JsonSerializer.SerializeToElement(new { type = "status" }));
+            selectedDisplay = displayId is > 0 ? displayId.Value : status.GetProperty("displayId").GetUInt32();
+            if (!status.GetProperty("displays").EnumerateArray().Any(d => d.GetProperty("id").GetUInt32() == selectedDisplay))
+                throw new InvalidOperationException("所选显示器已断开");
+        } catch (Exception error) {
+            _logger.LogWarning(error, "Mac display selection failed");
+            Response.StatusCode = 503;
+            await Response.WriteAsync("无法获取 Mac 显示器", cancellationToken);
+            return;
+        }
+
+        // Sunshine-style path: ScreenCaptureKit NV12 -> VideoToolbox. The desktop
+        // agent sends raw pixels, with no JPEG loss or base64 copies in between.
+        var captureStart = new ProcessStartInfo(executable) {
+            UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        foreach (var arg in new[] { "--raw-stream", selectedDisplay.ToString(), "1920", "20" })
+            captureStart.ArgumentList.Add(arg);
+        using var capture = Process.Start(captureStart) ?? throw new InvalidOperationException("无法启动 Mac 桌面采集");
+        var captureErrors = capture.StandardError.ReadToEndAsync();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Process? encoder = null;
+        Task? feed = null;
+        Task<string>? encodeErrors = null;
+        try {
+            using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            startup.CancelAfter(TimeSpan.FromSeconds(5));
+            var header = new byte[12];
+            try {
+                await capture.StandardOutput.BaseStream.ReadExactlyAsync(header, startup.Token);
+            } catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) {
+                Response.StatusCode = 503;
+                await Response.WriteAsync("Mac 桌面采集启动超时", cancellationToken);
+                return;
+            } catch (EndOfStreamException) {
+                Response.StatusCode = 503;
+                await Response.WriteAsync("Mac 桌面采集没有输出", cancellationToken);
+                return;
+            }
+            var width = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(4, 4));
+            var height = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(8, 4));
+            if (!header.AsSpan(0, 4).SequenceEqual("RTV1"u8) ||
+                width is < 2 or > 2560 || height is < 2 or > 2560 ||
+                (width & 1) != 0 || (height & 1) != 0)
+                throw new InvalidDataException("Mac 桌面采集画面尺寸无效");
+
+            var encodeStart = new ProcessStartInfo(FfmpegExecutable.Path) {
+                UseShellExecute = false, RedirectStandardInput = true,
+                RedirectStandardOutput = true, RedirectStandardError = true
+            };
+            foreach (var arg in new[] {
+                "-hide_banner", "-nostdin", "-loglevel", "error",
+                "-probesize", "32", "-analyzeduration", "0", "-fflags", "+nobuffer+genpts",
+                "-f", "rawvideo", "-pixel_format", "nv12", "-video_size", $"{width}x{height}",
+                "-framerate", "20", "-i", "pipe:0", "-an",
+                "-c:v", "h264_videotoolbox", "-realtime", "1",
+                "-b:v", "3M", "-maxrate", "4M", "-bufsize", "2M",
+                "-g", "20", "-bf", "0", "-profile:v", "baseline",
+                "-movflags", "+empty_moov+default_base_moof+frag_every_frame",
+                "-flush_packets", "1", "-f", "mp4", "pipe:1"
+            }) encodeStart.ArgumentList.Add(arg);
+            encoder = Process.Start(encodeStart) ?? throw new InvalidOperationException("无法启动 H.264 编码器");
+            encodeErrors = encoder.StandardError.ReadToEndAsync();
+            var runningEncoder = encoder;
+            feed = Task.Run(async () => {
+                try {
+                    await capture.StandardOutput.BaseStream.CopyToAsync(runningEncoder.StandardInput.BaseStream, linked.Token);
+                } catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
+                catch (IOException) when (linked.IsCancellationRequested || runningEncoder.HasExited) { }
+                finally { try { runningEncoder.StandardInput.Close(); } catch (IOException) { } }
+            }, linked.Token);
+
+            Response.ContentType = "video/mp4";
+            Response.Headers.CacheControl = "no-cache, no-store";
+            Response.Headers["X-Capture-Method"] = "ScreenCaptureKit + VideoToolbox";
+            Response.Headers["X-Capture-Source"] = $"{width}x{height}";
+            var buffer = new byte[64 * 1024];
+            var firstRead = true;
+            while (!cancellationToken.IsCancellationRequested) {
+                using var timeout = firstRead
+                    ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken) : null;
+                timeout?.CancelAfter(TimeSpan.FromSeconds(5));
+                int read;
+                try {
+                    read = await encoder.StandardOutput.BaseStream.ReadAsync(buffer, timeout?.Token ?? cancellationToken);
+                } catch (OperationCanceledException) when (firstRead && !cancellationToken.IsCancellationRequested) {
+                    Response.StatusCode = 503;
+                    await Response.WriteAsync("Mac H.264 编码器启动超时", cancellationToken);
+                    return;
+                }
+                if (read == 0) {
+                    if (firstRead && !Response.HasStarted) {
+                        Response.StatusCode = 503;
+                        await Response.WriteAsync("Mac H.264 编码器没有输出", cancellationToken);
+                    }
+                    break;
+                }
+                firstRead = false;
+                await Response.Body.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
+            }
+        } catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (IOException) when (cancellationToken.IsCancellationRequested) { }
+        finally {
+            linked.Cancel();
+            if (!capture.HasExited) capture.Kill();
+            if (encoder is { HasExited: false }) encoder.Kill();
+            if (feed is not null) try { await feed; } catch (OperationCanceledException) { }
+            var captureMessage = await captureErrors;
+            if (!string.IsNullOrWhiteSpace(captureMessage))
+                _logger.LogWarning("Mac capture: {Message}", captureMessage.Trim());
+            if (encodeErrors is not null) {
+                var encodeMessage = await encodeErrors;
+                if (!string.IsNullOrWhiteSpace(encodeMessage))
+                    _logger.LogWarning("Mac encoder: {Message}", encodeMessage.Trim());
+            }
+            encoder?.Dispose();
         }
     }
 
