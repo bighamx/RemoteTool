@@ -172,16 +172,6 @@ cd WebApplication
 dotnet run
 ```
 
-### 网页身份验证：OIDC 与 Cloudflare Access
-
-管理员在工作台 **设置 → 身份验证**（`/#/identity`）配置；现有用户名/密码登录仍可作为本地回退。OIDC 可添加多个提供方，分别填写 HTTPS Issuer、Client ID、Client Secret、scope 和允许邮箱。默认使用 OIDC Discovery；非标准 well-known 路径可填写 Discovery URL；没有 Discovery 的提供方可关闭该选项，明确配置 Auth URL、Token URL、Certificate/JWKS URL，以及可选的 UserInfo URL。手动配置同样使用公钥验证 ID Token，支持 JWKS JSON 或 PEM 证书及密钥刷新。所有提供方在服务端使用授权码 + PKCE，**在提供方登记的精确回调地址是站点外部地址加 `/access/callback`**，例如 `https://remote.example.com/access/callback`，不是提供方的授权入口。启用后登录页会显示对应按钮。提供方需在 ID Token 返回 `email`；仅当邮箱只在 UserInfo 时勾选该选项并配置对应 URL。
-
-Cloudflare Access 也在该页单独启用，填写 Team 名称（不含 `.cloudflareaccess.com`）、该 Access 应用的 AUD Tag 和允许邮箱。RemoteTool 验证签名、Issuer、Audience、有效期和邮箱后建立本地会话。**OIDC 与 Cloudflare Access 的允许邮箱分别配置，均为精确邮箱匹配；目前获准用户拥有 RemoteTool 管理员权限。**
-
-OIDC Client Secret 加密存放在私有数据目录 `oidc/providers.json`，加密密钥派生自私有 `Auth:JwtSecret`；请勿把该密钥或数据文件提交到 Git，也不要随意轮换 `Auth:JwtSecret`（轮换后须重新登记 Client Secret）。Cloudflare Access 配置位于同目录的 `oidc/cloudflare-access.json`，首次进入配置页面前仍兼容原有 `appsettings.json` 的单邮箱设置。两类设置保存后即时生效。生产环境必须使用 HTTPS 外部地址；反向代理需要正确转发原始 scheme/host。此功能只为**网页**实现，Android App 仍使用原有登录接口，不会自动完成第三方网页跳转。
-
-安全注意：不要仅依赖登录页隐藏或邮箱白名单来保护源站。应在身份提供方配置允许的客户端与回调地址，并限制公网源站入口；移除允许邮箱或停用提供方会使其新签发的 RemoteTool 会话令牌在下一次请求时失效。原有密码登录及其令牌仍独立有效，退出或改密码不等于撤销所有旧令牌。
-
 4. **访问服务**
 
 - 单页工作台：`http://localhost:5104/#/`。左侧导航切换总览、远程管理、任务、Codex、Hermes 时不刷新整页，例如终端 `/#/terminal`、远程桌面 `/#/desktop`、任务 `/#/jobs`。
@@ -198,6 +188,16 @@ Windows 上若 Docker Desktop 安装在交互用户目录，IIS 可能找不到 
 | `Auth:Username` | 登录用户名 | `admin` |
 | `Auth:Password` | 登录密码（必填） | `YourSecurePassword` |
 | `Auth:JwtSecret` | JWT 签名密钥（必填，≥32位） | `YourSecretKey...` |
+
+### 网页身份验证：OIDC 与 Cloudflare Access
+
+管理员在工作台 **设置 → 身份验证**（`/#/identity`）配置；现有用户名/密码登录仍可作为本地回退。OIDC 可添加多个提供方，分别填写 HTTPS Issuer、Client ID、Client Secret、scope 和允许邮箱。默认使用 OIDC Discovery；非标准 well-known 路径可填写 Discovery URL；没有 Discovery 的提供方可关闭该选项，明确配置 Auth URL、Token URL、Certificate/JWKS URL，以及可选的 UserInfo URL。手动配置同样使用公钥验证 ID Token，支持 JWKS JSON 或 PEM 证书及密钥刷新。所有提供方在服务端使用授权码 + PKCE，**在提供方登记的精确回调地址是站点外部地址加 `/access/callback`**，例如 `https://remote.example.com/access/callback`，不是提供方的授权入口。启用后登录页会显示对应按钮。提供方需在 ID Token 返回 `email`；仅当邮箱只在 UserInfo 时勾选该选项并配置对应 URL。
+
+Cloudflare Access 也在该页单独启用，填写 Team 名称（不含 `.cloudflareaccess.com`）、该 Access 应用的 AUD Tag 和允许邮箱。RemoteTool 验证签名、Issuer、Audience、有效期和邮箱后建立本地会话。**OIDC 与 Cloudflare Access 的允许邮箱分别配置，均为精确邮箱匹配；目前获准用户拥有 RemoteTool 管理员权限。**
+
+OIDC Client Secret 加密存放在私有数据目录 `oidc/providers.json`，加密密钥派生自私有 `Auth:JwtSecret`；请勿把该密钥或数据文件提交到 Git，也不要随意轮换 `Auth:JwtSecret`（轮换后须重新登记 Client Secret）。Cloudflare Access 配置位于同目录的 `oidc/cloudflare-access.json`，首次进入配置页面前仍兼容原有 `appsettings.json` 的单邮箱设置。两类设置保存后即时生效。生产环境必须使用 HTTPS 外部地址；反向代理需要正确转发原始 scheme/host。此功能只为**网页**实现，Android App 仍使用原有登录接口，不会自动完成第三方网页跳转。
+
+安全注意：不要仅依赖登录页隐藏或邮箱白名单来保护源站。应在身份提供方配置允许的客户端与回调地址，并限制公网源站入口；移除允许邮箱或停用提供方会使其新签发的 RemoteTool 会话令牌在下一次请求时失效。原有密码登录及其令牌仍独立有效，退出或改密码不等于撤销所有旧令牌。
 
 ### 可选配置
 <details>
