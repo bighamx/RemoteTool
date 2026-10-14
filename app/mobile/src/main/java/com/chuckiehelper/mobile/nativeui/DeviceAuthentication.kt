@@ -32,4 +32,30 @@ object DeviceAuthentication {
         }
         return null
     }
+
+    /**
+     * Recover a session that is ALREADY connected when one of its requests comes back 401.
+     * [recover] only runs while connecting; a token that expires mid-session therefore
+     * surfaced "登录已过期" and required a manual reconnect. Returns a usable token, or null
+     * when there is nothing to sign in with (the caller then reports login-required as before).
+     *
+     * [currentToken] is the token held right now and [failedToken] the one the failed request
+     * carried: when another 401 already refreshed the session (currentToken moved on past
+     * failedToken) we reuse it instead of signing in again, so a burst of parallel requests
+     * costs one login, not one each.
+     */
+    suspend fun refresh(
+        failedToken: String?,
+        currentToken: String?,
+        read: () -> DeviceLogin?,
+        signIn: suspend (DeviceLogin) -> String?,
+        save: (DeviceLogin) -> Unit,
+    ): String? {
+        if (!currentToken.isNullOrBlank() && currentToken != failedToken) return currentToken
+        val saved = read() ?: return null
+        if (saved.username.isBlank() || saved.password.isEmpty()) return null
+        val token = signIn(saved) ?: return null
+        save(saved.withToken(token))
+        return token
+    }
 }

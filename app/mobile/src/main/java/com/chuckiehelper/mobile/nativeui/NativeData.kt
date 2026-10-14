@@ -12,6 +12,8 @@ import java.net.URLEncoder
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -77,6 +79,10 @@ class NativeApi(
     private val onReadSuccess: (() -> Unit)? = null,
     private val authentication: DeviceAuthSession? = null,
 ) {
+    /** Called once when a request comes back 401: return a fresh token (or null).
+     *  Set by the model on the session's API instance; copied by [withReadPolicy]. */
+    var onUnauthorized: (suspend (failedToken: String?) -> String?)? = null
+
     companion object {
         val client =
             OkHttpClient.Builder()
@@ -93,6 +99,7 @@ class NativeApi(
 
     fun withReadPolicy(noRetry: Boolean, onReadSuccess: (() -> Unit)? = null) =
         NativeApi(base, noRetry = noRetry, onReadSuccess = onReadSuccess, authentication = authentication)
+            .also { it.onUnauthorized = onUnauthorized }
 
     fun request(path: String, body: JSONObject? = null): Request =
         Request.Builder()
@@ -154,11 +161,28 @@ class NativeApi(
 
     suspend fun json(request: Request): JSONObject {
         var attempt = 0
+        var current = request
+        var healed = false
         while (true) {
             currentCoroutineContext().ensureActive()
-            val result = try { jsonOnce(request, fresh = attempt > 0) }
+            val result = try { jsonOnce(current, fresh = attempt > 0) }
             catch (error: IOException) {
                 currentCoroutineContext().ensureActive()
+                // A 401 almost always means the 24h token expired. Re-sign in with the
+                // credentials the device already stored and replay the request once,
+                // rather than surfacing "登录已过期" and forcing a manual reconnect.
+                // The cookie is baked into the Request, so it must be rebuilt from the
+                // refreshed session before retrying.
+                if (error is LoginRequired && !healed && onUnauthorized != null) {
+                    healed = true
+                    val failed = authentication?.token
+                    val token = try { onUnauthorized?.invoke(failed) } catch (_: Exception) { null }
+                    if (!token.isNullOrBlank()) {
+                        installToken(token)
+                        current = current.newBuilder().header("Cookie", cookie()).build()
+                        continue
+                    }
+                }
                 if (mayRetryRead(request.method, probing, attempt, error, noRetry)) {
                     android.util.Log.i("ChuckieNetwork", "${request.method} ${request.url.encodedPath}: retry read on fresh connection (${error.javaClass.simpleName})")
                     attempt++; delay(250); continue
@@ -280,6 +304,29 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
 
     var loginNeeded by mutableStateOf(false)
     var message by mutableStateOf<String?>(null)
+    private val refreshLock = Mutex()
+
+    /**
+     * Re-sign in silently with the credentials already stored for this device and return a
+     * fresh token. Called from any request that comes back 401, so a session that outlives
+     * its 24h token heals itself instead of showing "登录已过期" and forcing a reconnect.
+     * The mutex + failed-token check keep a burst of concurrent 401s to a single login.
+     */
+    private fun attachRefresher(device: Device, api: NativeApi, authentication: DeviceAuthSession) {
+        api.onUnauthorized = { failedToken ->
+            refreshLock.withLock {
+                val token = DeviceAuthentication.refresh(
+                    failedToken = failedToken,
+                    currentToken = authentication.token,
+                    read = { credentials.read(device.id) },
+                    signIn = { saved -> try { api.login(saved.username, saved.password) } catch (_: Exception) { null } },
+                    save = { credentials.save(device.id, it) },
+                )
+                if (!token.isNullOrBlank()) loginNeeded = false
+                token
+            }
+        }
+    }
     private var connectJob: Job? = null
     private var connectionEpoch = 0
 
@@ -489,6 +536,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
                     if (epoch != connectionEpoch) return@launch
                     val authentication = authenticationSessions.getOrPut(device.id) { DeviceAuthSession() }
                     val api = NativeApi(selected.url, authentication = authentication)
+                    attachRefresher(device, api, authentication)
                     if (recovered != null) api.installToken(recovered.token) else authentication.token = null
                     if (epoch == connectionEpoch) {
                         loginNeeded = recovered == null
