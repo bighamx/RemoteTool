@@ -520,7 +520,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }.getOrDefault(emptyList())
     private suspend fun recordCompactionCompletion(run: String, session: String, result: JSONObject) {
         if (agent == "codex") {
-            if (successfulCompaction(run, result) && selectedId == session) loadHistory(session)
+            if (successfulCompaction(run, result)) {
+                if (selectedId == session) loadHistory(session)
+                // 压缩刚完成时 native 压缩行可能还没进 thread/turns（下一次刷新才出现），
+                // 先给一次性本地提示行；随后的历史刷新会用 native 行替换它。
+                if (selectedId == session && messages.none { it.role == "system" && it.text == "上下文压缩完成" })
+                    messages = messages + HermesMessage("system", "上下文压缩完成",
+                        localKey = "compaction-$run", timestamp = System.currentTimeMillis())
+            }
             return
         }
         if (!successfulCompaction(run, result) || compactionNotices.any { it.run == run }) return
