@@ -69,4 +69,32 @@ class DeviceAuthenticationTest {
         assertNull(result)
         assertEquals(1, attempts)
     }
+    @Test fun midSession401SignsBackInWithTheStoredPassword() = runBlocking {
+        var saved = DeviceLogin("user", "password", "expired")
+        var logins = 0
+        val token = DeviceAuthentication.refresh("expired", "expired", { saved },
+            { assertEquals("password", it.password); logins++; "renewed" }, { saved = it })
+        assertEquals("renewed", token)
+        assertEquals("renewed", saved.token)
+        assertEquals(1, logins)
+    }
+    @Test fun concurrent401ReusesTheTokenAnotherRequestAlreadyRefreshed() = runBlocking {
+        val saved = DeviceLogin("user", "password", "expired")
+        val token = DeviceAuthentication.refresh("expired", "renewed-by-sibling", { saved },
+            { fail("A sibling request already refreshed the session"); null }, { fail("Must not overwrite") })
+        assertEquals("renewed-by-sibling", token)
+    }
+    @Test fun midSession401WithoutStoredPasswordReportsLoginRequired() = runBlocking {
+        val token = DeviceAuthentication.refresh("expired", "expired", { null },
+            { fail("Must not sign in without credentials"); null }, { fail("Must not save") })
+        assertNull(token)
+    }
+    @Test fun midSession401WithRejectedPasswordDoesNotOverwriteSavedLogin() = runBlocking {
+        val saved = DeviceLogin("user", "changed", "expired")
+        var attempts = 0
+        val token = DeviceAuthentication.refresh("expired", "expired", { saved },
+            { attempts++; null }, { fail("Rejected login saved") })
+        assertNull(token)
+        assertEquals(1, attempts)
+    }
 }

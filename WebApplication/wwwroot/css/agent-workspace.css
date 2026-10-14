@@ -729,6 +729,28 @@
     margin-top: 12px
 }
 
+.agent-create-modes { display: flex; gap: 6px; }
+.agent-create-mode { flex: 1; min-height: 32px; padding: 4px 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-tertiary); color: var(--text-primary); font-size: 12px; cursor: pointer; }
+.agent-create-mode.active { border-color: var(--accent-color); color: var(--accent-color); font-weight: 700; }
+.agent-create-projects { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow: auto; padding: 2px; }
+.agent-create-project { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 7px 9px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-tertiary); color: var(--text-primary); cursor: pointer; }
+.agent-create-project.active { border-color: var(--accent-color); }
+.agent-create-project strong { font-size: 12px; }
+.agent-create-project span { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-create-root { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 400; padding: 3px 0; }
+.agent-create-root span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-create-root-remove { border: none; background: none; color: var(--text-muted); cursor: pointer; font-size: 14px; line-height: 1; }
+.agent-create-hint { font-size: 11px; color: var(--text-muted); }
+.agent-create-browse { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agent-create-browser { display: flex; flex-direction: column; gap: 8px; }
+.agent-create-browser-path { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.agent-create-browser-path code { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.agent-create-browser-list { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow: auto; border: 1px solid var(--border-color); border-radius: 6px; padding: 4px; }
+.agent-create-browser-item { display: flex; align-items: center; gap: 8px; text-align: left; padding: 6px 8px; border: none; border-radius: 5px; background: none; color: var(--text-primary); font-size: 12px; cursor: pointer; }
+.agent-create-browser-item:hover { background: var(--bg-tertiary); }
+.agent-create-browser-icon { width: 12px; height: 12px; border-radius: 2px; background: var(--accent-color); opacity: .55; }
+.agent-create-browser-new { display: flex; align-items: center; gap: 8px; }
+
 .ivu-modal-content {
     background: var(--bg-secondary);
     color: var(--text-primary)
