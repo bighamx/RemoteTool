@@ -25,7 +25,13 @@ internal static class CodexRollout
         return "";
     }
     public static bool IsRunning(string home, string path) {
-        return WriterLocked(home, path) && CodexRolloutSnapshot.Read(home, path).B("running");
+        if (!WriterLocked(home, path)) return false;
+        var snapshot = CodexRolloutSnapshot.Read(home, path);
+        if (!snapshot.B("running")) return false;
+        // STALE 自愈：客户端被杀时 task_complete 没写入，running 会永久残留。
+        // 正常运行中的 turn 会持续写 rollout 事件；超过 10 分钟无任何事件视为已结束。
+        if (snapshot["last_event_at"] is { } last && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - last.L() > TimeSpan.FromMinutes(10).TotalMilliseconds) return false;
+        return true;
     }
     public static bool WriterLocked(string home, string path) {
         if (string.IsNullOrWhiteSpace(path) || !OperatingSystem.IsWindows()) return false;
