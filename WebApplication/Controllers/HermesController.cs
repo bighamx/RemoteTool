@@ -55,20 +55,21 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         }
     }
     [HttpGet("sessions/{id}/context")] public async Task<IActionResult> SessionContext(string id, CancellationToken ct) {
-        try {
-            var result = JsonNode.Parse((await management.Invoke("session_context", JsonSerializer.SerializeToElement(new { session_id = Id(id) }), ct)).GetRawText())!.AsObject();
-            try {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(2));
-                using var info = await bridge.SendAsync(HttpMethod.Get, "api/sessions/" + Id(id), null, null, timeout.Token);
-                if (info.IsSuccessStatusCode) {
-                    var session = JsonNode.Parse(await info.Content.ReadAsStringAsync(timeout.Token));
-                    result["title"] = (session?["session"] ?? session)?["title"]?.DeepClone();
-                }
-            } catch (Exception error) when (!ct.IsCancellationRequested && error is HttpRequestException or OperationCanceledException or JsonException or InvalidOperationException) { }
-            return Ok(result);
-        }
+        try { return Ok(await ContextAsync(Id(id), ct)); }
         catch (InvalidOperationException error) { return Ok(new { available = false, message = error.Message }); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Ok(new { available = false, message = "上下文读取超时，请刷新重试" }); }
+    }
+    private async Task<JsonObject> ContextAsync(string id, CancellationToken ct) {
+        var result = JsonNode.Parse((await management.Invoke("session_context", JsonSerializer.SerializeToElement(new { session_id = id }), ct)).GetRawText())!.AsObject();
+        try {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            using var info = await bridge.SendAsync(HttpMethod.Get, "api/sessions/" + id, null, null, timeout.Token);
+            if (info.IsSuccessStatusCode) {
+                var session = JsonNode.Parse(await info.Content.ReadAsStringAsync(timeout.Token));
+                result["title"] = (session?["session"] ?? session)?["title"]?.DeepClone();
+            }
+        } catch (Exception error) when (!ct.IsCancellationRequested && error is HttpRequestException or OperationCanceledException or JsonException or InvalidOperationException) { }
+        return result;
     }
     [HttpGet("sessions/{id}/activity")] public IActionResult SessionActivity(string id) {
         Response.Headers.CacheControl = "no-store";
@@ -184,15 +185,21 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     [HttpDelete("sessions/{id}"), HttpPost("sessions/{id}/delete")] public Task DeleteSession(string id, CancellationToken ct) => Forward(HttpMethod.Delete, $"api/sessions/{Id(id)}", null, null, ct);
     [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 100, [FromQuery] string from_id = null, [FromQuery] string older_before = null, CancellationToken ct = default)
     {
-        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions/{Id(id)}/messages?inline_images=false", null, null, ct);
-        if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 会话历史" });
+        try { return Ok(await HistoryAsync(Id(id), limit, from_id, older_before, ct)); }
+        catch (InvalidOperationException error) { return StatusCode(502, new { message = error.Message }); }
+        catch (Exception error) when (error is HttpRequestException or IOException) { return StatusCode(502, new { message = "无法读取 Hermes 会话历史" }); }
+    }
+    private async Task<JsonNode> HistoryAsync(string id, int limit, string from_id, string older_before, CancellationToken ct)
+    {
+        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions/{id}/messages?inline_images=false", null, null, ct);
+        if (!upstream.IsSuccessStatusCode) throw new InvalidOperationException("无法读取 Hermes 会话历史");
         var json = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct));
         var state = activity.Read(id);
         json = CompletedToolHistory.Reduce(json, state["running"]?.GetValue<bool>() == true,
             state["started_at"]?.GetValue<long>() ?? 0, id, state["revision"]?.ToString() ?? "");
         json = AgentHistoryWindow.Select(json, limit, from_id, older_before);
         json = AgentInteractiveMessages.Present(json);
-        return Ok(attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}"));
+        return attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}");
     }
     [HttpPost("sessions/{id}/messages/{messageId}/attachments")] public IActionResult BindAttachments(string id, string messageId, [FromBody] JsonElement body)
     { attachments.Bind(Id(id), messageId, body.GetProperty("ids").EnumerateArray().Select(value => value.GetString()!).ToArray()); return Ok(new { success = true }); }
@@ -251,7 +258,16 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     [HttpGet("sessions/{id}/active-run")] public async Task ActiveRun(string id, CancellationToken ct)
     {
         Response.Headers.CacheControl = "no-store";
-        var sessionId = Id(id);
+        try { await Response.WriteAsJsonAsync(await ActiveRunAsync(Id(id), ct) ?? (object)new { run_id = (string?)null }, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception error) when (error is InvalidOperationException or HttpRequestException or IOException) {
+            Response.StatusCode = 502;
+            await Response.WriteAsJsonAsync(new { message = error.Message }, ct);
+        }
+    }
+    /// <summary>返回当前活跃 run 的完整文档；无活跃 run 时返回 null。供 /active-run 与 /overview 共用。</summary>
+    private async Task<JsonObject?> ActiveRunAsync(string sessionId, CancellationToken ct)
+    {
         var registered = runs.Query("hermes", sessionId);
         var candidates = new[] { registered }.Concat(activity.ActiveRunCandidates(sessionId))
             .Where(run => !string.IsNullOrEmpty(run)).Distinct();
@@ -259,9 +275,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             if (runId.StartsWith("hcompact_")) {
                 try {
                     var status = compaction.Status(runId);
-                    if (status["status"]?.ToString() is "started" or "submitting") {
-                        await Response.WriteAsJsonAsync(status, ct); return;
-                    }
+                    if (status["status"]?.ToString() is "started" or "submitting") return status;
                 } catch (KeyNotFoundException) { }
                 runs.Clear("hermes", sessionId, runId); continue;
             }
@@ -273,26 +287,60 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 runs.Clear("hermes", sessionId, runId);
                 continue;
             }
-            if (!upstream.IsSuccessStatusCode) {
-                Response.StatusCode = (int)upstream.StatusCode;
-                await Response.WriteAsJsonAsync(new { message = "无法核对 Hermes 当前任务，请稍后重试" }, ct); return;
-            }
-            using var doc = JsonDocument.Parse(await upstream.Content.ReadAsStringAsync(ct));
-            var state = doc.RootElement.TryGetProperty("status", out var s) ? s.GetString() : "";
-            var owner = doc.RootElement.TryGetProperty("session_id", out var session) ? session.GetString() : null;
+            if (!upstream.IsSuccessStatusCode) throw new InvalidOperationException("无法核对 Hermes 当前任务，请稍后重试");
+            var run = JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
+            var state = run["status"]?.ToString() ?? "";
+            var owner = run["session_id"]?.ToString();
             if (owner != sessionId || state is "completed" or "failed" or "cancelled" or "interrupted" or "acceptance_unknown") {
                 runs.Clear("hermes", sessionId, runId); continue;
             }
             if (state is not ("started" or "submitting" or "queued" or "running" or "stopping" or "waiting_for_approval")) continue;
             if (registered != runId) runs.Register("hermes", sessionId, runId);
-            await Response.WriteAsJsonAsync(doc.RootElement, ct); return;
+            return run;
         }
-        await Response.WriteAsJsonAsync(new { run_id = (string?)null }, ct);
+        return null;
     }
     [HttpGet("runs/{id}")] public async Task Status(string id, CancellationToken ct) {
         if (!Id(id).StartsWith("hcompact_")) { await Forward(HttpMethod.Get, $"v1/runs/{id}", null, null, ct); return; }
         try { await Response.WriteAsJsonAsync(compaction.Status(id), ct); }
         catch (KeyNotFoundException) { Response.StatusCode = 404; await Response.WriteAsJsonAsync(new { message = "压缩任务不存在" }, ct); }
+    }
+    /// <summary>一次往返取齐打开会话所需的数据：详情、历史、活跃 run、外部活动、上下文。
+    /// 单项失败不拖垮整体——失败项为 null，前端按需回退到对应的单独请求。</summary>
+    [HttpGet("sessions/{id}/overview")] public async Task<IActionResult> Overview(string id, [FromQuery] int limit = 80, CancellationToken ct = default)
+    {
+        Response.Headers.CacheControl = "no-store";
+        var sessionId = Id(id);
+        async Task<JsonNode?> Part(Func<Task<JsonNode?>> work) {
+            try { return await work(); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception) { return null; }
+        }
+        var detailTask = Part(async () => {
+            using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions/{sessionId}", null, null, ct);
+            return upstream.IsSuccessStatusCode ? JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)) : null;
+        });
+        var historyTask = Part(() => HistoryAsync(sessionId, Math.Clamp(limit, 1, 100), null, null, ct));
+        var runTask = Part(async () => (JsonNode?)(await ActiveRunAsync(sessionId, ct) ?? new JsonObject { ["run_id"] = null }));
+        var contextTask = Part(async () => {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(6));
+            return await ContextAsync(sessionId, timeout.Token);
+        });
+        await Task.WhenAll(detailTask, historyTask, runTask, contextTask);
+        var run = runTask.Result;
+        JsonNode? files = null;
+        try { files = JsonSerializer.SerializeToNode(new { data = attachments.List(sessionId) }); }
+        catch (Exception) { /* The app can use the existing files endpoint. */ }
+        return Ok(new JsonObject {
+            ["detail"] = detailTask.Result,
+            ["history"] = historyTask.Result,
+            ["active_run"] = run?.DeepClone(),
+            ["run"] = run?["run_id"] != null ? run.DeepClone() : null,
+            ["activity"] = activity.Read(sessionId),
+            ["context"] = contextTask.Result,
+            ["files"] = files,
+        });
     }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
     [HttpGet("sessions/{id}/tools/{summaryId}")] public async Task<IActionResult> ToolDetails(string id, string summaryId, [FromQuery] int offset = 0, CancellationToken ct = default) {

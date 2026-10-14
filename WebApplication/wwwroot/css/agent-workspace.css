@@ -1225,6 +1225,42 @@
     box-shadow: inset 1px 0 var(--accent-primary)
 }
 
+.agent-session-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    width: 100%
+}
+
+.agent-session-heading .agent-session-title {
+    flex: 1;
+    min-width: 0
+}
+
+.agent-session-running {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-primary) 14%, var(--bg-secondary));
+    color: var(--accent-primary);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.2;
+    white-space: nowrap
+}
+
+.agent-session-running::before {
+    content: '';
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor
+}
+
 .agent-session-title {
     font-size: 13px;
     line-height: 1.4

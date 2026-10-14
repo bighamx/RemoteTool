@@ -222,7 +222,7 @@ try {
     File.WriteAllText(history, "{\"type\":\"turn_context\",\"payload\":{\"model\":\"reset\"}}\n");
     Check(CodexRollout.LastModel(temp, history) == "reset", "truncation resets cached metadata");
     var activityPath = Path.Combine(temp, "activity.jsonl");
-    const long stamp = 1791207000000;
+    var stamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     string Record(string kind, JsonObject payload, long at) => System.Text.Json.JsonSerializer.Serialize(new {
         type = kind, timestamp = DateTimeOffset.FromUnixTimeMilliseconds(at).ToString("O"), payload,
     }) + "\n";

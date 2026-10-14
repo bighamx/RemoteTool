@@ -30,7 +30,7 @@ internal static class CodexRollout
         if (!snapshot.B("running")) return false;
         // STALE 自愈：客户端被杀时 task_complete 没写入，running 会永久残留。
         // 正常运行中的 turn 会持续写 rollout 事件；超过 10 分钟无任何事件视为已结束。
-        if (snapshot["last_event_at"] is { } last && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - last.L() > TimeSpan.FromMinutes(10).TotalMilliseconds) return false;
+        if (snapshot["last_event_at"] is not null && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - snapshot.L("last_event_at") > TimeSpan.FromMinutes(10).TotalMilliseconds) return false;
         return true;
     }
     public static bool WriterLocked(string home, string path) {

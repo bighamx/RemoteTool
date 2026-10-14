@@ -11,7 +11,7 @@
     // with "crypto.randomUUID is not a function"; fall back to getRandomValues, then to
     // Math.random. Keys only need to be unique per device, not cryptographically strong.
     const newKey = () => {
-        try { if (window.crypto && typeof crypto.randomUUID === 'function') return newKey(); } catch (e) {}
+        try { if (window.crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID(); } catch (e) {}
         try {
             if (window.crypto && typeof crypto.getRandomValues === 'function') {
                 const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -39,7 +39,7 @@
     let timelineResizeObserver = null;
     let scrollRestoreTimer = null;
     const app = Vue.createApp({
-        data: () => ({ agent, markdownReady: !!markdown, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
+        data: () => ({ agent, markdownReady: !!markdown, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [],
             activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0,
@@ -50,26 +50,40 @@
             currentWorkspaceName() {return this.workspaceName((this.workspaces.data||[]).find(row=>row.id===this.workspaces.current)||(this.accounts.data||[]).find(row=>row.id===this.accounts.current)||this.accounts.current_identity);},
             agentName() { return this.agent==='codex'?'Codex':'Hermes'; },
             filteredSessions() { const q=this.search.trim().toLowerCase(); return q?this.sessions.filter(s=>`${s.title||''} ${s.preview||''} ${s.cwd||''}`.toLowerCase().includes(q)):this.sessions; },
-            projectRootsOf(project) { return (project?.roots || []).map(root => root?.path).filter(Boolean); },
             filteredCreateProjects() { const q=(this.createProjectSearch||'').trim().toLowerCase(); const rows=this.projects||[]; return q?rows.filter(p=>`${p.name||''} ${this.projectRootsOf(p).join(' ')}`.toLowerCase().includes(q)):rows; },
             createProjectRoots() { return this.projectRootsOf((this.projects||[]).find(p=>p.id===this.createProjectId)); },
             createValid() { if(this.agent!=='codex'||this.createMode==='none')return true; if(this.createMode==='existing')return !!this.createProjectId&&!!this.createRoot; if(this.createMode==='new')return this.createRoots.length>0&&!!this.createRoot&&!!this.createProjectName.trim(); return true; },
             displayMessages() {const rows=this.messages.filter(m=>this.hasRenderableContent(m));const echoes=this.delivered.filter(row=>!row.canonicalId).map(row=>this.localMessage(row));if(this.pending&&Date.now()-(this.pending.createdAt||0)<=120000)echoes.push(this.localMessage(this.pending));for(const echo of echoes){const next=rows.findIndex(row=>this.messageStamp(row)>echo.timestamp);if(next<0)rows.push(echo);else rows.splice(next,0,echo);}return rows;},
             visibleLiveSegments() {
+                // Must stay pure. Merging used to write covered.text=segment.text on a liveSegments
+                // item - a reactive object this computed also reads - which invalidated the computed
+                // from inside itself and made Vue's reactivity recurse (trigger -> triggerEffects ->
+                // trigger) until "RangeError: Maximum call stack size exceeded". Merge on local copies
+                // instead: real merging still happens in pushLiveSegment, which may mutate state.
                 const out=[];
                 for (const segment of this.liveSegments) {
-                    if (!this.asText(segment.text).trim()) continue;
-                    if (this.messages.some(m=>m.role==='assistant'&&this.narrationCovers(this.messageText(m),segment.text)&&this.messageStamp(m)>=segment.createdAt-600000)) continue;
-                    const covered=out.find(prev=>this.sameNarration(prev.text,segment.text));
-                    if (covered) { if (segment.text.trim().length>covered.text.trim().length) covered.text=segment.text; continue; }
-                    out.push(segment);
+                    const text=this.asText(segment.text);
+                    if (!text.trim()) continue;
+                    if (this.messages.some(m=>m.role==='assistant'&&this.narrationCovers(this.messageText(m),text)&&this.messageStamp(m)>=segment.createdAt-600000)) continue;
+                    const covered=out.find(prev=>this.sameNarration(prev.text,text));
+                    if (covered) { if (text.trim().length>this.asText(covered.text).trim().length) covered.text=text; continue; }
+                    out.push({...segment, text});
                 }
                 return out;
             },
-            // Coerce a message/segment payload to text without ever letting String() throw.
-            // Upstream rows and SSE payloads are not guaranteed to be strings; an object that
-            // cannot be primitivised used to raise "Cannot convert object to primitive value"
-            // inside the visibleLiveSegments computed and broke the whole conversation view.
+            statusText() { if (this.activeRun) return this.runStatus || '正在执行'; if(this.externalRunning)return this.externalActivity?.kind==='compact'?'其他客户端正在压缩上下文':'其他客户端正在执行'; const value=this.selected?.status; return (typeof value==='object'?value?.type:value) || '空闲'; },
+            contextPercent() { const tokens=Number(this.context.context?.tokens||0);const limit=Number(this.context.context?.limit||0);return limit>0?Math.min(100,Math.max(0,Math.round(tokens/limit*100))):0; },
+            providerChoices() { return this.models.map(p=>({id:p.slug||p.id||'',name:p.name||p.slug||p.id})); },
+            modelChoices() { const found=this.models.find(p=>(p.slug||p.id)===this.modelSelection.provider); return (found?.models||[]).map(m=>typeof m==='string'?{id:m,name:m}:{id:m.model||m.id,name:m.displayName||m.name||m.model||m.id}); },
+            modelMetadata() { const provider=this.models.find(p=>(p.slug||p.id)===this.modelSelection.provider); return (provider?.models||[]).find(m=>typeof m==='object'&&(m.model||m.id)===this.modelSelection.model)||{}; },
+            effortChoices() { return this.agent==='codex'?(this.modelMetadata.supportedReasoningEfforts||[]).map(x=>x.reasoningEffort).filter(Boolean):['none','minimal','low','medium','high','xhigh','max','ultra']; },
+            tierChoices() { return (this.modelMetadata.serviceTiers||[]).map(x=>x.id).filter(Boolean); },
+            questionText() { const q=this.context.question; return q?.questions?.map(x=>x.question||x.title).join(' · ')||q?.question||'请回答会话中的问题'; },
+            approvalText() { const a=this.approval; return a?.reason||a?.message||a?.description||'当前任务请求确认'; }
+        },
+        methods: {
+            // These helpers take arguments and mutate live state; they must not be Vue computed properties.
+            projectRootsOf(project) { return (project?.roots || []).map(root => root?.path).filter(Boolean); },
             asText(value) {
                 try {
                     if (typeof value === 'string') return value;
@@ -93,17 +107,6 @@
                 }
                 this.liveSegments.push(segment);
             },
-            statusText() { if (this.activeRun) return this.runStatus || '正在执行'; if(this.externalRunning)return this.externalActivity?.kind==='compact'?'其他客户端正在压缩上下文':'其他客户端正在执行'; const value=this.selected?.status; return (typeof value==='object'?value?.type:value) || '空闲'; },
-            contextPercent() { const tokens=Number(this.context.context?.tokens||0);const limit=Number(this.context.context?.limit||0);return limit>0?Math.min(100,Math.max(0,Math.round(tokens/limit*100))):0; },
-            providerChoices() { return this.models.map(p=>({id:p.slug||p.id||'',name:p.name||p.slug||p.id})); },
-            modelChoices() { const found=this.models.find(p=>(p.slug||p.id)===this.modelSelection.provider); return (found?.models||[]).map(m=>typeof m==='string'?{id:m,name:m}:{id:m.model||m.id,name:m.displayName||m.name||m.model||m.id}); },
-            modelMetadata() { const provider=this.models.find(p=>(p.slug||p.id)===this.modelSelection.provider); return (provider?.models||[]).find(m=>typeof m==='object'&&(m.model||m.id)===this.modelSelection.model)||{}; },
-            effortChoices() { return this.agent==='codex'?(this.modelMetadata.supportedReasoningEfforts||[]).map(x=>x.reasoningEffort).filter(Boolean):['none','minimal','low','medium','high','xhigh','max','ultra']; },
-            tierChoices() { return (this.modelMetadata.serviceTiers||[]).map(x=>x.id).filter(Boolean); },
-            questionText() { const q=this.context.question; return q?.questions?.map(x=>x.question||x.title).join(' · ')||q?.question||'请回答会话中的问题'; },
-            approvalText() { const a=this.approval; return a?.reason||a?.message||a?.description||'当前任务请求确认'; }
-        },
-        methods: {
             hasRenderableContent(m) { return m.type==='interaction' || !!m.tool_summary_id || (m.attachments||[]).length>0 || !!this.messageBody(m).trim() || this.mediaFiles(m).length>0 || this.unresolvedMedia(m).length>0; },
             time: api.time,
             quotaGroups(usage) { const all=usage?.rateLimitsByLimitId;const entries=all&&Object.keys(all).length?Object.entries(all):usage?.rateLimits?[['codex',usage.rateLimits]]:[];return entries.map(([key,limit])=>({name:limit.limitName||limit.limitId||key,windows:['primary','secondary'].filter(k=>limit[k]).map(k=>{const w=limit[k],mins=Number(w.windowDurationMins);const used=w.usedPercent==null?NaN:Number(w.usedPercent);return {label:mins===300?'5 小时':mins===10080?'周额度':mins>0?`${mins/60} 小时`:k==='primary'?'短期额度':'长期额度',minutes:mins,remaining:Number.isFinite(used)?Math.floor(Math.min(100,Math.max(0,100-used))):null,resetsAt:w.resetsAt};})})); },
@@ -133,11 +136,26 @@
             formatBytes(size) {const n=Number(size)||0;return n>=1048576?`${(n/1048576).toFixed(1)} MB`:n>=1024?`${(n/1024).toFixed(1)} KB`:`${n} B`;},
             roleLabel(m) { return m.type==='interaction'?'提问':m.role==='user'?'你':m.role==='assistant'?this.agentName:m.role==='tool'?'工具':m.role==='system'?'系统':m.role; },
             queueText(item) { return item.input?.map?.(x=>x.text||'').join(' ')||item.text||item.id||'待发送'; },
+            sessionRunning(item) {
+                if (item.id===this.selectedId && this.selectedStatusKnown) return !!(this.activeRun||this.externalRunning);
+                const status=typeof item.status==='object'?item.status?.type:item.status;
+                return status==='active'||status==='running';
+            },
+            async refreshSessionStatuses() {
+                if (this.loadingList||this.sessionStatusRefreshing) return;
+                this.sessionStatusRefreshing=true; this.sessionStatusRefreshAt=Date.now();
+                try {
+                    const result=await api.get(`${base}/sessions`);
+                    const statuses=new Map((result.data||[]).filter(row=>row?.id).map(row=>[String(row.id),row.status]));
+                    for (const row of this.sessions) if (statuses.has(String(row.id)) && !(row.id===this.selectedId && this.selectedStatusKnown)) row.status=statuses.get(String(row.id));
+                } catch (_) { /* Keep the last known status; the main list reports explicit refresh errors. */ }
+                finally { this.sessionStatusRefreshing=false; }
+            },
             async refreshSessions(keepSelection=true) {
                 this.loadingList=true; this.listError='';
                 try {
                     const result=await api.get(`${base}/sessions`);
-                    this.sessions=result.data||[]; this.offset=this.sessions.length; this.nextCursor=result.next_cursor||null; this.hasMore=!!result.has_more;
+                    this.sessions=result.data||[]; this.offset=this.sessions.length; this.nextCursor=result.next_cursor||null; this.hasMore=!!result.has_more; this.sessionStatusRefreshAt=Date.now();
                     const fromUrl=window.RemoteToolWorkspace
                         ? (location.hash.startsWith(`#/${agent}?`) ? new URLSearchParams(location.hash.split('?')[1]||'').get('session') : null)
                         : new URLSearchParams(location.search).get('session');
@@ -151,14 +169,23 @@
             async select(item) {
                 this.stopEventStream();
                 if(this.scrollFrame!==null){cancelAnimationFrame(this.scrollFrame);this.scrollFrame=null;}
-                const current=++this.epoch; if(scrollRestoreTimer){clearTimeout(scrollRestoreTimer);scrollRestoreTimer=null;} this.selected=item; this.selectedId=item.id; this.sessionsOpen=false;this.dialog=null;this.showEditDialog=false;this.messages=[];this.historyLoading=true; this.historyHasMore=false; this.oldestId=null; this.followLatest=true;this.showJumpToLatest=false;this.lastTimelineTop=0; this.activeRun=null; this.externalRunning=false;this.externalActivity=null;this.approval=null; this.context={}; this.queue=[]; this.attachments=[]; this.sessionFiles=[];this.mediaSignature='';this.filesRefreshAt=0;this.error='';this.liveSegments=[];this.liveTools=[];this.streamSeq=0;this.streamGone=false;
+                const current=++this.epoch; if(scrollRestoreTimer){clearTimeout(scrollRestoreTimer);scrollRestoreTimer=null;} this.selected=item; this.selectedId=item.id; this.selectedStatusKnown=false; this.sessionsOpen=false;this.dialog=null;this.showEditDialog=false;this.messages=[];this.historyLoading=true; this.historyHasMore=false; this.oldestId=null; this.followLatest=true;this.showJumpToLatest=false;this.lastTimelineTop=0; this.activeRun=null; this.externalRunning=false;this.externalActivity=null;this.approval=null; this.context={}; this.queue=[]; this.attachments=[]; this.sessionFiles=[];this.mediaSignature='';this.filesRefreshAt=0;this.error='';this.liveSegments=[];this.liveTools=[];this.streamSeq=0;this.streamGone=false;
                 this.pending=this.restorePending(item.id);this.delivered=this.restoreDelivered(item.id);if(this.pending?.delivery==='已发送')this.acceptPending(item.id,this.pending.key); this.draft=localStorage.getItem(`remotetool:web:draft:${agent}:${item.id}`)||'';
                 if (window.RemoteToolWorkspace) { const route=location.hash.match(/^#\/(codex|hermes)(?=\?|$)/)?.[1]; if(route===agent){const query=new URLSearchParams(location.hash.split('?')[1]||'');query.set('session',item.id);history.replaceState(null,'',`${location.pathname}${location.search}#/${agent}?${query}`);} } else history.replaceState(null,'',`${location.pathname}?session=${api.id(item.id)}`);
                 try { await this.refreshAll(current); if(current===this.epoch){await this.$nextTick();this.scrollToLatest();} } finally { if(current===this.epoch)this.historyLoading=false; }
             },
-            async refreshAll(epoch=this.epoch) { if (!this.selectedId) return; await Promise.all([this.loadHistory(epoch),this.loadStatus(epoch),this.loadContext(epoch),this.loadQueue(epoch),this.loadSessionDetail(epoch)]); },
-            async loadSessionDetail(epoch=this.epoch) {try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}`);if(epoch!==this.epoch)return;const detail=result.session||result;this.selected={...this.selected,...detail};let config=detail.model_config||{};if(typeof config==='string'){try{config=JSON.parse(config);}catch{config={};}}const lock=config.browser_model_lock||{};this.modelSelection={provider:lock.provider||detail.modelProvider||detail.provider||this.modelSelection.provider,model:lock.model||detail.model||this.modelSelection.model,effort:lock.model_options?.reasoning?.effort||detail.reasoning_effort||this.modelSelection.effort,tier:detail.service_tier||this.modelSelection.tier};}catch{}},
-            async loadHistory(epoch=this.epoch) {const id=this.selectedId;try{const result=await api.get(`${base}/sessions/${api.id(id)}/messages?limit=80`);if(this.epoch!==epoch)return;const recent=result.data||[];const previous=this.messages;const tail=previous.at(-1)?.id;const continuous=tail!=null&&recent.some(row=>String(row.id)===String(tail));const ids=new Set(recent.map(row=>String(row.id)));const earlier=continuous?previous.filter(row=>row.id!=null&&!ids.has(String(row.id))):[];this.messages=[...earlier,...recent];this.historyHasMore=earlier.length?this.historyHasMore:!!result.has_more;this.oldestId=this.messages[0]?.id||result.oldest_id;const used=this.reconcileDelivered();this.reconcilePending(used);const marked=this.messages.filter(m=>m.role==='assistant'&&this.messageText(m).includes('MEDIA:'));const signature=marked.map(m=>m.id).join('|');if(signature&&(signature!==this.mediaSignature||Date.now()-this.filesRefreshAt>30000)){this.mediaSignature=signature;this.filesRefreshAt=Date.now();this.loadFiles(epoch);}this.queueFollowLatest();this.scheduleScrollRestore(id);}catch(e){if(this.epoch===epoch)this.error=e.message;}},
+            async refreshAll(epoch=this.epoch) { if (!this.selectedId) return;
+                // Overview 一次往返取齐历史/状态/上下文/详情，替代 5 个并行请求；
+                // 服务端单项失败返回 null，此处按需回退到单独请求。
+                try {
+                    const overview=await api.get(`${base}/sessions/${api.id(this.selectedId)}/overview`);
+                    if(epoch!==this.epoch)return;
+                    await Promise.all([this.loadHistory(epoch,overview.history),this.loadStatus(epoch,overview.active_run,overview.run,overview.activity),this.loadContext(epoch,overview.context),this.loadQueue(epoch,overview.queue),this.loadSessionDetail(epoch,overview.detail)]);
+                } catch (error) { if(epoch!==this.epoch)return;
+                    await Promise.all([this.loadHistory(epoch),this.loadStatus(epoch),this.loadContext(epoch),this.loadQueue(epoch),this.loadSessionDetail(epoch)]); }
+            },
+            async loadSessionDetail(epoch=this.epoch, result=null) {try{result=result||await api.get(`${base}/sessions/${api.id(this.selectedId)}`);if(epoch!==this.epoch)return;const detail=result.session||result;this.selected={...this.selected,...detail};let config=detail.model_config||{};if(typeof config==='string'){try{config=JSON.parse(config);}catch{config={};}}const lock=config.browser_model_lock||{};this.modelSelection={provider:lock.provider||detail.modelProvider||detail.provider||this.modelSelection.provider,model:lock.model||detail.model||this.modelSelection.model,effort:lock.model_options?.reasoning?.effort||detail.reasoning_effort||this.modelSelection.effort,tier:detail.service_tier||this.modelSelection.tier};}catch{}},
+            async loadHistory(epoch=this.epoch, result=null) {const id=this.selectedId;try{result=result||await api.get(`${base}/sessions/${api.id(id)}/messages?limit=80`);if(this.epoch!==epoch)return;const recent=result.data||[];const previous=this.messages;const tail=previous.at(-1)?.id;const continuous=tail!=null&&recent.some(row=>String(row.id)===String(tail));const ids=new Set(recent.map(row=>String(row.id)));const earlier=continuous?previous.filter(row=>row.id!=null&&!ids.has(String(row.id))):[];this.messages=[...earlier,...recent];this.historyHasMore=earlier.length?this.historyHasMore:!!result.has_more;this.oldestId=this.messages[0]?.id||result.oldest_id;const used=this.reconcileDelivered();this.reconcilePending(used);const marked=this.messages.filter(m=>m.role==='assistant'&&this.messageText(m).includes('MEDIA:'));const signature=marked.map(m=>m.id).join('|');if(signature&&(signature!==this.mediaSignature||Date.now()-this.filesRefreshAt>30000)){this.mediaSignature=signature;this.filesRefreshAt=Date.now();this.loadFiles(epoch);}this.queueFollowLatest();this.scheduleScrollRestore(id);}catch(e){if(this.epoch===epoch)this.error=e.message;}},
             async loadFiles(epoch=this.epoch) {try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/files`);if(epoch===this.epoch)this.sessionFiles=result.data||[];return result.data||[];}catch{return[];}},
             async loadOlder() {if(!this.oldestId||this.olderLoading)return;this.olderLoading=true;this.followLatest=false;this.showJumpToLatest=true;const epoch=this.epoch;const el=this.$refs.timeline;const oldHeight=el?.scrollHeight||0;const oldTop=el?.scrollTop||0;try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/messages?limit=80&older_before=${api.id(this.oldestId)}`);if(epoch!==this.epoch)return;const ids=new Set(this.messages.map(m=>String(m.id)));this.messages=[...(result.data||[]).filter(m=>!ids.has(String(m.id))),...this.messages];this.historyHasMore=!!result.has_more;this.oldestId=result.oldest_id||this.messages[0]?.id;await this.$nextTick();if(el)el.scrollTop=oldTop+el.scrollHeight-oldHeight;}catch(e){if(epoch===this.epoch)this.error=e.message;}finally{if(epoch===this.epoch)this.olderLoading=false;}},
             onTimelineScroll(e) {const el=e.target;const top=el.scrollTop;const height=el.scrollHeight;const distance=Math.max(0,height-el.clientHeight-top);const shrank=height<this.lastTimelineHeight;this.lastTimelineHeight=height;if(!shrank){if(top<this.lastTimelineTop-2)this.followLatest=false;else if(distance<=24&&top>this.lastTimelineTop+2)this.followLatest=true;}this.lastTimelineTop=top;this.showJumpToLatest=!this.followLatest&&!!this.selectedId&&height>el.clientHeight+4;if(!this.historyLoading&&top<80&&this.historyHasMore&&!this.olderLoading)this.loadOlder();},
@@ -174,29 +201,29 @@
                 try{const result=await api.post(`${base}/api-server`,{restart});const d=result.data||result;this.apiServer=d;
                     this.$Message.success(restart?'已写入配置并请求重启 Hermes 网关':'已写入配置；请重启 Hermes 网关后生效');}
                 catch(e){this.error=e.message;}finally{this.enablingApiServer=false;}},
-            async loadStatus(epoch=this.epoch) {
+            async loadStatus(epoch=this.epoch, state=null, runDoc=null, activityState=null) {
                 const id=this.selectedId;
                 try {
-                    const state=await api.get(`${base}/sessions/${api.id(id)}/active-run`);
+                    state=state||await api.get(`${base}/sessions/${api.id(id)}/active-run`);
                     if(epoch!==this.epoch)return;
                     const runId=state.run_id||this.activeRun;
                     if(runId){
                         let run;
-                        try {run=await api.get(`${base}/runs/${api.id(runId)}`);} catch(error){if(error.status!==404)throw error;run={status:'missing'};}
+                        try {run=runDoc||await api.get(`${base}/runs/${api.id(runId)}`);} catch(error){if(error.status!==404)throw error;run={status:'missing'};}
                         if(epoch!==this.epoch)return;
                         if(terminal.has(run.status)||run.status==='missing'){
                             this.stopEventStream();this.activeRun=null;this.approval=null;this.runStatus=run.status;
                             await this.loadHistory(epoch);
                         }else{
-                            this.activeRun=runId;this.externalRunning=false;this.externalActivity=null;
+                            this.activeRun=runId;this.externalRunning=false;this.externalActivity=null;this.selectedStatusKnown=true;
                             this.runStatus=run.status||'正在执行';this.approval=run.approval||null;
                             this.ensureEventStream(runId);return;
                         }
                     }
                     this.stopEventStream();this.activeRun=null;this.approval=null;
-                    const activity=await api.get(`${base}/sessions/${api.id(id)}/activity`);
+                    const activity=activityState||await api.get(`${base}/sessions/${api.id(id)}/activity`);
                     if(epoch!==this.epoch)return;
-                    this.externalActivity=activity;this.externalRunning=!!activity.running;
+                    this.externalActivity=activity;this.externalRunning=!!activity.running;this.selectedStatusKnown=activity.available!==false;
                     this.liveTools=this.externalRunning?(activity.progress||[]).map(row=>({id:row.id,tool:row.tool||row.name||'工具',preview:row.preview||'',status:row.status||'running',open:false})):[];
                 }catch(error){if(epoch===this.epoch)this.error=error.message;}
             },
@@ -211,8 +238,8 @@
                 if(type==='approval.request'){this.approval=event;return;}
                 if(type.startsWith('run.')){this.loadStatus();this.loadHistory();this.loadContext();}
             },
-            async loadContext(epoch=this.epoch) { const id=this.selectedId; try { const result=await api.get(`${base}/sessions/${api.id(id)}/context`); if(epoch===this.epoch)this.context=this.agent==='codex'?result:{context:result}; } catch {} },
-            async loadQueue(epoch=this.epoch) { if(this.agent!=='codex')return; try { const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/queue`); if(epoch===this.epoch)this.queue=result.data||[]; } catch {} },
+            async loadContext(epoch=this.epoch, result=null) { const id=this.selectedId; try { result=result||await api.get(`${base}/sessions/${api.id(id)}/context`); if(epoch===this.epoch)this.context=this.agent==='codex'?result:{context:result}; } catch {} },
+            async loadQueue(epoch=this.epoch, result=null) { if(this.agent!=='codex')return; try{result=result||await api.get(`${base}/sessions/${api.id(this.selectedId)}/queue`); if(epoch===this.epoch)this.queue=result.data||[]; } catch {} },
             async loadModels() { try { const result=await api.get(`${base}/model-options`); this.models=result.providers||[]; this.modelSelection={provider:result.provider||'',model:result.model||'',effort:result.reasoning_effort||'',tier:result.service_tier||''}; } catch {} },
             async loadCodexAdmin() { if(this.agent!=='codex')return; const results=await Promise.allSettled([api.get(`${base}/projects`),api.get(`${base}/accounts`)]); if(results[0].status==='fulfilled')this.projects=results[0].value.data||[]; if(results[1].status==='fulfilled'){this.accounts=results[1].value;this.selectedAccount=this.accounts.current||'';} },
             async useAccount() {if(!this.selectedAccount||this.selectedAccount===this.accounts.current)return;const row=(this.accounts.data||[]).find(item=>item.id===this.selectedAccount);if(row)await this.useWorkspace(row);},
@@ -274,7 +301,7 @@
             async loadMoreTool() {if(this.dialog?.activeTools){await this.refreshActiveTools(this.toolOffset);return;}if(!this.dialog?.toolId)return;try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/tools/${api.id(this.dialog.toolId)}?offset=${this.toolOffset}`);this.dialog.tools.push(...(result.data||[]));this.dialog.more=!!result.has_more;this.toolOffset+=(result.data||[]).length;}catch(e){this.error=e.message;}}
         },
         watch: { draft(value) {if(this.selectedId)localStorage.setItem(`remotetool:web:draft:${agent}:${this.selectedId}`,value);}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
-        mounted() {this.refreshSessions();this.loadCapabilities();this.loadModels();this.loadCodexAdmin();this.loadCurrentUsage();this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible')this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState==='visible'&&this.selectedId){this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
+        mounted() {this.refreshSessions();this.loadCapabilities();this.loadModels();this.loadCodexAdmin();this.loadCurrentUsage();this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible')this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible')return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
         beforeUnmount() {this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}
     });
     app.use(ViewUIPlus);

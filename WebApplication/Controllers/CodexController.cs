@@ -2,6 +2,7 @@ using RemoteTool.WebApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 namespace RemoteTool.WebApi.Controllers;
@@ -50,11 +51,62 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpPost("sessions/{id}/rewind")] public Task Rewind(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/rewind", body, ct);
     [HttpPost("sessions/{id}/model")] public Task SetModel(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/model", body, ct);
     [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 100, [FromQuery] string from_id = null, [FromQuery] string older_before = null, CancellationToken ct = default) {
-        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{Id(id)}/messages", null, ct);
-        if (!upstream.IsSuccessStatusCode) return StatusCode((int)upstream.StatusCode, System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)));
-        var json = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct));
+        var (status, payload) = await MessagesCore(Id(id), limit, from_id, older_before, ct);
+        return StatusCode(status, payload);
+    }
+    private async Task<(int Status, JsonNode? Payload)> MessagesCore(string id, int limit, string from_id, string older_before, CancellationToken ct) {
+        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{id}/messages", null, ct);
+        if (!upstream.IsSuccessStatusCode) return ((int)upstream.StatusCode, JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)));
+        var json = JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct));
         json = AgentHistoryWindow.Select(json, limit, from_id, older_before);
-        return Ok(attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}"));
+        return (200, attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}"));
+    }
+    /// <summary>一次往返取齐打开会话所需的数据：详情、历史、上下文、活跃 run、外部活动、队列。
+    /// 单项失败不拖垮整体——失败项为 null，前端按需回退到对应的单独请求。</summary>
+    [HttpGet("sessions/{id}/overview")] public async Task<IActionResult> Overview(string id, [FromQuery] int limit = 80, CancellationToken ct = default)
+    {
+        Response.Headers.CacheControl = "no-store";
+        var sessionId = Id(id);
+        async Task<JsonObject?> Part(Func<Task<JsonObject?>> work) {
+            try { return await work(); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception) { return null; }
+        }
+        async Task<JsonObject?> Upstream(string path, CancellationToken? token = null) {
+            var requestToken = token ?? ct;
+            using var response = await bridge.SendAsync(HttpMethod.Get, path, null, requestToken);
+            return response.IsSuccessStatusCode ? await JsonNode.ParseAsync(await response.Content.ReadAsStreamAsync(requestToken), cancellationToken: requestToken) as JsonObject : null;
+        }
+        var detailTask = Part(() => Upstream($"sessions/{sessionId}"));
+        var contextTask = Part(async () => {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(6));
+            return await Upstream($"sessions/{sessionId}/context", timeout.Token);
+        });
+        var runStateTask = Part(() => Upstream($"sessions/{sessionId}/active-run"));
+        var queueTask = Part(() => Upstream($"sessions/{sessionId}/queue"));
+        var historyTask = Part(async () => {
+            var (status, payload) = await MessagesCore(sessionId, Math.Clamp(limit, 1, 100), null, null, ct);
+            return status == 200 ? payload as JsonObject : null;
+        });
+        var activityTask = Part(() => ActivityAsync(sessionId, ct));
+        await Task.WhenAll(detailTask, contextTask, runStateTask, queueTask, historyTask, activityTask);
+        JsonObject? run = null;
+        if (runStateTask.Result?["run_id"]?.ToString() is string runId && Regex.IsMatch(runId, "^[a-zA-Z0-9_-]{1,160}$"))
+            run = await Part(() => Upstream($"runs/{runId}"));
+        JsonNode? files = null;
+        try { files = JsonSerializer.SerializeToNode(new { data = attachments.List(sessionId) }); }
+        catch (Exception) { /* The app can use the existing files endpoint. */ }
+        return Ok(new JsonObject {
+            ["detail"] = detailTask.Result,
+            ["history"] = historyTask.Result,
+            ["context"] = contextTask.Result,
+            ["active_run"] = runStateTask.Result?.DeepClone(),
+            ["run"] = run,
+            ["activity"] = activityTask.Result,
+            ["queue"] = queueTask.Result,
+            ["files"] = files,
+        });
     }
     [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
     [HttpGet("sessions/{id}/tools/{summaryId}")] public Task ToolDetails(string id, string summaryId, [FromQuery] int offset, CancellationToken ct) =>
@@ -70,13 +122,16 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     }
     [HttpGet("sessions/{id}/activity")] public async Task<IActionResult> SessionActivity(string id, CancellationToken ct) {
         Response.Headers.CacheControl = "no-store";
-        var result = activity.Read(Id(id));
+        return Ok(await ActivityAsync(Id(id), ct));
+    }
+    private async Task<JsonObject> ActivityAsync(string id, CancellationToken ct) {
+        var result = activity.Read(id);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(4));
         try {
-            using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{Id(id)}/desktop-activity", null, timeout.Token);
+            using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{id}/desktop-activity", null, timeout.Token);
             if (upstream.IsSuccessStatusCode) {
-                var live = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(timeout.Token));
+                var live = JsonNode.Parse(await upstream.Content.ReadAsStringAsync(timeout.Token));
                 if (live?["available"]?.GetValue<bool>() == true) {
                     // The desktop IPC is a per-client view: it only knows the turns the desktop app
                     // started, so a turn driven by another client (CLI, VS Code extension, another
@@ -87,16 +142,16 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
                     var desktopRunning = live["running"]?.GetValue<bool>() == true;
                     if (!localRunning || desktopRunning) {
                         if (live["activity_id"]?.ToString() != result["activity_id"]?.ToString()) {
-                            result["progress"] = new System.Text.Json.Nodes.JsonArray(); result["event_count"] = 0; result["last_response_at"] = null;
+                            result["progress"] = new JsonArray(); result["event_count"] = 0; result["last_response_at"] = null;
                         }
                         foreach (var field in new[] { "available", "running", "activity_id", "kind", "started_at", "phase_started_at" }) result[field] = live[field]?.DeepClone();
                     }
                     result["observed_only"] = true; result["source"] = "desktop";
-                    if (result["running"]?.GetValue<bool>() != true) { result["progress"] = new System.Text.Json.Nodes.JsonArray(); result["event_count"] = 0; }
+                    if (result["running"]?.GetValue<bool>() != true) { result["progress"] = new JsonArray(); result["event_count"] = 0; }
                 }
             }
         } catch (Exception error) when (!ct.IsCancellationRequested && error is HttpRequestException or OperationCanceledException or JsonException or InvalidOperationException) { }
-        return Ok(result);
+        return result;
     }
     [HttpPost("sessions/{id}/files"), RequestSizeLimit(501L * 1024 * 1024), RequestFormLimits(MultipartBodyLengthLimit = 501L * 1024 * 1024)]
     public async Task<IActionResult> Upload(string id, IFormFile file, CancellationToken ct) {

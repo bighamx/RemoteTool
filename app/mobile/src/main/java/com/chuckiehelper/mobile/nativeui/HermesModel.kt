@@ -33,6 +33,27 @@ data class HermesMessage(
 
 data class HermesEvent(val type: String, val text: String, val detail: String = "", val itemId: String? = null)
 
+/** A null part means that only that part needs the legacy endpoint fallback. */
+internal data class SessionOverview(
+    val detail: JSONObject?, val history: JSONObject?, val context: JSONObject?,
+    val activeRun: JSONObject?, val activity: JSONObject?, val files: JSONObject?
+) {
+    companion object {
+        fun read(value: JSONObject) = SessionOverview(
+            detail = value.optJSONObject("detail")?.takeIf { it.optJSONObject("session") != null || it.has("id") },
+            history = value.optJSONObject("history")?.takeIf { it.optJSONArray("data") != null },
+            context = value.optJSONObject("context"),
+            activeRun = value.optJSONObject("active_run")?.takeIf { it.has("run_id") },
+            activity = value.optJSONObject("activity")?.takeIf { it.has("available") },
+            files = value.optJSONObject("files")?.takeIf { it.optJSONArray("data") != null }
+        )
+    }
+}
+
+internal fun currentCodexIdentity(accounts: JSONObject, workspaces: JSONObject): String? =
+    workspaces.optString("current").takeIf { it.isNotBlank() && it != "null" }
+        ?: accounts.optString("current").takeIf { it.isNotBlank() && it != "null" }
+
 /** Durable run ids, never a persisted provider secret or automatically replayed prompt. */
 class HermesModel(application: Application, deviceId: String, val agent: String = "hermes") : AndroidViewModel(application) {
     val agentName = if (agent == "codex") "Codex" else "Hermes"
@@ -250,6 +271,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var externalActivity by mutableStateOf<JSONObject?>(null)
     private var externalVerifiedAt by mutableLongStateOf(0L)
     private var externalHistoryRevision: String? = null
+    private var openingSession: String? = null
+    private var openingGeneration = 0L
+    private var contextPrefetchedSession: String? = null
+    private var contextPrefetchedAt = 0L
+    private var activeRunCheckSession: String? = null
+    private var activeRunCheckedAt = 0L
     private var sessionControl by mutableStateOf<JSONObject?>(null)
     private var sessionControlVerifiedAt by mutableLongStateOf(0L)
     var controlMessage by mutableStateOf<String?>(null)
@@ -296,12 +323,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     val executionState get() = if (requestingCompaction) "正在提交压缩请求" else if (streamCompacting) "正在压缩上下文" else if (runId != null) state else externalActivityLabel(externalActivity)
     val executionCompacting get() = requestingCompaction || executionState == "正在压缩上下文"
 
-    fun pollExternalActivity() = viewModelScope.launch {
+    fun pollExternalActivity(force: Boolean = false) = viewModelScope.launch {
         val id = selectedId ?: return@launch
         if (runId != null || submitting) { externalActivity = null; return@launch }
+        if (openingSession == id) return@launch
         val connection = api
         val requestedAt = activityClock()
         activityNow = requestedAt
+        if (!force && externalActivity != null && requestedAt - externalVerifiedAt < 5_000L) return@launch
         try {
             // Gateway may have recovered after startup; capabilities are safe to retry.
             ensureCapabilities()
@@ -309,23 +338,27 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (capabilities.optJSONObject("chuckie_features")?.optBoolean("external_session_activity") != true) return@launch
             // An IIS/bridge restart can drop the local run subscription while its
             // desktop transport still executes a turn originally submitted here.
-            attachServerActiveRun(id)
+            if (activeRunCheckSession != id || requestedAt - activeRunCheckedAt >= 8_000L) attachServerActiveRun(id)
             if (selectedId != id || api !== connection || runId != null) return@launch
             val result = withTimeout(8_000) { connection.json("$root/sessions/${q(id)}/activity") }
             if (selectedId != id || api !== connection || runId != null) return@launch
-            if (!result.optBoolean("available")) return@launch
-            externalActivity = result; externalVerifiedAt = requestedAt
-            val compactedAt = parseMessageTimestamp(result.opt("compacted_at"))
-            val compactedId = result.optString("compaction_id").takeIf { it.isNotBlank() && it != "null" }
-            if (compactedAt != null && compactedId != null) recordExternalCompaction(id, compactedId, compactedAt)
-            noteRunActivity(id, obj("status" to if (result.optBoolean("running")) "started" else "completed"), requestedAt)
-            val revision = "$id:${result.optString("activity_id")}:${result.optLong("revision")}:${result.optBoolean("running")}:${result.optString("kind")}:${result.opt("compacted_at")}"
-            if (revision != externalHistoryRevision && historyJob?.isActive != true) {
-                loadHistory(id)
-                if (selectedId == id && api === connection) externalHistoryRevision = revision
-            }
+            applyExternalActivity(id, connection, result, requestedAt)
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { /* Keep only the last verified observation; it expires in 30 seconds. */ }
+    }
+
+    private fun applyExternalActivity(id: String, connection: NativeApi, result: JSONObject, observedAt: Long) {
+        if (selectedId != id || api !== connection || runId != null || !result.optBoolean("available")) return
+        externalActivity = result; externalVerifiedAt = observedAt; activityNow = observedAt
+        val compactedAt = parseMessageTimestamp(result.opt("compacted_at"))
+        val compactedId = result.optString("compaction_id").takeIf { it.isNotBlank() && it != "null" }
+        if (compactedAt != null && compactedId != null) recordExternalCompaction(id, compactedId, compactedAt)
+        noteRunActivity(id, obj("status" to if (result.optBoolean("running")) "started" else "completed"), observedAt)
+        val revision = "$id:${result.optString("activity_id")}:${result.optLong("revision")}:${result.optBoolean("running")}:${result.optString("kind")}:${result.opt("compacted_at")}"
+        if (revision != externalHistoryRevision) {
+            externalHistoryRevision = revision
+            if (historyJob?.isActive != true) launch { loadHistory(id) }
+        }
     }
 
     private var conversationUi by mutableStateOf(ConversationUiState())
@@ -757,6 +790,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     fun pollContext(): Job {
         val id = selectedId ?: return viewModelScope.launch { }
+        if (openingSession == id || contextPrefetchedSession == id && activityClock() - contextPrefetchedAt < 5_000L)
+            return viewModelScope.launch { }
         contextReadJob?.takeIf { it.isActive && contextReadSession == id }?.let { return it }
         contextReadJob?.cancel()
         contextReadSession = id
@@ -766,12 +801,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         try {
             val result = kotlinx.coroutines.withTimeout(25000) { connection.json("$root/sessions/${q(id)}/context") }
             if (selectedId != id || api !== connection) return@launch
-            contextInfo = result.optJSONObject("context") ?: result
-            if (contextInfo?.optBoolean("available") == true) contextCache[id] = contextInfo!!
-            if (agent == "codex") asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
-            sessionControl = result.optJSONObject("control")
-            sessionControlVerifiedAt = activityClock()
-            result.optString("title").takeIf { it.isNotBlank() && it != "null" }?.let { title = it }
+            applyContextResult(id, connection, result)
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             if (selectedId == id && api === connection && contextInfo?.optBoolean("available") != true)
                 contextInfo = obj("available" to false, "message" to "读取超时，请刷新重试")
@@ -781,6 +811,16 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 contextInfo = obj("available" to false, "message" to "读取失败，请刷新重试")
         }
         }.also { contextReadJob = it }
+    }
+    private fun applyContextResult(id: String, connection: NativeApi, result: JSONObject, prefetched: Boolean = false) {
+        if (selectedId != id || api !== connection) return
+        contextInfo = result.optJSONObject("context") ?: result
+        if (contextInfo?.optBoolean("available") == true) contextCache[id] = contextInfo!!
+        if (agent == "codex") asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
+        sessionControl = result.optJSONObject("control")
+        sessionControlVerifiedAt = activityClock()
+        result.optString("title").takeIf { it.isNotBlank() && it != "null" }?.let { title = it }
+        if (prefetched) { contextPrefetchedSession = id; contextPrefetchedAt = activityClock() }
     }
     private fun visibleQuestion(question: JSONObject?, session: String): JSONObject? = question?.takeUnless {
         val id = it.optString("request_id")
@@ -841,6 +881,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         loginJob?.cancel(); loginJob = null; loginInfo = null; loginVisible = false; loginStarting = false; loginError = null
         workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
         workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetUsing = emptySet(); workspaceResetErrors = emptyMap()
+        openingGeneration++; openingSession = null; contextPrefetchedSession = null; activeRunCheckSession = null
         api = value.withReadPolicy(noRetry = true, onReadSuccess = {
             if (api.base == value.base) {
                 if (error == readConnectionError) error = null
@@ -867,9 +908,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             }
             // Restore the offline view first; optional catalogs must not gate the online read.
             selectedId?.let { id ->
-                historyJob?.cancel(); historyJob = this@HermesModel.launch { loadHistory(id) }
-                this@HermesModel.launch { loadSelection(id) }
-                pollContext()
+                val session = sessions.firstOrNull { it.optString("id") == id }
+                    ?: JSONObject().put("id", id).put("title", title)
+                select(session)
             }
             capabilities = api.json("$root/capabilities")
             if (agent == "hermes" && capabilities.optJSONObject("features")?.optBoolean("run_submission") != true)
@@ -878,7 +919,6 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             reconcilePendingNow()
             fetchModels()
             if (agent == "codex") fetchAccountsNow()
-            selectedId?.let { loadHistory(it); loadSelection(it) }
             if (runId != null) watch()
             else if (hasPendingSubmission && agent == "hermes") error = "上次任务提交结果尚未确认，请使用原标识核对并重试"
             syncWatchService()
@@ -910,6 +950,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     fun refresh() = launch {
         ensureCapabilities(force = true)
+        if (agent == "codex") fetchAccountsNow()
         refreshSessions()
         selectedId?.let { loadHistory(it) }
     }
@@ -1187,7 +1228,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
-    private suspend fun resetAccountView() {
+    private fun currentCodexAccountId(): String? = if (agent == "codex") currentCodexIdentity(accounts, workspaces) else null
+
+    private suspend fun resetAccountView(expectedAccount: String? = null) {
         historyJob?.cancel()
         selectedId = null
         contextInfo = null; asyncQuestion = null
@@ -1198,7 +1241,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         draft = ""
         title = agentName
         prefs.edit().remove("session").apply()
-        fetchAccountsNow()
+        val attempts = if (expectedAccount == null) 1 else 4
+        var identitySynced = false
+        for (attempt in 0 until attempts) {
+            fetchAccountsNow()
+            if (expectedAccount == null || currentCodexAccountId() == expectedAccount) { identitySynced = true; break }
+            if (attempt < 3) delay(250L * (attempt + 1))
+        }
+        if (!identitySynced)
+            throw java.io.IOException("工作空间已切换，但手机尚未同步电脑身份，请刷新后重试")
         refreshSessions()
         fetchModels()
     }
@@ -1207,7 +1258,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         switchingAccount = true
         error = null
         try {
-            api.json("$root/${if (workspace) "workspaces" else "accounts"}/$id/use", obj())
+            val switched = api.json("$root/${if (workspace) "workspaces" else "accounts"}/$id/use", obj())
+            if (switched.optString("current") != id) throw java.io.IOException("服务端未确认工作空间切换")
+            // Bind subsequent queue/send requests to the acknowledged identity immediately;
+            // fetchAccountsNow below then verifies the authoritative server view.
+            accounts = JSONObject(accounts.toString()).put("current", id)
+            workspaces = JSONObject(workspaces.toString()).put("current", id)
             messageQueue.pause(true)
             watching?.cancel(); streamJob?.cancel()
             runId = null; runSession = null; approval = null; usage = null
@@ -1217,7 +1273,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
             workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetUsing = emptySet(); workspaceResetErrors = emptyMap()
             prefs.edit().remove("run").remove("runSession").remove("pendingKey").remove("pendingInput").remove("pendingSession").apply()
-            resetAccountView()
+            resetAccountView(id)
             fetchUsage()
             onDone()
         } finally { switchingAccount = false }
@@ -1273,6 +1329,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     fun select(session: JSONObject) {
         val id = session.getString("id")
+        val opening = ++openingGeneration
+        openingSession = id
+        contextPrefetchedSession = null
+        activeRunCheckSession = null
+        contextReadJob?.cancel(); contextReadJob = null; contextReadSession = null
         // 切换会话时把当前 run 挂到后台（服务端继续跑），切回时恢复跟踪。
         // runId/runSession 语义 = 「当前选中会话的 run」，不再是全局单值锁。
         if (runId != null && runSession != null && runSession != id) {
@@ -1315,30 +1376,59 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             watch()
         }
         saveRuns()
-        pollContext()
         historyJob = launch {
-            if (id !in cachedHistory) {
-                val offline = withContext(Dispatchers.IO) { historyCache.read(id) }?.let { withConfirmedKeys(id, it) }
-                if (selectedId != id) return@launch
-                if (offline != null && messages.isEmpty()) {
-                    cachedHistory[id] = offline; messages = projectFinalSyncRows(offline, finalSyncStates, id)
-                    historyCacheStatus = null; historyLoading = false; scrollToLatestRequest++
-                }
+            val connection = api
+            // Start the network read before disk-cache replay; neither should block the other.
+            val overviewRequest = async {
+                try { withTimeout(25_000) { connection.json("$root/sessions/${q(id)}/overview?limit=100") } }
+                catch (_: TimeoutCancellationException) { null }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { null } // Older servers: retain the original per-endpoint path.
             }
-            loadHistory(id)
-            if (needsFinalSyncPolling(id)) ensureFinalSyncPolling(id, api)
-            this@HermesModel.launch { reconcilePendingNow(id) }
-            this@HermesModel.launch { loadSelection(id) }
+            try {
+                if (id !in cachedHistory) {
+                    val offline = withContext(Dispatchers.IO) { historyCache.read(id) }?.let { withConfirmedKeys(id, it) }
+                    if (selectedId != id || api !== connection) return@launch
+                    if (offline != null && messages.isEmpty()) {
+                        cachedHistory[id] = offline; messages = projectFinalSyncRows(offline, finalSyncStates, id)
+                        historyCacheStatus = null; historyLoading = false; scrollToLatestRequest++
+                    }
+                }
+                val overview = overviewRequest.await()?.let(SessionOverview::read)
+                if (selectedId != id || api !== connection) return@launch
+                if (openingGeneration == opening) openingSession = null
+                if (overview != null) {
+                    val context = overview.context
+                    if (context != null) applyContextResult(id, connection, context, prefetched = true) else pollContext()
+                    attachServerActiveRun(id, prefetched = overview.activeRun)
+                    if (runId == null) {
+                        val activity = overview.activity
+                        if (activity != null) applyExternalActivity(id, connection, activity, activityClock())
+                        else pollExternalActivity(force = true)
+                    }
+                    this@HermesModel.launch { loadSelection(id, overview.detail, loadRelated = false) }
+                    loadHistory(id, overview.history, overview.files)
+                } else {
+                    pollContext()
+                    this@HermesModel.launch { loadSelection(id) }
+                    loadHistory(id)
+                }
+                if (needsFinalSyncPolling(id)) ensureFinalSyncPolling(id, api)
+                this@HermesModel.launch { reconcilePendingNow(id) }
+            } finally {
+                if (openingGeneration == opening) openingSession = null
+            }
         }
     }
 
     /** 多端共享：本地没有跟踪时，向服务端查询该会话是否有其它设备发起的活跃 run，有则以观察者身份挂载。 */
-    private suspend fun attachServerActiveRun(id: String, allowSubmitting: Boolean = false, required: Boolean = false) {
+    private suspend fun attachServerActiveRun(id: String, allowSubmitting: Boolean = false, required: Boolean = false, prefetched: JSONObject? = null) {
         if (runId != null || submitting && !allowSubmitting) return
         val connection = api
         try {
-            val result = connection.json("$root/sessions/${q(id)}/active-run")
+            val result = prefetched?.takeIf { it.has("run_id") } ?: connection.json("$root/sessions/${q(id)}/active-run")
             if (selectedId != id || api !== connection || runId != null) return
+            activeRunCheckSession = id; activeRunCheckedAt = activityClock()
             val serverRun = result.optString("run_id").takeIf { it.isNotBlank() && it != "null" } ?: return
             if (result.optString("status") !in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval")) return
             startRunTiming(serverRun, result)
@@ -1352,9 +1442,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { if (required) throw e }
     }
-    private suspend fun loadSelection(id: String) {
+    private suspend fun loadSelection(id: String, prefetched: JSONObject? = null, loadRelated: Boolean = true) {
         val connection = api
-        val result = connection.json("$root/sessions/$id").optJSONObject("session") ?: return
+        val response = prefetched?.takeIf { it.optJSONObject("session") != null || it.has("id") }
+            ?: connection.json("$root/sessions/$id")
+        val result = response.optJSONObject("session") ?: response.takeIf { it.has("id") } ?: return
         if (selectedId != id || api !== connection) return
         result.optString("title").takeIf { it.isNotBlank() }?.let { title = it }
         val selection = readAgentSelection(result)
@@ -1365,18 +1457,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
         sessionControl = result.optJSONObject("control")
         sessionControlVerifiedAt = activityClock()
-        pollContext()
-        attachServerActiveRun(id)
+        if (loadRelated) { pollContext(); attachServerActiveRun(id) }
     }
 
-    private suspend fun loadHistory(id: String) = historyReadMutex.withLock {
-        if (id == selectedId) loadHistoryNow(id)
+    private suspend fun loadHistory(id: String, prefetched: JSONObject? = null, prefetchedFiles: JSONObject? = null) = historyReadMutex.withLock {
+        if (id == selectedId) loadHistoryNow(id, prefetched = prefetched, prefetchedFiles = prefetchedFiles)
     }
-    private suspend fun loadHistoryNow(id: String, earlier: Boolean = false) {
+    private suspend fun loadHistoryNow(id: String, earlier: Boolean = false, prefetched: JSONObject? = null, prefetchedFiles: JSONObject? = null) {
         val connection = api
         val response = try {
-            connection.json("$root/sessions/$id/messages?limit=100" +
-                (historyOldestId?.let { "&${if (earlier) "older_before" else "from_id"}=" + android.net.Uri.encode(it) } ?: "")).also { it.getJSONArray("data") }
+            (prefetched?.takeIf { !earlier && it.optJSONArray("data") != null } ?: connection.json("$root/sessions/$id/messages?limit=100" +
+                (historyOldestId?.let { "&${if (earlier) "older_before" else "from_id"}=" + android.net.Uri.encode(it) } ?: ""))).also { it.getJSONArray("data") }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             if (selectedId == id && api === connection && id in cachedHistory) historyCacheStatus = "离线缓存"
@@ -1500,7 +1591,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         sessions
             .find { it.optString("id") == id }
             ?.let { title = it.optString("title").ifBlank { "未命名会话" } }
-        if (selectedId == id) refreshFiles()
+        if (selectedId == id) {
+            if (prefetchedFiles?.optJSONArray("data") != null) files = prefetchedFiles.array("data").objects()
+            else refreshFiles()
+        }
     }
 
     private suspend fun bindOutgoingIfReady(session: String, connection: NativeApi) {
@@ -1648,7 +1742,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             { session -> queueMayDispatch(
                 runId != null && runSession == session,
                 conversationUi.entry(session).submitting, hasPendingFor(session), false, false) },
-            { if (agent == "codex") accounts.optString("current").takeIf { it.isNotBlank() && it != "null" } else "hermes" },
+            { if (agent == "codex") currentCodexAccountId() else "hermes" },
             { row, result -> dispatchQueuedMessage(row, result) })
     }
     fun enqueueDraft(): Boolean {
@@ -1853,7 +1947,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             var accepted = false
             try {
                 val payload = obj("input" to input, "session_id" to session,
-                    "account_id" to if (agent == "codex") accounts.optString("current").takeIf { it.isNotBlank() && it != "null" } else null,
+                    "account_id" to currentCodexAccountId(),
                     "attachment_ids" to org.json.JSONArray(pending.attachmentIds))
                 if (agent == "codex" && pending.questionId != null) payload.put("question_reply_id", pending.questionId)
                 if (agent == "hermes") {
