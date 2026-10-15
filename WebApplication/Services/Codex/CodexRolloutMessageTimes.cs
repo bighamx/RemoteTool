@@ -54,7 +54,7 @@ internal static class CodexRolloutMessageTimes
     private static readonly object gate = new();
     private static readonly Dictionary<string,State> cache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string,(DateTime Checked,string[] Paths)> histories = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly Dictionary<string,(long Length,long Modified,long Timestamp)> activityCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string,(long Length,long Modified,long Timestamp,long Used,long Window)> activityCache = new(StringComparer.OrdinalIgnoreCase);
     public static Snapshot ReadSession(string home,string session,string original) {
         return Snapshot.Merge(SessionPaths(home,session,original).Select(path=>Read(home,path)));
     }
@@ -82,13 +82,26 @@ internal static class CodexRolloutMessageTimes
     }
     public static long LatestSessionMessageTime(string home,string session,string original) =>
         SessionPaths(home,session,original).Select(path=>LatestMessageTime(home,path)).DefaultIfEmpty(0).Max();
-    private static long LatestMessageTime(string home,string path) {
+    /** 上下文占用取最后一个 token_count（last_token_usage=当前上下文规模，与桌面端"剩余上下文"口径一致）；
+        续写 rollout 多文件时取修改时间最新且有数据的那个文件。 */
+    public static (long Used,long Window) LatestSessionContext(string home,string session,string original) {
+        var best=(Used:0L,Window:0L,Mtime:0L);
+        foreach(var path in SessionPaths(home,session,original)) {
+            var (_,used,window)=LatestActivity(home,path);
+            if(used<=0)continue;
+            var mtime=new FileInfo(path).LastWriteTimeUtc.Ticks;
+            if(mtime>=best.Mtime)best=(used,window,mtime);
+        }
+        return (best.Used,best.Window);
+    }
+    private static long LatestMessageTime(string home,string path) => LatestActivity(home,path).Time;
+    private static (long Time,long Used,long Window) LatestActivity(string home,string path) {
         try {
-            if(!RemoteControl.FilePathPolicy.IsWithin(home,path,false))return 0;
-            var file=new FileInfo(path);if(!file.Exists)return 0;
-            lock(gate) if(activityCache.TryGetValue(file.FullName,out var known) && known.Length==file.Length && known.Modified==file.LastWriteTimeUtc.Ticks)return known.Timestamp;
+            if(!RemoteControl.FilePathPolicy.IsWithin(home,path,false))return (0,0,0);
+            var file=new FileInfo(path);if(!file.Exists)return (0,0,0);
+            lock(gate) if(activityCache.TryGetValue(file.FullName,out var known) && known.Length==file.Length && known.Modified==file.LastWriteTimeUtc.Ticks)return (known.Timestamp,known.Used,known.Window);
             using var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete);
-            long latest=0;
+            long latest=0,used=0,window=0;
             // Usually one small tail contains the last message; settings-only appends
             // cannot change its timestamp. Expand only when the tail contains no messages.
             for(long amount=65536;;amount=Math.Min(stream.Length,amount*4)) {
@@ -96,9 +109,16 @@ internal static class CodexRolloutMessageTimes
                 using var reader=new StreamReader(stream,leaveOpen:true);
                 if(start>0)reader.ReadLine();
                 while(reader.ReadLine() is {} line) {
-                    if(!line.Contains("response_item"))continue;
+                    if(!line.Contains("response_item") && !line.Contains("\"token_count\""))continue;
                     try {
                         using var json=JsonDocument.Parse(line);var record=json.RootElement;
+                        if(record.TryGetProperty("payload",out var tok) && tok.TryGetProperty("type",out var tokKind) && tokKind.GetString()=="token_count") {
+                            if(tok.TryGetProperty("info",out var info) && info.ValueKind==JsonValueKind.Object) {
+                                if(info.TryGetProperty("last_token_usage",out var last) && last.TryGetProperty("total_tokens",out var usedNode) && usedNode.ValueKind==JsonValueKind.Number)used=usedNode.GetInt64();
+                                if(info.TryGetProperty("model_context_window",out var win) && win.ValueKind==JsonValueKind.Number)window=win.GetInt64();
+                            }
+                            continue;
+                        }
                         if(!record.TryGetProperty("type",out var type)||type.GetString()!="response_item"||!record.TryGetProperty("payload",out var payload)||
                             !payload.TryGetProperty("type",out var kind)||kind.GetString()!="message"||!payload.TryGetProperty("role",out var role)||role.GetString() is not ("user" or "assistant"))continue;
                         if(role.GetString()=="user" && payload.TryGetProperty("content",out var parts) && parts.ValueKind==JsonValueKind.Array) {
@@ -109,11 +129,11 @@ internal static class CodexRolloutMessageTimes
                         if(record.TryGetProperty("timestamp",out var time)&&DateTimeOffset.TryParse(time.GetString(),out var at))latest=Math.Max(latest,at.ToUnixTimeMilliseconds());
                     }catch(JsonException) { }
                 }
-                if(latest>0||start==0)break;
+                if((latest>0&&used>0)||start==0)break;
             }
-            lock(gate) {if(activityCache.Count>=512)activityCache.Clear();activityCache[file.FullName]=(file.Length,file.LastWriteTimeUtc.Ticks,latest);}
-            return latest;
-        }catch(Exception error)when(error is IOException or UnauthorizedAccessException or ArgumentException){return 0;}
+            lock(gate) {if(activityCache.Count>=512)activityCache.Clear();activityCache[file.FullName]=(file.Length,file.LastWriteTimeUtc.Ticks,latest,used,window);}
+            return (latest,used,window);
+        }catch(Exception error)when(error is IOException or UnauthorizedAccessException or ArgumentException){return (0,0,0);}
     }
     public static Snapshot Read(string home,string path) {
         try {

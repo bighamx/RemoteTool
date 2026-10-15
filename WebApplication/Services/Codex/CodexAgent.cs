@@ -575,6 +575,12 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var messageTime = CodexRolloutMessageTimes.LatestSessionMessageTime(home, thread.S("id"), thread.S("path"));
         result["last_active"] = messageTime > 0 ? JsonValue.Create(messageTime)
             : (thread?["createdAt"] ?? thread?["created_at"])?.DeepClone();
+        var (contextUsed, contextWindow) = CodexRolloutMessageTimes.LatestSessionContext(home, thread.S("id"), thread.S("path"));
+        if (contextUsed > 0) {
+            result["context_used"] = contextUsed;
+            // rollout 没有 model_context_window 时按 1M 兜底。
+            result["context_window"] = contextWindow > 0 ? contextWindow : 1_000_000;
+        }
         result["pinned"] = sessionPins.Contains(thread.S("id"));
         if (thread["status"].S("type") != "active" && CodexRollout.IsRunning(home, RolloutPath(thread))) result["status"] = Obj(("type", "active"), ("activeFlags", new JsonArray()));
         return result;

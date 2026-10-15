@@ -1097,12 +1097,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val connection = api
         val requestedAt = activityClock()
         loading = true
+        var pageRows: List<JSONObject> = emptyList()
         try {
             val result = connection.json(if (agent == "codex") "$root/sessions" +
                 (if (offset > 0 && nextCursor != null) "?cursor=${q(nextCursor!!)}" else "")
                 else "$root/sessions?offset=$offset")
             if (api !== connection) return@withLock
             val rows = result.array("data").objects()
+            pageRows = rows
             noteSessionActivities(rows, requestedAt)
             sessions = mergeSessionPage(
                 if (offset == 0) emptyList() else sessions,
@@ -1115,6 +1117,44 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             nextCursor = result.optString("next_cursor").takeIf { it.isNotBlank() && it != "null" }
         } finally {
             loading = false
+        }
+        // 上下文占用懒加载：列表先渲染，缺数据的行再分块异步补（服务端按缓存/预算返回），
+        // 不阻塞列表本身；codex 的列表响应已内联该字段，无需请求。
+        if (agent != "codex") launch { loadSessionContext(pageRows) }
+    }
+
+    private suspend fun loadSessionContext(rows: List<JSONObject>) {
+        val connection = api
+        val missing = rows.filter { it.optLong("context_used", 0) <= 0 && !it.optBoolean("context_unavailable") }
+            .map { it.optString("id") }.filter { it.isNotBlank() }
+        for (chunk in missing.chunked(20)) {
+            try {
+                val result = connection.json("$root/sessions/context-bulk?ids=" + chunk.joinToString(",") { q(it) })
+                val updates = mutableListOf<Pair<String, Pair<Long, Long>>>()
+                val empty = mutableListOf<String>()
+                for (id in chunk) {
+                    val entry = result.optJSONObject(id) ?: continue
+                    val used = entry.optLong("context_used", 0)
+                    val window = entry.optLong("context_window", 0)
+                    if (used > 0 && window > 0) updates += id to (used to window) else empty += id
+                }
+                if (updates.isEmpty() && empty.isEmpty()) continue
+                sessions = sessions.map { session ->
+                    val id = session.optString("id")
+                    when {
+                        updates.any { it.first == id } -> JSONObject(session.toString()).apply {
+                            val (used, window) = updates.first { it.first == id }.second
+                            put("context_used", used); put("context_window", window)
+                        }
+                        id in empty -> JSONObject(session.toString()).put("context_unavailable", true)
+                        else -> session
+                    }
+                }
+            } catch (error: Exception) {
+                if (api !== connection) return
+                break
+            }
+            if (api !== connection) return
         }
     }
 

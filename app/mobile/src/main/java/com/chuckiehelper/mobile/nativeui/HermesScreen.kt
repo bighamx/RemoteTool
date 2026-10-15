@@ -501,6 +501,29 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                 }
                             }
                         }
+                        // 卡片最底部的上下文占用进度条：context_used/context_window 由服务端提供
+                        // （codex 取自 rollout token_count；hermes 走懒加载批量接口，无数据默认 1M 窗口）。
+                        val contextUsed = session.optLong("context_used", 0)
+                        val contextWindow = session.optLong("context_window", 0)
+                        if (contextUsed > 0 && contextWindow > 0) {
+                            val fraction = (contextUsed.toDouble() / contextWindow).coerceIn(0.02, 1.0).toFloat()
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(3.dp)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth(fraction)
+                                        .fillMaxHeight()
+                                        .background(
+                                            if (fraction > 0.85f) MaterialTheme.colorScheme.error
+                                            else MaterialTheme.colorScheme.primary
+                                        )
+                                )
+                            }
+                        }
                     }
                 }
                 if (searchingSessions && model.sessionSearchHasMore)

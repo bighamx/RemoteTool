@@ -54,6 +54,43 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             return StatusCode(503, new { message = error.Message });
         }
     }
+    [HttpGet("sessions/context-bulk")] public async Task<IActionResult> SessionsContextBulk([FromQuery] string ids, CancellationToken ct) {
+        Response.Headers.CacheControl = "no-store";
+        var wanted = (ids ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(id => Regex.IsMatch(id, "^[a-zA-Z0-9_-]{1,80}$")).Distinct(StringComparer.OrdinalIgnoreCase).Take(40).ToArray();
+        var result = new System.Text.Json.Nodes.JsonObject();
+        if (wanted.Length == 0) return Ok(result);
+        var providers = activity.SessionModelInfo(wanted).ToDictionary(pair => pair.Key, pair => pair.Value.Provider);
+        var models = new Dictionary<string,string>();
+        try {
+            using var upstream = await bridge.SendAsync(HttpMethod.Get, "api/sessions?limit=50", null, null, ct);
+            if (upstream.IsSuccessStatusCode && System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)) is { } list && list["data"] is System.Text.Json.Nodes.JsonArray rows)
+                foreach (var row in rows.OfType<System.Text.Json.Nodes.JsonObject>())
+                    if (row["id"]?.ToString() is { } rid && row["model"]?.ToString() is { } mdl) models[rid] = mdl;
+        } catch (Exception error) when (error is HttpRequestException or OperationCanceledException or JsonException or InvalidOperationException) { }
+        var budget = CancellationTokenSource.CreateLinkedTokenSource(ct); budget.CancelAfter(TimeSpan.FromSeconds(6));
+        try {
+            var gate = new SemaphoreSlim(4);
+            await Task.WhenAll(wanted.Select(async id => {
+                try {
+                    await gate.WaitAsync(budget.Token);
+                    try {
+                        if (ContextCache.TryGetValue(id, out var cached) && DateTime.UtcNow - cached.At < TimeSpan.FromMinutes(10)) {
+                            result[id] = cached.Tokens > 0 ? Obj2(cached.Tokens, cached.Limit) : new System.Text.Json.Nodes.JsonObject();
+                            return;
+                        }
+                        var (tokens, limit) = await ContextUsageAsync(id, providers.GetValueOrDefault(id, ""), models.GetValueOrDefault(id, ""), budget.Token);
+                        ContextCache[id] = (DateTime.UtcNow, tokens, limit);
+                        if (tokens > 0) result[id] = Obj2(tokens, limit);
+                        else result[id] = new System.Text.Json.Nodes.JsonObject();
+                    } finally { gate.Release(); }
+                } catch (Exception error) when (error is OperationCanceledException or InvalidOperationException or HttpRequestException or IOException) { }
+            }).ToArray());
+        } catch (OperationCanceledException) { } finally { budget.Dispose(); }
+        return Ok(result);
+    }
+    private static System.Text.Json.Nodes.JsonObject Obj2(long tokens, long limit) =>
+        new() { ["context_used"] = tokens, ["context_window"] = limit };
     [HttpGet("sessions/{id}/context")] public async Task<IActionResult> SessionContext(string id, CancellationToken ct) {
         try { return Ok(await ContextAsync(Id(id), ct)); }
         catch (InvalidOperationException error) { return Ok(new { available = false, message = error.Message }); }
@@ -108,6 +145,27 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         try { return Ok(await management.Invoke(action, body, ct)); }
         catch (InvalidOperationException error) { return StatusCode(503, new { message = error.Message }); }
     }
+    /** 会话上下文占用缓存：网关 session_context 单次约 0.5-0.8s，列表不能逐个实时拉。
+        运行中的会话 30s 过期，空闲 10min；每次列表请求用 1.2s 总预算补齐最旧的一批。 */
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,(DateTime At,long Tokens,long Limit)> ContextCache = new(StringComparer.OrdinalIgnoreCase);
+    /** 窗口上限是模型属性而非会话属性：按 provider/model 学习一次，之后所有会话复用，不再重复解析。 */
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,long> ModelWindows = new(StringComparer.OrdinalIgnoreCase);
+    private (long Tokens,long Limit) WindowFrom(JsonNode result, string provider, string model) {
+        var tokens = result["tokens"]?.GetValue<long>() ?? 0;
+        var limit = result["limit"]?.GetValue<long>() ?? 0;
+        var name = result["model"]?.ToString();
+        if (!string.IsNullOrEmpty(name)) model = name;
+        var key = (provider ?? "") + "/" + (model ?? "");
+        if (limit > 0) ModelWindows[key] = limit;
+        else if (ModelWindows.TryGetValue(key, out var known)) limit = known;
+        // 网关没给出窗口上限时按 1M 兜底（主流长上下文模型的实际量级）。
+        if (limit <= 0) limit = 1_000_000;
+        return (tokens, limit);
+    }
+    private async Task<(long Tokens,long Limit)> ContextUsageAsync(string id, string provider, string model, CancellationToken ct) {
+        var raw = await management.Invoke("session_context", JsonSerializer.SerializeToElement(new { session_id = id }), ct);
+        return WindowFrom(JsonNode.Parse(raw.GetRawText())!, provider, model);
+    }
     [HttpGet("sessions")] public async Task<IActionResult> Sessions([FromQuery] int offset = 0, CancellationToken ct = default) {
         Response.Headers.CacheControl = "no-store";
         try {
@@ -118,11 +176,16 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 var ids = rows.Select(row => row?["id"]?.ToString()).ToArray();
                 var activities = activity.ReadMany(ids);
                 var previews = LatestSessionPreview.Read(activity.DatabasePath, ids, false);
+                var runningIds = new HashSet<string>();
                 foreach (var row in rows.OfType<System.Text.Json.Nodes.JsonObject>()) {
                     if (row["id"]?.ToString() is not string id) continue;
+                    var running = activities.TryGetValue(id, out var state) && state["available"]?.GetValue<bool>() == true && state["running"]?.GetValue<bool>() == true;
                     if (previews.TryGetValue(id, out var text)) { row["latest_user_message"] = text; row["preview"] = text; }
-                    if (activities.TryGetValue(id, out var state) && state["available"]?.GetValue<bool>() == true)
-                        row["status"] = state["running"]?.GetValue<bool>() == true ? "running" : "idle";
+                    if (activities.TryGetValue(id, out state) && state["available"]?.GetValue<bool>() == true)
+                        row["status"] = running ? "running" : "idle";
+                    if (ContextCache.TryGetValue(id, out var cached) && DateTime.UtcNow - cached.At < TimeSpan.FromMinutes(running ? 0.5 : 10)) {
+                        if (cached.Tokens > 0 && cached.Limit > 0) { row["context_used"] = cached.Tokens; row["context_window"] = cached.Limit; }
+                    }
                 }
             }
             return Ok(result);
