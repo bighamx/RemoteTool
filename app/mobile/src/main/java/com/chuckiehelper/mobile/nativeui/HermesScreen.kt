@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -285,11 +286,10 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             }
             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-            if (agent == "codex") IconButton(
+            if (list && agent == "codex") IconButton(
                 onClick = { model.toggleGroupByProject() }, modifier = Modifier.size(40.dp)
             ) {
-                Icon(Icons.Outlined.FolderOpen, "项目/最近切换",
-                    tint = if (model.groupByProject) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+                Icon(Icons.AutoMirrored.Outlined.List, "项目/最近切换")
             }
             IconButton(
                 onClick = {
@@ -299,8 +299,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             ) {
                 Icon(Icons.Outlined.ChatBubbleOutline, "会话列表")
             }
-            IconButton(onClick = { createChat() }, enabled = !model.submitting, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.Add, "新建会话") }
-            Box {
+            IconButton(onClick = { createChat() }, enabled = !model.submitting, modifier = Modifier.size(40.dp).offset(x = (-2).dp)) { Icon(Icons.Outlined.Add, "新建会话") }
+            Box(Modifier.offset(x = (-6).dp)) {
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.MoreVert, "$agentName 菜单") }
                 DropdownMenu(menu, { menu = false }) {
                     if (!list && model.canHandoverSession) DropdownMenuItem(
