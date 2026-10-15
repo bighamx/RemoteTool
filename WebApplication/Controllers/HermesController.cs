@@ -68,9 +68,9 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 foreach (var row in rows.OfType<System.Text.Json.Nodes.JsonObject>())
                     if (row["id"]?.ToString() is { } rid && row["model"]?.ToString() is { } mdl) models[rid] = mdl;
         } catch (Exception error) when (error is HttpRequestException or OperationCanceledException or JsonException or InvalidOperationException) { }
-        var budget = CancellationTokenSource.CreateLinkedTokenSource(ct); budget.CancelAfter(TimeSpan.FromSeconds(6));
+        var budget = CancellationTokenSource.CreateLinkedTokenSource(ct); budget.CancelAfter(TimeSpan.FromSeconds(15));
         try {
-            var gate = new SemaphoreSlim(4);
+            var gate = new SemaphoreSlim(5);
             await Task.WhenAll(wanted.Select(async id => {
                 try {
                     await gate.WaitAsync(budget.Token);

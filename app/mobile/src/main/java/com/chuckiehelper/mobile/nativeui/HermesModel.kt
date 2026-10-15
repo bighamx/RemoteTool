@@ -1125,36 +1125,48 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     private suspend fun loadSessionContext(rows: List<JSONObject>) {
         val connection = api
-        val missing = rows.filter { it.optLong("context_used", 0) <= 0 && !it.optBoolean("context_unavailable") }
-            .map { it.optString("id") }.filter { it.isNotBlank() }
-        for (chunk in missing.chunked(20)) {
-            try {
-                val result = connection.json("$root/sessions/context-bulk?ids=" + chunk.joinToString(",") { q(it) })
-                val updates = mutableListOf<Pair<String, Pair<Long, Long>>>()
+        // 快速滑动时多页并发拉取会拖慢网关，服务端预算内超时的 id 不在响应里——
+        // 对缺失的 id 逐轮重试（最多 3 轮），单块失败不中断后续块。
+        var missing = rows.filter { it.optLong("context_used", 0) <= 0 && !it.optBoolean("context_unavailable") }
+            .map { it.optString("id") }.filter { it.isNotBlank() }.distinct()
+        var attempt = 0
+        while (missing.isNotEmpty() && attempt < 3 && api === connection) {
+            val retry = mutableListOf<String>()
+            for (chunk in missing.chunked(20)) {
+                val answered = try {
+                    connection.json("$root/sessions/context-bulk?ids=" + chunk.joinToString(",") { q(it) })
+                } catch (error: Exception) {
+                    if (api !== connection) return
+                    null
+                }
+                if (api !== connection) return
+                if (answered == null) { retry += chunk; continue }
+                val updates = mutableMapOf<String, Pair<Long, Long>>()
                 val empty = mutableListOf<String>()
                 for (id in chunk) {
-                    val entry = result.optJSONObject(id) ?: continue
-                    val used = entry.optLong("context_used", 0)
-                    val window = entry.optLong("context_window", 0)
-                    if (used > 0 && window > 0) updates += id to (used to window) else empty += id
+                    val entry = answered.optJSONObject(id)
+                    val used = entry?.optLong("context_used", 0) ?: 0
+                    val window = entry?.optLong("context_window", 0) ?: 0
+                    if (used > 0 && window > 0) updates[id] = used to window
+                    else if (entry != null) empty += id
+                    else retry += id
                 }
                 if (updates.isEmpty() && empty.isEmpty()) continue
                 sessions = sessions.map { session ->
                     val id = session.optString("id")
                     when {
-                        updates.any { it.first == id } -> JSONObject(session.toString()).apply {
-                            val (used, window) = updates.first { it.first == id }.second
+                        updates.containsKey(id) -> JSONObject(session.toString()).apply {
+                            val (used, window) = updates.getValue(id)
                             put("context_used", used); put("context_window", window)
                         }
                         id in empty -> JSONObject(session.toString()).put("context_unavailable", true)
                         else -> session
                     }
                 }
-            } catch (error: Exception) {
-                if (api !== connection) return
-                break
             }
-            if (api !== connection) return
+            missing = retry.distinct()
+            attempt++
+            if (missing.isNotEmpty() && attempt < 3 && api === connection) delay(1500)
         }
     }
 
