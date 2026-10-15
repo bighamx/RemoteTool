@@ -289,7 +289,10 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             if (list && agent == "codex") IconButton(
                 onClick = { model.toggleGroupByProject() }, modifier = Modifier.size(40.dp)
             ) {
-                Icon(Icons.AutoMirrored.Outlined.List, "项目/最近切换")
+                Icon(
+                    if (model.groupByProject) Icons.Outlined.Subject else Icons.Outlined.FormatListBulleted,
+                    "项目/最近切换"
+                )
             }
             IconButton(
                 onClick = {
