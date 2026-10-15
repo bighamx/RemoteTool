@@ -1125,7 +1125,16 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     if (continuation.Length > 0) { row["latest_user_message"] = continuation; row["preview"] = continuation; }
                     return (JsonNode)row;
                 });
-                return Obj(("data", new JsonArray(unique.ToArray())), ("next_cursor", result["nextCursor"]), ("has_more", result.S("nextCursor").Length > 0));
+                // 排序只认真实消息活动（最后一条用户/助手消息），不能按 app-server 的 updated_at：
+                // Codex 桌面端仅打开查看会话也会刷新它，旧会话会被顶到新会话前面。
+                static long ActiveKey(JsonNode row) {
+                    if (row["last_active"] is JsonValue value) {
+                        if (value.TryGetValue<long>(out var ms)) return ms;
+                        if (value.TryGetValue<string>(out var text) && DateTimeOffset.TryParse(text, out var at)) return at.ToUnixTimeMilliseconds();
+                    }
+                    return 0;
+                }
+                return Obj(("data", new JsonArray(unique.OrderByDescending(ActiveKey).ToArray())), ("next_cursor", result["nextCursor"]), ("has_more", result.S("nextCursor").Length > 0));
             }
             if (p.Length == 1) {
                 return await CreateSession(body);
