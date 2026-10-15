@@ -299,8 +299,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             ) {
                 Icon(Icons.Outlined.ChatBubbleOutline, "会话列表")
             }
-            IconButton(onClick = { createChat() }, enabled = !model.submitting, modifier = Modifier.size(40.dp).offset(x = (-2).dp)) { Icon(Icons.Outlined.Add, "新建会话") }
-            Box(Modifier.offset(x = (-6).dp)) {
+            IconButton(onClick = { createChat() }, enabled = !model.submitting, modifier = Modifier.size(40.dp).offset(x = 2.dp)) { Icon(Icons.Outlined.Add, "新建会话") }
+            Box {
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.MoreVert, "$agentName 菜单") }
                 DropdownMenu(menu, { menu = false }) {
                     if (!list && model.canHandoverSession) DropdownMenuItem(
