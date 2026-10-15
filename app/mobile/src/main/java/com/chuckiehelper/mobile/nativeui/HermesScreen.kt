@@ -285,6 +285,12 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             }
             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+            if (agent == "codex") IconButton(
+                onClick = { model.toggleGroupByProject() }, modifier = Modifier.size(40.dp)
+            ) {
+                Icon(Icons.Outlined.FolderOpen, "项目/最近切换",
+                    tint = if (model.groupByProject) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+            }
             IconButton(
                 onClick = {
                     list = !list
@@ -523,7 +529,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         }
                     }
                 }
-                val sessionSections = if (agent == "codex" && !searchingSessions) groupCodexSessions(filteredSessions, model::isSessionPinned) else null
+                val sessionSections = if (agent == "codex" && !searchingSessions && model.groupByProject) groupCodexSessions(filteredSessions, model::isSessionPinned) else null
                 if (sessionSections == null) {
                     items(
                         filteredSessions,
@@ -1383,7 +1389,7 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
     // 这里只做 slug → 显示名的解析，供头部文案使用。高亮按 slug 精确匹配。
     val providerCatalog = model.modelOptions.array("providers").objects()
     val resolvedProvider = currentProvider
-    val resolvedProviderName = providerCatalog.firstOrNull { it.optString("slug") == resolvedProvider }?.optString("name", resolvedProvider) ?: resolvedProvider
+    val resolvedProviderName = providerCatalog.firstOrNull { it.optString("slug") == resolvedProvider }?.optString("name", displayProvider(resolvedProvider)) ?: displayProvider(resolvedProvider)
     LaunchedEffect(provider?.optString("slug"), global, resolvedProvider, currentModel) {
         selected = if (provider?.optString("slug") == resolvedProvider) currentModel.takeIf { it.isNotBlank() } else null
     }

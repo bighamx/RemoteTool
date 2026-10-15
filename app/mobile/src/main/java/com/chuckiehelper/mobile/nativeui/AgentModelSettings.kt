@@ -37,6 +37,13 @@ internal fun effortLabel(effort: String): String = when (effort) {
 }
 
 internal data class AgentSelection(val provider: String, val model: String, val effort: String, val tier: String)
+
+/** Provider 的展示名：hermes 自定义提供方去掉 "custom:" 前缀（匹配仍用原 slug）；
+    codex 的 modelProvider 恒为无区分度的 "custom"（官方/三方一致），直接不显示。 */
+internal fun displayProvider(raw: String): String {
+    val stripped = raw.removePrefix("custom:")
+    return if (stripped == "custom" || stripped.isBlank()) "" else stripped
+}
 internal fun readAgentSelection(session: JSONObject): AgentSelection {
     val raw = session.opt("model_config")
     val config = if (raw is JSONObject) raw else if (raw is String) runCatching { JSONObject(raw) }.getOrNull() else null

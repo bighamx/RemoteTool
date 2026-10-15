@@ -181,6 +181,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun isSessionPinned(session: JSONObject) = session.optBoolean("pinned")
     val orderedSessions get() = pinnedSessionsFirst(sessions, ::isSessionPinned)
 
+    /** codex 会话列表显示模式：项目分组 / 最近（平铺）。 */
+    var groupByProject by mutableStateOf(prefs.getBoolean("codex_group_by_project", true))
+        ; private set
+    fun toggleGroupByProject() {
+        groupByProject = !groupByProject
+        prefs.edit().putBoolean("codex_group_by_project", groupByProject).apply()
+    }
+
     /** codex 项目分组折叠状态（按组名持久化，跨页同名节共享状态）。 */
     private val groupCollapsed = mutableStateOf(prefs.getStringSet("codex_collapsed_groups", emptySet())?.toSet() ?: emptySet())
     fun isGroupCollapsed(group: String) = group in groupCollapsed.value
@@ -1662,7 +1670,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val selection = readAgentSelection(result)
         sessionProvider = selection.provider; sessionModel = selection.model
         sessionEffort = selection.effort; sessionTier = selection.tier
-        runtime = listOf(sessionProvider, sessionModel).filter { it.isNotBlank() }.joinToString(" · ")
+        runtime = listOf(displayProvider(sessionProvider), sessionModel).filter { it.isNotBlank() }.joinToString(" · ")
         if (loadRelated) {
             result.optJSONObject("context")?.let { contextInfo = it; if (it.optBoolean("available")) contextCache[id] = it }
             asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
@@ -2317,7 +2325,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         else if (result.optString("kind") == "compact" && result.optString("status") == "started") "正在压缩上下文" else statusLabel(result.optString("status"))
                     approval = result.optJSONObject("approval")
                     result.optJSONObject("runtime")?.let {
-                        runtime = it.optString("provider") + " · " + it.optString("model")
+                        runtime = listOf(displayProvider(it.optString("provider")), it.optString("model")).filter { piece -> piece.isNotBlank() }.joinToString(" · ")
                         if (selectedId == runSession) { sessionProvider = it.optString("provider"); sessionModel = it.optString("model") }
                     }
                     if (
