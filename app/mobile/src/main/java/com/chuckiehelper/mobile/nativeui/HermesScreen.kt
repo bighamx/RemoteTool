@@ -386,10 +386,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     item { Text("没有匹配的会话或历史消息") }
                 if (!searchingSessions && model.sessions.isEmpty() && !model.loading)
                     item { Text("暂无会话。点击 + 开始与 $agentName 对话。") }
-                items(
-                    filteredSessions,
-                    key = { it.getString("id") },
-                ) { session ->
+                val renderSession: @Composable (JSONObject) -> Unit = { session ->
                     val latestActivity = parseMessageTimestamp(session.opt("last_active"))
                         ?.let(::formatMessageTimestamp)
                     Card(
@@ -523,6 +520,46 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         )
                                 )
                             }
+                        }
+                    }
+                }
+                val sessionSections = if (agent == "codex" && !searchingSessions) groupCodexSessions(filteredSessions, model::isSessionPinned) else null
+                if (sessionSections == null) {
+                    items(
+                        filteredSessions,
+                        key = { it.getString("id") },
+                    ) { session -> renderSession(session) }
+                } else {
+                    sessionSections.forEach { group ->
+                        val collapsed = model.isGroupCollapsed(group.name)
+                        item(key = "group:" + group.name) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { model.toggleSessionGroup(group.name) }
+                                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    if (collapsed) Icons.Outlined.ChevronRight else Icons.Outlined.ExpandMore,
+                                    contentDescription = null,
+                                    Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    group.name,
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text("${group.sessions.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        if (!collapsed) {
+                            items(group.sessions, key = { it.getString("id") }) { session -> renderSession(session) }
                         }
                     }
                 }

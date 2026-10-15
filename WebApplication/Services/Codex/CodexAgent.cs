@@ -567,7 +567,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             _ = ReleaseAndNotify(p.S("threadId"));
         } else if (method == "serverRequest/resolved") { lock (gate) runs[run]!.AsObject().Remove("approval"); }
     }
-    private JsonObject Session(JsonNode thread) {
+    private JsonObject Session(JsonNode thread, JsonArray projects = null) {
         var result = Obj(("id", thread.S("id")), ("title", thread.S("name", thread.S("preview", "未命名会话"))),
         ("preview", thread.S("preview")), ("cwd", thread.S("cwd")), ("source", thread.S("source", "codex")),
         ("originator", thread.S("originator")),
@@ -575,6 +575,13 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var messageTime = CodexRolloutMessageTimes.LatestSessionMessageTime(home, thread.S("id"), thread.S("path"));
         result["last_active"] = messageTime > 0 ? JsonValue.Create(messageTime)
             : (thread?["createdAt"] ?? thread?["created_at"])?.DeepClone();
+        if (projects != null) {
+            var (groupName, fromProject) = CodexProjects.GroupName(thread.S("cwd"), projects);
+            if (groupName != null) {
+                result["group_name"] = groupName;
+                if (fromProject) result["project_name"] = groupName;
+            }
+        }
         var (contextUsed, contextWindow) = CodexRolloutMessageTimes.LatestSessionContext(home, thread.S("id"), thread.S("path"));
         if (contextUsed > 0) {
             result["context_used"] = contextUsed;
@@ -1122,10 +1129,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     }
                 }
                 _ = NotifyDesktop(result.A("data").Where(thread => thread.S("originator") is "chuckie_helper_mobile" or "remote_tool").Select(thread => thread.S("id")).ToArray());
+                var projects = await CodexProjects.CachedList(rpc);
                 var threads = result.A("data").Where(t => t.S("id").Length > 0).GroupBy(t => t.S("id")).Select(group => group.First()).ToArray();
                 var previews = LatestSessionPreview.Read(Path.Combine(home, "thread_history_1.sqlite"), threads.Select(thread => thread.S("id")), true);
                 var unique = threads.Select(thread => {
-                    var row = Session(thread);
+                    var row = Session(thread, projects);
                     if (previews.TryGetValue(thread.S("id"), out var text)) { row["latest_user_message"] = text; row["preview"] = text; }
                     var continuation = CodexPreviewRollout.Read(home, thread.S("id"), thread.S("path"));
                     if (continuation.Length > 0) { row["latest_user_message"] = continuation; row["preview"] = continuation; }

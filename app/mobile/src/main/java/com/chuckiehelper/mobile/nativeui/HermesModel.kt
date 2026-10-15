@@ -180,6 +180,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     fun isSessionPinned(session: JSONObject) = session.optBoolean("pinned")
     val orderedSessions get() = pinnedSessionsFirst(sessions, ::isSessionPinned)
+
+    /** codex 项目分组折叠状态（按组名持久化，跨页同名节共享状态）。 */
+    private val groupCollapsed = mutableStateOf(prefs.getStringSet("codex_collapsed_groups", emptySet())?.toSet() ?: emptySet())
+    fun isGroupCollapsed(group: String) = group in groupCollapsed.value
+    fun toggleSessionGroup(group: String) {
+        groupCollapsed.value = if (group in groupCollapsed.value) groupCollapsed.value - group else groupCollapsed.value + group
+        prefs.edit().putStringSet("codex_collapsed_groups", groupCollapsed.value).apply()
+    }
     fun toggleSessionPin(session: JSONObject) {
         val id = session.optString("id")
         if (id.isBlank() || id in pinningSessions) return
