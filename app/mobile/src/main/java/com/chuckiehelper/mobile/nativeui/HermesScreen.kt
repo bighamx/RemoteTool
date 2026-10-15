@@ -532,23 +532,14 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         val contextUsed = session.optLong("context_used", 0)
                         val contextWindow = session.optLong("context_window", 0)
                         if (contextUsed > 0 && contextWindow > 0) {
-                            val fraction = (contextUsed.toDouble() / contextWindow).coerceIn(0.02, 1.0).toFloat()
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(3.dp)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                            ) {
-                                Box(
-                                    Modifier
-                                        .fillMaxWidth(fraction)
-                                        .fillMaxHeight()
-                                        .background(
-                                            if (fraction > 0.85f) MaterialTheme.colorScheme.error
-                                            else MaterialTheme.colorScheme.primary
-                                        )
-                                )
-                            }
+                            // 与 AgentContextInfo 的会话上下文条同款（默认轨道色，≥90% 变红）
+                            LinearProgressIndicator(
+                                progress = { (contextUsed.toDouble() / contextWindow).coerceIn(0.02, 1.0).toFloat() },
+                                modifier = Modifier.fillMaxWidth().height(2.dp),
+                                drawStopIndicator = {},
+                                color = if (contextUsed.toDouble() / contextWindow >= .9) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.primary,
+                            )
                         }
                     }
                 }
