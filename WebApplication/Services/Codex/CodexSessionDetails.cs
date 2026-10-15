@@ -23,6 +23,6 @@ internal static class CodexSessionDetails
     }
     public static JsonObject Read(string home, string path) {
         var snapshot = CodexRolloutSnapshot.Read(home, path);
-        return Obj(("context", snapshot["context"]), ("question", snapshot["question"]));
+        return Obj(("context", snapshot["context"]), ("usage", snapshot["usage"]), ("question", snapshot["question"]));
     }
 }

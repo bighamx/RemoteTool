@@ -12,7 +12,7 @@ internal static class CodexRolloutSnapshot
         public long Offset, Modified;
         public MemoryStream Partial = new();
         public bool Oversized, Running;
-        public JsonObject Settings = new(), Context = Obj(("available", false)), Question;
+        public JsonObject Settings = new(), Context = Obj(("available", false)), Usage = new(), Question;
         public Dictionary<string, JsonObject> Pending = new();
         public long StartedAt, LastResponseAt, ActivityRevision, CompactedAt, PhaseStartedAt, LastEventAt;
         public string Kind = "task", CompactionId = "";
@@ -59,7 +59,8 @@ internal static class CodexRolloutSnapshot
                 state.Modified = file.LastWriteTimeUtc.Ticks;
                 var context = state.Context.DeepClone().AsObject();
                 if (context.L("tokens") > 0) context["available"] = true;
-                return Obj(("settings", state.Settings), ("context", context), ("question", state.Question), ("running", state.Running), ("last_event_at", state.LastEventAt > 0 ? (object)state.LastEventAt : null),
+                return Obj(("settings", state.Settings), ("context", context), ("usage", state.Usage.Count > 0 ? state.Usage : null),
+                    ("question", state.Question), ("running", state.Running), ("last_event_at", state.LastEventAt > 0 ? (object)state.LastEventAt : null),
                     ("activity", Obj(("started_at", state.StartedAt > 0 ? (object)state.StartedAt : null),
                         ("last_response_at", state.LastResponseAt > 0 ? (object)state.LastResponseAt : null), ("activity_id", state.TurnId),
                         ("kind", state.Kind), ("phase_started_at", state.PhaseStartedAt > 0 ? (object)state.PhaseStartedAt : null),
@@ -102,6 +103,9 @@ internal static class CodexRolloutSnapshot
                 if (type == "token_count" && payload["info"] is { } info) {
                     var last = info["last_token_usage"]; var limit = info.L("model_context_window");
                     state.Context = Obj(("available", last != null), ("tokens", last.L("total_tokens")), ("limit", limit > 0 ? (object)limit : null), ("estimated", false));
+                    if (info["total_token_usage"] is JsonObject total)
+                        state.Usage = Obj(("input_tokens", total["input_tokens"]), ("cached_input_tokens", total["cached_input_tokens"]),
+                            ("output_tokens", total["output_tokens"]));
                 }
             }
             if (kind != "response_item") return;

@@ -374,7 +374,12 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var snapshot = CodexRolloutSnapshot.Read(home, path);
         var locked = CodexRollout.WriterLocked(home, path);
         var running = CodexRollout.IsRunning(home, path);
-        bool mobile; lock (gate) mobile = active.ContainsKey(id) || sessionRpcs.ContainsKey(id) || handoff.OwnsSession(id);
+        bool mobile;
+        lock (gate) {
+            var run = active.GetValueOrDefault(id);
+            mobile = sessionRpcs.ContainsKey(id) || handoff.OwnsSession(id) ||
+                (run != null && runs[run]?.S("owner") != "desktop");
+        }
         return Obj(("state", mobile ? "mobile" : running ? "busy" : locked ? "writer_held" : "available"),
             ("activity_id", snapshot["activity"].S("activity_id")), ("can_takeover", !mobile),
             ("message", mobile ? "手机任务正在执行" : running ? "其他客户端正在执行此会话，可等待结束或中断并接管。" : locked ? "其他端持有写入权限，手机将尝试桌面协作；无法访问时会保留草稿并提示原因。" : "可继续发送消息"));
@@ -550,6 +555,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private JsonObject Session(JsonNode thread) {
         var result = Obj(("id", thread.S("id")), ("title", thread.S("name", thread.S("preview", "未命名会话"))),
         ("preview", thread.S("preview")), ("cwd", thread.S("cwd")), ("source", thread.S("source", "codex")),
+        ("originator", thread.S("originator")),
         ("model", thread.S("model")), ("project_id", thread?["projectId"]), ("message_count", thread.A("turns").Count), ("status", thread?["status"]));
         var messageTime = CodexRolloutMessageTimes.LatestSessionMessageTime(home, thread.S("id"), thread.S("path"));
         result["last_active"] = messageTime > 0 ? JsonValue.Create(messageTime)
@@ -974,8 +980,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private static long MessageId(string id) => Convert.ToInt64(Hash(id)[..14], 16) + 1;
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
-        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 20), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("native_session_search", true), ("state_version", 20));
+        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 24), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("native_session_search", true), ("state_version", 24));
         if (path == "sessions/search" && method == "GET") {
             var query = context.Request.Query["query"].ToString().Trim();
             if (query.Length is < 1 or > 500) throw new CodexError("搜索关键词应为 1 至 500 字", 400);
@@ -1094,7 +1100,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                         }
                     }
                 }
-                _ = NotifyDesktop(result.A("data").Where(thread => thread.S("originator") == "chuckie_helper_mobile").Select(thread => thread.S("id")).ToArray());
+                _ = NotifyDesktop(result.A("data").Where(thread => thread.S("originator") is "chuckie_helper_mobile" or "remote_tool").Select(thread => thread.S("id")).ToArray());
                 var threads = result.A("data").Where(t => t.S("id").Length > 0).GroupBy(t => t.S("id")).Select(group => group.First()).ToArray();
                 var previews = LatestSessionPreview.Read(Path.Combine(home, "thread_history_1.sqlite"), threads.Select(thread => thread.S("id")), true);
                 var unique = threads.Select(thread => {
@@ -1128,7 +1134,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 var tuning = CodexRollout.LastSettings(home, RolloutPath(thread));
                 lock (gate) if (sessionOverrides.TryGetValue(session, out var chosen)) tuning = chosen.DeepClone().AsObject();
                 info["reasoning_effort"] = tuning["reasoningEffort"]?.DeepClone(); info["service_tier"] = tuning["serviceTier"]?.DeepClone();
-                var detail = CodexSessionDetails.Read(home, RolloutPath(thread)); info["context"] = detail["context"]?.DeepClone(); info["question"] = detail["question"]?.DeepClone();
+                var detail = CodexSessionDetails.Read(home, RolloutPath(thread)); info["context"] = detail["context"]?.DeepClone();
+                info["usage"] = detail["usage"]?.DeepClone(); info["question"] = detail["question"]?.DeepClone();
                 info["control"] = SessionControl(thread);
                 info["title_generation"] = titles.State(session);
                 return Obj(("session", info));

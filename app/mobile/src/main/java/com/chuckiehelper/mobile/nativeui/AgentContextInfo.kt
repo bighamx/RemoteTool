@@ -10,10 +10,16 @@ import androidx.compose.ui.unit.dp
 import org.json.JSONObject
 import java.util.Locale
 
-private fun contextTokens(value: Long) = when {
-    value >= 1000000 -> String.format(Locale.ROOT, "%.2fM", value / 1000000.0)
-    value >= 1000 -> String.format(Locale.ROOT, "%.1fk", value / 1000.0)
-    else -> value.toString()
+internal fun compactTokenCount(value: Long): String {
+    if (value in -999L..999L) return value.toString()
+    val units = arrayOf("", "K", "M", "B", "T")
+    var size = kotlin.math.abs(value.toDouble())
+    var unit = 0
+    while (size >= 1000 && unit < units.lastIndex) { size /= 1000; unit++ }
+    var rounded = kotlin.math.round(size * 10) / 10
+    if (rounded >= 1000 && unit < units.lastIndex) { rounded /= 1000; unit++ }
+    val format = if (rounded % 1.0 == 0.0) "%.0f%s" else "%.1f%s"
+    return (if (value < 0) "-" else "") + String.format(Locale.ROOT, format, rounded, units[unit])
 }
 
 @Composable
@@ -24,7 +30,7 @@ fun AgentContextInfo(info: JSONObject?, runtime: String = "", onClick: (() -> Un
     val ratio = if (available && limit > 0) tokens.toDouble() / limit else null
     val estimate = if (info?.optBoolean("estimated") == true) "约 " else ""
     val context = if (!available) (info?.optString("message")?.takeIf { it.isNotBlank() } ?: "暂无数据") else
-        "$estimate${contextTokens(tokens)}" + if (ratio != null) " / ${contextTokens(limit)} · ${(ratio * 100).toInt()}%" else " · 未返回上限"
+        "$estimate${compactTokenCount(tokens)}" + if (ratio != null) " / ${compactTokenCount(limit)} · ${(ratio * 100).toInt()}%" else " · 未返回上限"
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp).let { modifier ->
         if (onClick != null) modifier.clickable(onClick = onClick) else modifier
     }) {

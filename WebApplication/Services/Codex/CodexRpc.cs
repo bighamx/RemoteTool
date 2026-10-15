@@ -101,7 +101,7 @@ internal sealed class CodexRpc : IAsyncDisposable
         _ = Task.Run(async () => { while (await process.StandardError.ReadLineAsync() != null) { } });
     }
     public async Task Initialize(CancellationToken ct = default) {
-        await Call("initialize", CodexJson.Obj(("clientInfo", CodexJson.Obj(("name", "chuckie_helper_mobile"), ("title", "RemoteTool Mobile"), ("version", "1.0"))),
+        await Call("initialize", CodexJson.Obj(("clientInfo", CodexJson.Obj(("name", "remote_tool"), ("title", "RemoteTool"), ("version", "1.0"))),
             ("capabilities", CodexJson.Obj(("experimentalApi", true)))), ct);
         await Write(CodexJson.Obj(("method", "initialized")), ct);
     }

@@ -84,6 +84,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         onDispose { lifecycle.removeObserver(observer); model.setObserving(false) }
     }
     var renameChat by remember { mutableStateOf<JSONObject?>(null) }
+    var detailsChat by remember { mutableStateOf<JSONObject?>(null) }
     var deleteChat by remember { mutableStateOf<JSONObject?>(null) }
     var handoverSession by remember { mutableStateOf<JSONObject?>(null) }
     var models by remember { mutableStateOf(false) }
@@ -296,6 +297,13 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             Box {
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.MoreVert, "$agentName 菜单") }
                 DropdownMenu(menu, { menu = false }) {
+                    if (!list && model.canHandoverSession) DropdownMenuItem(
+                        text = { Text("放弃写入权") },
+                        onClick = {
+                            menu = false
+                            handoverSession = obj("id" to model.selectedId, "title" to model.title)
+                        },
+                    )
                     if (agent == "codex") DropdownMenuItem(text = { Text("账户与工作空间") }, onClick = { menu = false; accountsPanel = true; model.fetchAccounts() })
                     DropdownMenuItem(text = { Text("标题生成模型") }, onClick = { menu = false; titleModelDialog = true; model.fetchTitleModel() })
                     listOf("模型选择" to "/model", "Provider 管理" to "/providers", "刷新与重连" to "/status")
@@ -431,6 +439,21 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                     IconButton(onClick = { actions = true }) { Icon(Icons.Outlined.MoreVert, "会话操作") }
                                     DropdownMenu(actions, { actions = false }) {
                                         DropdownMenuItem(
+                                            text = { Text("会话详情") },
+                                            leadingIcon = { Icon(Icons.Outlined.Info, null) },
+                                            onClick = { actions = false; detailsChat = session },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("复制会话 ID") },
+                                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
+                                            onClick = {
+                                                actions = false
+                                                (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                                                    .setPrimaryClip(android.content.ClipData.newPlainText("会话 ID", session.getString("id")))
+                                                android.widget.Toast.makeText(context, "已复制会话 ID", android.widget.Toast.LENGTH_SHORT).show()
+                                            },
+                                        )
+                                        DropdownMenuItem(
                                             text = { Text(if (model.isSessionPinned(session)) "取消置顶" else "置顶会话") },
                                             leadingIcon = { Icon(Icons.Outlined.PushPin, null) },
                                             enabled = session.getString("id") !in model.pinningSessions,
@@ -438,7 +461,6 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         )
                                         DropdownMenuItem(text = { Text("修改名称") }, onClick = { actions = false; renameChat = session })
                                         if (model.hasPendingFor(session.getString("id"))) DropdownMenuItem(text = { Text("核对上次提交") }, onClick = { actions = false; pendingInfo = true })
-                                        if (agent == "codex") DropdownMenuItem(text = { Text("转交桌面") }, onClick = { actions = false; handoverSession = session })
                                         DropdownMenuItem(text = { Text("删除会话", color = MaterialTheme.colorScheme.error) }, onClick = { actions = false; deleteChat = session })
                                     }
                                 }
@@ -870,6 +892,9 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         }
     }
     if (queueDialog) MessageQueueDialog(model.messageQueue) { queueDialog = false }
+    detailsChat?.let { chat ->
+        SessionDetailsDialog(api, agent, chat) { detailsChat = null }
+    }
     editTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { if (!model.messageActionBusy) editTarget = null },
@@ -912,7 +937,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         }
     }
     handoverSession?.let { chat ->
-        ConfirmDialog("转交到桌面 Codex", "把“${chat.optString("title")}”的写入权交给桌面 Codex App：正在执行的任务会被中断（已执行的操作不会撤销），会话历史保留，之后在桌面打开同一会话即可继续。", { handoverSession = null }) {
+        ConfirmDialog("放弃写入权", "释放手机端对“${chat.optString("title")}”的写入权。正在执行的任务会被中断；已执行的操作不会撤销，会话历史会保留。之后可在桌面端打开同一会话继续。", { handoverSession = null }) {
             model.handoverSession(chat.getString("id"))
             handoverSession = null
         }
