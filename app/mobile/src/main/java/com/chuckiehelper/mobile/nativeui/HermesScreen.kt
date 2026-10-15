@@ -6,6 +6,7 @@ import android.app.Application
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -13,6 +14,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.List
+import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -403,7 +405,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                             model.select(session)
                             list = false
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().alpha(if (session.optBoolean("archived")) 0.55f else 1f),
                     ) {
                         Column(
                             Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -446,12 +448,14 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                     DropdownMenu(actions, { actions = false }) {
                                         DropdownMenuItem(
                                             text = { Text("会话详情") },
-                                            leadingIcon = { Icon(Icons.Outlined.Info, null) },
+                                            leadingIcon = { Icon(Icons.Outlined.Info, null, Modifier.size(18.dp)) },
+                                            modifier = Modifier.heightIn(min = 40.dp),
                                             onClick = { actions = false; detailsChat = session },
                                         )
                                         DropdownMenuItem(
                                             text = { Text("复制会话 ID") },
-                                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
+                                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(18.dp)) },
+                                            modifier = Modifier.heightIn(min = 40.dp),
                                             onClick = {
                                                 actions = false
                                                 (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
@@ -461,13 +465,29 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                         )
                                         DropdownMenuItem(
                                             text = { Text(if (model.isSessionPinned(session)) "取消置顶" else "置顶会话") },
-                                            leadingIcon = { Icon(Icons.Outlined.PushPin, null) },
+                                            leadingIcon = { Icon(Icons.Outlined.PushPin, null, Modifier.size(18.dp)) },
+                                            modifier = Modifier.heightIn(min = 40.dp),
                                             enabled = session.getString("id") !in model.pinningSessions,
                                             onClick = { actions = false; model.toggleSessionPin(session) },
                                         )
-                                        DropdownMenuItem(text = { Text("修改名称") }, onClick = { actions = false; renameChat = session })
-                                        if (model.hasPendingFor(session.getString("id"))) DropdownMenuItem(text = { Text("核对上次提交") }, onClick = { actions = false; pendingInfo = true })
-                                        DropdownMenuItem(text = { Text("删除会话", color = MaterialTheme.colorScheme.error) }, onClick = { actions = false; deleteChat = session })
+                                        DropdownMenuItem(
+                                            text = { Text("修改名称") },
+                                            leadingIcon = { Icon(Icons.Outlined.Edit, null, Modifier.size(18.dp)) },
+                                            modifier = Modifier.heightIn(min = 40.dp),
+                                            onClick = { actions = false; renameChat = session },
+                                        )
+                                        if (model.hasPendingFor(session.getString("id"))) DropdownMenuItem(
+                                            text = { Text("核对上次提交") },
+                                            leadingIcon = { Icon(Icons.Outlined.CheckCircle, null, Modifier.size(18.dp)) },
+                                            modifier = Modifier.heightIn(min = 40.dp),
+                                            onClick = { actions = false; pendingInfo = true },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("删除会话", color = MaterialTheme.colorScheme.error) },
+                                            leadingIcon = { Icon(Icons.Outlined.Delete, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error) },
+                                            modifier = Modifier.heightIn(min = 40.dp),
+                                            onClick = { actions = false; deleteChat = session },
+                                        )
                                     }
                                 }
                             }

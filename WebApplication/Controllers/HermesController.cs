@@ -80,8 +80,8 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                             return;
                         }
                         var (tokens, limit) = await ContextUsageAsync(id, providers.GetValueOrDefault(id, ""), models.GetValueOrDefault(id, ""), budget.Token);
-                        ContextCache[id] = (DateTime.UtcNow, tokens, limit);
-                        if (tokens > 0) result[id] = Obj2(tokens, limit);
+                        // 0 值（网关对繁忙/刚创建会话的临时空结果）不写缓存，否则真数据要等 TTL 才能回来。
+                        if (tokens > 0) { ContextCache[id] = (DateTime.UtcNow, tokens, limit); result[id] = Obj2(tokens, limit); }
                         else result[id] = new System.Text.Json.Nodes.JsonObject();
                     } finally { gate.Release(); }
                 } catch (Exception error) when (error is OperationCanceledException or InvalidOperationException or HttpRequestException or IOException) { }

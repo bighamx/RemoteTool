@@ -190,7 +190,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     /** codex 项目分组折叠状态（按组名持久化，跨页同名节共享状态）。 */
-    private val groupCollapsed = mutableStateOf(prefs.getStringSet("codex_collapsed_groups", emptySet())?.toSet() ?: emptySet())
+    private val groupCollapsed = mutableStateOf(prefs.getStringSet("codex_collapsed_groups", setOf("已存档"))?.toSet() ?: setOf("已存档"))
     fun isGroupCollapsed(group: String) = group in groupCollapsed.value
     fun toggleSessionGroup(group: String) {
         groupCollapsed.value = if (group in groupCollapsed.value) groupCollapsed.value - group else groupCollapsed.value + group
@@ -1143,7 +1143,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val connection = api
         // 快速滑动时多页并发拉取会拖慢网关，服务端预算内超时的 id 不在响应里——
         // 对缺失的 id 逐轮重试（最多 3 轮），单块失败不中断后续块。
-        var missing = rows.filter { it.optLong("context_used", 0) <= 0 && !it.optBoolean("context_unavailable") }
+        // 不再永久标记 context_unavailable：繁忙会话偶发空结果后仍要在下次列表刷新时重试
+        var missing = rows.filter { it.optLong("context_used", 0) <= 0 }
             .map { it.optString("id") }.filter { it.isNotBlank() }.distinct()
         var attempt = 0
         while (missing.isNotEmpty() && attempt < 3 && api === connection) {
@@ -1175,7 +1176,6 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                             val (used, window) = updates.getValue(id)
                             put("context_used", used); put("context_window", window)
                         }
-                        id in empty -> JSONObject(session.toString()).put("context_unavailable", true)
                         else -> session
                     }
                 }
