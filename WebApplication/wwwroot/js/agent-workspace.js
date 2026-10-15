@@ -45,7 +45,7 @@
             messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [],
             activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0,
             showCreateDialog: false, createTitle: '', createProjectId: '', createMode: 'existing', createRoot: '', createRoots: [], createProjectName: '', createProjectSearch: '', createBrowser: false, createBrowserPath: '', createBrowserDirs: [], createBrowserLoading: false, createBrowserError: '', createBrowserNew: '', createBrowserMkdir: false, creating: false, createError: '', showEditDialog: false, editText: '', editTarget: null, editFiles: [], editing: false, editError: '', messageMenu: null, sessionMenu: null,
-            liveSegments: [], liveTools: [], streamRun: null, streamSeq: 0, streamConnected: false, streamGone: false, toolTimer: null, externalRunning: false, externalActivity: null, toolsCollapsed: false, apiServer: null, enablingApiServer: false }),
+            liveSegments: [], liveTools: [], streamRun: null, streamSeq: 0, streamConnected: false, streamGone: false, toolTimer: null, externalRunning: false, externalActivity: null, toolsCollapsed: true, apiServer: null, enablingApiServer: false }),
         computed: {
             headerQuotaWindows() {const windows=this.quotaGroups(this.codexUsage).flatMap(group=>group.windows);return [[300,'5 小时'],[10080,'周额度']].map(([minutes,label])=>({minutes,label,remaining:windows.find(w=>w.minutes===minutes)?.remaining??null}));},
             currentWorkspaceName() {return this.workspaceName((this.workspaces.data||[]).find(row=>row.id===this.workspaces.current)||(this.accounts.data||[]).find(row=>row.id===this.accounts.current)||this.accounts.current_identity);},
@@ -55,6 +55,14 @@
             createProjectRoots() { return this.projectRootsOf((this.projects||[]).find(p=>p.id===this.createProjectId)); },
             createValid() { if(this.agent!=='codex'||this.createMode==='none')return true; if(this.createMode==='existing')return !!this.createProjectId&&!!this.createRoot; if(this.createMode==='new')return this.createRoots.length>0&&!!this.createRoot&&!!this.createProjectName.trim(); return true; },
             displayMessages() {const rows=this.messages.filter(m=>this.hasRenderableContent(m));const echoes=this.delivered.filter(row=>!row.canonicalId).map(row=>this.localMessage(row));if(this.pending&&Date.now()-(this.pending.createdAt||0)<=120000)echoes.push(this.localMessage(this.pending));for(const echo of echoes){const next=rows.findIndex(row=>this.messageStamp(row)>echo.timestamp);if(next<0)rows.push(echo);else rows.splice(next,0,echo);}return rows;},
+            timeline() {
+                // 历史消息与实时旁白按时间合并成单一时间线，插话气泡落在旁白之间的正确位置。
+                const items=[];
+                for (const message of this.displayMessages) items.push({kind:'message', at:this.messageStamp(message)||0, message});
+                for (const segment of this.visibleLiveSegments) items.push({kind:'live', at:segment.createdAt||0, segment});
+                items.sort((a,b)=>a.at-b.at);
+                return items;
+            },
             visibleLiveSegments() {
                 // Must stay pure. Merging used to write covered.text=segment.text on a liveSegments
                 // item - a reactive object this computed also reads - which invalidated the computed
@@ -65,7 +73,12 @@
                 for (const segment of this.liveSegments) {
                     const text=this.asText(segment.text);
                     if (!text.trim()) continue;
-                    if (this.messages.some(m=>m.role==='assistant'&&this.narrationCovers(this.messageText(m),text)&&this.messageStamp(m)>=segment.createdAt-600000)) continue;
+                    // 流式期间的多次 interim 各自落成一条历史消息，而 snapshot/completed 产生的是
+                    // 它们的拼接段；拼接段不被任何单条消息覆盖，会与历史气泡重复显示。
+                    // 因此除单条覆盖外，再对窗口内助手消息拼接后的整段做一次覆盖判断。
+                    const recent=this.messages.filter(m=>m.role==='assistant'&&this.messageStamp(m)>=segment.createdAt-600000);
+                    if (recent.some(m=>this.narrationCovers(this.messageText(m),text))) continue;
+                    if (this.narrationCovers(recent.map(m=>this.messageText(m)).join('\n'), text)) continue;
                     const covered=out.find(prev=>this.sameNarration(prev.text,text));
                     if (covered) { if (text.trim().length>this.asText(covered.text).trim().length) covered.text=text; continue; }
                     out.push({...segment, text});
@@ -128,7 +141,18 @@
             closeSessionMenus(event) { document.querySelectorAll('.agent-session-actions[open]').forEach(menu=>{if(!event||!menu.contains(event.target)||event.target.closest('button'))menu.open=false;}); },
             messageStamp(m) {const raw=m.timestamp||0;const value=(raw!==null&&typeof raw==='object')?NaN:Number(raw);if(Number.isFinite(value)&&value>0)return value<1e12?value*1000:value;return typeof raw==='string'?Date.parse(raw)||0:0;}, sameText(a,b) { const norm=v=>this.asText(v).replace(/\s+/g,' ').trim(); return norm(a)===norm(b); },
             messageKey(m) { return m.localKey||m.id||`${m.role}-${m.timestamp}-${this.asText(m.content).slice(0,24)}`; },
-            messageText(m) { if (typeof m.content==='string') { if (m.content.startsWith('[{')) { try { const value=JSON.parse(m.content); if (Array.isArray(value)) return value.map(x=>this.asText(x)).filter(Boolean).join('\n')||m.content; } catch {} } return m.content; } if (Array.isArray(m.content)) return m.content.map(x=>this.asText(x)).filter(Boolean).join('\n'); return this.asText(m.text); },
+            messageText(m) { return this.unwrapOob(this.messageTextRaw(m)); },
+            // 插话在运行中被网关投递为 OOB 消息并整段落库（含附件说明），展示与本地回显匹配前先解包。
+            unwrapOob(text) {
+                const raw=this.asText(text); const open=raw.indexOf('[OUT-OF-BAND USER MESSAGE');
+                if (open<0) return raw;
+                const start=raw.indexOf(']', open); const close=raw.lastIndexOf('[/OUT-OF-BAND USER MESSAGE]');
+                if (start<0||close<=start) return raw;
+                let inner=raw.slice(start+1, close).trim();
+                const note=inner.indexOf('[ChuckieHelper'); if (note>0) inner=inner.slice(0, note).trim();
+                return inner||raw;
+            },
+            messageTextRaw(m) {if (typeof m.content==='string') { if (m.content.startsWith('[{')) { try { const value=JSON.parse(m.content); if (Array.isArray(value)) return value.map(x=>this.asText(x)).filter(Boolean).join('\n')||m.content; } catch {} } return m.content; } if (Array.isArray(m.content)) return m.content.map(x=>this.asText(x)).filter(Boolean).join('\n'); return this.asText(m.text); },
             mediaMarkers(text) {const lines=text.replaceAll('\r\n','\n').split('\n');let fence=null,size=0;const markers=[];for(const [index,line] of lines.entries()){const delimiter=line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);if(fence){if(delimiter&&delimiter[1][0]===fence&&delimiter[1].length>=size&&!delimiter[2].trim())fence=null;continue;}if(delimiter){fence=delimiter[1][0];size=delimiter[1].length;continue;}const match=line.match(/^ {0,3}MEDIA:[ \t]*(.+?)[ \t]*$/i);if(match)markers.push({index,path:match[1].trim().replace(/^['"]|['"]$/g,'')});}return markers;},
             normalPath(path) {return this.asText(path).replaceAll('\\','/').toLowerCase();},
             mediaMatches(message) {if(message.role!=='assistant')return[];const byId=new Map();for(const file of [...(message.attachments||[]),...this.sessionFiles.filter(file=>file.outgoing)])if(file.id&&!byId.has(file.id))byId.set(file.id,file);const candidates=[...byId.values()];return this.mediaMarkers(this.messageText(message)).map(marker=>{const path=this.normalPath(marker.path);const exact=candidates.filter(file=>file.mediaPath&&this.normalPath(file.mediaPath)===path);const name=path.split('/').at(-1);const named=candidates.filter(file=>String(file.name||'').toLowerCase()===name);const found=exact.length===1?exact[0]:named.length===1?named[0]:null;return {...marker,file:found};});},

@@ -29,3 +29,27 @@
 .identity-actions { justify-content: flex-start; }
 .identity-hint { margin: 16px 0 0; padding: 12px 14px; border-radius: 10px; background: var(--bg-tertiary, #edf3f1); color: var(--text-secondary, #455e5a); font-size: 13px; }
 @media (max-width: 700px) { .identity-panel { padding: 16px; } .identity-panel-head,.identity-form-title { align-items: flex-start; flex-direction: column; } .identity-form { grid-template-columns: minmax(0, 1fr); } .identity-tab { align-items: flex-start; flex-direction: column; padding: 13px; } }
+
+/* Docker 风格子页签（与远程页 .tabs/.tab 一致：active 高亮 + 底部指示条） */
+.identity-subtabs { display: flex; align-items: center; gap: 2px; margin-top: 22px; margin-bottom: 18px; border-bottom: 1px solid var(--border-color, #cad6d0); overflow-x: auto; }
+.identity-subtabs::-webkit-scrollbar { height: 0; }
+.identity-subtabs .tab { position: relative; min-height: 42px; padding: 0 18px; display: flex; align-items: center; background: none; border: none; color: var(--text-secondary, #455e5a); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: color .18s, background .18s; }
+.identity-subtabs .tab:hover { color: var(--text-primary, #172b29); background: var(--bg-tertiary, #edf3f1); }
+.identity-subtabs .tab.active { color: var(--accent-primary, #327a6b); }
+.identity-subtabs .tab.active::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 1px; background: var(--accent-primary, #327a6b); }
+.identity-subtabs .tab:focus-visible { outline: 2px solid var(--accent-primary, #327a6b); outline-offset: -2px; }
+.identity-subtabs .tab:disabled { cursor: wait; opacity: .7; }
+
+/* 提供方模板与接入指引 */
+.identity-presets { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-weight: 600; }
+.identity-presets span { color: var(--text-secondary, #455e5a); font-size: 13px; font-weight: 400; }
+.identity-presets button { padding: 7px 14px; border: 1px solid var(--border-color, #cad6d0); border-radius: 9px; background: var(--bg-tertiary, #edf3f1); color: var(--text-primary, #172b29); font: inherit; font-size: 13px; cursor: pointer; transition: border-color .18s, background .18s; }
+.identity-presets button:hover:not(:disabled) { border-color: var(--accent-primary, #327a6b); }
+.identity-presets button.active { border-color: var(--accent-primary, #327a6b); background: color-mix(in srgb, var(--accent-primary, #327a6b) 12%, var(--bg-secondary, #fff)); color: var(--accent-primary, #327a6b); font-weight: 700; }
+.identity-presets button:disabled { opacity: .55; cursor: not-allowed; }
+.identity-guide { padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--accent-primary, #327a6b) 35%, var(--border-color, #cad6d0)); border-radius: 10px; background: color-mix(in srgb, var(--accent-primary, #327a6b) 6%, var(--bg-secondary, #fff)); }
+.identity-guide p { margin: 0 0 8px; font-weight: 600; }
+.identity-guide ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; color: var(--text-primary, #172b29); font-size: 13px; }
+.identity-guide code { padding: 2px 6px; border-radius: 6px; background: var(--bg-tertiary, #edf3f1); overflow-wrap: anywhere; }
+.identity-copy { margin-left: 6px; padding: 2px 10px; border: 1px solid var(--border-color, #cad6d0); border-radius: 6px; background: var(--bg-secondary, #fff); color: var(--text-primary, #172b29); font-size: 12px; cursor: pointer; }
+.identity-copy:hover { border-color: var(--accent-primary, #327a6b); color: var(--accent-primary, #327a6b); }

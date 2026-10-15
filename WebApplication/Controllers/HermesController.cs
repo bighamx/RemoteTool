@@ -142,7 +142,28 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         }
         Response.StatusCode = (int)response.StatusCode; Response.ContentType = "application/json"; await Response.WriteAsync(payload, ct);
     }
-    [HttpGet("sessions/{id}")] public Task SessionInfo(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"api/sessions/{Id(id)}", null, null, ct);
+    [HttpGet("sessions/{id}")] public async Task SessionInfo(string id, CancellationToken ct)
+    {
+        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions/{Id(id)}", null, null, ct);
+        var payload = await upstream.Content.ReadAsStringAsync(ct);
+        // 网关的会话详情不包含 provider（用户自定义提供方上的会话会缺省成 "custom"）；
+        // 从 state.db 的 model_config / billing_provider 注入权威值，供客户端正确回显与高亮。
+        if (upstream.IsSuccessStatusCode && System.Text.Json.Nodes.JsonNode.Parse(payload) is System.Text.Json.Nodes.JsonObject node)
+        {
+            var session = (node["session"] as System.Text.Json.Nodes.JsonObject) ?? node;
+            var info = activity.SessionModelInfo(new[] { Id(id) }).GetValueOrDefault(Id(id));
+            if (!string.IsNullOrEmpty(info?.Provider))
+            {
+                session["provider"] = info.Provider;
+                session["modelProvider"] = info.Provider;
+            }
+            if (!string.IsNullOrEmpty(info?.Effort)) session["reasoning_effort"] = info.Effort;
+            payload = node.ToJsonString();
+        }
+        Response.StatusCode = (int)upstream.StatusCode;
+        Response.ContentType = upstream.Content.Headers.ContentType?.ToString() ?? "application/json";
+        await Response.WriteAsync(payload, ct);
+    }
     [HttpPost("sessions/{id}/fork")] public Task<IActionResult> ForkSession(string id, [FromBody] JsonElement body, CancellationToken ct) => MessageAction(id, "fork", body, ct);
     [HttpPost("sessions/{id}/rewind")] public Task<IActionResult> RewindSession(string id, [FromBody] JsonElement body, CancellationToken ct) => MessageAction(id, "rewind", body, ct);
     private async Task<IActionResult> MessageAction(string id, string operation, JsonElement body, CancellationToken ct) {
@@ -318,7 +339,13 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         }
         var detailTask = Part(async () => {
             using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions/{sessionId}", null, null, ct);
-            return upstream.IsSuccessStatusCode ? JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)) : null;
+            if (!upstream.IsSuccessStatusCode) return null;
+            if (System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)) is not JsonObject detail) return null;
+            var session = (detail["session"] as JsonObject) ?? detail;
+            var info = activity.SessionModelInfo(new[] { sessionId }).GetValueOrDefault(sessionId);
+            if (!string.IsNullOrEmpty(info?.Provider)) { session["provider"] = info.Provider; session["modelProvider"] = info.Provider; }
+            if (!string.IsNullOrEmpty(info?.Effort)) session["reasoning_effort"] = info.Effort;
+            return detail;
         });
         var historyTask = Part(() => HistoryAsync(sessionId, Math.Clamp(limit, 1, 100), null, null, ct));
         var runTask = Part(async () => (JsonNode?)(await ActiveRunAsync(sessionId, ct) ?? new JsonObject { ["run_id"] = null }));

@@ -98,8 +98,16 @@
         .error-message { color: var(--accent-danger); font-size: 14px; margin-top: 16px; text-align: center; min-height: 20px; }
         .oidc-logins { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-color); }
         .oidc-logins p { color: var(--text-secondary); font-size: 13px; margin-bottom: 10px; text-align: center; }
-        .oidc-logins a { display: block; padding: 11px; margin-top: 8px; border: 1px solid var(--border-color); border-radius: 11px; color: var(--text-primary); text-decoration: none; text-align: center; }
-        .oidc-logins a:hover { border-color: var(--accent-primary); }
+        .oidc-logins a {
+            display: flex; align-items: center; justify-content: flex-start; gap: 10px;
+            padding: 11px 16px; margin-top: 8px;
+            border: 1px solid var(--border-color); border-radius: 11px;
+            color: var(--text-primary); text-decoration: none; font-size: 14px;
+            transition: var(--transition);
+        }
+        .oidc-logins a:hover { border-color: var(--accent-primary); background: var(--bg-tertiary); }
+        .oidc-logins a svg { width: 20px; height: 20px; flex: none; fill: currentColor; }
+        .oidc-logins a .oidc-kind { color: var(--text-secondary); }
     </style>
 </head>
 <body>
@@ -136,10 +144,19 @@
                 if (!Array.isArray(providers) || !providers.length) return;
                 const container = document.getElementById('oidc-links');
                 const returnUrl = new URLSearchParams(location.search).get('ReturnUrl') || '/';
+                // 通用 OIDC 图标 + “OIDC · 提供方名称”，样式对齐 Cloudflare Access 的登录按钮
+                const OIDC_ICON = '<svg viewBox="0 0 400 371" aria-hidden="true"><path d="M211.250 15.011 L 181.000 29.893 181.000 181.051 L 181.000 332.209 176.750 331.636 C 168.287 330.497,156.533 328.142,150.000 326.278 C 53.710 298.800,30.149 219.441,105.069 174.935 C 123.576 163.941,155.804 152.034,167.128 152.006 C 171.764 151.995,172.067 150.619,171.773 130.870 L 171.500 112.500 168.500 112.618 C 165.317 112.743,157.507 113.832,155.000 114.500 C 154.175 114.720,151.485 115.184,149.021 115.532 C 146.558 115.880,144.308 116.308,144.021 116.484 C 143.735 116.659,141.912 117.053,139.971 117.361 C 126.586 119.478,97.626 129.637,79.932 138.421 C 19.537 168.406,-8.506 213.259,2.357 262.500 C 11.558 304.208,73.787 351.904,134.177 363.534 C 135.268 363.744,136.911 364.142,137.830 364.419 C 139.445 364.905,141.983 365.440,147.750 366.510 C 149.262 366.791,151.517 367.251,152.760 367.532 C 154.004 367.813,157.139 368.292,159.728 368.597 C 162.316 368.901,164.674 369.298,164.967 369.479 C 165.260 369.660,169.141 370.108,173.591 370.475 C 182.773 371.233,178.261 372.873,216.000 355.056 C 226.725 349.993,237.176 345.096,239.224 344.175 L 242.948 342.500 242.974 171.250 C 242.988 77.063,242.662 0.029,242.250 0.064 C 241.838 0.100,227.887 6.826,211.250 15.011 M253.000 131.373 C 253.000 150.886,253.009 150.964,255.250 151.417 C 274.656 155.341,292.484 161.189,306.430 168.208 L 315.360 172.702 308.430 176.690 C 304.618 178.884,297.311 183.050,292.192 185.948 C 282.348 191.520,282.096 191.819,286.627 192.554 C 288.207 192.810,292.425 193.660,296.000 194.442 C 299.575 195.225,309.025 197.295,317.000 199.043 C 324.975 200.792,332.625 202.422,334.000 202.665 C 335.375 202.908,342.350 204.409,349.500 205.999 C 356.650 207.590,367.000 209.829,372.500 210.975 C 378.000 212.122,384.075 213.475,386.000 213.983 C 387.925 214.491,391.075 215.169,393.000 215.489 C 394.925 215.810,397.326 216.323,398.336 216.631 C 400.139 217.179,400.236 206.897,398.521 197.000 C 398.283 195.625,397.820 191.350,397.493 187.500 C 397.166 183.650,396.726 178.925,396.514 177.000 C 396.303 175.075,395.870 170.575,395.552 167.000 C 395.234 163.425,394.786 158.925,394.556 157.000 C 394.327 155.075,393.836 149.900,393.465 145.500 C 392.354 132.328,392.175 130.841,391.630 130.297 C 391.343 130.010,384.235 133.715,375.834 138.530 L 360.559 147.284 357.530 145.486 C 339.711 134.913,306.673 121.903,288.998 118.500 C 288.167 118.340,282.991 117.296,277.494 116.181 C 271.997 115.065,265.250 113.861,262.500 113.504 C 259.750 113.148,256.488 112.615,255.250 112.320 L 253.000 111.783 253.000 131.373"></path></svg>';
                 for (const provider of providers) {
                     const link = document.createElement('a');
                     link.href = '/api/auth/oidc/start/' + encodeURIComponent(provider.id) + '?returnUrl=' + encodeURIComponent(returnUrl);
-                    link.textContent = '使用 ' + provider.name + ' 登录';
+                    const icon = document.createElement('span');
+                    icon.innerHTML = OIDC_ICON;
+                    const kind = document.createElement('span');
+                    kind.className = 'oidc-kind';
+                    kind.textContent = 'OIDC · ';
+                    const name = document.createElement('span');
+                    name.textContent = provider.name;
+                    link.append(icon, kind, name);
                     container.append(link);
                 }
                 document.getElementById('oidc-logins').hidden = false;

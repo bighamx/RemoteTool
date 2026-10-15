@@ -1319,11 +1319,16 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
     val currentModel = if (global) model.modelOptions.optString("model") else model.sessionModel.ifBlank { model.modelOptions.optString("model") }
     val currentEffort = if (global) model.modelOptions.cleanSetting("reasoning_effort") else model.sessionEffort
     val currentTier = if (global) model.modelOptions.cleanSetting("service_tier") else model.sessionTier
-    LaunchedEffect(provider?.optString("slug"), global, currentProvider, currentModel) {
-        selected = if (provider?.optString("slug") == currentProvider) currentModel.takeIf { it.isNotBlank() } else null
+    // 会话详情里的 provider 由服务端注入权威值（state.db 的 model_config.provider）；
+    // 这里只做 slug → 显示名的解析，供头部文案使用。高亮按 slug 精确匹配。
+    val providerCatalog = model.modelOptions.array("providers").objects()
+    val resolvedProvider = currentProvider
+    val resolvedProviderName = providerCatalog.firstOrNull { it.optString("slug") == resolvedProvider }?.optString("name", resolvedProvider) ?: resolvedProvider
+    LaunchedEffect(provider?.optString("slug"), global, resolvedProvider, currentModel) {
+        selected = if (provider?.optString("slug") == resolvedProvider) currentModel.takeIf { it.isNotBlank() } else null
     }
     LaunchedEffect(selected, provider?.optString("slug"), global) {
-        val isCurrent = selected == currentModel && provider?.optString("slug") == currentProvider
+        val isCurrent = selected == currentModel && provider?.optString("slug") == resolvedProvider
         val choices = reasoningChoices(model.agent, provider, selected)
         effort = if (isCurrent && currentEffort in choices) currentEffort else ""
         tier = if (isCurrent) currentTier else ""
@@ -1367,7 +1372,7 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                     singleLine = true,
                 )
                 Text(
-                    "${if (global) "全局默认" else "当前会话"}：$currentProvider · $currentModel",
+                    "${if (global) "全局默认" else "当前会话"}：$resolvedProviderName · $currentModel",
                     style = MaterialTheme.typography.labelSmall,
                 )
                 LazyColumn(Modifier.heightIn(max = if (selected != null) 180.dp else 340.dp)) {
@@ -1385,8 +1390,8 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                                     filter = ""
                                 },
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                colors = CardDefaults.cardColors(containerColor = if (p.optString("slug") == currentProvider) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh),
-                                border = if (p.optString("slug") == currentProvider) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+                                colors = CardDefaults.cardColors(containerColor = if (p.optString("slug") == resolvedProvider) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh),
+                                border = if (p.optString("slug") == resolvedProvider) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
                             ) {
                                 Column(Modifier.padding(12.dp)) {
                                     Text(
@@ -1395,7 +1400,7 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                                     )
                                     Text(
                                         "${p.array("models").length()} 个模型" +
-                                            (if (p.optString("slug") == currentProvider) " · 当前使用"
+                                            (if (p.optString("slug") == resolvedProvider) " · 当前使用"
                                             else if (p.optBoolean("is_current")) " · 全局默认"
                                             else ""),
                                         style = MaterialTheme.typography.labelSmall,
@@ -1444,7 +1449,7 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                                     Modifier.weight(1f),
                                     style = MaterialTheme.typography.bodySmall,
                                 )
-                                if (provider!!.optString("slug") == currentProvider && name == currentModel)
+                                if (provider!!.optString("slug") == resolvedProvider && name == currentModel)
                                     Text("当前使用", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
                             }
                         }

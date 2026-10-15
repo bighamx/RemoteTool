@@ -280,6 +280,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var activeRunCheckedAt = 0L
     private var sessionControl by mutableStateOf<JSONObject?>(null)
     private var sessionControlVerifiedAt by mutableLongStateOf(0L)
+    val canHandoverSession get() = agent == "codex" && selectedId != null &&
+        sessionControl?.optString("state") == "mobile" && activityClock() - sessionControlVerifiedAt < 60_000L
     var controlMessage by mutableStateOf<String?>(null)
         private set
     private var runVerifiedAt by mutableLongStateOf(0L)
@@ -324,6 +326,27 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     val executionEventCount get() = if (runId != null) eventCount else externalActivity?.optInt("event_count") ?: 0
     val executionState get() = if (requestingCompaction) "正在提交压缩请求" else if (streamCompacting) "正在压缩上下文" else if (runId != null) state else externalActivityLabel(externalActivity)
     val executionCompacting get() = requestingCompaction || executionState == "正在压缩上下文"
+
+    private var externalActivityJob: Job? = null
+    private var externalActivityPollingSession: String? = null
+
+    /** 外部运行（其他客户端发起）时 activity 快照只在打开会话时拉过一次，
+     *  导致「距上次响应」冻结、工具数量不变；这里按运行状态自适应轮询。 */
+    private fun ensureExternalActivityPolling() {
+        val id = selectedId ?: return
+        if (externalActivityJob?.isActive == true) {
+            if (externalActivityPollingSession == id) return
+            externalActivityJob?.cancel()
+        }
+        externalActivityPollingSession = id
+        externalActivityJob = launch {
+            while (isActive && selectedId == id) {
+                pollExternalActivity()
+                val running = externalActivityRunning(externalActivity, id, activityClock(), externalVerifiedAt)
+                kotlinx.coroutines.delay(if (running) 5_000L else 20_000L)
+            }
+        }
+    }
 
     fun pollExternalActivity(force: Boolean = false) = viewModelScope.launch {
         val id = selectedId ?: return@launch
@@ -371,6 +394,24 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         set(value) { conversationUi = conversationUi.draft(selectedId, value) }
     private fun setDraft(session: String?, value: String) { conversationUi = conversationUi.draft(session, value) }
     private fun setError(session: String?, value: String?) { conversationUi = conversationUi.error(session, value) }
+
+            /** 服务端确认会话在本机已无记录（thread_missing）：自动退出并清掉本地残留，避免反复同步失败。 */
+            private fun exitMissingSession(session: String?) {
+                cancelRecovery()
+                historyJob?.cancel()
+                backgroundRuns.remove(session); if (runSession == session) { runId = null; runSession = null }
+                approval = null; pendingText = ""; flushedStreamPrefix = ""; pendingItemId = null; pendingPhase = ""
+                events = emptyList(); eventCount = 0; finalSyncJob?.cancel()
+                conversationUi = conversationUi.forget(session)
+                prefs.edit().remove("session").remove("run").remove("runSession").apply()
+                selectedId = null
+                contextInfo = null; asyncQuestion = null; sessionControl = null
+                sessionProvider = ""; sessionModel = ""; sessionEffort = ""; sessionTier = ""
+                title = "$agentName 会话"; state = "就绪"
+                messages = emptyList(); files = emptyList()
+                setError(null, "该会话在本机已无记录（可能已被清理），已自动退出；请从列表选择其他会话")
+                launch { refreshSessions() }
+            }
     private fun setSubmitting(session: String?, value: Boolean) { conversationUi = conversationUi.submitting(session, value) }
     var pendingText by mutableStateOf("")
         private set
@@ -684,6 +725,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     readConnectionError = null
                     if (state == "正在同步会话") state = "就绪"
                     if (runId != null) watch()
+                    ensureExternalActivityPolling()
                 }
             } catch (timeout: TimeoutCancellationException) {
                 if (current()) {
@@ -694,7 +736,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             catch (failure: Exception) {
                 if (current()) {
                     recoveryFailedAt = activityClock()
-                    setError(session, "自动同步未成功：${connectionFailureMessage(failure)}")
+                    if (failure is ApiRequestFailure && failure.code == "thread_missing") exitMissingSession(session)
+                    else setError(session, "自动同步未成功：${connectionFailureMessage(failure)}")
                 }
             } finally { if (current()) stateRecovering = false }
         }
@@ -1035,6 +1078,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 currentCoroutineContext().ensureActive()
                 if (originatingConnection !== api) return@launch
                 if (canRecoverAgentRead(e) && recoverState(originatingSession)) return@launch
+                if (e is ApiRequestFailure && e.code == "thread_missing" && selectedId == originatingSession) exitMissingSession(originatingSession)
                 setError(originatingSession, connectionFailureMessage(e))
                 if (selectedId == originatingSession && historyCacheStatus != null) historyCacheStatus = "缓存 · 同步失败"
                 if (e is ReadConnectionFailure && selectedId == originatingSession) readConnectionError = error
@@ -1478,6 +1522,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             watch()
         }
         saveRuns()
+        ensureExternalActivityPolling()
         historyJob = launch {
             val connection = api
             // Start the network read before disk-cache replay; neither should block the other.
@@ -2462,7 +2507,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
-    /** 放弃手机端所有权并把会话转交到桌面 Codex App：有 run 先中断，再释放 writer 锁（空闲会话同样适用）。 */
+    /** 放弃手机端写入权：有 run 先中断，再释放 writer 锁（空闲会话同样适用）。 */
     fun handoverSession(sessionId: String) = launch {
         val connection = api
         if (stopRequestInFlight) return@launch
@@ -2477,7 +2522,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (api !== connection) return@launch
             if (id != null) clearRunTracking(sessionId, id)
             stoppingRunId = null
-            if (selectedId == sessionId) state = if (result.optBoolean("interrupted")) "已中断并转交桌面" else "已转交桌面"
+            if (selectedId == sessionId) {
+                sessionControl = null; sessionControlVerifiedAt = 0L
+                state = if (result.optBoolean("interrupted")) "任务已中断，写入权已释放" else "写入权已释放"
+            }
             loadHistory(sessionId); loadSelection(sessionId)
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {

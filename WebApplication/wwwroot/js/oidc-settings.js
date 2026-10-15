@@ -5,7 +5,7 @@
     const empty = () => ({ id: null, name: '', issuer: '', clientId: '', clientSecret: '', enabled: true, useUserInfo: false,
         discovery: true, discoveryUrl: '', authorizationUrl: '', tokenUrl: '', certificateUrl: '', userInfoUrl: '' });
     const app = Vue.createApp({
-        data: () => ({ activeTab: 'oidc', providers: [], form: null, emailsText: '', scopesText: 'openid profile email', access: { enabled: false, team: '', audience: '' }, accessEmails: '', error: '', notice: '', saving: false }),
+        data: () => ({ activeTab: 'oidc', providers: [], form: null, emailsText: '', scopesText: 'openid profile email', preset: '', access: { enabled: false, team: '', audience: '' }, accessEmails: '', error: '', notice: '', saving: false }),
         computed: { callbackUrl() { return location.origin + '/access/callback'; } },
         methods: {
             selectTab(tab) { if (this.saving || !['oidc', 'access'].includes(tab)) return; this.activeTab = tab; this.error = ''; this.notice = ''; },
@@ -23,11 +23,23 @@
             },
             async refreshProviders() { this.providers = await api.get('/api/auth/oidc/settings'); },
             async refreshAccess() { const access = await api.get('/api/auth/oidc/access-settings'); this.access = access; this.accessEmails = (access.allowedEmails || []).join('\n'); },
-            newProvider() { this.form = empty(); this.emailsText = ''; this.scopesText = 'openid profile email'; this.error = ''; this.notice = ''; },
+            newProvider() { this.form = empty(); this.emailsText = ''; this.scopesText = 'openid profile email'; this.preset = ''; this.error = ''; this.notice = ''; },
+            // 提供方模板：把 issuer/scope 等固定项预填好，用户只需在提供方创建 OAuth 客户端
+            // 拿到 Client ID/Secret 填入（该密钥必须由提供方签发，无法在本系统内省略）。
+            selectPreset(key) {
+                if (!this.form || this.form.id) return;
+                this.preset = key;
+                if (key === 'google') {
+                    this.form = { ...empty(), name: 'Google', issuer: 'https://accounts.google.com', discovery: true, enabled: true };
+                    this.scopesText = 'openid email profile';
+                } else { this.form = empty(); this.scopesText = 'openid profile email'; }
+                this.error = ''; this.notice = '';
+            },
+            copyCallback() { navigator.clipboard?.writeText(this.callbackUrl).catch(() => {}); },
             editProvider(item) { this.form = { id: item.id, name: item.name, issuer: item.issuer, clientId: item.clientId, clientSecret: '', enabled: item.enabled,
                 useUserInfo: item.useUserInfo, discovery: item.discovery, discoveryUrl: item.discoveryUrl || '',
                 authorizationUrl: item.authorizationUrl || '', tokenUrl: item.tokenUrl || '', certificateUrl: item.certificateUrl || '', userInfoUrl: item.userInfoUrl || '' };
-                this.emailsText = (item.allowedEmails || []).join('\n'); this.scopesText = (item.scopes || ['openid','profile','email']).join(' '); this.error = ''; this.notice = ''; },
+                this.emailsText = (item.allowedEmails || []).join('\n'); this.scopesText = (item.scopes || ['openid','profile','email']).join(' '); this.preset = ''; this.error = ''; this.notice = ''; },
             emails(value) { return value.split(/[\r\n,;]+/).map(x => x.trim()).filter(Boolean); },
             async saveProvider() {
                 if (!this.form || this.saving) return;

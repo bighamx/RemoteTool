@@ -5,21 +5,30 @@
 <div id="identity-settings-app" class="workspace-page identity-settings" v-cloak>
     <div class="workspace-heading"><div><p class="eyebrow">REMOTE TOOL / IDENTITY</p><h1>身份验证</h1><p>分别管理 OIDC 提供方和 Cloudflare Access；现有密码登录保持可用。</p></div></div>
     <p v-if="error" class="workspace-alert">{{error}}</p>
-    <p v-if="notice" class="workspace-alert">{{notice}}</p>
-    <div class="identity-tabs" role="tablist" aria-label="身份验证配置">
-        <button id="identity-tab-oidc" ref="oidcTab" type="button" role="tab" class="identity-tab" :class="{active:activeTab==='oidc'}" :aria-selected="activeTab==='oidc'" :tabindex="activeTab==='oidc'?0:-1" :disabled="saving" aria-controls="identity-panel-oidc" @@click="selectTab('oidc')" v-on:keydown="onTabKeydown">
-            <span><strong>OIDC 提供方</strong><small>管理第三方登录</small></span><em>{{providers.length}} 个</em>
-        </button>
-        <button id="identity-tab-access" ref="accessTab" type="button" role="tab" class="identity-tab" :class="{active:activeTab==='access'}" :aria-selected="activeTab==='access'" :tabindex="activeTab==='access'?0:-1" :disabled="saving" aria-controls="identity-panel-access" @@click="selectTab('access')" v-on:keydown="onTabKeydown">
-            <span><strong>Cloudflare Access</strong><small>管理入口自动登录</small></span><em>{{access.enabled?'已启用':'未启用'}}</em>
-        </button>
-    </div>
+    <p v-if="notice" class="workspace-alert workspace-alert-success">{{notice}}</p>
+    <nav class="tabs identity-subtabs" role="tablist" aria-label="身份验证配置">
+        <button id="identity-tab-oidc" ref="oidcTab" type="button" role="tab" class="tab" :class="{active:activeTab==='oidc'}" :aria-selected="activeTab==='oidc'" :tabindex="activeTab==='oidc'?0:-1" :disabled="saving" aria-controls="identity-panel-oidc" @@click="selectTab('oidc')" v-on:keydown="onTabKeydown">OIDC 提供方</button>
+        <button id="identity-tab-access" ref="accessTab" type="button" role="tab" class="tab" :class="{active:activeTab==='access'}" :aria-selected="activeTab==='access'" :tabindex="activeTab==='access'?0:-1" :disabled="saving" aria-controls="identity-panel-access" @@click="selectTab('access')" v-on:keydown="onTabKeydown">Cloudflare Access</button>
+    </nav>
     <section id="identity-panel-oidc" class="identity-panel" role="tabpanel" aria-labelledby="identity-tab-oidc" v-show="activeTab==='oidc'">
         <div class="identity-panel-head"><div><h2>OIDC 提供方</h2><p>授权码 + PKCE · 统一回调地址 <code>{{callbackUrl}}</code></p></div><button class="btn btn-secondary" type="button" @@click="newProvider">添加提供方</button></div>
         <div class="identity-provider-list" v-if="providers.length"><button v-for="item in providers" :key="item.id" type="button" class="identity-provider-item" :class="{selected:form && form.id===item.id}" @@click="editProvider(item)"><strong>{{item.name}}</strong><small>{{item.issuer}}</small><span>{{item.enabled?'已启用':'已停用'}}</span></button></div>
         <p v-else>尚未配置 OIDC。添加任意符合标准的 OIDC 提供方即可开始使用。</p>
         <form v-if="form" v-on:submit.prevent="saveProvider" class="identity-form">
             <div class="identity-form-title"><h3>{{form.id?'编辑提供方':'添加提供方'}}</h3></div>
+            <div v-if="!form.id" class="identity-presets identity-wide">
+                <span>提供方模板：</span>
+                <button type="button" :class="{active:preset==='google'}" @@click="selectPreset('google')">Google</button>
+                <button type="button" :class="{active:preset==='custom'}" @@click="selectPreset('custom')">自定义 OIDC</button>
+            </div>
+            <div v-if="preset==='google'" class="identity-guide identity-wide">
+                <p>在 Google Cloud 控制台只需三步（Client ID/Secret 必须由谷歌签发，本系统无法代办）：</p>
+                <ol>
+                    <li><strong>API 和服务 → 凭据 → 创建凭据 → OAuth 客户端 ID</strong>，应用类型选 <strong>Web 应用</strong>；首次创建需先在 OAuth 同意屏幕填应用名称和支持邮箱</li>
+                    <li>已获授权的重定向 URI 填 <code>{{callbackUrl}}</code> <button type="button" class="identity-copy" @@click="copyCallback">复制</button></li>
+                    <li>把 Client ID 和 Client Secret 填入下方，允许邮箱填你的 Gmail 地址；同意屏幕处于"测试中"时先把该邮箱加为测试用户</li>
+                </ol>
+            </div>
             <label class="identity-wide">显示名称<input v-model.trim="form.name" required maxlength="80" placeholder="例如 公司账号"></label>
             <label class="identity-wide">Issuer / Authority<input v-model.trim="form.issuer" required type="url" placeholder="https://id.example.com/"><small>ID Token 的 iss 必须与此值一致；生产环境仅接受 HTTPS。</small></label>
             <label class="identity-check identity-wide"><input v-model="form.discovery" type="checkbox"> 使用 OIDC Discovery</label>

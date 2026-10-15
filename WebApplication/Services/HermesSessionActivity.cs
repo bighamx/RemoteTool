@@ -22,6 +22,43 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
     public IReadOnlyDictionary<string, JsonObject> ReadMany(IEnumerable<string> ids) => ReadDatabase(DatabasePath, ids, false);
     public IReadOnlyList<string> ActiveRunCandidates(string id) => ReadActiveRunCandidates(Path.Combine(Path.GetDirectoryName(DatabasePath)!, "runs_idempotency.db"), id);
 
+    public sealed record SessionModelSetting(string Provider, string Effort);
+
+    /// <summary>会话当前模型设置（提供方 / 思考等级）的权威记录，取自 state.db 的 model_config，
+    /// 缺失时 provider 退回 billing_provider。网关的会话详情响应不包含这些字段，必须从这里取。</summary>
+    public IReadOnlyDictionary<string, SessionModelSetting> SessionModelInfo(IEnumerable<string> ids) {
+        var result = new Dictionary<string, SessionModelSetting>();
+        var database = DatabasePath;
+        if (!File.Exists(database)) return result;
+        try {
+            SQLitePCL.Batteries_V2.Init();
+            using var db = new SQLiteConnection(database, SQLiteOpenFlags.ReadOnly | SQLiteOpenFlags.FullMutex);
+            db.BusyTimeout = TimeSpan.FromMilliseconds(250);
+            foreach (var id in ids.Distinct()) {
+                var row = db.Query<SessionProviderRow>("SELECT model_config, billing_provider FROM sessions WHERE id=?", id).FirstOrDefault();
+                if (row == null) continue;
+                var provider = row.BillingProvider; var effort = "";
+                try {
+                    if (!string.IsNullOrEmpty(row.ModelConfig) && System.Text.Json.Nodes.JsonNode.Parse(row.ModelConfig) is System.Text.Json.Nodes.JsonObject config) {
+                        var fromConfig = config["provider"]?.ToString();
+                        if (string.IsNullOrEmpty(fromConfig)) fromConfig = (config["gateway_runtime"] as System.Text.Json.Nodes.JsonObject)?["provider"]?.ToString();
+                        if (!string.IsNullOrEmpty(fromConfig)) provider = fromConfig;
+                        if (config["reasoning_config"] is System.Text.Json.Nodes.JsonObject reasoning) {
+                            effort = reasoning["enabled"]?.GetValue<bool>() == false ? "none" : reasoning["effort"]?.ToString() ?? "";
+                        }
+                    }
+                } catch (System.Text.Json.JsonException) { }
+                if (!string.IsNullOrEmpty(provider) || !string.IsNullOrEmpty(effort)) result[id] = new SessionModelSetting(provider, effort);
+            }
+        } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException or DllNotFoundException or TypeInitializationException) { }
+        return result;
+    }
+
+    private sealed class SessionProviderRow {
+        [Column("model_config")] public string ModelConfig { get; set; } = "";
+        [Column("billing_provider")] public string BillingProvider { get; set; } = "";
+    }
+
     // Desktop session streams also publish native run IDs here, without going through
     // RemoteTool's run registry. Candidates must still be authenticated by GET /v1/runs/{id}.
     internal static IReadOnlyList<string> ReadActiveRunCandidates(string database, string id) {

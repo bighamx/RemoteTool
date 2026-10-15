@@ -110,9 +110,24 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         try { await client.Initialize(); lock (gate) sessionRpcs[id] = client; return client; }
         catch { await client.DisposeAsync(); throw; }
     }
-    private Task<JsonObject> ReadThread(string id, bool turns, CancellationToken ct = default) {
+    private async Task<JsonObject> ReadThread(string id, bool turns, CancellationToken ct = default) {
         CodexRpc reader; lock (gate) sessionRpcs.TryGetValue(id, out reader);
-        return (reader?.Running == true ? reader : rpc).Call("thread/read", Obj(("threadId", id), ("includeTurns", turns)), ct);
+        var client = reader?.Running == true ? reader : rpc;
+        try { return await client.Call("thread/read", Obj(("threadId", id), ("includeTurns", turns)), ct); }
+        catch (CodexError error) when (error.Message.Contains("thread not loaded", StringComparison.OrdinalIgnoreCase)) {
+            // app-server 重启或更换 CODEX_HOME 后线程不在内存：thread/resume 会从 rollout 重新装载。
+            try {
+                await client.Call("thread/resume", Obj(("threadId", id)), ct);
+                return await client.Call("thread/read", Obj(("threadId", id), ("includeTurns", turns)), ct);
+            } catch (CodexError resumeError) when (
+                resumeError.Message.Contains("thread not loaded", StringComparison.OrdinalIgnoreCase) ||
+                resumeError.Message.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+                resumeError.Message.Contains("no rollout", StringComparison.OrdinalIgnoreCase) ||
+                resumeError.Message.Contains("No such thread", StringComparison.OrdinalIgnoreCase)) {
+                // rollout 也不存在（其他设备创建/已被清理）：给可判别的错误码，客户端据此退出失效会话
+                throw new CodexError("该会话在本机已无记录（可能来自其他设备或已被清理），无法打开；请选择其他会话", 404, "thread_missing");
+            }
+        }
     }
     private async Task<JsonObject> ResumeSessionRequest(string id) {
         var request = Obj(("threadId", id));
