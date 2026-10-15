@@ -21,7 +21,7 @@ public class DockerService : IDockerService
         {
             // 使用简单的管道符分隔格式，避免 JSON 截断问题
             // Format: ID|Names|Image|Status|Ports|State
-            var output = await ExecuteDockerCommandAsync("ps -a --no-trunc --format \"{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}|{{.State}}\"");
+            var output = await ExecuteDockerCommandAsync("ps -a --no-trunc --format \"{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}|{{.State}}\"", strict: true);
             if (string.IsNullOrEmpty(output))
             {
                 Console.WriteLine("Docker ps returned empty output");
@@ -82,7 +82,7 @@ public class DockerService : IDockerService
     {
         try
         {
-            var output = await ExecuteDockerCommandAsync("ps -a --format json");
+            var output = await ExecuteDockerCommandAsync("ps -a --format json", strict: true);
             if (string.IsNullOrEmpty(output))
             {
                 return new List<DockerContainer>();
@@ -136,7 +136,7 @@ public class DockerService : IDockerService
         catch (Exception ex)
         {
             Console.WriteLine($"GetContainers JSON fallback error: {ex.Message}");
-            return new List<DockerContainer>();
+            throw new IOException("Docker 容器查询失败，请检查 Docker 服务和命令行配置", ex);
         }
     }
 
@@ -188,7 +188,7 @@ public class DockerService : IDockerService
             // 格式: ID|Name|CPUPerc|MemUsage|MemPerc
             var output = await ExecuteDockerCommandAsync(
                 "stats --no-stream --format \"{{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}\"",
-                timeoutSeconds: 15);
+                timeoutSeconds: 15, strict: true);
 
             if (string.IsNullOrEmpty(output))
             {
@@ -232,7 +232,7 @@ public class DockerService : IDockerService
         catch (Exception ex)
         {
             Console.WriteLine($"GetContainerStats error: {ex.Message}");
-            return new List<ContainerUsageStats>();
+            throw new IOException("Docker 资源统计查询失败，请检查 Docker 服务", ex);
         }
     }
 
@@ -316,7 +316,7 @@ public class DockerService : IDockerService
         {
             // 使用简单的管道符分隔格式，避免 JSON 截断问题
             // Format: ID|Repository|Tag|Size|CreatedAt
-            var output = await ExecuteDockerCommandAsync("images --no-trunc --format \"{{.ID}}|{{.Repository}}|{{.Tag}}|{{.Size}}|{{.CreatedAt}}\"");
+            var output = await ExecuteDockerCommandAsync("images --no-trunc --format \"{{.ID}}|{{.Repository}}|{{.Tag}}|{{.Size}}|{{.CreatedAt}}\"", strict: true);
             if (string.IsNullOrEmpty(output))
             {
                 Console.WriteLine("Docker images returned empty output");
@@ -376,7 +376,7 @@ public class DockerService : IDockerService
     {
         try
         {
-            var output = await ExecuteDockerCommandAsync("images --format json");
+            var output = await ExecuteDockerCommandAsync("images --format json", strict: true);
             if (string.IsNullOrEmpty(output))
             {
                 Console.WriteLine("Docker images JSON fallback returned empty output");
@@ -424,7 +424,7 @@ public class DockerService : IDockerService
         catch (Exception ex)
         {
             Console.WriteLine($"GetImages JSON fallback error: {ex.Message}");
-            return new List<DockerImage>();
+            throw new IOException("Docker 镜像查询失败，请检查 Docker 服务和命令行配置", ex);
         }
     }
 
@@ -843,7 +843,7 @@ public class DockerService : IDockerService
 
         {
             // 使用 docker compose ls --all 同时显示运行中与已停止的项目
-            var output = await ExecuteDockerCommandAsync("compose ls --all");
+            var output = await ExecuteDockerCommandAsync("compose ls --all", strict: true);
 
             if (string.IsNullOrEmpty(output))
             {
@@ -923,7 +923,16 @@ public class DockerService : IDockerService
         {
             Console.WriteLine($"GetComposeStatus error: {ex.Message}");
             Console.WriteLine($"Stack trace: {ex.StackTrace}");
-            return new List<ComposeProject>();
+            try {
+                // Docker Engine may be reachable while the IIS account cannot see the
+                // per-user Compose plugin. Its container labels still identify projects.
+                var containers = await ExecuteDockerCommandAsync(
+                    "ps -a --filter label=com.docker.compose.project --format json", strict: true);
+                return DockerComposeFallback.Parse(containers);
+            } catch (Exception fallback) {
+                throw new IOException("Docker Compose 查询失败，请检查 Docker 服务和命令行配置",
+                    new AggregateException(ex, fallback));
+            }
         }
     }
 
@@ -966,9 +975,9 @@ public class DockerService : IDockerService
     /// <summary>
     /// 执行 Docker 命令
     /// </summary>
-    private async Task<string> ExecuteDockerCommandAsync(string arguments, int timeoutSeconds = 10)
+    private async Task<string> ExecuteDockerCommandAsync(string arguments, int timeoutSeconds = 10, bool strict = false)
     {
-        return await ExecuteCommandAsync(DockerExecutable.Path, arguments, timeoutSeconds);
+        return await ExecuteCommandAsync(DockerExecutable.Path, arguments, timeoutSeconds, strict);
     }
 
     /// <summary>
@@ -1065,7 +1074,7 @@ public class DockerService : IDockerService
     /// <summary>
     /// 执行系统命令
     /// </summary>
-    private async Task<string> ExecuteCommandAsync(string command, string arguments, int timeoutSeconds = 10)
+    private async Task<string> ExecuteCommandAsync(string command, string arguments, int timeoutSeconds = 10, bool strict = false)
     {
         var processInfo = new ProcessStartInfo
         {
@@ -1077,13 +1086,13 @@ public class DockerService : IDockerService
             RedirectStandardError = true
         };
 
-        return await ExecuteProcessAsync(processInfo, timeoutSeconds);
+        return await ExecuteProcessAsync(processInfo, timeoutSeconds, strict);
     }
 
     /// <summary>
     /// 执行进程
     /// </summary>
-    private async Task<string> ExecuteProcessAsync(ProcessStartInfo processInfo, int timeoutSeconds = 10)
+    private async Task<string> ExecuteProcessAsync(ProcessStartInfo processInfo, int timeoutSeconds = 10, bool strict = false)
     {
         try
         {
@@ -1096,6 +1105,7 @@ public class DockerService : IDockerService
             using var process = Process.Start(processInfo);
             if (process == null)
             {
+                if (strict) throw new IOException("无法启动 Docker 命令行");
                 Console.WriteLine($"Failed to start process: {processInfo.FileName}");
                 return "";
             }
@@ -1108,6 +1118,7 @@ public class DockerService : IDockerService
             if (completedTask != waitTask)
             {
                 try { process.Kill(); } catch { }
+                if (strict) throw new TimeoutException("Docker 命令执行超时");
                 Console.WriteLine($"Process timeout: {processInfo.FileName} {processInfo.Arguments}");
                 return $"Process timeout after {timeoutSeconds} seconds.";
             }
@@ -1124,11 +1135,14 @@ public class DockerService : IDockerService
             if (!string.IsNullOrEmpty(error))
             {
                 Console.WriteLine($"Process error (exit code: {process.ExitCode}): {error}");
+                if (strict && process.ExitCode != 0) throw new IOException("Docker 命令执行失败：" + error.Trim());
+                if (strict) return output;
                 return error;
             }
 
             if (process.ExitCode != 0)
             {
+                if (strict) throw new IOException("Docker 命令退出，代码 " + process.ExitCode);
                 Console.WriteLine($"Process exited with code {process.ExitCode}: {processInfo.FileName} {processInfo.Arguments}");
                 // 返回错误信息或空字符串，而不是中断
                 if (!string.IsNullOrEmpty(output))
@@ -1143,6 +1157,7 @@ public class DockerService : IDockerService
         {
             Console.WriteLine($"ExecuteProcess error: {ex.Message}");
             Console.WriteLine($"Stack trace: {ex.StackTrace}");
+            if (strict) throw;
             return "";
         }
     }

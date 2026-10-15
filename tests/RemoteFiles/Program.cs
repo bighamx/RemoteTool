@@ -28,6 +28,14 @@ try {
     try { service.GetFiles(Path.Combine(root, "missing")); throw new Exception("missing directory returned empty success"); } catch (DirectoryNotFoundException) { count++; }
     Check(!service.DeleteDirectory(""), "blank delete refused");
     var zip = Path.Combine(root, "nested.zip");
+    var selfZip = Path.Combine(source, "self.zip");
+    Check(!service.Compress([source], selfZip) && !File.Exists(selfZip), "compression output inside source refused before creation");
+    var packed = Path.Combine(root, "packed.zip");
+    Check(service.Compress([source], packed), "normal compression succeeds");
+    using (var archive = System.IO.Compression.ZipFile.OpenRead(packed))
+        Check(archive.GetEntry("source/child/value.txt") != null, "archive entries use portable slashes");
+    var missingZip = Path.Combine(root, "missing.zip");
+    Check(!service.Compress([Path.Combine(root, "not-found")], missingZip) && !File.Exists(missingZip), "missing input fails before creating archive");
     using (var archive = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create)) {
         using var writer = new StreamWriter(archive.CreateEntry("folder/test.txt").Open()); writer.Write("archive content");
     }

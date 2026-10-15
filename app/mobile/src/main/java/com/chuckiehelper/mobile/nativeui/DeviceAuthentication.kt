@@ -1,6 +1,18 @@
 package com.chuckiehelper.mobile.nativeui
 
 import java.io.IOException
+import okhttp3.Request
+
+// Login can itself return 401; refreshing it would re-enter the held refresh mutex.
+internal fun Request.canRefreshAuthentication(): Boolean =
+    !url.encodedPath.trimEnd('/').equals("/api/auth/login", ignoreCase = true)
+
+// Read the token actually sent, not the session token another request may have renewed.
+internal fun Request.authenticationToken(): String? = headers.values("Cookie")
+    .asSequence().flatMap { it.split(';').asSequence() }
+    .map { it.trim().split('=', limit = 2) }
+    .firstOrNull { it.size == 2 && it[0] == "access_token" }
+    ?.get(1)?.takeIf { it.isNotBlank() }
 
 class DeviceLogin(val username: String, val password: String, val token: String) {
     fun withToken(value: String) = DeviceLogin(username, password, value)

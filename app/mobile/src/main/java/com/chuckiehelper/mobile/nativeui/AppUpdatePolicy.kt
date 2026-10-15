@@ -8,7 +8,8 @@ internal const val UPDATE_REPOSITORY = "bighamx/RemoteTool"
 internal const val UPDATE_REPOSITORY_ID = 368781353L
 internal const val UPDATE_RELEASES_URL = "https://api.github.com/repositories/368781353/releases?per_page=30"
 private val updateRepositoryAliases = setOf(UPDATE_REPOSITORY, "bighamx/chuckieTool")
-internal const val UPDATE_MANIFEST = "chuckiehelper-update.json"
+internal const val UPDATE_MANIFEST = "remotetool-update.json"
+internal const val LEGACY_UPDATE_MANIFEST = "chuckiehelper-update.json"
 internal const val UPDATE_LATEST_MANIFEST_URL = "https://github.com/$UPDATE_REPOSITORY/releases/latest/download/$UPDATE_MANIFEST"
 internal const val UPDATE_PACKAGE = "com.chuckiehelper.mobile"
 internal const val MAX_UPDATE_SIZE = 256L * 1024 * 1024
@@ -49,7 +50,7 @@ internal fun appReleaseCandidates(releases: JSONArray): List<JSONObject> =
         .filter { release ->
             !release.optBoolean("draft") && !release.optBoolean("prerelease") &&
                 release.optJSONArray("assets")?.let { assets ->
-                    (0 until assets.length()).any { assets.optJSONObject(it)?.optString("name") == UPDATE_MANIFEST }
+                    (0 until assets.length()).any { assets.optJSONObject(it)?.optString("name") in setOf(UPDATE_MANIFEST, LEGACY_UPDATE_MANIFEST) }
                 } == true
         }.take(5)
 

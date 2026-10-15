@@ -58,7 +58,9 @@ if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskRepo "artifacts\a
 $destination = [IO.Path]::GetFullPath($OutputDirectory)
 $apkName = "RemoteTool-$versionName.apk"
 $targetApk = Join-Path $destination $apkName
-$manifestPath = Join-Path $destination 'chuckiehelper-update.json'
+$manifestPath = Join-Path $destination 'remotetool-update.json'
+# Installed versions through build 43 request the legacy filename.
+$legacyManifestPath = Join-Path $destination 'chuckiehelper-update.json'
 $notesTarget = Join-Path $destination 'release-notes.txt'
 $manifest = [ordered]@{
     schemaVersion = 1
@@ -75,6 +77,7 @@ New-Item -ItemType Directory -Path $destination -Force | Out-Null
 if ($apkSource -ne $targetApk) { Copy-Item -LiteralPath $apkSource -Destination $targetApk -Force }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 5), $utf8)
+Copy-Item -LiteralPath $manifestPath -Destination $legacyManifestPath -Force
 [IO.File]::WriteAllText($notesTarget, $notes, $utf8)
 if ((Get-ApkSha256 $targetApk) -ne $manifest.sha256) { throw 'Copied APK hash mismatch.' }
 if ($Publish) {
@@ -84,7 +87,7 @@ if ($Publish) {
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read current releases; refusing to publish without version verification.' }
     foreach ($release in ($releasesRaw -join "`n" | ConvertFrom-Json)) {
         if ($release.draft -or $release.prerelease) { continue }
-        $asset = $release.assets | Where-Object { $_.name -eq 'chuckiehelper-update.json' } | Select-Object -First 1
+        $asset = $release.assets | Where-Object { $_.name -in @('remotetool-update.json', 'chuckiehelper-update.json') } | Select-Object -First 1
         if ($asset) {
             if (-not ($asset.browser_download_url.StartsWith("https://github.com/$repository/releases/download/") -or
                 $asset.browser_download_url.StartsWith('https://github.com/bighamx/chuckieTool/releases/download/'))) { throw 'Unexpected manifest URL.' }
@@ -92,7 +95,9 @@ if ($Publish) {
             if ($versionCode -le [long]$published.versionCode) { throw 'versionCode must exceed every published stable Android version.' }
         }
     }
-    & gh release create "android-v$versionName-build$versionCode" $targetApk $manifestPath --repo $repository --title "RemoteTool Android v$versionName" --notes-file $notesTarget
+    $releaseCommit = & git -C $taskRepo rev-parse HEAD
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve release commit.' }
+    & gh release create "android-v$versionName-build$versionCode" $targetApk $manifestPath $legacyManifestPath --repo $repository --target $releaseCommit --title "RemoteTool Android v$versionName" --notes-file $notesTarget
     if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
 } else { Write-Output 'Prepared locally. Add -Publish to publish these assets as an Android GitHub release.' }
 Write-Output "APK: $targetApk"

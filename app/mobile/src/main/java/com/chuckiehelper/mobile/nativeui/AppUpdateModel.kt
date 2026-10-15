@@ -254,7 +254,9 @@ internal class AppUpdateModel(app: Application) : AndroidViewModel(app) {
         val releases = JSONArray(fetchText(UPDATE_RELEASES_URL))
         return appReleaseCandidates(releases).map { candidate ->
             val assets = candidate.getJSONArray("assets")
-            val manifest = (0 until assets.length()).map { assets.getJSONObject(it) }.first { it.optString("name") == UPDATE_MANIFEST }
+            val rows = (0 until assets.length()).map { assets.getJSONObject(it) }
+            val manifest = rows.firstOrNull { it.optString("name") == UPDATE_MANIFEST }
+                ?: rows.first { it.optString("name") == LEGACY_UPDATE_MANIFEST }
             val url = manifest.getString("browser_download_url")
             require(isUpdateAssetUrl(url)) { "更新清单地址不属于本项目" }
             parseAppRelease(JSONObject(fetchText(url)), candidate)

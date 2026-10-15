@@ -12,6 +12,7 @@ const sandbox = {
     Vue: { createApp: value => { options = value; return { use() {}, mount() {} }; } },
     ViewUIPlus: {}
 };
+sandbox.window.RemoteToolApi.id = value => encodeURIComponent(value);
 vm.runInNewContext(source, sandbox, { filename: 'agent-workspace.js' });
 assert.ok(options?.computed?.visibleLiveSegments, 'Hermes workspace computed must exist');
 for (const name of ['projectRootsOf', 'asText', 'narrationNormalized', 'narrationCovers', 'sameNarration', 'narrationOverlap', 'pushLiveSegment']) {
@@ -60,3 +61,34 @@ options.methods.refreshSessionStatuses.call(list).then(() => {
     assert.equal(options.methods.sessionRunning.call(list, other), true, 'Hermes running status shows badge');
     console.log('Session running badges: Codex, Hermes, selected live state and background refresh passed');
 }).catch(error => { console.error(error); process.exitCode = 1; });
+
+const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+async function checkReadOrdering() {
+    const older = deferred(), newer = deferred(); let reads = 0;
+    sandbox.window.RemoteToolApi.get = async () => (++reads === 1 ? older.promise : newer.promise);
+    const status = {
+        epoch: 1, selectedId: 'same', activeRun: null, externalRunning: false,
+        startRead: options.methods.startRead, stopEventStream() {}, liveTools: []
+    };
+    const first = options.methods.loadStatus.call(status, 1, null, null, { available: true, running: false });
+    const second = options.methods.loadStatus.call(status, 1, null, null, { available: true, running: true });
+    newer.resolve({ run_id: null }); await second;
+    assert.equal(status.externalRunning, true, `latest status failed before the older response: ${status.error || 'no error'}`);
+    older.resolve({ run_id: null }); await first;
+    assert.equal(status.externalRunning, true, 'older status response must not clear a newer running observation');
+
+    const oldHistory = deferred(), newHistory = deferred(); reads = 0;
+    sandbox.window.RemoteToolApi.get = async () => (++reads === 1 ? oldHistory.promise : newHistory.promise);
+    const history = {
+        epoch: 2, selectedId: 'same', messages: [], mediaSignature: '', filesRefreshAt: 0,
+        startRead: options.methods.startRead, reconcileDelivered: () => new Set(),
+        reconcilePending() {}, messageText: m => m.content, queueFollowLatest() {}, scheduleScrollRestore() {}
+    };
+    const oldRead = options.methods.loadHistory.call(history, 2);
+    const newRead = options.methods.loadHistory.call(history, 2);
+    newHistory.resolve({ data: [{ id: 2, role: 'user', content: 'new' }], has_more: false }); await newRead;
+    oldHistory.resolve({ data: [{ id: 1, role: 'user', content: 'old' }], has_more: false }); await oldRead;
+    assert.equal(history.messages[0].id, 2, 'older history response must not replace newer messages');
+    console.log('Agent workspace concurrent reads: latest status and history win');
+}
+checkReadOrdering().catch(error => { console.error(error); process.exitCode = 1; });

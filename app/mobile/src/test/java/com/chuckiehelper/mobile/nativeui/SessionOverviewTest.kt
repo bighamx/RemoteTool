@@ -15,6 +15,11 @@ class SessionOverviewTest {
         ))
     }
 
+    @Test fun explicitWorkspaceLogoutDoesNotReuseOldAccount() {
+        assertNull(currentCodexIdentity(JSONObject().put("current", "old-account"),
+            JSONObject().put("current", JSONObject.NULL)))
+    }
+
     @Test fun completeOverviewKeepsAllPartsIncludingExplicitNoRun() {
         val overview = SessionOverview.read(JSONObject("""{
             "detail":{"session":{"id":"session-1"}},

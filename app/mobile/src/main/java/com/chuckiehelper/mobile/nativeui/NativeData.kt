@@ -133,7 +133,7 @@ class NativeApi(
                 }
 
                 override fun onResponse(call: Call, response: Response) {
-                    if (cont.isActive) cont.resume(response) else response.close()
+                    cont.resume(response) { _, undelivered, _ -> undelivered.close() }
                 }
             }
         )
@@ -147,7 +147,7 @@ class NativeApi(
                 call.enqueue(object : Callback {
                     override fun onFailure(call: Call, error: IOException) { if (cont.isActive) cont.resumeWithException(error) }
                     override fun onResponse(call: Call, response: Response) {
-                        if (cont.isActive) cont.resume(response) else response.close()
+                        cont.resume(response) { _, undelivered, _ -> undelivered.close() }
                     }
                 })
             }
@@ -173,10 +173,12 @@ class NativeApi(
                 // rather than surfacing "登录已过期" and forcing a manual reconnect.
                 // The cookie is baked into the Request, so it must be rebuilt from the
                 // refreshed session before retrying.
-                if (error is LoginRequired && !healed && onUnauthorized != null) {
+                if (error is LoginRequired && !healed && onUnauthorized != null && current.canRefreshAuthentication()) {
                     healed = true
-                    val failed = authentication?.token
-                    val token = try { onUnauthorized?.invoke(failed) } catch (_: Exception) { null }
+                    val failed = current.authenticationToken()
+                    val token = try { onUnauthorized?.invoke(failed) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { null }
                     if (!token.isNullOrBlank()) {
                         installToken(token)
                         current = current.newBuilder().header("Cookie", cookie()).build()
@@ -319,7 +321,11 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
                     failedToken = failedToken,
                     currentToken = authentication.token,
                     read = { credentials.read(device.id) },
-                    signIn = { saved -> try { api.login(saved.username, saved.password) } catch (_: Exception) { null } },
+                    signIn = { saved ->
+                        try { api.login(saved.username, saved.password) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { null }
+                    },
                     save = { credentials.save(device.id, it) },
                 )
                 if (!token.isNullOrBlank()) loginNeeded = false

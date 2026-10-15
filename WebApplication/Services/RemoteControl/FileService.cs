@@ -732,6 +732,29 @@ public class FileService
         try
         {
             var fullDest = ResolvePath(destZipPath);
+            if (sourcePaths == null || sourcePaths.Count == 0) return false;
+            // Inspect every source before creating the archive. This prevents the output
+            // from being included in its own source tree and rejects junction loops.
+            var entries = new List<(string File, string Name)>();
+            foreach (var path in sourcePaths)
+            {
+                var source = ResolvePath(path);
+                if (FilePathPolicy.IsWithin(source, fullDest)) throw new IOException("压缩目标不能是源文件或位于源目录内");
+                var directory = Directory.Exists(source);
+                var prefix = new DirectoryInfo(source).Name;
+                var pending = new Stack<string>();
+                pending.Push(source);
+                while (pending.TryPop(out var item))
+                {
+                    if ((File.GetAttributes(item) & FileAttributes.ReparsePoint) != 0)
+                        throw new IOException("压缩暂不支持文件或目录链接，请选择实际路径");
+                    if (Directory.Exists(item))
+                        foreach (var child in Directory.EnumerateFileSystemEntries(item)) pending.Push(child);
+                    else entries.Add((item, directory
+                        ? prefix + "/" + Path.GetRelativePath(source, item).Replace('\\', '/')
+                        : Path.GetFileName(item)));
+                }
+            }
             // Ensure destination directory exists
             var destDir = Path.GetDirectoryName(fullDest);
             if (!Directory.Exists(destDir)) Directory.CreateDirectory(destDir);
@@ -739,24 +762,7 @@ public class FileService
             // Create zip
             using var archive = ZipFile.Open(fullDest, ZipArchiveMode.Create);
             
-            foreach (var path in sourcePaths)
-            {
-                var fullSource = ResolvePath(path);
-                if (File.Exists(fullSource))
-                {
-                    archive.CreateEntryFromFile(fullSource, Path.GetFileName(fullSource));
-                }
-                else if (Directory.Exists(fullSource))
-                {
-                    var dirName = Path.GetFileName(fullSource);
-                    var files = Directory.GetFiles(fullSource, "*", SearchOption.AllDirectories);
-                    foreach (var file in files)
-                    {
-                        var relativePath = Path.GetRelativePath(fullSource, file);
-                        archive.CreateEntryFromFile(file, Path.Combine(dirName, relativePath));
-                    }
-                }
-            }
+            foreach (var entry in entries) archive.CreateEntryFromFile(entry.File, entry.Name);
             return true;
         }
         catch (Exception ex)

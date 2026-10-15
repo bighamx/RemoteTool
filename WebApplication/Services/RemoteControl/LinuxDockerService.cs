@@ -58,7 +58,7 @@ public class LinuxDockerService : IDockerService, IDisposable
         catch (Exception ex)
         {
             Console.WriteLine($"GetContainers error: {ex.Message}");
-            return new List<DockerContainer>();
+            throw new IOException("Docker 容器查询失败，请检查 Docker 服务连接", ex);
         }
     }
 
@@ -171,7 +171,7 @@ public class LinuxDockerService : IDockerService, IDisposable
         catch (Exception ex)
         {
             Console.WriteLine($"GetImages error: {ex.Message}");
-            return new List<DockerImage>();
+            throw new IOException("Docker 镜像查询失败，请检查 Docker 服务连接", ex);
         }
     }
 
@@ -393,9 +393,9 @@ public class LinuxDockerService : IDockerService, IDisposable
 
             return projects;
         }
-        catch
+        catch (Exception ex)
         {
-            return new List<ComposeProject>();
+            throw new IOException("Docker Compose 查询失败，请检查 Docker 服务连接", ex);
         }
     }
 

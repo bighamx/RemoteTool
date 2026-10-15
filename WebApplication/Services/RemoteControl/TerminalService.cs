@@ -17,8 +17,6 @@ public enum TerminalType
 
 public class TerminalService(IConfiguration configuration)
 {
-    private readonly Dictionary<string, TerminalSession> _sessions = new();
-
     public async Task HandleWebSocketAsync(WebSocket webSocket, TerminalType terminalType = TerminalType.Shell)
     {
         if (OperatingSystem.IsMacOS())
@@ -26,9 +24,7 @@ public class TerminalService(IConfiguration configuration)
             await MacPtySession.RunAsync(webSocket, configuration);
             return;
         }
-        var sessionId = Guid.NewGuid().ToString();
         var session = new TerminalSession(webSocket, terminalType);
-        _sessions[sessionId] = session;
 
         try
         {
@@ -42,7 +38,6 @@ public class TerminalService(IConfiguration configuration)
         finally
         {
             session.Dispose();
-            _sessions.Remove(sessionId);
         }
     }
 }
@@ -332,9 +327,7 @@ public class TerminalSession : IDisposable
                 var bytesRead = await reader.ReadAsync(buffer, 0, buffer.Length);
                 if (bytesRead == 0)
                 {
-                    // 没有数据可读，短暂等待后重试
-                    await Task.Delay(10);
-                    continue;
+                    break;
                 }
 
                 var output = new string(buffer, 0, bytesRead);
@@ -355,17 +348,11 @@ public class TerminalSession : IDisposable
         {
             try
             {
-                var result = await _webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
-
-                if (result.MessageType == WebSocketMessageType.Close)
+                // Wait for the complete UTF-8 message before executing a command.
+                var command = await WebSocketTextReader.Read(_webSocket, buffer, CancellationToken.None, 65536);
+                if (command is null) break;
+                if (_process != null && !_process.HasExited)
                 {
-                    await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
-                    break;
-                }
-
-                if (result.MessageType == WebSocketMessageType.Text && _process != null && !_process.HasExited)
-                {
-                    var command = Encoding.UTF8.GetString(buffer, 0, result.Count);
                     var lineEnd = !OperatingSystem.IsWindows() ? "\n" : "\r\n";
 
                     if (_terminalType == TerminalType.Shell || RuntimeInformation.IsOSPlatform(OSPlatform.Linux))

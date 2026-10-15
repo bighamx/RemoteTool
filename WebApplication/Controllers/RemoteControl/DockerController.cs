@@ -39,7 +39,7 @@ public class DockerController : ControllerBase
         }
         catch (Exception ex)
         {
-            return ApiError($"Failed to get containers: {ex.Message}");
+            return StatusCode(503, new { message = $"Failed to get containers: {ex.Message}" });
         }
     }
 
@@ -130,7 +130,7 @@ public class DockerController : ControllerBase
         }
         catch (Exception ex)
         {
-            return ApiError($"Failed to get container stats: {ex.Message}");
+            return StatusCode(503, new { message = $"Failed to get container stats: {ex.Message}" });
         }
     }
 
@@ -147,7 +147,7 @@ public class DockerController : ControllerBase
         }
         catch (Exception ex)
         {
-            return ApiError(ex.Message);
+            return StatusCode(503, new { message = ex.Message });
         }
     }
 
@@ -435,7 +435,7 @@ public class DockerController : ControllerBase
         }
         catch (Exception ex)
         {
-            return BadRequest(new { message = ex.Message });
+            return StatusCode(503, new { message = ex.Message });
         }
     }
 

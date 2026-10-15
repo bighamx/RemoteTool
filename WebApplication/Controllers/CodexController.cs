@@ -91,8 +91,8 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
         });
         var activityTask = Part(() => ActivityAsync(sessionId, ct));
         await Task.WhenAll(detailTask, contextTask, runStateTask, queueTask, historyTask, activityTask);
-        JsonObject? run = null;
-        if (runStateTask.Result?["run_id"]?.ToString() is string runId && Regex.IsMatch(runId, "^[a-zA-Z0-9_-]{1,160}$"))
+        JsonObject? run = AgentOverview.RunDocument(runStateTask.Result, sessionId);
+        if (run == null && runStateTask.Result?["run_id"]?.ToString() is string runId && Regex.IsMatch(runId, "^[a-zA-Z0-9_-]{1,160}$"))
             run = await Part(() => Upstream($"runs/{runId}"));
         JsonNode? files = null;
         try { files = JsonSerializer.SerializeToNode(new { data = attachments.List(sessionId) }); }

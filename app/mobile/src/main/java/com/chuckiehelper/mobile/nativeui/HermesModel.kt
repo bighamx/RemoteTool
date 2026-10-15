@@ -51,8 +51,8 @@ internal data class SessionOverview(
 }
 
 internal fun currentCodexIdentity(accounts: JSONObject, workspaces: JSONObject): String? =
-    workspaces.optString("current").takeIf { it.isNotBlank() && it != "null" }
-        ?: accounts.optString("current").takeIf { it.isNotBlank() && it != "null" }
+    (if (workspaces.has("current")) workspaces else accounts).optString("current")
+        .takeIf { it.isNotBlank() && it != "null" }
 
 /** Durable run ids, never a persisted provider secret or automatically replayed prompt. */
 class HermesModel(application: Application, deviceId: String, val agent: String = "hermes") : AndroidViewModel(application) {
@@ -207,11 +207,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun loadEarlierHistory() = launch {
         val id = selectedId ?: return@launch
         val connection = api
+        val generation = openingGeneration
         if (!historyHasMore || historyLoadingEarlier) return@launch
         historyLoadingEarlier = true
         try {
             historyReadMutex.withLock {
-                if (selectedId == id && api === connection) loadHistoryNow(id, earlier = true)
+                if (selectedId == id && api === connection && generation == openingGeneration) loadHistoryNow(id, earlier = true)
             }
         } finally {
             if (selectedId == id && api === connection) historyLoadingEarlier = false
@@ -303,6 +304,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         super.onCleared()
     }
     private fun pauseWatching() {
+        cancelRecovery()
         observationEpoch++
         watching?.cancel(); watching = null
         streamJob?.cancel(); streamJob = null
@@ -347,7 +349,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         catch (_: Exception) { /* Keep only the last verified observation; it expires in 30 seconds. */ }
     }
 
-    private fun applyExternalActivity(id: String, connection: NativeApi, result: JSONObject, observedAt: Long) {
+    private suspend fun applyExternalActivity(id: String, connection: NativeApi, result: JSONObject, observedAt: Long) {
         if (selectedId != id || api !== connection || runId != null || !result.optBoolean("available")) return
         externalActivity = result; externalVerifiedAt = observedAt; activityNow = observedAt
         val compactedAt = parseMessageTimestamp(result.opt("compacted_at"))
@@ -355,9 +357,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (compactedAt != null && compactedId != null) recordExternalCompaction(id, compactedId, compactedAt)
         noteRunActivity(id, obj("status" to if (result.optBoolean("running")) "started" else "completed"), observedAt)
         val revision = "$id:${result.optString("activity_id")}:${result.optLong("revision")}:${result.optBoolean("running")}:${result.optString("kind")}:${result.opt("compacted_at")}"
-        if (revision != externalHistoryRevision) {
-            externalHistoryRevision = revision
-            if (historyJob?.isActive != true) launch { loadHistory(id) }
+        if (revision != externalHistoryRevision && historyJob?.isActive != true) {
+            // Do not acknowledge the revision before history succeeds: a failed read
+            // must be retried even if the agent produces no more events.
+            loadHistory(id)
+            if (selectedId == id && api === connection) externalHistoryRevision = revision
         }
     }
 
@@ -475,6 +479,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     var workspaceResetErrors by mutableStateOf<Map<String, String>>(emptyMap())
         private set
     private var workspaceReadEpoch = 0L
+    private var accountReadEpoch = 0L
     var projects by mutableStateOf<List<JSONObject>>(emptyList())
         private set
     var projectsLoading by mutableStateOf(false)
@@ -625,6 +630,76 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     var scrollToLatestRequest by mutableStateOf(0L)
         private set
     private var readConnectionError: String? = null
+    private var recoveryJob: Job? = null
+    private var recoveryEpoch = 0L
+    private var recoveryFailedAt = 0L
+    private var stateRecovering by mutableStateOf(false)
+    private var statusRecovering by mutableStateOf(false)
+    private var streamRecovering by mutableStateOf(false)
+    private var contextRecovering by mutableStateOf(false)
+    val recovering get() = stateRecovering || statusRecovering || streamRecovering || contextRecovering
+
+    private fun cancelRecovery() {
+        recoveryEpoch++
+        recoveryJob?.cancel(); recoveryJob = null
+        stateRecovering = false; statusRecovering = false; streamRecovering = false; contextRecovering = false
+        recoveryFailedAt = 0L
+    }
+
+    private fun recoverState(session: String? = selectedId, manual: Boolean = false): Boolean {
+        if (!this::api.isInitialized || session != selectedId) return false
+        if (recoveryJob?.isActive == true) return true
+        if (!manual && recoveryFailedAt != 0L && activityClock() - recoveryFailedAt < 30_000) return false
+        val connection = api
+        val generation = openingGeneration
+        val recovery = ++recoveryEpoch
+        stateRecovering = true
+        setError(session, null)
+        recoveryJob = viewModelScope.launch {
+            fun current() = api === connection && selectedId == session && openingGeneration == generation && recoveryEpoch == recovery
+            try {
+                retryAgentRead {
+                    withTimeout(20_000) {
+                        if (!current()) throw CancellationException()
+                        ensureCapabilities(force = true)
+                        if (agent == "codex") fetchAccountsNow()
+                        if (!current()) throw CancellationException()
+                        refreshSessions()
+                        if (session != null) {
+                            loadHistory(session)
+                            if (!current()) throw CancellationException()
+                            loadSelection(session, loadRelated = false)
+                            attachServerActiveRun(session, required = true)
+                            val context = connection.json("$root/sessions/${q(session)}/context")
+                            if (!current()) throw CancellationException()
+                            applyContextResult(session, connection, context)
+                            reconcilePendingNow(session)
+                            if (hasPendingFor(session)) throw IOException("消息发送结果仍待核对，请勿重复发送")
+                        }
+                    }
+                }
+                if (current()) {
+                    recoveryFailedAt = 0L
+                    if (error == readConnectionError) setError(session, null)
+                    readConnectionError = null
+                    if (state == "正在同步会话") state = "就绪"
+                    if (runId != null) watch()
+                }
+            } catch (timeout: TimeoutCancellationException) {
+                if (current()) {
+                    recoveryFailedAt = activityClock()
+                    setError(session, "自动同步多次超时，请检查连接后重试；草稿已保留")
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                if (current()) {
+                    recoveryFailedAt = activityClock()
+                    setError(session, "自动同步未成功：${connectionFailureMessage(failure)}")
+                }
+            } finally { if (current()) stateRecovering = false }
+        }
+        return true
+    }
     private var flushedStreamPrefix = ""
     private var pendingItemId: String? = null
     private var pendingPhase = ""
@@ -803,20 +878,27 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         contextReadJob?.cancel()
         contextReadSession = id
         val connection = api
+        val generation = openingGeneration
         return viewModelScope.launch {
         if (contextInfo == null) contextInfo = obj("available" to false, "message" to "正在读取")
         try {
-            val result = kotlinx.coroutines.withTimeout(25000) { connection.json("$root/sessions/${q(id)}/context") }
-            if (selectedId != id || api !== connection) return@launch
+            val result = retryAgentRead {
+                try { withTimeout(15_000) { connection.json("$root/sessions/${q(id)}/context") } }
+                catch (failure: Exception) {
+                    if (canRecoverAgentRead(failure)) contextRecovering = true
+                    throw failure
+                }
+            }
+            if (selectedId != id || api !== connection || generation != openingGeneration) return@launch
             applyContextResult(id, connection, result)
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            if (selectedId == id && api === connection && contextInfo?.optBoolean("available") != true)
-                contextInfo = obj("available" to false, "message" to "读取超时，请刷新重试")
+            if (selectedId == id && api === connection && generation == openingGeneration && contextInfo?.optBoolean("available") != true)
+                contextInfo = obj("available" to false, "message" to "多次读取超时，可稍后重试")
         } catch (e: CancellationException) { throw e }
         catch (error: Exception) {
-            if (selectedId == id && api === connection && contextInfo?.optBoolean("available") != true)
-                contextInfo = obj("available" to false, "message" to "读取失败，请刷新重试")
-        }
+            if (selectedId == id && api === connection && generation == openingGeneration && contextInfo?.optBoolean("available") != true)
+                contextInfo = obj("available" to false, "message" to "读取暂未恢复，可稍后重试")
+        } finally { if (api === connection && generation == openingGeneration) contextRecovering = false }
         }.also { contextReadJob = it }
     }
     private fun applyContextResult(id: String, connection: NativeApi, result: JSONObject, prefetched: Boolean = false) {
@@ -881,6 +963,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     fun bind(value: NativeApi) {
         if (this::api.isInitialized && api.base == value.base) return
+        cancelRecovery()
+        accountReadEpoch++
         sessionSearchEpoch++; sessionSearchJob?.cancel()
         sessionSearchResults = emptyList(); sessionSearchLoading = false; sessionSearchError = null; sessionSearchHasMore = false
         historyOldestId = null; historyHasMore = false; historyLoadingEarlier = false
@@ -941,6 +1025,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     private fun launch(block: suspend CoroutineScope.() -> Unit): Job {
         val originatingSession = selectedId
+        val originatingConnection = if (this::api.isInitialized) api else null
         return viewModelScope.launch {
             try {
                 block()
@@ -948,6 +1033,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 throw e
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
+                if (originatingConnection !== api) return@launch
+                if (canRecoverAgentRead(e) && recoverState(originatingSession)) return@launch
                 setError(originatingSession, connectionFailureMessage(e))
                 if (selectedId == originatingSession && historyCacheStatus != null) historyCacheStatus = "缓存 · 同步失败"
                 if (e is ReadConnectionFailure && selectedId == originatingSession) readConnectionError = error
@@ -1136,9 +1223,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     private suspend fun fetchAccountsNow() {
         val connection = api
+        val epoch = ++accountReadEpoch
         val loadedAccounts = connection.json("$root/accounts")
         val loadedWorkspaces = connection.json("$root/workspaces")
-        if (api !== connection) return
+        if (api !== connection || epoch != accountReadEpoch) return
         if (workspaces.optString("current") != loadedWorkspaces.optString("current")) {
             workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
             workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetUsing = emptySet(); workspaceResetErrors = emptyMap()
@@ -1238,7 +1326,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private fun currentCodexAccountId(): String? = if (agent == "codex") currentCodexIdentity(accounts, workspaces) else null
 
     private suspend fun resetAccountView(expectedAccount: String? = null) {
+        cancelRecovery()
         historyJob?.cancel()
+        openingGeneration++; openingSession = null
+        contextReadJob?.cancel(); contextReadJob = null; contextReadSession = null
+        contextPrefetchedSession = null; activeRunCheckSession = null
         selectedId = null
         contextInfo = null; asyncQuestion = null
         sessionProvider = ""; sessionModel = ""; sessionEffort = ""; sessionTier = ""
@@ -1263,6 +1355,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun switchAccount(id: String, workspace: Boolean, onDone: () -> Unit) = launch {
         if (switchingAccount) return@launch
         switchingAccount = true
+        accountReadEpoch++ // Reject account reads begun before the switch.
         error = null
         try {
             val switched = api.json("$root/${if (workspace) "workspaces" else "accounts"}/$id/use", obj())
@@ -1335,8 +1428,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     fun select(session: JSONObject) {
+        cancelRecovery()
         val id = session.getString("id")
         val opening = ++openingGeneration
+        filesReadEpoch++; filesReadJob?.cancel(); filesReadJob = null; filesRefreshPending = false
         openingSession = id
         contextPrefetchedSession = null
         activeRunCheckSession = null
@@ -1402,12 +1497,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     }
                 }
                 val overview = overviewRequest.await()?.let(SessionOverview::read)
-                if (selectedId != id || api !== connection) return@launch
+                if (selectedId != id || api !== connection || openingGeneration != opening) return@launch
                 if (openingGeneration == opening) openingSession = null
                 if (overview != null) {
                     val context = overview.context
                     if (context != null) applyContextResult(id, connection, context, prefetched = true) else pollContext()
                     attachServerActiveRun(id, prefetched = overview.activeRun)
+                    if (selectedId != id || api !== connection || openingGeneration != opening) return@launch
                     if (runId == null) {
                         val activity = overview.activity
                         if (activity != null) applyExternalActivity(id, connection, activity, activityClock())
@@ -1432,9 +1528,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private suspend fun attachServerActiveRun(id: String, allowSubmitting: Boolean = false, required: Boolean = false, prefetched: JSONObject? = null) {
         if (runId != null || submitting && !allowSubmitting) return
         val connection = api
+        val generation = openingGeneration
         try {
             val result = prefetched?.takeIf { it.has("run_id") } ?: connection.json("$root/sessions/${q(id)}/active-run")
-            if (selectedId != id || api !== connection || runId != null) return
+            if (selectedId != id || api !== connection || generation != openingGeneration || runId != null) return
             activeRunCheckSession = id; activeRunCheckedAt = activityClock()
             val serverRun = result.optString("run_id").takeIf { it.isNotBlank() && it != "null" } ?: return
             if (result.optString("status") !in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval")) return
@@ -1451,37 +1548,47 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     private suspend fun loadSelection(id: String, prefetched: JSONObject? = null, loadRelated: Boolean = true) {
         val connection = api
+        val generation = openingGeneration
         val response = prefetched?.takeIf { it.optJSONObject("session") != null || it.has("id") }
             ?: connection.json("$root/sessions/$id")
         val result = response.optJSONObject("session") ?: response.takeIf { it.has("id") } ?: return
-        if (selectedId != id || api !== connection) return
+        if (selectedId != id || api !== connection || generation != openingGeneration) return
         result.optString("title").takeIf { it.isNotBlank() }?.let { title = it }
         val selection = readAgentSelection(result)
         sessionProvider = selection.provider; sessionModel = selection.model
         sessionEffort = selection.effort; sessionTier = selection.tier
         runtime = listOf(sessionProvider, sessionModel).filter { it.isNotBlank() }.joinToString(" · ")
-        result.optJSONObject("context")?.let { contextInfo = it; if (it.optBoolean("available")) contextCache[id] = it }
-        asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
-        sessionControl = result.optJSONObject("control")
-        sessionControlVerifiedAt = activityClock()
-        if (loadRelated) { pollContext(); attachServerActiveRun(id) }
+        if (loadRelated) {
+            result.optJSONObject("context")?.let { contextInfo = it; if (it.optBoolean("available")) contextCache[id] = it }
+            asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
+            sessionControl = result.optJSONObject("control")
+            sessionControlVerifiedAt = activityClock()
+            pollContext(); attachServerActiveRun(id)
+        }
     }
 
-    private suspend fun loadHistory(id: String, prefetched: JSONObject? = null, prefetchedFiles: JSONObject? = null) = historyReadMutex.withLock {
-        if (id == selectedId) loadHistoryNow(id, prefetched = prefetched, prefetchedFiles = prefetchedFiles)
+    private suspend fun loadHistory(id: String, prefetched: JSONObject? = null, prefetchedFiles: JSONObject? = null) {
+        val connection = api
+        val generation = openingGeneration
+        historyReadMutex.withLock {
+            if (id == selectedId && api === connection && generation == openingGeneration)
+                loadHistoryNow(id, prefetched = prefetched, prefetchedFiles = prefetchedFiles)
+        }
     }
     private suspend fun loadHistoryNow(id: String, earlier: Boolean = false, prefetched: JSONObject? = null, prefetchedFiles: JSONObject? = null) {
         val connection = api
+        val generation = openingGeneration
         val response = try {
             (prefetched?.takeIf { !earlier && it.optJSONArray("data") != null } ?: connection.json("$root/sessions/$id/messages?limit=100" +
                 (historyOldestId?.let { "&${if (earlier) "older_before" else "from_id"}=" + android.net.Uri.encode(it) } ?: ""))).also { it.getJSONArray("data") }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
-            if (selectedId == id && api === connection && id in cachedHistory) historyCacheStatus = "离线缓存"
+            if (selectedId != id || api !== connection || generation != openingGeneration) return
+            if (id in cachedHistory) historyCacheStatus = "离线缓存"
             if (messages.isEmpty()) historyLoading = false
             throw e
         }
-        if (id != selectedId || api !== connection) return
+        if (id != selectedId || api !== connection || generation != openingGeneration) return
         // Native order and content are authoritative. Local snapshots never contribute rows.
         var history = withConfirmedKeys(id, response.array("data").objects().mapNotNull { row -> agentHistoryMessage(agent, row) })
         historyHasMore = response.optBoolean("has_more", false)
@@ -1756,7 +1863,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (submitting || uploading || selectedId == null) return false
         if (draft.trim().startsWith("/")) { error = "斜杠命令请直接执行，消息队列用于对话内容"; return false }
         val files = pendingFiles.toList()
-        if (!messageQueue.enqueue(draft.trim(), files)) { error = "账号信息尚未就绪，请刷新后入队"; return false }
+        if (!messageQueue.enqueue(draft.trim(), files)) {
+            if (!recoverState()) error = "账号信息尚未就绪，请稍后再试；草稿已保留"
+            return false
+        }
         draft = ""; pendingFiles = emptyList()
         syncWatchService()
         return true
@@ -1804,10 +1914,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             viewModelScope.launch {
                 var dispatched = false
                 try {
-                    withTimeout(8_000) { attachServerActiveRun(session, allowSubmitting = true) }
+                    retryAgentRead { withTimeout(8_000) { attachServerActiveRun(session, allowSubmitting = true, required = true) } }
                     if (selectedId != session || api !== connection) return@launch
                     if (runId == null) {
-                        val current = withTimeout(8_000) { connection.json("$root/sessions/${q(session)}/activity") }
+                        val current = retryAgentRead { withTimeout(8_000) {
+                            connection.json("$root/sessions/${q(session)}/activity").also {
+                                if (!it.optBoolean("available")) throw IOException("暂时无法核对任务归属")
+                            }
+                        } }
                         if (selectedId != session || api !== connection) return@launch
                         if (!current.optBoolean("available")) { setError(session, "暂时无法核对任务归属，文字和附件已保留"); return@launch }
                         externalActivity = current; externalVerifiedAt = activityClock(); activityNow = externalVerifiedAt
@@ -1837,7 +1951,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             viewModelScope.launch {
                 var dispatched = false
                 try {
-                    withTimeout(8_000) { attachServerActiveRun(session, allowSubmitting = true) }
+                    retryAgentRead { withTimeout(8_000) { attachServerActiveRun(session, allowSubmitting = true, required = true) } }
                     if (selectedId != session || api !== connection) return@launch
                     if (draft == originalDraft && pendingFiles.map { it.optString("id") } == originalFiles) {
                         setSubmitting(session, false)
@@ -1892,7 +2006,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     currentCoroutineContext().ensureActive()
-                    if (accepted) { setError(session, "插话已送达，暂时无法刷新历史。${connectionFailureMessage(e)}"); return@launch }
+                    if (accepted) {
+                        if (!recoverState(session)) setError(session, "插话已送达，历史同步暂未恢复")
+                        return@launch
+                    }
                     setError(session, if (writeWasRejected(e)) connectionFailureMessage(e)
                         else "插话发送结果尚未确认，请核对会话历史后再决定是否重发。${connectionFailureMessage(e)}")
                     updateSteering(steerKey, steeringFailureDelivery(e))
@@ -1903,6 +2020,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     if (staleRunFailure(e)) clearRunTracking(session, id)
                     if (!isQuestion && conversationUi.entry(session).draft.isBlank()) setDraft(session, input)
                     if (isQuestion) prefs.edit().remove("answeringQuestion:$session").apply()
+                    if (canRecoverAgentRead(e) && recoverState(session)) return@launch
                     if (selectedId == session && api === connection) try { loadHistory(session); loadSelection(session) }
                     catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { }
                 } finally { setSubmitting(session, false) }
@@ -1995,7 +2113,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 saveRuns()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                if (accepted) { setError(session, "消息已送达，暂时无法刷新历史。${connectionFailureMessage(e)}"); return@launch }
+                if (accepted) {
+                    if (!recoverState(session)) setError(session, "消息已送达，历史同步暂未恢复")
+                    return@launch
+                }
+                if (agent == "codex" && e is ApiRequestFailure && e.code == "account_changed") {
+                    // Refresh the identity, but never replay a write automatically under
+                    // a different account. The rejection path below restores the draft.
+                    try { fetchAccountsNow() }
+                    catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) { }
+                }
                 messageQueue.failed(key, writeWasRejected(e))
                 if (writeWasRejected(e)) {
                     removePending(session)
@@ -2011,6 +2139,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     try { reconcilePendingNow(session) } catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { }
                     if (!hasPendingFor(session)) return@launch
                 }
+                if ((canRecoverAgentRead(e) || !writeWasRejected(e)) && recoverState(session)) return@launch
                 setError(session, if (writeWasRejected(e)) connectionFailureMessage(e)
                     else "消息发送结果尚未确认，请核对会话历史；不要重复发送。${connectionFailureMessage(e)}")
             } finally { setSubmitting(session, false) }
@@ -2022,6 +2151,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         watching?.cancel()
         streamJob?.cancel()
         streamConnected = false
+        statusRecovering = false; streamRecovering = false
         if (!observation.active || !this::api.isInitialized) return
         val id = runId ?: return
         if (streamGapRun != id) { streamGapRun = id; streamGap = false; finalSnapshotReceived = false }
@@ -2058,6 +2188,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     }
                     if (activityClock() - started >= 15_000) reconnects = 0
                     reconnects++
+                    if (epoch == observationEpoch) streamRecovering = reconnects < 4
                     if (runId == id) delay((1_500L * (1L shl (reconnects - 1).coerceIn(0, 4))).coerceAtMost(30_000))
                 }
             }
@@ -2070,7 +2201,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     val result = connection.json("$root/runs/$id")
                     currentCoroutineContext().ensureActive()
                     if (runId != id || api !== connection) return@launch
-                    failures = 0
+                    statusRecovering = false
+                    if (error == readConnectionError) error = null
+                    readConnectionError = null
                     noteRunActivity(watchedSession, result, requestedAt)
                     runVerifiedAt = requestedAt
                     runTurnId = result.optString("turn_id").takeIf { it.isNotBlank() && it != "null" }
@@ -2124,6 +2257,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         backgroundRuns.values.remove(id); saveRuns()
                         approval = null
                         streamJob?.cancel()
+                        streamRecovering = false
                         prefs.edit().remove("run").remove("runSession").apply()
                         if (finishedSession != null && selectedId == finishedSession) {
                             messages = projectFinalSyncRows(cachedHistory[finishedSession].orEmpty(), finalSyncStates, finishedSession)
@@ -2137,6 +2271,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         refreshSessions()
                         break
                     }
+                    failures = 0
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -2149,15 +2284,18 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         discardRunNarrations(id)
                         runNarrationUsers.remove(id)
                         streamJob?.cancel()
+                        streamRecovering = false; statusRecovering = false
                         backgroundRuns.values.remove(id); saveRuns()
                         prefs.edit().remove("run").remove("runSession").apply()
-                        state = "任务记录已不存在，请核对会话历史"
-                        runSession?.let { loadHistory(it) }
-                        refreshSessions()
+                        state = "正在同步会话"
+                        recoverState(watchedSession)
                         break
                     }
-                    error = "暂时无法读取任务状态：${connectionFailureMessage(e)}"
-                    if (e is ReadConnectionFailure) readConnectionError = error
+                    statusRecovering = failures < 4 && canRecoverAgentRead(e)
+                    if (!statusRecovering && !stateRecovering) {
+                        error = "多次读取任务状态失败：${connectionFailureMessage(e)}"
+                        readConnectionError = error
+                    }
                 }
                 withTimeoutOrNull(agentStatusPollDelay(streamConnected, failures)) { wake.receive() }
             }
@@ -2165,13 +2303,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     fun reconnect() {
-        error = null
-        launch {
-            ensureCapabilities(force = true)
-            refreshSessions()
-            selectedId?.let { loadHistory(it); loadSelection(it) }
-            if (runId != null) watch()
-        }
+        recoverState(manual = true)
     }
 
     private suspend fun readEvents(connection: NativeApi, id: String, epoch: Long) {
@@ -2190,6 +2322,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             }
             if (runId != id || api !== connection || !observation.active || epoch != observationEpoch) return@streamingResponse
             streamConnected = true
+            streamRecovering = false
             withContext(Dispatchers.IO) {
                 response.body!!.charStream().buffered().use { reader ->
                     val parser = HermesSseParser()

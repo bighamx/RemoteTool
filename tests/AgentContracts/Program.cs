@@ -278,6 +278,11 @@ try {
     Check(!CodexDesktopActivity.Project(desktop)["running"].GetValue<bool>(), "completed desktop turn is idle despite a retained writer");
     Check(!CodexDesktopActivity.Project(new())["available"].GetValue<bool>(), "incomplete desktop snapshot cannot prove idle");
 } finally { Directory.Delete(temp, true); }
+var overviewRun = JsonNode.Parse("""{"run_id":"run-1","session_id":"session-1","status":"started"}""")!.AsObject();
+var overviewCopy = RemoteTool.WebApi.Services.AgentOverview.RunDocument(overviewRun, "session-1");
+Check(overviewCopy != null && !ReferenceEquals(overviewCopy, overviewRun), "overview reuses an independent complete run document");
+Check(RemoteTool.WebApi.Services.AgentOverview.RunDocument(overviewRun, "other") == null, "overview rejects another session's run");
+Check(RemoteTool.WebApi.Services.AgentOverview.RunDocument(new JsonObject { ["run_id"] = "run-1" }, "session-1") == null, "bare run id requires a status fallback");
 Console.WriteLine($"Agent contract checks: {count} passed");
 var input = "{\"type\":\"text\",\"text\":\"" + new string('汉', 2048) + "\"}";
 using var ws = new FragmentSocket(System.Text.Encoding.UTF8.GetBytes(input));

@@ -268,10 +268,11 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     Text(
                         if (list) "$agentName 会话" else model.title,
                         style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f, fill = false),
                         maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
                     // 本地已有数据、正在同步最新历史：标题后的小型加载指示
-                    if (!list && model.historyLoading && model.messages.isNotEmpty())
+                    if (model.recovering || !list && model.historyLoading && model.messages.isNotEmpty())
                         CircularProgressIndicator(Modifier.padding(start = 8.dp).size(14.dp), strokeWidth = 2.dp)
                 }
                 if (list) Text(

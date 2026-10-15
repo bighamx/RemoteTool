@@ -6,6 +6,11 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AppUpdatePolicyTest {
+    @Test fun acceptsOldManifestDuringRenameMigration() {
+        val legacy = JSONObject().put("assets", JSONArray().put(JSONObject().put("name", LEGACY_UPDATE_MANIFEST)))
+        assertEquals(1, appReleaseCandidates(JSONArray().put(legacy)).size)
+        assertTrue(UPDATE_LATEST_MANIFEST_URL.endsWith("/remotetool-update.json"))
+    }
     private val hash = "ab".repeat(32)
     private fun manifest() = JSONObject().put("schemaVersion", 1).put("packageId", UPDATE_PACKAGE)
         .put("versionCode", 4).put("versionName", "0.4.0").put("sha256", hash).put("size", 1234)

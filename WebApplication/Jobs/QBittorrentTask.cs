@@ -40,13 +40,13 @@ namespace ChuckieHelper.WebApi.Jobs
             if (r)
             {
                 context.SetTextColor(ConsoleTextColor.Green);
-                context.WriteLine($"[QBittorrentTask] Maintence for {qbUrl}: OK");
+                context.WriteLine($"[QBittorrentTask] Maintence for {MaskUrl(qbUrl)}: OK");
                 context.ResetTextColor();
             }
             else
             {
                 context.SetTextColor(ConsoleTextColor.Red);
-                context.WriteLine($"[QBittorrentTask] Maintence for {qbUrl}: Fail");
+                context.WriteLine($"[QBittorrentTask] Maintence for {MaskUrl(qbUrl)}: Fail");
                 context.ResetTextColor();
             }
 
@@ -77,13 +77,13 @@ namespace ChuckieHelper.WebApi.Jobs
             if (r)
             {
                 context.SetTextColor(ConsoleTextColor.Green);
-                context.WriteLine($"[QBittorrentTask] Move from {qbUrl} to {qbUrl2}: OK");
+                context.WriteLine($"[QBittorrentTask] Move from {MaskUrl(qbUrl)} to {MaskUrl(qbUrl2)}: OK");
                 context.ResetTextColor();
             }
             else
             {
                 context.SetTextColor(ConsoleTextColor.Red);
-                context.WriteLine($"[QBittorrentTask] Move from {qbUrl} to {qbUrl2}: Fail");
+                context.WriteLine($"[QBittorrentTask] Move from {MaskUrl(qbUrl)} to {MaskUrl(qbUrl2)}: Fail");
                 context.ResetTextColor();
             }
 
@@ -117,7 +117,7 @@ namespace ChuckieHelper.WebApi.Jobs
             await qb.CleanUnwantedFiles(deleteFileFunc, context.WriteLine);
 
             context.SetTextColor(ConsoleTextColor.Green);
-            context.WriteLine($"[QBittorrentTask] CleanUnwantedFiles for {qbUrl}: Done");
+            context.WriteLine($"[QBittorrentTask] CleanUnwantedFiles for {MaskUrl(qbUrl)}: Done");
             context.ResetTextColor();
         }
 

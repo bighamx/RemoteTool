@@ -38,6 +38,7 @@
     let streamAbort = null;
     let timelineResizeObserver = null;
     let scrollRestoreTimer = null;
+    const readVersions = new Map();
     const app = Vue.createApp({
         data: () => ({ agent, markdownReady: !!markdown, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
@@ -82,6 +83,13 @@
             approvalText() { const a=this.approval; return a?.reason||a?.message||a?.description||'当前任务请求确认'; }
         },
         methods: {
+            // Session epoch protects navigation; per-resource versions protect concurrent reads
+            // within the same session (SSE, timers and manual refresh may overlap).
+            startRead(kind, epoch=this.epoch) {
+                const version=(readVersions.get(kind)||0)+1;
+                readVersions.set(kind,version);
+                return ()=>this.epoch===epoch && readVersions.get(kind)===version;
+            },
             // These helpers take arguments and mutate live state; they must not be Vue computed properties.
             projectRootsOf(project) { return (project?.roots || []).map(root => root?.path).filter(Boolean); },
             asText(value) {
@@ -168,6 +176,7 @@
             async moreSessions() { if (this.loadingList||!this.hasMore) return; this.loadingList=true; try { const query=this.agent==='codex'?`cursor=${api.id(this.nextCursor||'')}`:`offset=${this.offset}`; const result=await api.get(`${base}/sessions?${query}`); const ids=new Set(this.sessions.map(x=>x.id)); this.sessions.push(...(result.data||[]).filter(x=>!ids.has(x.id))); this.offset+=result.data?.length||0; this.nextCursor=result.next_cursor||null; this.hasMore=!!result.has_more; } catch(e) { this.listError=e.message; } finally { this.loadingList=false; } },
             async select(item) {
                 this.stopEventStream();
+                this.olderLoading=false;
                 if(this.scrollFrame!==null){cancelAnimationFrame(this.scrollFrame);this.scrollFrame=null;}
                 const current=++this.epoch; if(scrollRestoreTimer){clearTimeout(scrollRestoreTimer);scrollRestoreTimer=null;} this.selected=item; this.selectedId=item.id; this.selectedStatusKnown=false; this.sessionsOpen=false;this.dialog=null;this.showEditDialog=false;this.messages=[];this.historyLoading=true; this.historyHasMore=false; this.oldestId=null; this.followLatest=true;this.showJumpToLatest=false;this.lastTimelineTop=0; this.activeRun=null; this.externalRunning=false;this.externalActivity=null;this.approval=null; this.context={}; this.queue=[]; this.attachments=[]; this.sessionFiles=[];this.mediaSignature='';this.filesRefreshAt=0;this.error='';this.liveSegments=[];this.liveTools=[];this.streamSeq=0;this.streamGone=false;
                 this.pending=this.restorePending(item.id);this.delivered=this.restoreDelivered(item.id);if(this.pending?.delivery==='已发送')this.acceptPending(item.id,this.pending.key); this.draft=localStorage.getItem(`remotetool:web:draft:${agent}:${item.id}`)||'';
@@ -175,18 +184,49 @@
                 try { await this.refreshAll(current); if(current===this.epoch){await this.$nextTick();this.scrollToLatest();} } finally { if(current===this.epoch)this.historyLoading=false; }
             },
             async refreshAll(epoch=this.epoch) { if (!this.selectedId) return;
+                const current=this.startRead('overview',epoch);
+                const versions=new Map(readVersions);
+                const unchanged=kind=>current()&&readVersions.get(kind)===versions.get(kind);
                 // Overview 一次往返取齐历史/状态/上下文/详情，替代 5 个并行请求；
                 // 服务端单项失败返回 null，此处按需回退到单独请求。
                 try {
                     const overview=await api.get(`${base}/sessions/${api.id(this.selectedId)}/overview`);
-                    if(epoch!==this.epoch)return;
-                    await Promise.all([this.loadHistory(epoch,overview.history),this.loadStatus(epoch,overview.active_run,overview.run,overview.activity),this.loadContext(epoch,overview.context),this.loadQueue(epoch,overview.queue),this.loadSessionDetail(epoch,overview.detail)]);
-                } catch (error) { if(epoch!==this.epoch)return;
-                    await Promise.all([this.loadHistory(epoch),this.loadStatus(epoch),this.loadContext(epoch),this.loadQueue(epoch),this.loadSessionDetail(epoch)]); }
+                    if(!current())return;
+                    await Promise.all([
+                        unchanged('history')&&this.loadHistory(epoch,overview.history,overview.files),
+                        unchanged('status')&&this.loadStatus(epoch,overview.active_run,overview.run,overview.activity),
+                        unchanged('context')&&this.loadContext(epoch,overview.context),
+                        unchanged('queue')&&this.loadQueue(epoch,overview.queue),
+                        unchanged('detail')&&this.loadSessionDetail(epoch,overview.detail)]);
+                } catch (error) { if(!current())return;
+                    await Promise.all([unchanged('history')&&this.loadHistory(epoch),unchanged('status')&&this.loadStatus(epoch),unchanged('context')&&this.loadContext(epoch),unchanged('queue')&&this.loadQueue(epoch),unchanged('detail')&&this.loadSessionDetail(epoch)]); }
             },
-            async loadSessionDetail(epoch=this.epoch, result=null) {try{result=result||await api.get(`${base}/sessions/${api.id(this.selectedId)}`);if(epoch!==this.epoch)return;const detail=result.session||result;this.selected={...this.selected,...detail};let config=detail.model_config||{};if(typeof config==='string'){try{config=JSON.parse(config);}catch{config={};}}const lock=config.browser_model_lock||{};this.modelSelection={provider:lock.provider||detail.modelProvider||detail.provider||this.modelSelection.provider,model:lock.model||detail.model||this.modelSelection.model,effort:lock.model_options?.reasoning?.effort||detail.reasoning_effort||this.modelSelection.effort,tier:detail.service_tier||this.modelSelection.tier};}catch{}},
-            async loadHistory(epoch=this.epoch, result=null) {const id=this.selectedId;try{result=result||await api.get(`${base}/sessions/${api.id(id)}/messages?limit=80`);if(this.epoch!==epoch)return;const recent=result.data||[];const previous=this.messages;const tail=previous.at(-1)?.id;const continuous=tail!=null&&recent.some(row=>String(row.id)===String(tail));const ids=new Set(recent.map(row=>String(row.id)));const earlier=continuous?previous.filter(row=>row.id!=null&&!ids.has(String(row.id))):[];this.messages=[...earlier,...recent];this.historyHasMore=earlier.length?this.historyHasMore:!!result.has_more;this.oldestId=this.messages[0]?.id||result.oldest_id;const used=this.reconcileDelivered();this.reconcilePending(used);const marked=this.messages.filter(m=>m.role==='assistant'&&this.messageText(m).includes('MEDIA:'));const signature=marked.map(m=>m.id).join('|');if(signature&&(signature!==this.mediaSignature||Date.now()-this.filesRefreshAt>30000)){this.mediaSignature=signature;this.filesRefreshAt=Date.now();this.loadFiles(epoch);}this.queueFollowLatest();this.scheduleScrollRestore(id);}catch(e){if(this.epoch===epoch)this.error=e.message;}},
-            async loadFiles(epoch=this.epoch) {try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/files`);if(epoch===this.epoch)this.sessionFiles=result.data||[];return result.data||[];}catch{return[];}},
+            async loadSessionDetail(epoch=this.epoch, result=null) {const current=this.startRead('detail',epoch);try{result=result||await api.get(`${base}/sessions/${api.id(this.selectedId)}`);if(!current())return;const detail=result.session||result;this.selected={...this.selected,...detail};let config=detail.model_config||{};if(typeof config==='string'){try{config=JSON.parse(config);}catch{config={};}}const lock=config.browser_model_lock||{};this.modelSelection={provider:lock.provider||detail.modelProvider||detail.provider||this.modelSelection.provider,model:lock.model||detail.model||this.modelSelection.model,effort:lock.model_options?.reasoning?.effort||detail.reasoning_effort||this.modelSelection.effort,tier:detail.service_tier||this.modelSelection.tier};}catch{}},
+            async loadHistory(epoch=this.epoch, result=null, files=null) {
+                const id=this.selectedId, current=this.startRead('history',epoch);
+                try {
+                    result=result||await api.get(`${base}/sessions/${api.id(id)}/messages?limit=80`);
+                    if(!current())return;
+                    if(!Array.isArray(result.data))throw new Error('会话历史格式无效，请重试');
+                    const recent=result.data, previous=this.messages, tail=previous.at(-1)?.id;
+                    const continuous=tail!=null&&recent.some(row=>String(row.id)===String(tail));
+                    const ids=new Set(recent.map(row=>String(row.id)));
+                    const earlier=continuous?previous.filter(row=>row.id!=null&&!ids.has(String(row.id))):[];
+                    this.messages=[...earlier,...recent];
+                    this.historyHasMore=earlier.length?this.historyHasMore:!!result.has_more;
+                    this.oldestId=this.messages[0]?.id||result.oldest_id;
+                    const used=this.reconcileDelivered();this.reconcilePending(used);
+                    const signature=this.messages.filter(m=>m.role==='assistant'&&this.messageText(m).includes('MEDIA:')).map(m=>m.id).join('|');
+                    if(Array.isArray(files?.data)){
+                        this.startRead('files',epoch);
+                        this.sessionFiles=files.data;this.mediaSignature=signature;this.filesRefreshAt=Date.now();
+                    } else if(signature&&(signature!==this.mediaSignature||Date.now()-this.filesRefreshAt>30000)){
+                        this.mediaSignature=signature;this.filesRefreshAt=Date.now();this.loadFiles(epoch);
+                    }
+                    this.queueFollowLatest();this.scheduleScrollRestore(id);
+                }catch(e){if(current())this.error=e.message;}
+            },
+            async loadFiles(epoch=this.epoch) {const current=this.startRead('files',epoch);try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/files`);if(current())this.sessionFiles=result.data||[];return result.data||[];}catch{return[];}},
             async loadOlder() {if(!this.oldestId||this.olderLoading)return;this.olderLoading=true;this.followLatest=false;this.showJumpToLatest=true;const epoch=this.epoch;const el=this.$refs.timeline;const oldHeight=el?.scrollHeight||0;const oldTop=el?.scrollTop||0;try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/messages?limit=80&older_before=${api.id(this.oldestId)}`);if(epoch!==this.epoch)return;const ids=new Set(this.messages.map(m=>String(m.id)));this.messages=[...(result.data||[]).filter(m=>!ids.has(String(m.id))),...this.messages];this.historyHasMore=!!result.has_more;this.oldestId=result.oldest_id||this.messages[0]?.id;await this.$nextTick();if(el)el.scrollTop=oldTop+el.scrollHeight-oldHeight;}catch(e){if(epoch===this.epoch)this.error=e.message;}finally{if(epoch===this.epoch)this.olderLoading=false;}},
             onTimelineScroll(e) {const el=e.target;const top=el.scrollTop;const height=el.scrollHeight;const distance=Math.max(0,height-el.clientHeight-top);const shrank=height<this.lastTimelineHeight;this.lastTimelineHeight=height;if(!shrank){if(top<this.lastTimelineTop-2)this.followLatest=false;else if(distance<=24&&top>this.lastTimelineTop+2)this.followLatest=true;}this.lastTimelineTop=top;this.showJumpToLatest=!this.followLatest&&!!this.selectedId&&height>el.clientHeight+4;if(!this.historyLoading&&top<80&&this.historyHasMore&&!this.olderLoading)this.loadOlder();},
             scrollToLatest(force) {const el=this.$refs.timeline;if(!el)return;if(force||this.followLatest){el.scrollTop=el.scrollHeight;this.followLatest=true;}this.lastTimelineTop=el.scrollTop;this.lastTimelineHeight=el.scrollHeight;this.showJumpToLatest=false;},
@@ -203,17 +243,19 @@
                 catch(e){this.error=e.message;}finally{this.enablingApiServer=false;}},
             async loadStatus(epoch=this.epoch, state=null, runDoc=null, activityState=null) {
                 const id=this.selectedId;
+                const current=this.startRead('status',epoch);
                 try {
                     state=state||await api.get(`${base}/sessions/${api.id(id)}/active-run`);
-                    if(epoch!==this.epoch)return;
+                    if(!current())return;
                     const runId=state.run_id||this.activeRun;
                     if(runId){
                         let run;
                         try {run=runDoc||await api.get(`${base}/runs/${api.id(runId)}`);} catch(error){if(error.status!==404)throw error;run={status:'missing'};}
-                        if(epoch!==this.epoch)return;
+                        if(!current())return;
                         if(terminal.has(run.status)||run.status==='missing'){
                             this.stopEventStream();this.activeRun=null;this.approval=null;this.runStatus=run.status;
                             await this.loadHistory(epoch);
+                            if(!current())return;
                         }else{
                             this.activeRun=runId;this.externalRunning=false;this.externalActivity=null;this.selectedStatusKnown=true;
                             this.runStatus=run.status||'正在执行';this.approval=run.approval||null;
@@ -222,10 +264,10 @@
                     }
                     this.stopEventStream();this.activeRun=null;this.approval=null;
                     const activity=activityState||await api.get(`${base}/sessions/${api.id(id)}/activity`);
-                    if(epoch!==this.epoch)return;
+                    if(!current())return;
                     this.externalActivity=activity;this.externalRunning=!!activity.running;this.selectedStatusKnown=activity.available!==false;
                     this.liveTools=this.externalRunning?(activity.progress||[]).map(row=>({id:row.id,tool:row.tool||row.name||'工具',preview:row.preview||'',status:row.status||'running',open:false})):[];
-                }catch(error){if(epoch===this.epoch)this.error=error.message;}
+                }catch(error){if(current())this.error=error.message;}
             },
             async takeover() {if(this.agent!=='codex'||!this.externalRunning||!this.selectedId)return;if(!confirm('将中断其他客户端正在执行的任务，并由 Web 端接管会话。继续？'))return;try{const id=this.selectedId;const result=await api.post(`${base}/sessions/${api.id(id)}/takeover`,{expected_activity_id:this.externalActivity?.activity_id||''});if(!result.ready)throw new Error('接管尚未确认');this.externalRunning=false;this.externalActivity=null;await this.refreshAll();}catch(e){this.error=e.message;}},
             stopEventStream() {streamAbort?.abort();streamAbort=null;this.streamRun=null;this.streamConnected=false;},
@@ -238,8 +280,15 @@
                 if(type==='approval.request'){this.approval=event;return;}
                 if(type.startsWith('run.')){this.loadStatus();this.loadHistory();this.loadContext();}
             },
-            async loadContext(epoch=this.epoch, result=null) { const id=this.selectedId; try { result=result||await api.get(`${base}/sessions/${api.id(id)}/context`); if(epoch===this.epoch)this.context=this.agent==='codex'?result:{context:result}; } catch {} },
-            async loadQueue(epoch=this.epoch, result=null) { if(this.agent!=='codex')return; try{result=result||await api.get(`${base}/sessions/${api.id(this.selectedId)}/queue`); if(epoch===this.epoch)this.queue=result.data||[]; } catch {} },
+            async loadContext(epoch=this.epoch, result=null) {
+                const id=this.selectedId,current=this.startRead('context',epoch);
+                try {result=result||await api.get(`${base}/sessions/${api.id(id)}/context`);if(current())this.context=this.agent==='codex'?result:{context:result};}catch{}
+            },
+            async loadQueue(epoch=this.epoch, result=null) {
+                if(this.agent!=='codex')return;
+                const id=this.selectedId,current=this.startRead('queue',epoch);
+                try{result=result||await api.get(`${base}/sessions/${api.id(id)}/queue`);if(current())this.queue=result.data||[];}catch{}
+            },
             async loadModels() { try { const result=await api.get(`${base}/model-options`); this.models=result.providers||[]; this.modelSelection={provider:result.provider||'',model:result.model||'',effort:result.reasoning_effort||'',tier:result.service_tier||''}; } catch {} },
             async loadCodexAdmin() { if(this.agent!=='codex')return; const results=await Promise.allSettled([api.get(`${base}/projects`),api.get(`${base}/accounts`)]); if(results[0].status==='fulfilled')this.projects=results[0].value.data||[]; if(results[1].status==='fulfilled'){this.accounts=results[1].value;this.selectedAccount=this.accounts.current||'';} },
             async useAccount() {if(!this.selectedAccount||this.selectedAccount===this.accounts.current)return;const row=(this.accounts.data||[]).find(item=>item.id===this.selectedAccount);if(row)await this.useWorkspace(row);},

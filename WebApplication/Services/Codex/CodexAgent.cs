@@ -806,7 +806,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             if (entry.Value.S("fingerprint") != fingerprint) throw new CodexError("相同任务标识内容不一致", 409);
             return Obj(("run_id", entry.Key), ("status", entry.Value.S("status")), ("delivery", RunDelivery(entry.Value)), ("replayed", true));
         }
-        if (body.S("account_id").Length > 0 && body.S("account_id") != accounts.List().S("current")) throw new CodexError("电脑登录身份已变化，请刷新后发送", 409);
+        if (body.S("account_id").Length > 0 && body.S("account_id") != accounts.List().S("current")) throw new CodexError("电脑登录身份已变化，请刷新后发送", 409, "account_changed", "rejected");
         if (await handoff.SessionBusy(session)) throw new CodexError("此会话仍由升级前的连接执行，请等待当前任务结束；本次消息未写入。", 409, "session_writer_busy");
         ct.ThrowIfCancellationRequested();
         lock (gate) {

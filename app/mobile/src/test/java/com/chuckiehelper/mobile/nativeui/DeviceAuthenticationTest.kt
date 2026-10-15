@@ -5,6 +5,31 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DeviceAuthenticationTest {
+    @Test fun rejectedLoginCannotReenterAuthenticationRefresh() {
+        for (path in listOf("/api/auth/login", "/API/Auth/Login/")) {
+            val request = okhttp3.Request.Builder().url("http://host$path").build()
+            assertFalse(request.canRefreshAuthentication())
+        }
+        assertTrue(okhttp3.Request.Builder().url("http://host/api/codex/sessions").build().canRefreshAuthentication())
+    }
+
+    @Test fun delayed401UsesSentTokenAndReusesSiblingRenewal() = runBlocking {
+        val authentication = DeviceAuthSession("expired")
+        val request = NativeApi("http://host", authentication = authentication).request("/api/hermes/sessions")
+        authentication.token = "renewed"
+        val result = DeviceAuthentication.refresh(request.authenticationToken(), authentication.token,
+            { fail("Should reuse sibling renewal without reading credentials"); null },
+            { fail("Should not sign in again"); null }, { fail("Should not save") })
+        assertEquals("renewed", result)
+        assertEquals("expired", request.authenticationToken())
+    }
+
+    @Test fun requestTokenHandlesMultipleCookiesAndMissingCredentials() {
+        val request = okhttp3.Request.Builder().url("http://host")
+            .addHeader("Cookie", "other=value; access_token=token==; third=x").build()
+        assertEquals("token==", request.authenticationToken())
+        assertNull(request.newBuilder().removeHeader("Cookie").build().authenticationToken())
+    }
     @Test fun sameHostnameAndDifferentPortsKeepTheirDeviceTokensIsolated() {
         val authenticationA = DeviceAuthSession("token-A")
         val authenticationB = DeviceAuthSession("token-B")
