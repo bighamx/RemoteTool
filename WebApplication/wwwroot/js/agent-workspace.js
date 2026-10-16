@@ -69,9 +69,19 @@
             displayedGroups() {
                 const rows=this.filteredSessions;
                 if(!(this.groupByProject&&this.agent==='codex')) return [{key:'__all__',name:'',rows}];
+                // 与 App 一致：已存档会话不留在原项目里，统一沉底到「已存档」组。
+                const groups=[];
                 const map=new Map();
-                for(const s of rows){const name=s.group_name||(s.cwd?String(s.cwd).split(/[\\/]/).filter(Boolean).pop():'')||'未分组';if(!map.has(name))map.set(name,[]);map.get(name).push(s);}
-                return [...map.entries()].map(([name,list])=>({key:name,name,rows:list}));
+                for(const s of rows){
+                    if(s.archived) continue;
+                    const name=s.group_name||(s.cwd?String(s.cwd).split(/[\\/]/).filter(Boolean).pop():'')||'未分组';
+                    if(!map.has(name))map.set(name,[]);
+                    map.get(name).push(s);
+                }
+                for(const [name,list] of map) groups.push({key:name,name,rows:list});
+                const archived=rows.filter(s=>s.archived);
+                if(archived.length) groups.push({key:'__archived__',name:'已存档',rows:archived});
+                return groups;
             },
             filteredMoveProjects() { const q=(this.moveSearch||'').trim().toLowerCase(); const rows=this.projects||[]; return q?rows.filter(p=>`${p.name||''} ${this.projectRootsOf(p).join(' ')}`.toLowerCase().includes(q)):rows; },
             filteredCreateProjects() { const q=(this.createProjectSearch||'').trim().toLowerCase(); const rows=this.projects||[]; return q?rows.filter(p=>`${p.name||''} ${this.projectRootsOf(p).join(' ')}`.toLowerCase().includes(q)):rows; },
@@ -225,8 +235,30 @@
                     const selected=this.sessions.find(s=>s.id===wanted)||this.sessions[0];
                     if (selected && selected.id!==this.selectedId) await this.select(selected);
                     else if (selected) this.selected=selected;
+                    void this.fetchMissingContext();
                 } catch(e) { this.listError=e.message; } finally { this.loadingList=false; }
             },
+            // 会话列表的上下文进度条（与 App 同源字段）：codex 行由服务端 rollout 扫描自带；
+            // hermes 缺数据的行走 context-bulk 批量补齐（40/块，服务端有 TTL 缓存与预算控制）。
+            async fetchMissingContext() {
+                if (this.agent !== 'hermes') return;
+                const ids = this.sessions.filter(s => !(Number(s.context_window) > 0)).map(s => s.id).slice(0, 80);
+                if (!ids.length) return;
+                const merged = {};
+                for (let i = 0; i < ids.length; i += 40) {
+                    const chunk = ids.slice(i, i + 40);
+                    try {
+                        const answered = await api.get(`${base}/sessions/context-bulk?ids=` + encodeURIComponent(chunk.join(',')));
+                        for (const id of chunk) {
+                            const entry = answered && answered[id];
+                            if (entry && Number(entry.context_used) > 0 && Number(entry.context_window) > 0) merged[id] = { used: Number(entry.context_used), window: Number(entry.context_window) };
+                        }
+                    } catch (e) { /* 单块失败不影响其余 */ }
+                }
+                if (Object.keys(merged).length) this.sessions = this.sessions.map(s => merged[s.id] ? { ...s, context_used: merged[s.id].used, context_window: merged[s.id].window } : s);
+            },
+            contextPct(item) { const tokens=Number(item.context_used||0); const limit=Number(item.context_window||0); return limit>0?Math.min(100,Math.max(0,Math.round(tokens/limit*100))):0; },
+            contextBarTitle(item) { const pct=this.contextPct(item); return pct>0?`${this.contextTokens(Number(item.context_used||0))} / ${this.contextTokens(Number(item.context_window||0))} tokens · ${pct}%`:''; },
             async moreSessions() { if (this.loadingList||!this.hasMore) return; this.loadingList=true; try { const query=this.agent==='codex'?`cursor=${api.id(this.nextCursor||'')}`:`offset=${this.offset}`; const result=await api.get(`${base}/sessions?${query}`); const ids=new Set(this.sessions.map(x=>x.id)); this.sessions.push(...(result.data||[]).filter(x=>!ids.has(x.id))); this.offset+=result.data?.length||0; this.nextCursor=result.next_cursor||null; this.hasMore=!!result.has_more; } catch(e) { this.listError=e.message; } finally { this.loadingList=false; } },
             async select(item) {
                 this.stopEventStream();

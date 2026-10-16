@@ -2464,13 +2464,40 @@
 }
 
 .agent-session-group-caret {
-    font-size: 10px
+    font-size: 14px;
+    line-height: 1
 }
 
 .agent-session-archived {
     color: var(--text-muted);
-    font-size: 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    padding: 0 4px
+    font-size: 13px;
+    margin-left: 4px
+}
+
+/* 会话卡片底部的上下文进度条（对齐 App：细条、≥85% 转警示色）。 */
+.agent-session-item {
+    position: relative;
+    overflow: hidden
+}
+
+.agent-session-contextbar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    border-radius: 0 0 9px 9px;
+    background: var(--border-color);
+    overflow: hidden;
+    pointer-events: none
+}
+
+.agent-session-contextbar i {
+    display: block;
+    height: 100%;
+    background: var(--accent-primary, #61dbc4)
+}
+
+.agent-session-contextbar i.hot {
+    background: #e5484d
 }
