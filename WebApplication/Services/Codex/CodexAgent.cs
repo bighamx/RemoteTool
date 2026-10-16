@@ -166,12 +166,39 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private async Task<JsonObject> ReadThread(string id, bool turns, CancellationToken ct = default) {
         CodexRpc reader; lock (gate) sessionRpcs.TryGetValue(id, out reader);
         var client = reader?.Running == true ? reader : rpc;
-        try { return await client.Call("thread/read", Obj(("threadId", id), ("includeTurns", turns)), ct); }
+        // 读路径加硬上限：正常 thread/read 亚秒级；该会话的专用连接可能卡死（进程活着但不响应），
+        // 没有上限时每个请求都干等 60s 全局超时，且卡死的连接永远不被丢弃、后续请求继续排队。
+        // includeTurns:true 另有官方坑：会话被其他客户端装载（桌面端正开着，写锁被持）时它会等 ~25s
+        // 再返回 0 条 turns（实测）——所以 turns 读取 5s 快速失败，走 thread/turns/list 分页回退。
+        using var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        readTimeout.CancelAfter(TimeSpan.FromSeconds(turns ? 5 : 20));
+        // app-server 按连接串行处理且不支持取消：includeTurns:true 遇写锁要等 ~25s，被放弃的操作
+        // 仍占着队列、把共享主连接上其他会话的请求全部堵死。锁被持有时直接走分页回退，绝不碰主连接。
+        if (turns && ReferenceEquals(client, rpc) && WriterLockHeld(id)) return await ReadThreadTurnsPaged(id, ct);
+        try {
+            return await client.Call("thread/read", Obj(("threadId", id), ("includeTurns", turns)), readTimeout.Token);
+        } catch (CodexError error) when (error.Status == 504 && turns) {
+            return await ReadThreadTurnsPaged(id, ct);
+        } catch (OperationCanceledException) when (turns && !ct.IsCancellationRequested) {
+            // WaitAsync 在令牌取消时抛 TaskCanceledException（不是 TimeoutException），同样走分页回退。
+            return await ReadThreadTurnsPaged(id, ct);
+        } catch (CodexError error) when (error.Status == 504 && !ReferenceEquals(client, rpc)) {
+            // 会话专用连接超时：丢弃重建（下个请求走主连接），而不是让该会话永久排队。
+            lock (gate) if (sessionRpcs.TryGetValue(id, out var stuck) && ReferenceEquals(stuck, reader)) sessionRpcs.Remove(id);
+            _ = Task.Run(async () => { try { await reader!.DisposeAsync(); } catch { /* 已死连接，尽力释放 */ } });
+            return await rpc.Call("thread/read", Obj(("threadId", id), ("includeTurns", turns)), ct);
+        }
         catch (CodexError error) when (error.Message.Contains("thread not loaded", StringComparison.OrdinalIgnoreCase)) {
             // app-server 重启或更换 CODEX_HOME 后线程不在内存：thread/resume 会从 rollout 重新装载。
             try {
-                await client.Call("thread/resume", Obj(("threadId", id)), ct);
-                return await client.Call("thread/read", Obj(("threadId", id), ("includeTurns", turns)), ct);
+                await client.Call("thread/resume", Obj(("threadId", id)), readTimeout.Token);
+                return await client.Call("thread/read", Obj(("threadId", id), ("includeTurns", turns)), readTimeout.Token);
+            } catch (CodexError resumeError) when (resumeError.Message.Contains("already has an active writer", StringComparison.OrdinalIgnoreCase)) {
+                // 线程被别的客户端装载中（典型：桌面端正开着该会话，实测跨进程独占锁）：
+                // 官方行为是立即报错不是阻塞，映射成可判别的 409，读数据走 thread/read 的回退即可。
+                throw new CodexError("该会话正被其他客户端占用（如桌面端已打开），暂无法装载；稍后重试", 409, "session_busy");
+            } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+                throw new CodexError("读取会话超时，请稍后重试", 504);
             } catch (CodexError resumeError) when (
                 resumeError.Message.Contains("thread not loaded", StringComparison.OrdinalIgnoreCase) ||
                 resumeError.Message.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
@@ -182,6 +209,28 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             }
         }
     }
+    private bool WriterLockHeld(string id) => File.Exists(Path.Combine(home, "thread-writer-locks", id + ".lock"));
+
+    /// 被其他客户端持锁（桌面端开着）时的 turns 读取：thread/turns/list 读分页历史存储，
+    /// 不受写锁影响（实测 0.2s/页）。默认新→旧返回，翻完 nextCursor 后倒序成 thread.read 的时间序。
+    private async Task<JsonObject> ReadThreadTurnsPaged(string id, CancellationToken ct) {
+        var thread = (await rpc.Call("thread/read", Obj(("threadId", id), ("includeTurns", false)), ct))["thread"]!;
+        var turns = new JsonArray();
+        var cursor = "";
+        for (var page = 0; page < 100; page++) {
+            var request = Obj(("threadId", id), ("limit", 100));
+            if (cursor.Length > 0) request["cursor"] = cursor;
+            var result = await rpc.Call("thread/turns/list", request, ct);
+            foreach (var turn in result.A("data")) turns.Add(turn.DeepClone());
+            cursor = result.S("nextCursor");
+            if (cursor.Length == 0) break;
+        }
+        var ordered = new JsonArray();
+        for (var i = turns.Count - 1; i >= 0; i--) ordered.Add(turns[i]?.DeepClone());
+        thread["turns"] = ordered;
+        return Obj(("thread", thread));
+    }
+
     private async Task<JsonObject> ResumeSessionRequest(string id) {
         var request = Obj(("threadId", id));
         var thread = (await ReadThread(id, false))["thread"]!;
