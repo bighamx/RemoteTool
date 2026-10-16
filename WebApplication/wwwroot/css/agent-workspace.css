@@ -1159,7 +1159,8 @@
     --text-muted: #91a4a8;
     --accent-primary: #61dbc4;
     --border-color: #30414a;
-    grid-template-columns: 296px minmax(0, 1fr) 272px;
+    /* 会话信息改为按需弹出的抽屉，主区固定两列（第三列的空位是它隐藏后留下的）。 */
+    grid-template-columns: 296px minmax(0, 1fr);
     background: var(--bg-primary);
     font-size: 13px;
 }
