@@ -24,7 +24,9 @@
     };
     const terminal = new Set(['completed','failed','cancelled','interrupted','acceptance_unknown']);
     const previewSupport = new Map();
-    const markdown = agent === 'codex' && window.markdownit
+    // 两个 agent 都启用 markdown 渲染（hermes assistant 消息同为 markdown 输出；
+    // html:false 转义裸 HTML，安全面不变）。
+    const markdown = window.markdownit
         ? window.markdownit({ html: false, breaks: true, linkify: true }) : null;
     const markdownCache = new Map();
     if (markdown) {
