@@ -1,6 +1,6 @@
 .agent-workspace {
     display: grid;
-    grid-template-columns: 270px minmax(0, 1fr) 250px;
+    grid-template-columns: 270px minmax(0, 1fr);
     height: 100%;
     min-height: 0;
     background: var(--bg-primary);
@@ -22,6 +22,66 @@
 
 .agent-inspector {
     border-left: 1px solid var(--border-color)
+}
+
+/* 会话信息侧栏：默认隐藏，点击上下文条上的模型徽标时以抽屉形式覆盖在右侧。 */
+.agent-inspector {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(320px, 92vw);
+    z-index: 40;
+    padding-bottom: 12px;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, .18)
+}
+
+.agent-inspector-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 39;
+    background: rgba(0, 0, 0, .32)
+}
+
+.agent-inspector-head {
+    position: sticky;
+    top: 0;
+    background: var(--bg-secondary)
+}
+
+.agent-inspector-close {
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1;
+    padding: 4px 6px;
+    border-radius: 6px;
+    cursor: pointer
+}
+
+.agent-inspector-close:hover {
+    color: var(--text-primary);
+    background: var(--border-color)
+}
+
+.agent-model-chip {
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1;
+    padding: 4px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap
+}
+
+.agent-model-chip:hover {
+    border-color: var(--text-muted)
 }
 
 .agent-pane-head {
@@ -989,10 +1049,6 @@
 @media(max-width:1200px) {
     .agent-workspace {
         grid-template-columns: 255px minmax(0, 1fr)
-    }
-
-    .agent-inspector {
-        display: none
     }
 }
 

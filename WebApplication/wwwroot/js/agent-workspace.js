@@ -42,7 +42,7 @@
     let scrollRestoreTimer = null;
     const readVersions = new Map();
     const app = Vue.createApp({
-        data: () => ({ agent, markdownReady: !!markdown, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
+        data: () => ({ agent, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [],
             activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0,
@@ -52,6 +52,16 @@
             headerQuotaWindows() {const windows=this.quotaGroups(this.codexUsage).flatMap(group=>group.windows);return [[300,'5 小时'],[10080,'周额度']].map(([minutes,label])=>({minutes,label,remaining:windows.find(w=>w.minutes===minutes)?.remaining??null}));},
             currentWorkspaceName() {return this.workspaceName((this.workspaces.data||[]).find(row=>row.id===this.workspaces.current)||(this.accounts.data||[]).find(row=>row.id===this.accounts.current)||this.accounts.current_identity);},
             agentName() { return this.agent==='codex'?'Codex':'Hermes'; },
+            // 上下文条上的模型徽标：像 App 一样显示当前模型 + 推理强度，点击打开会话信息侧栏。
+            modelChipLabel() {
+                const model=this.selected?.model||this.modelSelection.model||'默认模型';
+                const effort=this.modelSelection.effort||this.selected?.reasoning_effort||'';
+                return effort?`${model} · ${effort}`:model;
+            },
+            modelChipTitle() {
+                const provider=(this.providerChoices.find(item=>item.id===this.modelSelection.provider)||{}).name;
+                return `提供方：${provider||'默认'}（点击修改模型）`;
+            },
             filteredSessions() { const q=this.search.trim().toLowerCase(); return q?this.sessions.filter(s=>`${s.title||''} ${s.preview||''} ${s.cwd||''}`.toLowerCase().includes(q)):this.sessions; },
             filteredCreateProjects() { const q=(this.createProjectSearch||'').trim().toLowerCase(); const rows=this.projects||[]; return q?rows.filter(p=>`${p.name||''} ${this.projectRootsOf(p).join(' ')}`.toLowerCase().includes(q)):rows; },
             createProjectRoots() { return this.projectRootsOf((this.projects||[]).find(p=>p.id===this.createProjectId)); },
