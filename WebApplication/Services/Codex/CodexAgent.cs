@@ -272,12 +272,14 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     }
 
     private readonly CodexSessionPins sessionPins;
+    private readonly CodexSessionMoves sessionMoves;
     private CodexAgent(string config) {
         configPath = config;
         settings = Read(config); folder = settings.S("state_folder", Path.GetDirectoryName(config)!); home = settings.S("home");
         if (string.IsNullOrWhiteSpace(home) || !Path.IsPathFullyQualified(home))
             throw new InvalidOperationException("Codex bridge home must be a non-empty absolute path; regenerate connection.json through the web service.");
         sessionPins = new CodexSessionPins(Path.Combine(home, "remotetool-session-pins.json"));
+        sessionMoves = new CodexSessionMoves(Path.Combine(home, "remotetool-session-moved.json"));
         titles = new CodexTitleGenerator(Path.GetDirectoryName(config)!);
         journal = Path.Combine(folder, "runs.json");
         providers = Read(Path.Combine(folder, "providers.json")); runs = Read(journal);
@@ -1177,6 +1179,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 var update = Obj(("threadId", p[1]));
                 update["projectId"] = projectId; // 空串 = 移出项目（官方接口语义）
                 await rpc.Call("thread/metadata/update", update);
+                // 官方索引不会跟着搬家：记下来，列表装配时按 id 回填，避免"移动 = 消失"。
+                sessionMoves.Set(p[1], projectId);
                 var thread = (await ReadThread(p[1], false))["thread"]!;
                 return Obj(("session", Session(thread, await CodexProjects.CachedList(rpc))));
             }
@@ -1219,6 +1223,20 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     if (projectId.Length == 0) continue;
                     var page = await ListPage(Obj(("limit", 50), ("projectId", projectId)));
                     foreach (var thread in page) result["data"]!.AsArray().Add(thread.DeepClone());
+                }
+                // 移动过的会话不在任何分路结果里（见 CodexSessionMoves 注释），按 id 补回。
+                if (context.Request.Query["cursor"].Count == 0) {
+                    var listed = result.A("data").Select(thread => thread.S("id")).ToHashSet();
+                    foreach (var id in sessionMoves.Ids.Where(id => !listed.Contains(id))) {
+                        context.RequestAborted.ThrowIfCancellationRequested();
+                        try {
+                            var moved = (await ReadThread(id, false))["thread"];
+                            if (moved != null) result["data"]!.AsArray().Add(moved.DeepClone());
+                        } catch (CodexError error) when (error.Status == 404 || error.Message.Contains("thread not found", StringComparison.OrdinalIgnoreCase)
+                            || error.Message.Contains("no rollout found", StringComparison.OrdinalIgnoreCase)) {
+                            sessionMoves.Remove(id);
+                        } catch (Exception) { /* 单条回填失败不影响整表 */ }
+                    }
                 }
                 // 官方 {"archived": true} 查询对刚存档的会话不可见（物化滞后且翻页也不含），
                 // 改为直读同一 state db 的 archived 行（同源数据，即时准确）。
@@ -1307,6 +1325,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     await ReleaseSessionCore(session);
                     await rpc.Call("thread/delete", Obj(("threadId", session)));
                     sessionPins.Set(session, false);
+                    sessionMoves.Remove(session);
                     lock (gate) { sessionOverrides.Remove(session); PersistModels(); }
                     await CodexDesktopSync.NotifyRemoved(new[] { session });
                     return Obj(("deleted", true));

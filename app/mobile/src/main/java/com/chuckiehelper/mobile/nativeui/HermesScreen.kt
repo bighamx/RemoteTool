@@ -477,18 +477,22 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                             modifier = Modifier.heightIn(min = 40.dp),
                                             onClick = { actions = false; renameChat = session },
                                         )
-                                        DropdownMenuItem(
-                                            text = { Text("移动到项目") },
-                                            leadingIcon = { Icon(Icons.Outlined.DriveFileMove, null, Modifier.size(18.dp)) },
-                                            modifier = Modifier.heightIn(min = 40.dp),
-                                            onClick = { actions = false; moveChat = session },
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(if (session.optBoolean("archived")) "取消存档" else "存档会话") },
-                                            leadingIcon = { Icon(Icons.Outlined.Archive, null, Modifier.size(18.dp)) },
-                                            modifier = Modifier.heightIn(min = 40.dp),
-                                            onClick = { actions = false; model.toggleSessionArchive(session) },
-                                        )
+                                        // 项目与存档是 Codex 独有概念（hermes 无项目、也没有存档端点），
+                                        // 共享会话菜单必须按 agent 过滤，否则 hermes 会露出点了必然失败的入口。
+                                        if (agent == "codex") {
+                                            DropdownMenuItem(
+                                                text = { Text("移动到项目") },
+                                                leadingIcon = { Icon(Icons.Outlined.DriveFileMove, null, Modifier.size(18.dp)) },
+                                                modifier = Modifier.heightIn(min = 40.dp),
+                                                onClick = { actions = false; moveChat = session; model.fetchProjects() },
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text(if (session.optBoolean("archived")) "取消存档" else "存档会话") },
+                                                leadingIcon = { Icon(Icons.Outlined.Archive, null, Modifier.size(18.dp)) },
+                                                modifier = Modifier.heightIn(min = 40.dp),
+                                                onClick = { actions = false; model.toggleSessionArchive(session) },
+                                            )
+                                        }
                                         if (model.hasPendingFor(session.getString("id"))) DropdownMenuItem(
                                             text = { Text("核对上次提交") },
                                             leadingIcon = { Icon(Icons.Outlined.CheckCircle, null, Modifier.size(18.dp)) },
@@ -1030,7 +1034,12 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
             text = {
                 Column {
                     if (model.projectsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
-                    if (model.projects.isEmpty() && !model.projectsLoading) Text("没有可选项目", style = MaterialTheme.typography.bodySmall)
+                    if (model.projects.isEmpty() && !model.projectsLoading) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("没有可选项目", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { model.fetchProjects() }) { Text("重新加载") }
+                        }
+                    }
                     LazyColumn(Modifier.heightIn(max = 320.dp)) {
                         item {
                             Row(Modifier.fillMaxWidth().clickable(enabled = currentProject.isNotBlank()) {
