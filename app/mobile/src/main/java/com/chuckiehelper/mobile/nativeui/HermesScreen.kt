@@ -87,6 +87,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         onDispose { lifecycle.removeObserver(observer); model.setObserving(false) }
     }
     var renameChat by remember { mutableStateOf<JSONObject?>(null) }
+    var moveChat by remember { mutableStateOf<JSONObject?>(null) }
     var detailsChat by remember { mutableStateOf<JSONObject?>(null) }
     var deleteChat by remember { mutableStateOf<JSONObject?>(null) }
     var handoverSession by remember { mutableStateOf<JSONObject?>(null) }
@@ -475,6 +476,18 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                             leadingIcon = { Icon(Icons.Outlined.Edit, null, Modifier.size(18.dp)) },
                                             modifier = Modifier.heightIn(min = 40.dp),
                                             onClick = { actions = false; renameChat = session },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("移动到项目") },
+                                            leadingIcon = { Icon(Icons.Outlined.DriveFileMove, null, Modifier.size(18.dp)) },
+                                            modifier = Modifier.heightIn(min = 40.dp),
+                                            onClick = { actions = false; moveChat = session },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(if (session.optBoolean("archived")) "取消存档" else "存档会话") },
+                                            leadingIcon = { Icon(Icons.Outlined.Archive, null, Modifier.size(18.dp)) },
+                                            modifier = Modifier.heightIn(min = 40.dp),
+                                            onClick = { actions = false; model.toggleSessionArchive(session) },
                                         )
                                         if (model.hasPendingFor(session.getString("id"))) DropdownMenuItem(
                                             text = { Text("核对上次提交") },
@@ -1008,6 +1021,44 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         ) { name ->
             model.renameSession(chat.getString("id"), name) { renameChat = null }
         }
+    }
+    moveChat?.let { chat ->
+        val currentProject = chat.optString("project_id")
+        AlertDialog(
+            onDismissRequest = { moveChat = null },
+            title = { Text("移动到项目") },
+            text = {
+                Column {
+                    if (model.projectsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    if (model.projects.isEmpty() && !model.projectsLoading) Text("没有可选项目", style = MaterialTheme.typography.bodySmall)
+                    LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                        item {
+                            Row(Modifier.fillMaxWidth().clickable(enabled = currentProject.isNotBlank()) {
+                                model.moveSession(chat.getString("id"), "") { moveChat = null }
+                            }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("无项目", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                if (currentProject.isBlank()) Text("当前", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                        items(model.projects, key = { it.optString("id") }) { project ->
+                            val pid = project.optString("id")
+                            Row(Modifier.fillMaxWidth().clickable(enabled = pid != currentProject) {
+                                model.moveSession(chat.getString("id"), pid) { moveChat = null }
+                            }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(project.optString("name"), style = MaterialTheme.typography.bodyMedium)
+                                    Text(project.array("roots").objects().firstOrNull()?.optString("path") ?: "",
+                                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                }
+                                if (pid == currentProject) Text("当前", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { moveChat = null }) { Text("关闭") } },
+        )
     }
     deleteChat?.let { chat ->
         ConfirmDialog("删除会话", "删除“${chat.optString("title") }”及其消息历史，无法撤销。附件按服务端清理规则保留。", { deleteChat = null }) {

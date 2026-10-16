@@ -34,6 +34,8 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpPatch("sessions/{id}")] public Task Rename(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Patch, $"sessions/{Id(id)}", body, ct);
     [HttpPost("sessions/{id}/delete")] public Task Delete(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/delete", JsonSerializer.SerializeToElement(new { }), ct);
     [HttpPost("sessions/{id}/pin")] public Task Pin(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/pin", body, ct);
+    [HttpPost("sessions/{id}/archive")] public Task Archive(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/archive", body, ct);
+    [HttpPost("sessions/{id}/move")] public Task Move(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/move", body, ct);
     [HttpPost("sessions/{id}/fork")] public async Task Fork(string id, [FromBody] JsonElement body, CancellationToken ct) {
         using var response = await bridge.SendAsync(HttpMethod.Post, $"sessions/{Id(id)}/fork", body, ct);
         var payload = await response.Content.ReadAsStringAsync(ct);

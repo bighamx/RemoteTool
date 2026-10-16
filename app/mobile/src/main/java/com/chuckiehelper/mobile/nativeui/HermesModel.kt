@@ -1919,6 +1919,30 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
+    fun toggleSessionArchive(session: JSONObject) = launch {
+        val id = session.optString("id")
+        val archived = !session.optBoolean("archived")
+        try {
+            api.json("$root/sessions/${q(id)}/archive", obj("archived" to archived))
+            sessions = sessions.map { if (it.optString("id") == id) JSONObject(it.toString()).put("archived", archived) else it }
+            saveOfflineSessions()
+        } catch (e: Exception) {
+            error = "存档失败：${e.message ?: "未知错误"}"
+        }
+    }
+
+    fun moveSession(id: String, projectId: String, onDone: () -> Unit) = launch {
+        try {
+            val result = api.json("$root/sessions/${q(id)}/move", obj("projectId" to projectId))
+            val row = result.getJSONObject("session")
+            sessions = sessions.map { if (it.optString("id") == id) row else it }
+            saveOfflineSessions()
+        } catch (e: Exception) {
+            error = "移动会话失败：${e.message ?: "未知错误"}"
+        }
+        onDone()
+    }
+
     fun renameSession(id: String, name: String, onDone: () -> Unit) = launch {
         val body = obj("title" to name.trim()).toString().toRequestBody("application/json".toMediaType())
         val result = api.json(api.request("$root/sessions/$id").newBuilder().patch(body).build())

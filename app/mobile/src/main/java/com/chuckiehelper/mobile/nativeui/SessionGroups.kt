@@ -11,9 +11,10 @@ data class SessionGroup(val name: String, val sessions: List<JSONObject>, val pi
  * rows 本身的顺序决定组内顺序，这里不重排会话。
  */
 fun groupCodexSessions(rows: List<JSONObject>, isPinned: (JSONObject) -> Boolean): List<SessionGroup> {
-    val pinnedRows = rows.filter(isPinned)
+    // 已存档会话单独一节沉底（置顶/项目节都不含它们）
+    val pinnedRows = rows.filter { isPinned(it) && !it.optBoolean("archived") }
     val groups = LinkedHashMap<String, MutableList<JSONObject>>()
-    for (row in rows.filterNot(isPinned)) {
+    for (row in rows.filterNot { isPinned(it) || it.optBoolean("archived") }) {
         val name = row.optString("group_name").ifBlank { "其他" }
         groups.getOrPut(name) { mutableListOf() }.add(row)
     }
@@ -21,5 +22,7 @@ fun groupCodexSessions(rows: List<JSONObject>, isPinned: (JSONObject) -> Boolean
     val sections = mutableListOf<SessionGroup>()
     if (pinnedRows.isNotEmpty()) sections += SessionGroup("已置顶", pinnedRows, pinned = true)
     sections += groups.entries.map { (name, list) -> SessionGroup(name, list.toList()) }.sortedByDescending(::newest)
+    val archived = rows.filter { it.optBoolean("archived") }
+    if (archived.isNotEmpty()) sections += SessionGroup("已存档", archived)
     return sections
 }

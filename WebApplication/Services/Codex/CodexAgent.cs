@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using SQLite;
 using System.Text.RegularExpressions;
 using static RemoteTool.WebApi.Services.Codex.CodexJson;
 
@@ -95,6 +96,58 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private CodexRpc Runtime(string id) {
         lock (gate) return sessionRpcs.GetValueOrDefault(id) ?? throw new CodexError("原任务连接已释放，本次消息未写入，请刷新后重新发送。", 409, "run_stale");
     }
+    /** 列表专用连接：thread/metadata|archive 的暂存机制会让写实例自己的列表查询短暂滞后，
+        独立连接只读共享 state db，永远拿到已落库的最新值。 */
+    private CodexRpc listRpc;
+    private async Task<CodexRpc> EnsureListRpc() {
+        if (listRpc?.Running == true) return listRpc;
+        listRpc?.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(2));
+        var client = NewRuntime();
+        await client.Initialize();
+        listRpc = client;
+        return client;
+    }
+
+    private sealed class ArchivedThreadRow {
+        [SQLite.Column("id")] public string Id { get; set; }
+        [SQLite.Column("title")] public string Title { get; set; }
+        [SQLite.Column("cwd")] public string Cwd { get; set; }
+        [SQLite.Column("project_id")] public string ProjectId { get; set; }
+        [SQLite.Column("model")] public string Model { get; set; }
+        [SQLite.Column("updated_at_ms")] public long UpdatedAtMs { get; set; }
+    }
+
+    /** 已存档会话：官方 {"archived": true} 列表查询对刚存档的会话有物化滞后，
+        直读同一 state db（只读）即时且与桌面端同源。 */
+    private JsonArray ArchivedSessionRows(JsonArray projects) {
+        var rows = new JsonArray();
+        try {
+            var dbPath = Path.Combine(home, "state_5.sqlite");
+            if (!File.Exists(dbPath)) return rows;
+            SQLitePCL.Batteries_V2.Init();
+            using var db = new SQLiteConnection(dbPath, SQLiteOpenFlags.ReadOnly | SQLiteOpenFlags.FullMutex);
+            db.BusyTimeout = TimeSpan.FromMilliseconds(250);
+            var projectNameById = projects.ToDictionary(project => project.S("id"), project => project.S("name"));
+            foreach (var row in db.Query<ArchivedThreadRow>(
+                "SELECT id, COALESCE(NULLIF(name,''), title) AS title, cwd, project_id, model, updated_at_ms FROM threads WHERE archived=1 ORDER BY updated_at_ms DESC LIMIT 100")) {
+                var cwd = row.Cwd ?? "";
+                var groupName = null as string;
+                if (!string.IsNullOrEmpty(row.ProjectId) && projectNameById.TryGetValue(row.ProjectId, out var byProject)) groupName = byProject;
+                else {
+                    var (fromCwd, _) = CodexProjects.GroupName(cwd, projects);
+                    groupName = fromCwd;
+                }
+                var node = Obj(("id", row.Id), ("title", string.IsNullOrEmpty(row.Title) ? "未命名会话" : row.Title),
+                    ("cwd", cwd), ("model", row.Model ?? ""), ("archived", true),
+                    ("last_active", row.UpdatedAtMs), ("source", "codex"));
+                if (!string.IsNullOrEmpty(row.ProjectId)) node["project_id"] = row.ProjectId;
+                if (!string.IsNullOrEmpty(groupName)) node["group_name"] = groupName;
+                rows.Add(node);
+            }
+        } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException or DllNotFoundException or TypeInitializationException) { }
+        return rows;
+    }
+
     private CodexRpc NewRuntime() {
         var environment = new Dictionary<string, string>();
         foreach (var entry in providers) if (entry.Value.S("api_key").Length > 0) environment["CHUCKIE_CODEX_" + entry.Key.ToUpperInvariant() + "_KEY"] = entry.Value.S("api_key");
@@ -576,10 +629,18 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         result["last_active"] = messageTime > 0 ? JsonValue.Create(messageTime)
             : (thread?["createdAt"] ?? thread?["created_at"])?.DeepClone();
         if (projects != null) {
-            var (groupName, fromProject) = CodexProjects.GroupName(thread.S("cwd"), projects);
-            if (groupName != null) {
-                result["group_name"] = groupName;
-                if (fromProject) result["project_name"] = groupName;
+            var projectId = thread.S("projectId");
+            var projectName = projectId.Length > 0 ? projects.FirstOrDefault(project => project.S("id") == projectId)?.S("name") ?? null : null;
+            if (!string.IsNullOrEmpty(projectName)) {
+                // 会话已归属项目（thread/metadata/update）：项目名是权威分组，优先于 cwd 匹配。
+                result["group_name"] = projectName;
+                result["project_name"] = projectName;
+            } else {
+                var (groupName, fromProject) = CodexProjects.GroupName(thread.S("cwd"), projects);
+                if (groupName != null) {
+                    result["group_name"] = groupName;
+                    if (fromProject) result["project_name"] = groupName;
+                }
             }
         }
         var (contextUsed, contextWindow) = CodexRolloutMessageTimes.LatestSessionContext(home, thread.S("id"), thread.S("path"));
@@ -1105,6 +1166,20 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 sessionPins.Set(p[1], pinned);
                 return Obj(("pinned", pinned));
             }
+            if (p.Length == 3 && p[2] == "archive" && method == "POST") {
+                if (body["archived"] is not JsonValue archiveFlag || !archiveFlag.TryGetValue<bool>(out var archived)) throw new CodexError("archived 必须为布尔值");
+                await rpc.Call(archived ? "thread/archive" : "thread/unarchive", Obj(("threadId", p[1])));
+                return Obj(("archived", archived));
+            }
+            if (p.Length == 3 && p[2] == "move" && method == "POST") {
+                var projectId = body.S("projectId", "").Trim();
+                if (projectId.Length > 120 || projectId.Contains('\n') || projectId.Contains('\r')) throw new CodexError("projectId 不合法");
+                var update = Obj(("threadId", p[1]));
+                update["projectId"] = projectId; // 空串 = 移出项目（官方接口语义）
+                await rpc.Call("thread/metadata/update", update);
+                var thread = (await ReadThread(p[1], false))["thread"]!;
+                return Obj(("session", Session(thread, await CodexProjects.CachedList(rpc))));
+            }
             if (p.Length == 3 && p[2] == "queue") return await Queue(p[1], method, body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "takeover" && method == "POST") return await TakeoverSession(p[1], body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "handover" && method == "POST") return await HandoverSession(p[1], body, context.RequestAborted);
@@ -1130,10 +1205,30 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 }
                 _ = NotifyDesktop(result.A("data").Where(thread => thread.S("originator") is "chuckie_helper_mobile" or "remote_tool").Select(thread => thread.S("id")).ToArray());
                 var projects = await CodexProjects.CachedList(rpc);
+                // 官方语义：默认列表只含未归属会话；项目归属/存档的会话要按官方桌面端的方式分路查询后合并，
+                // 否则移动过/存档过的会话会从列表里"消失"。
+                CodexRpc listConnection = rpc;
+                try { listConnection = await EnsureListRpc(); } catch (Exception) { }
+                async System.Threading.Tasks.Task<JsonArray> ListPage(JsonObject request) {
+                    try { return (await listConnection.Call("thread/list", request)).A("data"); }
+                    catch (CodexError error) when (error.Status == 400 || error.Message.Contains("unsupported", StringComparison.OrdinalIgnoreCase)) { return new JsonArray(); }
+                    catch (Exception) { return new JsonArray(); }
+                }
+                foreach (var project in projects) {
+                    var projectId = project.S("id");
+                    if (projectId.Length == 0) continue;
+                    var page = await ListPage(Obj(("limit", 50), ("projectId", projectId)));
+                    foreach (var thread in page) result["data"]!.AsArray().Add(thread.DeepClone());
+                }
+                // 官方 {"archived": true} 查询对刚存档的会话不可见（物化滞后且翻页也不含），
+                // 改为直读同一 state db 的 archived 行（同源数据，即时准确）。
+                foreach (var archivedRow in ArchivedSessionRows(projects)) result["data"]!.AsArray().Add(archivedRow.DeepClone());
+                var archivedIds = result.A("data").Where(t => t.S("archived") == "true").Select(t => t.S("id")).ToHashSet();
                 var threads = result.A("data").Where(t => t.S("id").Length > 0).GroupBy(t => t.S("id")).Select(group => group.First()).ToArray();
                 var previews = LatestSessionPreview.Read(Path.Combine(home, "thread_history_1.sqlite"), threads.Select(thread => thread.S("id")), true);
                 var unique = threads.Select(thread => {
                     var row = Session(thread, projects);
+                    if (archivedIds.Contains(thread.S("id"))) row["archived"] = true;
                     if (previews.TryGetValue(thread.S("id"), out var text)) { row["latest_user_message"] = text; row["preview"] = text; }
                     var continuation = CodexPreviewRollout.Read(home, thread.S("id"), thread.S("path"));
                     if (continuation.Length > 0) { row["latest_user_message"] = continuation; row["preview"] = continuation; }
