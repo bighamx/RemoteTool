@@ -46,6 +46,9 @@
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [],
             activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0,
+            groupByProject: localStorage.getItem(`remotetool:web:groupByProject:${agent}`) === '1',
+            collapsedGroups: (() => { try { return JSON.parse(localStorage.getItem(`remotetool:web:collapsedGroups:${agent}`) || '[]'); } catch { return []; } })(),
+            showMoveDialog: false, moveTarget: null, moveMoving: false, moveSearch: '', moveError: '',
             showCreateDialog: false, createTitle: '', createProjectId: '', createMode: 'existing', createRoot: '', createRoots: [], createProjectName: '', createProjectSearch: '', createBrowser: false, createBrowserPath: '', createBrowserDirs: [], createBrowserLoading: false, createBrowserError: '', createBrowserNew: '', createBrowserMkdir: false, creating: false, createError: '', showEditDialog: false, editText: '', editTarget: null, editFiles: [], editing: false, editError: '', messageMenu: null, sessionMenu: null,
             liveSegments: [], liveTools: [], streamRun: null, streamSeq: 0, streamConnected: false, streamGone: false, toolTimer: null, externalRunning: false, externalActivity: null, toolsCollapsed: true, apiServer: null, enablingApiServer: false }),
         computed: {
@@ -63,6 +66,14 @@
                 return `提供方：${provider||'默认'}（点击修改模型）`;
             },
             filteredSessions() { const q=this.search.trim().toLowerCase(); return q?this.sessions.filter(s=>`${s.title||''} ${s.preview||''} ${s.cwd||''}`.toLowerCase().includes(q)):this.sessions; },
+            displayedGroups() {
+                const rows=this.filteredSessions;
+                if(!(this.groupByProject&&this.agent==='codex')) return [{key:'__all__',name:'',rows}];
+                const map=new Map();
+                for(const s of rows){const name=s.group_name||(s.cwd?String(s.cwd).split(/[\\/]/).filter(Boolean).pop():'')||'未分组';if(!map.has(name))map.set(name,[]);map.get(name).push(s);}
+                return [...map.entries()].map(([name,list])=>({key:name,name,rows:list}));
+            },
+            filteredMoveProjects() { const q=(this.moveSearch||'').trim().toLowerCase(); const rows=this.projects||[]; return q?rows.filter(p=>`${p.name||''} ${this.projectRootsOf(p).join(' ')}`.toLowerCase().includes(q)):rows; },
             filteredCreateProjects() { const q=(this.createProjectSearch||'').trim().toLowerCase(); const rows=this.projects||[]; return q?rows.filter(p=>`${p.name||''} ${this.projectRootsOf(p).join(' ')}`.toLowerCase().includes(q)):rows; },
             createProjectRoots() { return this.projectRootsOf((this.projects||[]).find(p=>p.id===this.createProjectId)); },
             createValid() { if(this.agent!=='codex'||this.createMode==='none')return true; if(this.createMode==='existing')return !!this.createProjectId&&!!this.createRoot; if(this.createMode==='new')return this.createRoots.length>0&&!!this.createRoot&&!!this.createProjectName.trim(); return true; },
@@ -336,6 +347,39 @@
             async loadCodexAdmin() { if(this.agent!=='codex')return; const results=await Promise.allSettled([api.get(`${base}/projects`),api.get(`${base}/accounts`)]); if(results[0].status==='fulfilled')this.projects=results[0].value.data||[]; if(results[1].status==='fulfilled'){this.accounts=results[1].value;this.selectedAccount=this.accounts.current||'';} },
             async useAccount() {if(!this.selectedAccount||this.selectedAccount===this.accounts.current)return;const row=(this.accounts.data||[]).find(item=>item.id===this.selectedAccount);if(row)await this.useWorkspace(row);},
             providerChanged() { this.modelSelection.model='';this.modelSelection.effort='';this.modelSelection.tier=''; },
+            groupRows(group) { return (this.groupByProject && this.agent === 'codex' && this.collapsedGroups.includes(group.name)) ? [] : group.rows; },
+            toggleGroupMode() {
+                this.groupByProject = !this.groupByProject;
+                localStorage.setItem(`remotetool:web:groupByProject:${this.agent}`, this.groupByProject ? '1' : '0');
+            },
+            toggleGroup(name) {
+                const index = this.collapsedGroups.indexOf(name);
+                if (index >= 0) this.collapsedGroups.splice(index, 1); else this.collapsedGroups.push(name);
+                localStorage.setItem(`remotetool:web:collapsedGroups:${this.agent}`, JSON.stringify(this.collapsedGroups));
+            },
+            openMoveDialog(session) {
+                this.sessionMenu = null;
+                this.moveTarget = session; this.moveError = ''; this.moveSearch = '';
+                if (this.agent === 'codex' && !this.projects.length) { this.projectsLoading = true; api.get(`${base}/projects`).then(r => { this.projects = r.data || []; }).catch(e => { this.error = e.message; }).finally(() => { this.projectsLoading = false; }); }
+                this.showMoveDialog = true;
+            },
+            async doMove(projectId) {
+                if (!this.moveTarget || this.moveMoving) return;
+                const id = this.moveTarget.id;
+                this.moveMoving = true; this.moveError = '';
+                try {
+                    const result = await api.post(`${base}/sessions/${api.id(id)}/move`, { projectId: projectId || '' });
+                    if (result.session) this.sessions = this.sessions.map(s => s.id === id ? result.session : s);
+                    this.showMoveDialog = false; this.moveTarget = null;
+                    this.$Message.success('已移动到新项目');
+                } catch (e) { this.moveError = e.message; } finally { this.moveMoving = false; }
+            },
+            async toggleArchiveSession(session) {
+                this.sessionMenu = null;
+                const archived = !session.archived;
+                try { await api.post(`${base}/sessions/${api.id(session.id)}/archive`, { archived: archived }); this.sessions = this.sessions.map(s => s.id === session.id ? { ...s, archived: archived } : s); this.$Message.success(archived ? '已存档' : '已取消存档'); }
+                catch (e) { this.error = e.message; }
+            },
             async saveModel() { if(!this.selectedId||!this.modelSelection.model)return; try {const choice=this.modelSelection;const body={provider:choice.provider,model:choice.model,reasoning_effort:choice.effort};if(this.agent==='codex')body.service_tier=choice.tier;else body.model_options={reasoning:choice.effort==='none'?{enabled:false}:choice.effort?{enabled:true,effort:choice.effort}:{}};await api.post(`${base}/sessions/${api.id(this.selectedId)}/model`,body); this.$Message.success('模型设置已更新'); await this.refreshSessions(); } catch(e) { this.error=e.message; } },
             openCreateDialog() {this.createTitle='';this.createProjectId='';this.createRoot='';this.createRoots=[];this.createProjectName='';this.createProjectSearch='';this.createMode='existing';this.createBrowser=false;this.createBrowserError='';this.createError='';this.showCreateDialog=true;if(this.agent==='codex')this.loadCodexAdmin();},
             pickCreateProject(project) {this.createProjectId=project?.id||'';const roots=this.projectRootsOf(project);this.createRoot=roots[0]||'';},
