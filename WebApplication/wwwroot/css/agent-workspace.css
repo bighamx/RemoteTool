@@ -378,19 +378,18 @@
 }
 
 .agent-message {
-    max-width: 88%;
     margin: 0 0 18px
 }
 
 .agent-message.from-user {
     width: fit-content;
-    max-width: min(85%, 720px);
+    min-width: 255px;
     margin-left: auto
 }
 
 .agent-message.from-agent {
-    width: min(100%, 1440px);
-    max-width: 100%
+    width: fit-content;
+    min-width: 255px;
 }
 
 .agent-message-meta {
@@ -1681,7 +1680,6 @@
 }
 
 .agent-message {
-    max-width: 95%;
     margin-bottom: 15px
 }
 
@@ -2284,7 +2282,7 @@
 
 @media(max-width:1300px) {
     .agent-workspace {
-        grid-template-columns: 274px minmax(0, 1fr) 248px
+        grid-template-columns: 274px minmax(0, 1fr)
     }
 }
 
