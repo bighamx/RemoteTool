@@ -10,6 +10,9 @@ internal sealed class CodexSessionMoves(string path) {
     private readonly object gate = new();
     private JsonObject entries = Read(path);
     public string[] Ids { get { lock (gate) return entries.Select(pair => pair.Key).ToArray(); } }
+    public (string Id, string ProjectId)[] Entries {
+        get { lock (gate) return entries.Select(pair => (pair.Key, pair.Value?.GetValue<string>() ?? "")).ToArray(); }
+    }
     public void Set(string id, string projectId) {
         lock (gate) {
             var updated = entries.DeepClone().AsObject();

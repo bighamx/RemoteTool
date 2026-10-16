@@ -273,6 +273,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
 
     private readonly CodexSessionPins sessionPins;
     private readonly CodexSessionMoves sessionMoves;
+    private DateTime lastDesktopSyncAttempt = DateTime.MinValue;
     private CodexAgent(string config) {
         configPath = config;
         settings = Read(config); folder = settings.S("state_folder", Path.GetDirectoryName(config)!); home = settings.S("home");
@@ -1181,8 +1182,15 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 await rpc.Call("thread/metadata/update", update);
                 // 官方索引不会跟着搬家：记下来，列表装配时按 id 回填，避免"移动 = 消失"。
                 sessionMoves.Set(p[1], projectId);
+                // 桌面端侧栏按它自己的 .codex-global-state.json 分组，不读 app-server 的 project_id，
+                // 不同步这份状态就会出现"手机端移动成功、桌面端还在原项目"。
+                var desktopSync = "failed";
+                try { desktopSync = CodexDesktopProjects.SyncMove(home, p[1], projectId); }
+                catch (Exception) { /* 桌面端状态不可写不应影响移动本身 */ }
                 var thread = (await ReadThread(p[1], false))["thread"]!;
-                return Obj(("session", Session(thread, await CodexProjects.CachedList(rpc))));
+                return Obj(("session", Session(thread, await CodexProjects.CachedList(rpc))),
+                    ("desktop_sync", desktopSync),
+                    ("desktop_running", CodexDesktopProjects.DesktopRunning()));
             }
             if (p.Length == 3 && p[2] == "queue") return await Queue(p[1], method, body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "takeover" && method == "POST") return await TakeoverSession(p[1], body, context.RequestAborted);
@@ -1223,6 +1231,15 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     if (projectId.Length == 0) continue;
                     var page = await ListPage(Obj(("limit", 50), ("projectId", projectId)));
                     foreach (var thread in page) result["data"]!.AsArray().Add(thread.DeepClone());
+                }
+                // 桌面端关闭时把没生效的移动补写到它自己的状态文件（它运行时会覆盖，写了也白写）。
+                if (context.Request.Query["cursor"].Count == 0
+                    && sessionMoves.Entries.Length > 0
+                    && DateTime.UtcNow - lastDesktopSyncAttempt > TimeSpan.FromSeconds(60)) {
+                    lastDesktopSyncAttempt = DateTime.UtcNow;
+                    try {
+                        if (!CodexDesktopProjects.DesktopRunning()) CodexDesktopProjects.SyncPending(home, sessionMoves.Entries);
+                    } catch (Exception) { /* 桌面端状态同步失败不影响列表 */ }
                 }
                 // 移动过的会话不在任何分路结果里（见 CodexSessionMoves 注释），按 id 补回。
                 if (context.Request.Query["cursor"].Count == 0) {
