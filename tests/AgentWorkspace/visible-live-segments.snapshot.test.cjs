@@ -33,6 +33,16 @@ const msg = (text, ts) => ({ role: 'assistant', timestamp: ts, content: text });
 const partial = visible.call(context([msg('第一条旁白内容', now - 2000), msg('第二条旁白内容', now - 1900)]));
 assert.equal(partial.map(s => s.id).join(), 'snap', 'partial landing keeps only the snapshot segment');
 assert.match(partial[0].text, /第三条还没落库/);
+// 已落地的两条不得再出现在实时气泡里（否则与上方历史气泡重复）
+assert.doesNotMatch(partial[0].text, /第一条旁白内容/, 'landed lines must not repeat in the live bubble');
+assert.doesNotMatch(partial[0].text, /第二条旁白内容/, 'landed lines must not repeat in the live bubble');
+
+// 场景1b：已落库的行时间很早（超出旧的 10 分钟窗口）也必须被剔除
+const old = visible.call(context([msg('第一条旁白内容', now - 3600000), msg('第二条旁白内容', now - 3500000)]));
+assert.equal(old.length, 1, 'old landed lines must still be filtered out of the live bubble');
+assert.doesNotMatch(old[0].text, /第一条旁白内容/);
+assert.doesNotMatch(old[0].text, /第二条旁白内容/);
+assert.match(old[0].text, /第三条还没落库/);
 
 // 场景2：三条全部落库 —— live 区域应为空（不再与历史气泡重复）
 const all = visible.call(context([

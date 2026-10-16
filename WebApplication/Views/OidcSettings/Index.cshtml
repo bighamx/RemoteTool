@@ -2,14 +2,14 @@
     Layout = "_Layout";
     ViewData["Title"] = "身份验证";
 }
-<div id="identity-settings-app" class="workspace-page identity-settings" v-cloak>
-    <div class="workspace-heading"><div><p class="eyebrow">REMOTE TOOL / IDENTITY</p><h1>身份验证</h1><p>分别管理 OIDC 提供方和 Cloudflare Access；现有密码登录保持可用。</p></div></div>
-    <p v-if="error" class="workspace-alert">{{error}}</p>
-    <p v-if="notice" class="workspace-alert workspace-alert-success">{{notice}}</p>
+<div id="identity-settings-app" class="identity-settings" v-cloak>
     <nav class="tabs identity-subtabs" role="tablist" aria-label="身份验证配置">
         <button id="identity-tab-oidc" ref="oidcTab" type="button" role="tab" class="tab" :class="{active:activeTab==='oidc'}" :aria-selected="activeTab==='oidc'" :tabindex="activeTab==='oidc'?0:-1" :disabled="saving" aria-controls="identity-panel-oidc" @@click="selectTab('oidc')" v-on:keydown="onTabKeydown">OIDC 提供方</button>
         <button id="identity-tab-access" ref="accessTab" type="button" role="tab" class="tab" :class="{active:activeTab==='access'}" :aria-selected="activeTab==='access'" :tabindex="activeTab==='access'?0:-1" :disabled="saving" aria-controls="identity-panel-access" @@click="selectTab('access')" v-on:keydown="onTabKeydown">Cloudflare Access</button>
     </nav>
+    <div class="identity-content">
+    <p v-if="error" class="workspace-alert">{{error}}</p>
+    <p v-if="notice" class="workspace-alert workspace-alert-success">{{notice}}</p>
     <section id="identity-panel-oidc" class="identity-panel" role="tabpanel" aria-labelledby="identity-tab-oidc" v-show="activeTab==='oidc'">
         <div class="identity-panel-head"><div><h2>OIDC 提供方</h2><p>授权码 + PKCE · 统一回调地址 <code>{{callbackUrl}}</code></p></div><button class="btn btn-secondary" type="button" @@click="newProvider">添加提供方</button></div>
         <div class="identity-provider-list" v-if="providers.length"><button v-for="item in providers" :key="item.id" type="button" class="identity-provider-item" :class="{selected:form && form.id===item.id}" @@click="editProvider(item)"><strong>{{item.name}}</strong><small>{{item.issuer}}</small><span>{{item.enabled?'已启用':'已停用'}}</span></button></div>
@@ -59,4 +59,5 @@
             <div class="identity-actions"><button class="btn btn-primary" type="submit" :disabled="saving">保存 Access 配置</button></div>
         </form>
     </section>
+    </div>
 </div>

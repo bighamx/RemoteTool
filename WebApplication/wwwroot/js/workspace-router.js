@@ -46,7 +46,9 @@
         if (loadedStyles.has(path)) return pendingStyles.get(path) || Promise.resolve();
         loadedStyles.add(path);
         const loading = new Promise((resolve, reject) => {
-            const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = path;
+            const link = document.createElement('link'); link.rel = 'stylesheet';
+            // 与脚本一致带构建版本号：否则浏览器会长期复用旧的动态样式（改动不生效）。
+            link.href = `${path}?v=${encodeURIComponent(document.body?.dataset.build || '')}`;
             link.onload = () => { pendingStyles.delete(path); resolve(); };
             link.onerror = () => { pendingStyles.delete(path); loadedStyles.delete(path); reject(new Error(`样式加载失败：${name}`)); };
             document.head.append(link);

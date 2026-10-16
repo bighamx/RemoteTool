@@ -29,7 +29,7 @@
 .workspace-fitted #stream-video,.workspace-fitted #stream-img,.workspace-fitted #stream-canvas{max-width:100%;max-height:100%;object-fit:contain}
 .workspace-fitted .screenshot-container.fullscreen{height:100vh;max-height:none}
 .app-workspace .tabs{flex:none;justify-content:flex-start;height:52px;padding:0 24px;border-bottom:1px solid var(--border-color);background:var(--bg-secondary)}.app-workspace .tab{height:100%;padding:0 18px}
-.remote-section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:52px;padding:0 24px;background:var(--bg-secondary);border-bottom:1px solid var(--border-color)}.remote-section-heading strong{font-size:14px}.remote-section-heading .tabs{height:52px;padding:0;border:0}.remote-section-heading .tab{height:52px}
+.remote-section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:53px;padding:0 24px;background:var(--bg-secondary);border-bottom:1px solid var(--border-color)}.remote-section-heading strong{font-size:14px}.remote-section-heading .tabs{height:52px;padding:0;border:0}.remote-section-heading .tab{height:52px}
 .remote-section-heading:not(.docker-selected) .docker-subtabs{display:none}.remote-section-heading.docker-selected>strong{display:none}.remote-section-heading .tab[hidden]{display:none}
 .app-workspace #remote-page.page{min-height:0}.app-workspace #remote-page .content{padding:24px}.app-workspace #remote-page .tab-content{min-height:0}
 .workspace-module[data-module="remote"] .processes-controls #refresh-processes-btn{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;flex:none;padding:0;line-height:1}

@@ -1,4 +1,6 @@
-.identity-settings { max-width: 1080px; margin: 0 auto; padding-bottom: 48px; }
+/* 与 Docker 页一致：无顶部标题区，tab 条占满宽度（同 .remote-section-heading 视觉） */
+.identity-settings { display: block; padding: 0; }
+.identity-content { padding: 24px 32px 48px; }
 .identity-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
 .identity-tab { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-width: 0; padding: 16px 18px; border: 1px solid var(--border-color, #cad6d0); border-radius: 14px; background: var(--bg-secondary, #fff); color: var(--text-primary, #172b29); text-align: left; cursor: pointer; transition: border-color .18s, background .18s, box-shadow .18s; }
 .identity-tab:hover { border-color: var(--accent-primary, #327a6b); }
@@ -31,14 +33,14 @@
 @media (max-width: 700px) { .identity-panel { padding: 16px; } .identity-panel-head,.identity-form-title { align-items: flex-start; flex-direction: column; } .identity-form { grid-template-columns: minmax(0, 1fr); } .identity-tab { align-items: flex-start; flex-direction: column; padding: 13px; } }
 
 /* Docker 风格子页签（与远程页 .tabs/.tab 一致：active 高亮 + 底部指示条） */
-.identity-subtabs { display: flex; align-items: center; gap: 2px; margin-top: 22px; margin-bottom: 18px; border-bottom: 1px solid var(--border-color, #cad6d0); overflow-x: auto; }
-.identity-subtabs::-webkit-scrollbar { height: 0; }
-.identity-subtabs .tab { position: relative; min-height: 42px; padding: 0 18px; display: flex; align-items: center; background: none; border: none; color: var(--text-secondary, #455e5a); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: color .18s, background .18s; }
-.identity-subtabs .tab:hover { color: var(--text-primary, #172b29); background: var(--bg-tertiary, #edf3f1); }
-.identity-subtabs .tab.active { color: var(--accent-primary, #327a6b); }
-.identity-subtabs .tab.active::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 1px; background: var(--accent-primary, #327a6b); }
-.identity-subtabs .tab:focus-visible { outline: 2px solid var(--accent-primary, #327a6b); outline-offset: -2px; }
-.identity-subtabs .tab:disabled { cursor: wait; opacity: .7; }
+.identity-settings .identity-subtabs { display: flex; align-items: center; gap: 2px; height: 53px; padding: 0 24px; margin: 0; background: var(--bg-secondary, #f7faf9); border-bottom: 1px solid var(--border-color, #cad6d0); overflow-x: auto; justify-content: flex-start; }
+.identity-settings .identity-subtabs::-webkit-scrollbar { height: 0; }
+.identity-settings .identity-subtabs .tab { position: relative; height: 52px; min-height: 52px; padding: 0 18px; display: flex; align-items: center; background: none; border: none; color: var(--text-secondary, #455e5a); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: color .18s, background .18s; }
+.identity-settings .identity-subtabs .tab:hover { color: var(--text-primary, #172b29); background: var(--bg-tertiary, #edf3f1); }
+.identity-settings .identity-subtabs .tab.active { color: var(--accent-primary, #327a6b); }
+.identity-settings .identity-subtabs .tab.active::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; border-radius: 2px 2px 0 0; background: var(--accent-primary, #327a6b); }
+.identity-settings .identity-subtabs .tab:focus-visible { outline: 2px solid var(--accent-primary, #327a6b); outline-offset: -2px; }
+.identity-settings .identity-subtabs .tab:disabled { cursor: wait; opacity: .7; }
 
 /* 提供方模板与接入指引 */
 .identity-presets { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-weight: 600; }

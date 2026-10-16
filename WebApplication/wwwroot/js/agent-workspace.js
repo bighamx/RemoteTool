@@ -76,12 +76,19 @@
                     // 流式期间的多次 interim 各自落成一条历史消息，而 snapshot/completed 产生的是
                     // 它们的拼接段；拼接段不被任何单条消息覆盖，会与历史气泡重复显示。
                     // 因此除单条覆盖外，再对窗口内助手消息拼接后的整段做一次覆盖判断。
-                    const recent=this.messages.filter(m=>m.role==='assistant'&&this.messageStamp(m)>=segment.createdAt-600000);
+                    // 不能用时间窗过滤：累积的实时段包含更早的旁白，而那些行早已落库（时间窗会漏掉）。
+                    const recent=this.messages.filter(m=>m.role==='assistant').slice(-400);
                     if (recent.some(m=>this.narrationCovers(this.messageText(m),text))) continue;
                     if (this.narrationCovers(recent.map(m=>this.messageText(m)).join('\n'), text)) continue;
-                    const covered=out.find(prev=>this.sameNarration(prev.text,text));
-                    if (covered) { if (text.trim().length>this.asText(covered.text).trim().length) covered.text=text; continue; }
-                    out.push({...segment, text});
+                    // 拼接段里已经落成历史气泡的行不再重复显示，只留尚未落地的尾巴；
+                    // 逐行剔除（而不是整段判断）才能覆盖"部分落库"的常见中间态。
+                    const display=text.split('\n').map(line=>line.trim())
+                        .filter(line=>line&&!recent.some(m=>this.narrationCovers(this.messageText(m),line)))
+                        .join('\n').trim();
+                    if (!display) continue;
+                    const covered=out.find(prev=>this.sameNarration(prev.text,display));
+                    if (covered) { if (display.length>this.asText(covered.text).trim().length) covered.text=display; continue; }
+                    out.push({...segment, text:display});
                 }
                 return out;
             },
