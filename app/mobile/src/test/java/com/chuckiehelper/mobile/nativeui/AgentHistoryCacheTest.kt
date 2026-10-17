@@ -91,7 +91,9 @@ class AgentHistoryCacheTest {
         assertFalse(terminalHistoryContainsAssistant(partial, item, live))
         val corrected = reconcilePendingAssistant(partial, item, live)
         assertEquals(listOf(live), corrected.map { it.text })
-        assertEquals("", visiblePendingAssistant(corrected, item, live))
+        val projected = chatMessageItems(corrected, ChatTextStream("run", item, live, null))
+        assertEquals(1, projected.size)
+        assertEquals(corrected.single(), projected.single().message)
         assertTrue(terminalHistoryContainsAssistant(corrected, item, live))
         assertFalse(terminalHistoryContainsAssistant(emptyList(), item, live))
     }

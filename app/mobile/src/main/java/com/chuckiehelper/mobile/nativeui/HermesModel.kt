@@ -838,11 +838,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         return true
     }
     private var flushedStreamPrefix = ""
-    private var pendingItemId: String? = null
-    private var pendingPhase = ""
+    private var pendingItemId by mutableStateOf<String?>(null)
+    private var pendingPhase by mutableStateOf("")
     private var streamGap = false
     private var streamGapRun: String? = null
-    private var finalSnapshotReceived = false
+    private var finalSnapshotReceived by mutableStateOf(false)
     private val finalSyncStates = mutableStateListOf<FinalSyncState>().apply {
         addAll(restoreFinalSyncStates(prefs.getString("finalSyncStates", "[]")))
     }
@@ -870,7 +870,20 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private fun needsFinalSyncPolling(session: String) = finalSyncStates.any { it.session == session } ||
         outgoingFiles.any { it.session == session }
     private var finalSyncJob: Job? = null
-    val visiblePendingText get() = visiblePendingAssistant(messages, pendingItemId, pendingText)
+    internal val chatTextStream: ChatTextStream?
+        get() = runId?.takeIf { runSession == selectedId && pendingText.isNotBlank() }?.let {
+            ChatTextStream(it, pendingItemId, pendingText, pendingTextTimestamp,
+                finalSnapshotReceived && pendingPhase == "final_answer", pendingPhase == "commentary")
+        }
+    internal val assistantRowIdentities: Map<String, String>
+        get() = buildMap {
+            narrations.filter { it.session == selectedId && it.streamed && it.run != null }.forEach {
+                put(it.key, chatAssistantIdentity(it.run!!, it.messageId, it.timestamp))
+            }
+            finalSyncStates.filter { it.session == selectedId }.forEach {
+                put("final-sync-${it.run}", chatAssistantIdentity(it.run, it.item, it.timestamp))
+            }
+        }
     private fun syncPendingCanonical() {
         messages = reconcilePendingAssistant(messages, pendingItemId, pendingText)
     }

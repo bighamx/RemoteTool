@@ -12,6 +12,7 @@ import android.util.TypedValue
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
+import io.noties.markwon.Markwon
 
 internal fun messageFooterFits(lastLineRight: Float, width: Int, footerWidth: Float, gap: Float): Boolean =
     lastLineRight + footerWidth + gap <= width + 0.5f
@@ -19,6 +20,37 @@ internal fun messageFooterFits(lastLineRight: Float, width: Int, footerWidth: Fl
 /** Draw metadata outside selectable Markdown; reserve its space using real line metrics. */
 internal class MessageTextView(context: Context) : TextView(context) {
     var onBubbleTap: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
+    /** 已应用到视图的链接色：recomposition 高频期跳过同值 setLinkTextColor 的无效重绘。 */
+    var appliedLinkColor: Int = 0
+    private var renderedSource: String? = null
+    private var renderedMarkdown = false
+
+    fun renderMarkdown(source: String, parsed: Spanned, markwon: Markwon) {
+        if (renderedSource == source && renderedMarkdown) return
+        markwon.setParsedMarkdown(this, parsed)
+        renderedSource = source
+        renderedMarkdown = true
+    }
+
+    fun renderMessage(source: String, markdown: Boolean, markwon: Markwon) {
+        if (renderedSource == source && renderedMarkdown == markdown) return
+        val previous = renderedSource
+        if (markdown) markwon.setMarkdown(this, source)
+        else if (!renderedMarkdown && previous != null && source.startsWith(previous))
+            append(source, previous.length, source.length)
+        else setText(source, BufferType.EDITABLE)
+        renderedSource = source
+        renderedMarkdown = markdown
+    }
+
+    // Read-only messages have no caret to follow. TextView's pre-draw otherwise
+    // reveals its collapsed selection after each update, scrolling the Compose
+    // list towards the old cursor while chat following scrolls towards the tail.
+    // A real text selection still needs native scrolling for its handles.
+    override fun bringPointIntoView(offset: Int): Boolean =
+        hasSelection() && super.bringPointIntoView(offset)
+
+
     private val tap = BubbleTapGesture(ViewConfiguration.get(context).scaledTouchSlop.toFloat(), ViewConfiguration.getLongPressTimeout().toLong())
     private var pressedLink: ClickableSpan? = null
     private fun linkAt(event: MotionEvent): ClickableSpan? {

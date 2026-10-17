@@ -183,7 +183,12 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     // LazyColumn evaluates its content later, potentially after history/SSE updates.
     // Capture the row and key together; never index keys using a newer model list.
     val messageRows = model.messages
-    val messageItems = remember(messageRows) { chatMessageItems(messageRows) }
+    val textStream = model.chatTextStream
+    val assistantIdentities = model.assistantRowIdentities
+    val messageItems = remember(messageRows, textStream, assistantIdentities) {
+        chatMessageItems(messageRows, textStream, assistantIdentities)
+    }
+    val timelineRows = chatTimelineRows(messageItems, model.hasExecution, model.approval != null, model.selectedId == null)
     val sessionsScroll = model.sessionsListState
     val searchingSessions = filter.isNotBlank()
     LaunchedEffect(filter) { model.searchSessions(filter) }
@@ -207,24 +212,18 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     var followLatest by rememberChatFollowing(
         scroll, model.selectedId, list,
         model.messages.isNotEmpty() || model.pendingText.isNotEmpty(), model.scrollToLatestRequest, latestRequest,
+        timelineRows.getOrNull(1)?.key,
     )
     val historyUiScope = rememberCoroutineScope()
     fun loadEarlier() = historyUiScope.launch {
         followLatest = false
-        val session = model.selectedId
-        val anchor = scroll.layoutInfo.visibleItemsInfo.firstOrNull { it.key != "history-start" }
         model.loadEarlierHistory().join()
-        if (session == model.selectedId && anchor != null) {
-            withFrameNanos { }
-            val index = chatMessageItems(model.messages).indexOfFirst { it.key == anchor.key }
-            if (index >= 0) scroll.scrollToItem(index + 1, (-anchor.offset).coerceAtLeast(0))
-        }
     }
     val historyDragged by scroll.interactionSource.collectIsDraggedAsState()
     LaunchedEffect(model.selectedId, list, historyDragged) {
         if (!list && historyDragged) {
-            snapshotFlow { scroll.firstVisibleItemIndex }.collect { index ->
-                if (index == 0 && model.historyHasMore && !model.historyLoadingEarlier) {
+            snapshotFlow { scroll.layoutInfo.visibleItemsInfo.any { it.key == "history-start" } }.collect { atStart ->
+                if (atStart && model.historyHasMore && !model.historyLoadingEarlier) {
                     loadEarlier().join()
                 }
             }
@@ -632,13 +631,9 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     CircularProgressIndicator(Modifier.size(42.dp), strokeWidth = 3.5.dp)
                 }
             }
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                state = scroll,
-                contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                item(key = "history-start") {
+            ChatTimelineList(timelineRows, scroll, Modifier.fillMaxSize()) { row ->
+                when (row.kind) {
+                ChatRowKind.History -> {
                     if (model.historyHasMore || model.historyLoadingEarlier) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                             TextButton(enabled = !model.historyLoadingEarlier, onClick = {
@@ -647,7 +642,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         }
                     }
                 }
-                items(messageItems, key = { it.key }) { item ->
+                ChatRowKind.Message -> {
+                    val item = requireNotNull(row.message)
                     val message = item.message
                     if (message.role == "system" && message.nativeTurnId == "interaction") {
                         InteractionCard(message, agentName)
@@ -666,6 +662,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                     } else {
                     MessageBubble(message.role, message.text, message.attachments, api, model.files, agentName, message.delivery, message.timestamp,
                         narration = message.narration || message.localKey?.startsWith("narration-") == true, narrationTexts = model.narrationTexts,
+                        streaming = item.streaming,
                         forkDisabledReason = when {
                             !model.supportsMessageActions -> "当前连接尚未支持，请重新连接刷新或更新该设备服务端"
                             message.serverId <= 0 -> "消息尚未绑定已保存记录，请刷新历史"
@@ -689,12 +686,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         }) else null)
                     }
                 }
-                if (model.runId != null && model.visiblePendingText.isNotBlank()) item {
-                    MessageBubble("assistant", model.visiblePendingText, api = api, availableFiles = model.files,
-                        agentName = agentName, timestamp = model.pendingTextTimestamp, narrationTexts = model.narrationTexts)
-                }
-                if (model.hasExecution) {
-                    item {
+                ChatRowKind.Execution -> {
                         var showTools by remember(model.executionKey) { mutableStateOf(false) }
                         Card(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(12.dp)) {
@@ -731,10 +723,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                     }
                             }
                         }
-                    }
                 }
-                model.approval?.let { approval ->
-                    item {
+                ChatRowKind.Approval -> model.approval?.let { approval ->
                         ElevatedCard {
                             Column(
                                 Modifier.padding(14.dp),
@@ -769,12 +759,12 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                                 }
                             }
                         }
-                    }
                 }
-                if (model.selectedId == null) item { Text("请先选择会话或新建会话") }
-                item("conversation-bottom") { Spacer(Modifier.height(1.dp)) }
+                ChatRowKind.Empty -> Text("请先选择会话或新建会话")
+                ChatRowKind.Bottom -> Spacer(Modifier.height(1.dp))
+                }
             }
-            if (!followLatest && scroll.canScrollForward) SmallFloatingActionButton(
+            if (!followLatest && scroll.canScrollBackward) SmallFloatingActionButton(
                 onClick = {
                     latestRequest++
                 },
@@ -1358,6 +1348,7 @@ private fun MessageBubble(
     onEdit: (() -> Unit)? = null,
     forkDisabledReason: String? = null,
     editDisabledReason: String? = null,
+    streaming: Boolean = false,
 ) {
     val context = LocalContext.current
     var preview by remember { mutableStateOf<JSONObject?>(null) }
@@ -1390,10 +1381,12 @@ private fun MessageBubble(
                     val inlineTime = presentation.text.isNotBlank() && presentation.files.isEmpty() &&
                         presentation.unavailable.isEmpty()
                     val metadata = listOfNotNull(delivery, time.takeIf { it.isNotBlank() }).joinToString(" · ")
+                    val body = if (role == "assistant") displayNarration(presentation.text, narration, narrationTexts) else presentation.text
                     if (presentation.text.isNotBlank()) HermesMarkdown(
-                        if (role == "assistant") displayNarration(presentation.text, narration, narrationTexts) else presentation.text,
+                        body,
                         footer = if (inlineTime) metadata else "",
                         onBubbleTap = openActions,
+                        streaming = streaming && role == "assistant",
                     )
                     if (!inlineTime) delivery?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     presentation.unavailable.forEach { name ->

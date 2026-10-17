@@ -1,9 +1,18 @@
 package com.chuckiehelper.mobile.nativeui
 
+import android.content.Context
+import android.text.Spanned
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -12,23 +21,43 @@ import io.noties.markwon.Markwon
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+internal fun createMessageMarkwon(context: Context): Markwon = Markwon.builder(context)
+    .usePlugin(TablePlugin.create(context))
+    .usePlugin(StrikethroughPlugin.create())
+    .usePlugin(LinkifyPlugin.create())
+    .build()
+
+private data class MarkdownFrame(val source: String, val parsed: Spanned)
 
 @Composable
-fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String = "", onBubbleTap: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null) {
+fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String = "", onBubbleTap: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
+    streaming: Boolean = false) {
     val context = LocalContext.current
-    val markwon =
-        remember(context) {
-            Markwon.builder(context)
-                .usePlugin(TablePlugin.create(context))
-                .usePlugin(StrikethroughPlugin.create())
-                .usePlugin(LinkifyPlugin.create())
-                .build()
-        }
+    val markwon = remember(context) { createMessageMarkwon(context) }
     val color = MaterialTheme.colorScheme.onSurface.toArgb()
     val link = MaterialTheme.colorScheme.primary.toArgb()
     val footerColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f).toArgb()
+    // Keep the last styled frame visible while parsing the next snapshot off the
+    // UI thread. One conflated collector prevents queued work or out-of-order results.
+    var displayed by remember(markwon) { mutableStateOf(MarkdownFrame(text, markwon.toMarkdown(text))) }
+    val latest by rememberUpdatedState(text to streaming)
+    LaunchedEffect(markwon) {
+        snapshotFlow { latest }.conflate().collect { target ->
+            if (target.first != displayed.source) {
+                displayed = withContext(Dispatchers.Default) {
+                    MarkdownFrame(target.first, markwon.toMarkdown(target.first))
+                }
+            }
+            if (target.second) delay(50)
+        }
+    }
     AndroidView(
-        modifier = modifier,
+        modifier = modifier.clipToBounds(),
         factory = {
             MessageTextView(it).apply {
                 textSize = 15f
@@ -37,18 +66,17 @@ fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String =
                 // MessageTextView owns short link taps; native selection keeps long presses.
                 linksClickable = false
                 setPadding(0, 0, 0, 0)
+                movementMethod = ArrowKeyMovementMethod.getInstance()
             }
         },
         update = { view ->
             view.onBubbleTap = onBubbleTap
             view.setFooter(footer, footerColor)
-            view.setTextColor(color)
-            view.setLinkTextColor(link)
-            if (view.tag != text) {
-                markwon.setMarkdown(view, text)
-                view.movementMethod = ArrowKeyMovementMethod.getInstance()
-                view.tag = text
-            }
+            // 同值 setTextColor/setLinkTextColor 也会 invalidate 整个 TextView；
+            // recomposition 风暴期（流式/切换会话）逐帧重绘就是闪烁感的一部分。
+            if (view.currentTextColor != color) view.setTextColor(color)
+            if (view.appliedLinkColor != link) { view.setLinkTextColor(link); view.appliedLinkColor = link }
+            view.renderMarkdown(displayed.source, displayed.parsed, markwon)
         },
     )
 }

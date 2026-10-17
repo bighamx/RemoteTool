@@ -146,9 +146,6 @@ internal fun reconcilePendingAssistant(history: List<HermesMessage>, item: Strin
     }
 }
 
-internal fun visiblePendingAssistant(history: List<HermesMessage>, item: String?, text: String): String =
-    if (item != null && history.any { it.role == "assistant" && it.serverId == narrationMessageId(item) && narrationCovers(it.text, text) }) "" else text
-
 internal fun exactFinalAssistant(history: List<HermesMessage>, item: String?, turn: String?,
     text: String = "", startedAt: Long? = null): HermesMessage? = when {
     item != null -> history.singleOrNull { it.role == "assistant" && it.serverId == narrationMessageId(item) }

@@ -11,8 +11,8 @@ android {
         applicationId 'com.chuckiehelper.mobile'
         minSdk 26
         targetSdk 34
-        versionCode 55
-        versionName "0.3.52"
+        versionCode 59
+        versionName "0.3.56"
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -20,6 +20,7 @@ android {
     }
     kotlinOptions { jvmTarget = '17' }
     buildFeatures { compose true; buildConfig true }
+    testOptions { unitTests.includeAndroidResources = true }
     buildTypes {
         release {
             // Preserve the certificate used by installed APKs so updates keep app data.
@@ -38,6 +39,7 @@ dependencies {
     implementation 'androidx.compose.material:material-icons-extended'
     implementation 'androidx.compose.ui:ui-tooling-preview'
     debugImplementation 'androidx.compose.ui:ui-tooling'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
     implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.7'
     implementation 'androidx.lifecycle:lifecycle-service:2.8.7'
@@ -52,5 +54,10 @@ dependencies {
     implementation 'androidx.media3:media3-ui:1.4.1'
     implementation 'androidx.media3:media3-datasource-okhttp:1.4.1'
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'androidx.compose.ui:ui-test-junit4'
+    testImplementation('org.robolectric:robolectric:4.14.1') {
+        // These tests exercise Android text/scroll behaviour with legacy graphics.
+        exclude group: 'org.robolectric', module: 'nativeruntime-dist-compat'
+    }
     testImplementation 'org.json:json:20240303'
 }

@@ -54,10 +54,13 @@ class NarrationReconciliationTest {
     @Test fun slowerHistoryDoesNotEraseAnInFlightNativeItemOrSuppressItsText() {
         val native = HermesMessage("assistant", "先检查", serverId = narrationMessageId("item"), narration = true)
         val text = "先检查部署配置，再验证服务"
-        assertEquals(text, visiblePendingAssistant(listOf(user, native), "item", text))
+        val stream = ChatTextStream("run", "item", text, null, narration = true)
+        val projected = chatMessageItems(listOf(user, native), stream)
+        assertEquals(listOf(user.text, text), projected.map { it.message.text })
+        assertEquals(native.serverId, projected.last().message.serverId)
         val reconciled = reconcilePendingAssistant(listOf(user, native), "item", text)
         assertEquals(text, reconciled.last().text)
-        assertEquals("", visiblePendingAssistant(reconciled, "item", text))
+        assertEquals(projected, chatMessageItems(reconciled, stream))
         assertEquals(native.serverId, reconciled.last().serverId)
     }
     @Test fun streamNarrationArrivingDuringHistoryEnrichmentSurvivesPublication() {
