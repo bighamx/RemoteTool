@@ -4,5 +4,7 @@
     <Compile Include="../../WebApplication/Services/Codex/CodexRolloutMessageTimes.cs" Link="CodexRolloutMessageTimes.cs" />
     <Compile Include="../../WebApplication/Services/RemoteControl/FilePathPolicy.cs" Link="FilePathPolicy.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexDesktopRunResume.cs" Link="CodexDesktopRunResume.cs" />
+    <Compile Include="../../WebApplication/Services/LatestSessionPreview.cs" Link="LatestSessionPreview.cs" />
+    <PackageReference Include="sqlite-net-pcl" Version="1.9.172" />
   </ItemGroup>
 </Project>

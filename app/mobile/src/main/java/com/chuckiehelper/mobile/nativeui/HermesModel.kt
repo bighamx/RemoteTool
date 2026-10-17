@@ -2,6 +2,7 @@ package com.chuckiehelper.mobile.nativeui
 
 import android.app.Application
 import androidx.compose.runtime.*
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -63,6 +64,24 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private val watchOwner = "$agent-$deviceId"
     private lateinit var api: NativeApi
     val sessionsListState = LazyListState()
+
+    /** 会话列表视口锚点（首个可见项的 key + 像素偏移）。恢复按 key 而非 index+像素：
+        运行中会话按活跃时间重排、行高变化时，index 会指向别的会话，key 始终指向同一条。 */
+    var sessionsViewportAnchor by mutableStateOf<Triple<String, Int, Int>?>(null)
+        private set
+    fun captureSessionsViewport(key: String?, offset: Int, index: Int) {
+        sessionsViewportAnchor = if (key != null) Triple(key, offset, index) else null
+    }
+    /** suspend：必须在组合上下文调用（需要 MonotonicFrameClock），勿再包 viewModelScope.launch。 */
+    suspend fun restoreSessionsViewport() {
+        val anchor = sessionsViewportAnchor ?: return
+        if (sessionsListState.isScrollInProgress) return
+        withFrameNanos { }
+        val info = sessionsListState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == anchor.first } ?: return
+        if (info.offset == anchor.second) return
+        if (anchor.second >= 0) sessionsListState.scrollToItem(info.index, anchor.second)
+        else { sessionsListState.scrollToItem(info.index); sessionsListState.scrollBy(anchor.second.toFloat()) }
+    }
     var sessionSearchQuery by mutableStateOf("")
         private set
     var sessionSearchResults by mutableStateOf<List<JSONObject>>(emptyList())
@@ -328,6 +347,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         streamJob?.cancel(); streamJob = null
         streamConnected = false; statusWake = null
         timingSave?.cancel(); timingSave = null
+        // 外部活动轮询也要停：否则退后台后仍以 5~20s 间隔打网络请求。
+        externalActivityJob?.cancel(); externalActivityJob = null; externalActivityPollingSession = null
         saveRuns()
     }
     val externalRunning get() = runId == null && externalActivityRunning(externalActivity, selectedId, activityNow, externalVerifiedAt)
@@ -419,6 +440,23 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 approval = null; pendingText = ""; flushedStreamPrefix = ""; pendingItemId = null; pendingPhase = ""
                 events = emptyList(); eventCount = 0; finalSyncJob?.cancel()
                 conversationUi = conversationUi.forget(session)
+                // 与 deleteSession 同一套本地状态清理：会话已不存在，pending/插话/队列不可能再被
+                // 服务端确认，残留会让前台服务和唤醒锁永久持有（队列非空时 syncWatchService 恒 true）。
+                if (session != null) {
+                    removePending(session)
+                    localSubmissions.remove(session)
+                    cachedHistory.remove(session)
+                    if (finalSyncStates.removeAll { it.session == session }) saveFinalSyncStates()
+                    if (outgoingFiles.removeAll { it.session == session }) saveOutgoingFiles()
+                    narrations = narrations.filterNot { it.session == session }; saveNarrations()
+                    compactionNotices = compactionNotices.filterNot { it.session == session }; saveCompactionNotices()
+                    steering = steering.filterNot { it.session == session }; saveSteering()
+                    draftFiles = draftFiles - session
+                    messageQueue.purgeSession(session)
+                    purgeSessionRuntime(session)
+                    launch { withContext(Dispatchers.IO) { historyCache.remove(session) } }
+                    sessionActivities = sessionActivities - session
+                }
                 prefs.edit().remove("session").remove("run").remove("runSession").apply()
                 selectedId = null
                 contextInfo = null; asyncQuestion = null; sessionControl = null
@@ -544,6 +582,46 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     var contextInfo by mutableStateOf<JSONObject?>(null)
         private set
     private val contextCache = mutableMapOf<String, JSONObject>()
+
+    /** 每会话最新已知信息（provider/model/effort/tier + 上下文），持久化。进会话先回放缓存，
+        避免显示上一个会话的 provider/模型或空上下文；网络刷新后随取随更新。 */
+    private fun saveSessionRuntime(id: String, provider: String, model: String, effort: String, tier: String, context: JSONObject?) {
+        val cache = runCatching { JSONObject(prefs.getString("sessionRuntimeCache", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        val row = (cache.optJSONObject(id) ?: JSONObject())
+        row.put("provider", provider); row.put("model", model); row.put("effort", effort); row.put("tier", tier)
+        context?.let { row.put("context", it) }
+        cache.put(id, row)
+        prefs.edit().putString("sessionRuntimeCache", cache.toString()).apply()
+    }
+    private fun cachedSessionRuntime(id: String): JSONObject? =
+        runCatching { JSONObject(prefs.getString("sessionRuntimeCache", "{}") ?: "{}").optJSONObject(id) }.getOrNull()
+    private fun noteSessionContext(id: String, used: Long, window: Long) {
+        val cache = runCatching { JSONObject(prefs.getString("sessionRuntimeCache", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        val row = (cache.optJSONObject(id) ?: JSONObject())
+        row.put("context", obj("available" to (used > 0), "tokens" to used, "limit" to window))
+        cache.put(id, row)
+        prefs.edit().putString("sessionRuntimeCache", cache.toString()).apply()
+    }
+    private fun purgeSessionRuntime(id: String) {
+        val cache = runCatching { JSONObject(prefs.getString("sessionRuntimeCache", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        if (cache.remove(id) != null) prefs.edit().putString("sessionRuntimeCache", cache.toString()).apply()
+    }
+    private fun saveSessionContext(id: String, context: JSONObject) {
+        val cache = runCatching { JSONObject(prefs.getString("sessionRuntimeCache", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        val row = (cache.optJSONObject(id) ?: JSONObject())
+        row.put("context", context)
+        cache.put(id, row)
+        prefs.edit().putString("sessionRuntimeCache", cache.toString()).apply()
+    }
+    private fun applyCachedSessionRuntime(id: String) {
+        val row = cachedSessionRuntime(id)
+        sessionProvider = row?.optString("provider") ?: ""
+        sessionModel = row?.optString("model") ?: ""
+        sessionEffort = row?.optString("effort") ?: ""
+        sessionTier = row?.optString("tier") ?: ""
+        updateRuntimeDisplay()
+        contextInfo = contextCache[id] ?: row?.optJSONObject("context")
+    }
     private var contextReadJob: Job? = null
     private var contextReadSession: String? = null
     var asyncQuestion by mutableStateOf<JSONObject?>(null)
@@ -964,6 +1042,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (selectedId != id || api !== connection) return
         contextInfo = result.optJSONObject("context") ?: result
         if (contextInfo?.optBoolean("available") == true) contextCache[id] = contextInfo!!
+        saveSessionContext(id, contextInfo!!)
         if (agent == "codex") asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
         sessionControl = result.optJSONObject("control")
         sessionControlVerifiedAt = activityClock()
@@ -1122,9 +1201,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             val rows = result.array("data").objects()
             pageRows = rows
             noteSessionActivities(rows, requestedAt)
+            val merged = inheritSessionContext(sessions, rows)
             sessions = mergeSessionPage(
                 if (offset == 0) emptyList() else sessions,
-                rows,
+                merged,
             ) { it.optString("id") }
             saveOfflineSessions()
             hasMore = result.optBoolean("has_more")
@@ -1137,6 +1217,21 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         // 上下文占用懒加载：列表先渲染，缺数据的行再分块异步补（服务端按缓存/预算返回），
         // 不阻塞列表本身；codex 的列表响应已内联该字段，无需请求。
         if (agent != "codex") launch { loadSessionContext(pageRows) }
+    }
+
+    /** 列表响应经常不带 context（服务端对运行中会话 30s 过期后不下发，其余走懒加载）；
+        合并前从现有行继承，避免进度条闪失。新行有值时不覆盖。 */
+    private fun inheritSessionContext(existing: List<JSONObject>, incoming: List<JSONObject>): List<JSONObject> {
+        val known = existing.associate {
+            it.optString("id") to (it.optLong("context_used", 0) to it.optLong("context_window", 0))
+        }.filter { it.value.first > 0 }
+        if (known.isEmpty()) return incoming
+        return incoming.map { row ->
+            val prev = known[row.optString("id")]
+            if (prev != null && row.optLong("context_used", 0) <= 0)
+                JSONObject(row.toString()).apply { put("context_used", prev.first); put("context_window", prev.second) }
+            else row
+        }
     }
 
     private suspend fun loadSessionContext(rows: List<JSONObject>) {
@@ -1169,6 +1264,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     else retry += id
                 }
                 if (updates.isEmpty() && empty.isEmpty()) continue
+                updates.forEach { (id, pair) -> noteSessionContext(id, pair.first, pair.second) }
                 sessions = sessions.map { session ->
                     val id = session.optString("id")
                     when {
@@ -1293,7 +1389,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         try {
                 val connection = api
                 val requestedAt = activityClock()
-                val latest = mergeSessionPage(emptyList(), connection.json("$root/sessions").array("data").objects()) { it.optString("id") }
+                val latest = mergeSessionPage(emptyList(),
+                    inheritSessionContext(sessions, connection.json("$root/sessions").array("data").objects())) { it.optString("id") }
                 if (api !== connection) return@launch
                 noteSessionActivities(latest, requestedAt)
                 // The server page is sorted by last activity; adopting it wholesale keeps
@@ -1333,6 +1430,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         finally { sessionRefreshMutex.unlock() }
     }
 
+    /** codex 用量统一存储：会话顶部（/usage）与工作空间对话框（/workspaces/{id}/usage）
+        两个来源各自成功后都把额度窗口写进共享状态，避免两处短暂显示不一致。 */
+    private fun adoptUsageRateLimits(target: JSONObject, source: JSONObject) {
+        listOf("rateLimits", "rateLimitsByLimitId").forEach { key ->
+            source.optJSONObject(key)?.let { target.put(key, it) }
+        }
+    }
+
     private suspend fun fetchAccountsNow() {
         val connection = api
         val epoch = ++accountReadEpoch
@@ -1363,8 +1468,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     val result = connection.json("$root/workspaces/${q(id)}/usage" + if (force) "?refresh=true" else "")
                     if (api === connection && epoch == workspaceReadEpoch && result.optString("workspace_id") == id) {
                         val receivedWorkspace = result.optString("chatgpt_account_id")
-                        workspaceUsages = workspaceUsages + (id to if (result.optBoolean("available") && receivedWorkspace.isNotBlank() && receivedWorkspace != expectedWorkspace)
-                            obj("available" to false, "error" to "返回的工作空间身份不匹配，请刷新") else result)
+                        val delivered = if (result.optBoolean("available") && receivedWorkspace.isNotBlank() && receivedWorkspace != expectedWorkspace)
+                            obj("available" to false, "error" to "返回的工作空间身份不匹配，请刷新") else result
+                        workspaceUsages = workspaceUsages + (id to delivered)
+                        // 统一存储：当前工作空间的额度窗口反写会话顶部用量。
+                        if (delivered.optBoolean("available") && id == workspaces.optString("current"))
+                            delivered.optJSONObject("usage")?.let { quotaUsage ->
+                                usage = JSONObject(usage?.toString() ?: "{}").also { adoptUsageRateLimits(it, quotaUsage) }
+                            }
                     }
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { if (api === connection && epoch == workspaceReadEpoch) workspaceUsages = workspaceUsages + (id to obj("available" to false, "error" to "暂时无法读取用量，请刷新重试")) }
@@ -1521,7 +1632,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun showLogin() { loginVisible = true }
     fun fetchUsage() = viewModelScope.launch {
         val connection = api
-        try { val result = connection.json("$root/usage"); if (api === connection) usage = result }
+        try { val result = connection.json("$root/usage"); if (api === connection) {
+            usage = result
+            // 统一存储：当前工作空间的用量行同步额度窗口，切进对话框时显示同一份数据。
+            val current = workspaces.optString("current")
+            if (current.isNotBlank()) workspaceUsages[current]?.let { row ->
+                val rowUsage = (row.optJSONObject("usage") ?: JSONObject()).also { adoptUsageRateLimits(it, result) }
+                workspaceUsages = workspaceUsages + (current to JSONObject(row.toString()).put("usage", rowUsage))
+            }
+        } }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { if (api === connection) usage = null }
     }
@@ -1574,8 +1693,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         title = session.optString("title").ifBlank { "未命名会话" }
         prefs.edit().putString("session", selectedId).apply()
         historyJob?.cancel()
-        sessionProvider = ""; sessionModel = ""; sessionEffort = ""; sessionTier = ""
-        contextInfo = contextCache[id]; asyncQuestion = null
+        applyCachedSessionRuntime(id)
+        asyncQuestion = null
         // 先回放上一次该会话的消息（如有缓存），网络刷新到位后替换 —— 消除「返回再进白屏等待」。
         cachedHistory[selectedId]?.let { cached ->
             messages = projectFinalSyncRows(cached, finalSyncStates, id)
@@ -1670,7 +1789,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val selection = readAgentSelection(result)
         sessionProvider = selection.provider; sessionModel = selection.model
         sessionEffort = selection.effort; sessionTier = selection.tier
-        runtime = listOf(displayProvider(sessionProvider), sessionModel).filter { it.isNotBlank() }.joinToString(" · ")
+        updateRuntimeDisplay()
+        saveSessionRuntime(id, sessionProvider, sessionModel, sessionEffort, sessionTier, result.optJSONObject("context"))
         if (loadRelated) {
             result.optJSONObject("context")?.let { contextInfo = it; if (it.optBoolean("available")) contextCache[id] = it }
             asyncQuestion = visibleQuestion(result.optJSONObject("question"), id)
@@ -2192,7 +2312,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private fun submit(pending: PendingAgentSubmission, session: String, queuedFiles: List<JSONObject>? = null, clearDraft: Boolean = true) {
         val key = pending.key; val input = pending.input
         currentSubmissionKeys += key
-        val provider = sessionProvider.takeIf { selectedId == session }.orEmpty()
+        // 壳值 "custom"（billing 占位）不下发：下发反而让网关解析到错误提供方；
+        // 留空时服务端会用会话锁或全局默认补齐（与 /runs 注入跳过壳值同一语义）。
+        val provider = sessionProvider.takeIf { selectedId == session && it.isNotBlank() && it != "custom" }.orEmpty()
         val model = sessionModel.takeIf { selectedId == session }.orEmpty()
         val attached = queuedFiles ?: pendingFiles.filter { it.optString("id") in pending.attachmentIds }
         setSubmitting(session, true); setError(session, null)
@@ -2245,7 +2367,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     // Older completed runs keep their own final text and attachment receipts.
                     events = emptyList(); eventCount = 0; approval = null; seq = -1; state = "执行中"
                     runVerifiedAt = activityClock(); activityNow = runVerifiedAt
-                    watch(); loadHistory(session)
+                    watch()
+                    // hermes 网关写消息是异步的，立刻 loadHistory 可能还没入库导致确认失败。
+                    // 延迟 1.5s 再拉，给网关写入时间；后续 SSE/轮询的 loadHistory 也会重试确认。
+                    launch { kotlinx.coroutines.delay(1_500); loadHistory(session) }
                 } else backgroundRuns[session] = startedRun
                 saveRuns()
             } catch (e: CancellationException) { throw e }
@@ -2348,9 +2473,20 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     state = if (stoppingRunId == id && result.optString("status") in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval")) "正在停止"
                         else if (result.optString("kind") == "compact" && result.optString("status") == "started") "正在压缩上下文" else statusLabel(result.optString("status"))
                     approval = result.optJSONObject("approval")
-                    result.optJSONObject("runtime")?.let {
-                        runtime = listOf(displayProvider(it.optString("provider")), it.optString("model")).filter { piece -> piece.isNotBlank() }.joinToString(" · ")
-                        if (selectedId == runSession) { sessionProvider = it.optString("provider"); sessionModel = it.optString("model") }
+                    result.optJSONObject("runtime")?.let { rt ->
+                        val sseProvider = rt.optString("provider")
+                        // SSE 事件的 provider 可能是 billing 壳值（如 "custom"）：壳值不采纳，
+                        // 只在它是目录里可解析的 slug 时才覆盖，否则只补模型名。
+                        val sseProviderKnown = sseProvider.isNotBlank() &&
+                            modelOptions.array("providers").objects().any { it.optString("slug") == sseProvider }
+                        if (sseProviderKnown) {
+                            runtime = listOf(providerDisplayName(sseProvider), rt.optString("model")).filter { piece -> piece.isNotBlank() }.joinToString(" · ")
+                            if (selectedId == runSession) { sessionProvider = sseProvider; sessionModel = rt.optString("model") }
+                        } else if (sessionModel.isBlank()) {
+                            // sessionProvider 可能是 billing 壳值 "custom"：走统一显示（回落全局默认），不裸拼。
+                            sessionModel = rt.optString("model")
+                            updateRuntimeDisplay()
+                        }
                     }
                     if (
                         result.optString("status") in
@@ -2642,10 +2778,28 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         } finally { setSubmitting(session, false) }
     }
 
+    /** slug → 用户可读的 provider 显示名：优先 modelOptions 目录里的 name，回落去前缀的 slug。 */
+    private fun providerDisplayName(slug: String): String {
+        // "custom" 是 billing 壳值（自定义提供方的真 slug 是 custom:xxx），显示时不算已知提供方。
+        if (slug.isBlank() || slug == "custom") return ""
+        if (this::api.isInitialized) {
+            modelOptions.array("providers").objects()
+                .firstOrNull { it.optString("slug") == slug }
+                ?.optString("name")?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+        return displayProvider(slug)
+    }
+
+    /** 头部 provider/模型显示：会话未锁定（新建会话/壳值）时回落到全局默认，与实际提交行为一致。 */
+    private fun updateRuntimeDisplay() {
+        val provider = sessionProvider.takeIf { it.isNotBlank() && it != "custom" } ?: modelOptions.optString("provider")
+        val model = sessionModel.ifBlank { modelOptions.optString("model") }
+        runtime = listOf(providerDisplayName(provider), model).filter { it.isNotBlank() }.joinToString(" · ")
+    }
+
     fun fetchModels() = launch {
         modelOptions = api.json("$root/model-options")
-        if (runtime.isBlank())
-            runtime = modelOptions.optString("provider") + " · " + modelOptions.optString("model")
+        updateRuntimeDisplay()
     }
 
     fun refreshFiles() {
@@ -2773,7 +2927,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             val id = session ?: throw java.io.IOException("请先选择会话")
             connection.json("$root/sessions/$id/model", body)
             if (selectedId == id && api === connection) {
-                runtime = "$provider · $model"
+                runtime = listOf(providerDisplayName(provider), model).filter { it.isNotBlank() }.joinToString(" · ")
                 sessionProvider = provider; sessionModel = model; sessionEffort = effort; sessionTier = tier
             }
         }

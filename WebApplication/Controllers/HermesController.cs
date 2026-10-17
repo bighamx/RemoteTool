@@ -71,21 +71,24 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         var budget = CancellationTokenSource.CreateLinkedTokenSource(ct); budget.CancelAfter(TimeSpan.FromSeconds(15));
         try {
             var gate = new SemaphoreSlim(5);
+            // JsonObject 非线程安全：并发阶段写 ConcurrentDictionary，结束后串行合并。
+            var answered = new System.Collections.Concurrent.ConcurrentDictionary<string, System.Text.Json.Nodes.JsonNode>(StringComparer.OrdinalIgnoreCase);
             await Task.WhenAll(wanted.Select(async id => {
                 try {
                     await gate.WaitAsync(budget.Token);
                     try {
                         if (ContextCache.TryGetValue(id, out var cached) && DateTime.UtcNow - cached.At < TimeSpan.FromMinutes(10)) {
-                            result[id] = cached.Tokens > 0 ? Obj2(cached.Tokens, cached.Limit) : new System.Text.Json.Nodes.JsonObject();
+                            answered[id] = cached.Tokens > 0 ? Obj2(cached.Tokens, cached.Limit) : new System.Text.Json.Nodes.JsonObject();
                             return;
                         }
                         var (tokens, limit) = await ContextUsageAsync(id, providers.GetValueOrDefault(id, ""), models.GetValueOrDefault(id, ""), budget.Token);
                         // 0 值（网关对繁忙/刚创建会话的临时空结果）不写缓存，否则真数据要等 TTL 才能回来。
-                        if (tokens > 0) { ContextCache[id] = (DateTime.UtcNow, tokens, limit); result[id] = Obj2(tokens, limit); }
-                        else result[id] = new System.Text.Json.Nodes.JsonObject();
+                        if (tokens > 0) { ContextCache[id] = (DateTime.UtcNow, tokens, limit); answered[id] = Obj2(tokens, limit); }
+                        else answered[id] = new System.Text.Json.Nodes.JsonObject();
                     } finally { gate.Release(); }
                 } catch (Exception error) when (error is OperationCanceledException or InvalidOperationException or HttpRequestException or IOException) { }
             }).ToArray());
+            foreach (var pair in answered) result[pair.Key] = pair.Value;
         } catch (OperationCanceledException) { } finally { budget.Dispose(); }
         return Ok(result);
     }
@@ -98,6 +101,9 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     }
     private async Task<JsonObject> ContextAsync(string id, CancellationToken ct) {
         var result = JsonNode.Parse((await management.Invoke("session_context", JsonSerializer.SerializeToElement(new { session_id = id }), ct)).GetRawText())!.AsObject();
+        // 与 WindowFrom 同一纠错：自定义网关上 hermes 无法得知真实窗口，已知模型用真实值。
+        if (KnownModelWindows.TryGetValue(result["model"]?.ToString() ?? "", out var window) &&
+            (result["limit"]?.GetValue<long>() ?? 0) < window) result["limit"] = window;
         try {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(2));
             using var info = await bridge.SendAsync(HttpMethod.Get, "api/sessions/" + id, null, null, timeout.Token);
@@ -150,13 +156,21 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,(DateTime At,long Tokens,long Limit)> ContextCache = new(StringComparer.OrdinalIgnoreCase);
     /** 窗口上限是模型属性而非会话属性：按 provider/model 学习一次，之后所有会话复用，不再重复解析。 */
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,long> ModelWindows = new(StringComparer.OrdinalIgnoreCase);
+    /** 已知模型的真实上下文窗口（字节数单位 token）。网关在自定义提供方上估不准时使用。 */
+    private static readonly System.Collections.Generic.Dictionary<string,long> KnownModelWindows = new(StringComparer.OrdinalIgnoreCase) {
+        ["k3"] = 1_048_576, ["kimi-k3-1"] = 1_048_576,
+    };
     private (long Tokens,long Limit) WindowFrom(JsonNode result, string provider, string model) {
         var tokens = result["tokens"]?.GetValue<long>() ?? 0;
         var limit = result["limit"]?.GetValue<long>() ?? 0;
         var name = result["model"]?.ToString();
         if (!string.IsNullOrEmpty(name)) model = name;
         var key = (provider ?? "") + "/" + (model ?? "");
-        if (limit > 0) ModelWindows[key] = limit;
+        // 自定义网关（custom:*）上 hermes 无法得知真实上下文窗口，会按保守默认值（如 256K）上报；
+        // 已知模型的真实窗口以本表为准，仅上调不下调。
+        var knownWindow = KnownModelWindows.TryGetValue(model ?? "", out var knownMax) ? knownMax : 0;
+        if (limit > 0 && limit >= knownWindow) ModelWindows[key] = limit;
+        else if (knownWindow > 0) limit = knownWindow;
         else if (ModelWindows.TryGetValue(key, out var known)) limit = known;
         // 网关没给出窗口上限时按 1M 兜底（主流长上下文模型的实际量级）。
         if (limit <= 0) limit = 1_000_000;
@@ -310,6 +324,27 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = "任务提交需要唯一的 Idempotency-Key" }, ct); return; }
         try
         {
+            // 会话锁定的 provider/model 必须随每次提交下发：App 在后台/队列提交时不带
+            // provider（只有前台选中会话才带），body 缺 provider 时网关 /v1/runs 会落到
+            // config 默认通道（与该会话锁定的提供方不一致）。缺省时用 state.db 的
+            // browser_model_lock 补齐，与 chat 通道的会话锁语义一致。
+            try
+            {
+                var runSessionId = body.TryGetProperty("session_id", out var rs) ? rs.GetString() : null;
+                if (!string.IsNullOrEmpty(runSessionId)) {
+                    var info = activity.SessionModelInfo(new[] { Id(runSessionId) }).GetValueOrDefault(Id(runSessionId));
+                    if (info != null) {
+                        var patched = System.Text.Json.Nodes.JsonNode.Parse(body.GetRawText())!.AsObject();
+                        // 壳值 "custom" 只是计费占位（billing_provider 对自定义提供方恒为 custom），
+                        // 注入它反而让网关解析到错误的提供方；只在拿到完整 slug 时补齐。
+                        if (string.IsNullOrEmpty(patched["provider"]?.ToString()) &&
+                            !string.IsNullOrEmpty(info.Provider) && info.Provider != "custom") patched["provider"] = info.Provider;
+                        if (string.IsNullOrEmpty(patched["model"]?.ToString()) && !string.IsNullOrEmpty(info.Model)) patched["model"] = info.Model;
+                        body = JsonSerializer.SerializeToElement(patched);
+                    }
+                }
+            }
+            catch (System.Text.Json.JsonException) { }
             using var upstream = await bridge.SendAsync(HttpMethod.Post, "v1/runs", attachments.PrepareRun(body, key), key, ct, Request.Headers["Last-Event-ID"].ToString());
             Response.Headers.CacheControl = "no-store";
             var payload = await upstream.Content.ReadAsStringAsync(ct);

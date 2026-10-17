@@ -8,9 +8,26 @@ internal fun currentSubmissionHistoryMatch(agent: String, pending: PendingAgentS
     val lastNativeId = existing.filter { it > 0 && it < 1_000_000_000_000L }.maxOrNull() ?: 0L
     return history.filter { row -> row.role == "user" && row.serverId > 0 && row.serverId !in existing &&
         row.serverId > lastNativeId &&
-        row.timestamp?.let { it >= pending.timestamp - 2000L && it <= pending.timestamp + 120_000L } == true &&
+        // 下界放宽到 10s：设备时钟可能比服务器快几秒（NTP 漂移），消息不可能早于发送前 10s 入库。
+        row.timestamp?.let { it >= pending.timestamp - 10_000L && it <= pending.timestamp + 120_000L } == true &&
         (pending.attachmentIds.isEmpty() || row.attachments.map { it.optString("id") }.containsAll(pending.attachmentIds)) &&
-        agentUserMessageText(agent, row.text).trim() == agentUserMessageText(agent, pending.input).trim() }
+        run {
+            // agentUserMessageText 已剥 OUT-OF-BAND 外壳；网关还会把 turn 活跃期间的
+            // 多条消息合并进一行（一行一条），合并行按文本行匹配。
+            val text = agentUserMessageText(agent, pending.input).trim()
+            val rowText = agentUserMessageText(agent, row.text).trim()
+            rowText == text || (rowText.contains('\n') && rowText.split('\n').any { it.trim() == text })
+        } }
+        .also { matched ->
+            if (matched.isEmpty()) {
+                // 诊断日志：确认失败时输出判据现场（Release 包也输出，量极低）。
+                val near = history.filter { it.role == "user" && it.serverId > 0 }
+                println("HermesAck confirm miss: pending.key=${pending.key} ts=${pending.timestamp} " +
+                    "window=[${pending.timestamp - 10_000},${pending.timestamp + 120_000}] " +
+                    "lastNativeId=$lastNativeId existing=${existing.size} " +
+                    "recentUserRows=" + near.takeLast(3).joinToString { "id=${it.serverId},ts=${it.timestamp},text=${it.text.take(20)}" })
+            }
+        }
         .singleOrNull()
 }
 

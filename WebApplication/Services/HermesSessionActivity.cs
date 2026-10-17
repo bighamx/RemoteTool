@@ -22,9 +22,9 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
     public IReadOnlyDictionary<string, JsonObject> ReadMany(IEnumerable<string> ids) => ReadDatabase(DatabasePath, ids, false);
     public IReadOnlyList<string> ActiveRunCandidates(string id) => ReadActiveRunCandidates(Path.Combine(Path.GetDirectoryName(DatabasePath)!, "runs_idempotency.db"), id);
 
-    public sealed record SessionModelSetting(string Provider, string Effort);
+    public sealed record SessionModelSetting(string Provider, string Effort, string Model = "");
 
-    /// <summary>会话当前模型设置（提供方 / 思考等级）的权威记录，取自 state.db 的 model_config，
+    /// <summary>会话当前模型设置（提供方 / 思考等级 / 模型）的权威记录，取自 state.db 的 model_config，
     /// 缺失时 provider 退回 billing_provider。网关的会话详情响应不包含这些字段，必须从这里取。</summary>
     public IReadOnlyDictionary<string, SessionModelSetting> SessionModelInfo(IEnumerable<string> ids) {
         var result = new Dictionary<string, SessionModelSetting>();
@@ -37,18 +37,25 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
             foreach (var id in ids.Distinct()) {
                 var row = db.Query<SessionProviderRow>("SELECT model_config, billing_provider FROM sessions WHERE id=?", id).FirstOrDefault();
                 if (row == null) continue;
-                var provider = row.BillingProvider; var effort = "";
+                var provider = row.BillingProvider; var effort = ""; var model = "";
                 try {
                     if (!string.IsNullOrEmpty(row.ModelConfig) && System.Text.Json.Nodes.JsonNode.Parse(row.ModelConfig) is System.Text.Json.Nodes.JsonObject config) {
                         var fromConfig = config["provider"]?.ToString();
                         if (string.IsNullOrEmpty(fromConfig)) fromConfig = (config["gateway_runtime"] as System.Text.Json.Nodes.JsonObject)?["provider"]?.ToString();
+                        // 浏览器/移动端锁定的提供方（browser_model_lock）优先于计费归属：
+                        // billing_provider 对自定义提供方恒为壳值 "custom"，lock 里才是完整 slug。
+                        if ((config["browser_model_lock"] as System.Text.Json.Nodes.JsonObject)?["provider"]?.ToString() is { Length: > 0 } locked) fromConfig = locked;
                         if (!string.IsNullOrEmpty(fromConfig)) provider = fromConfig;
+                        // 锁里的 model 优先；锁会被任何 /model 切换清掉（update_session_model 无条件
+                        // drop lock 只写路由），此时回退到路由的 top-level model，保证注入完整。
+                        model = (config["browser_model_lock"] as System.Text.Json.Nodes.JsonObject)?["model"]?.ToString() ?? "";
+                        if (string.IsNullOrEmpty(model)) model = config["model"]?.ToString() ?? "";
                         if (config["reasoning_config"] is System.Text.Json.Nodes.JsonObject reasoning) {
                             effort = reasoning["enabled"]?.GetValue<bool>() == false ? "none" : reasoning["effort"]?.ToString() ?? "";
                         }
                     }
                 } catch (System.Text.Json.JsonException) { }
-                if (!string.IsNullOrEmpty(provider) || !string.IsNullOrEmpty(effort)) result[id] = new SessionModelSetting(provider, effort);
+                if (!string.IsNullOrEmpty(provider) || !string.IsNullOrEmpty(effort) || !string.IsNullOrEmpty(model)) result[id] = new SessionModelSetting(provider, effort, model);
             }
         } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException or DllNotFoundException or TypeInitializationException) { }
         return result;

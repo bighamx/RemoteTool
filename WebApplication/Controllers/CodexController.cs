@@ -119,7 +119,10 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
         normalized["session_id"] = Id(id);
         var prepared = JsonSerializer.SerializeToElement(normalized);
         if (body.TryGetProperty("action", out var action) && action.GetString() is "add" or "update")
-            prepared = attachments.PrepareCodexRun(prepared, body.TryGetProperty("key", out var key) ? key.GetString() : Guid.NewGuid().ToString());
+            // key 会拼进 outbox 目录名，必须与 Idempotency-Key 同规则校验，防止路径逃逸。
+            prepared = attachments.PrepareCodexRun(prepared,
+                body.TryGetProperty("key", out var key) && System.Text.RegularExpressions.Regex.IsMatch(key.GetString() ?? "", "^[a-zA-Z0-9_-]{16,120}$")
+                    ? key.GetString()! : Guid.NewGuid().ToString("N"));
         return Forward(HttpMethod.Post, $"sessions/{Id(id)}/queue", prepared, ct);
     }
     [HttpGet("sessions/{id}/activity")] public async Task<IActionResult> SessionActivity(string id, CancellationToken ct) {

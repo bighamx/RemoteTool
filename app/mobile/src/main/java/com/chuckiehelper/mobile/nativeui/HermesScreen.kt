@@ -190,6 +190,19 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
     val filteredSessions = if (searchingSessions) model.sessionSearchResults else model.orderedSessions
     val sessionsDragged by sessionsScroll.interactionSource.collectIsDraggedAsState()
     LaunchedEffect(sessionsDragged) { if (sessionsDragged) model.sessionsListTouched = true }
+    // 视口锚点：列表可见时持续记录首个可见项（key+offset）；数据更新/返回列表时按 key 恢复，
+    // 运行中会话的重排与行高变化不再把视口推走。
+    LaunchedEffect(list, searchingSessions) {
+        if (!list) return@LaunchedEffect
+        snapshotFlow {
+            val info = sessionsScroll.layoutInfo.visibleItemsInfo.firstOrNull()
+            if (info == null) Triple(null as String?, 0, 0)
+            else Triple(info.key as? String, info.offset, info.index)
+        }.collect { (key, offset, index) -> model.captureSessionsViewport(key, offset, index) }
+    }
+    LaunchedEffect(model.orderedSessions, list, searchingSessions) {
+        if (list && !searchingSessions) model.restoreSessionsViewport()
+    }
     var latestRequest by remember(model.selectedId, list) { mutableStateOf(0L) }
     var followLatest by rememberChatFollowing(
         scroll, model.selectedId, list,

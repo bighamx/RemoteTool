@@ -69,4 +69,23 @@ class SteeringMessagesTest {
         assertFalse(steeringAppearsInHistory(pending, listOf(old)))
         assertEquals(listOf(pending), reconcileSteeringMessages(listOf(old), listOf(pending)).first)
     }
+    @Test fun mergedOutOfBandRowConfirmsEachSteeringLine() {
+        // 网关把 turn 活跃期间的多条消息合并进一行（OOB 外壳，一行一条）。
+        // 插话在网关队列排队 11 分钟后才合并入库——行时间远晚于发送时刻，不设上界。
+        val merged = HermesMessage("user",
+            "[OUT-OF-BAND USER MESSAGE — x]\n测试2\n测试3\n[/OUT-OF-BAND USER MESSAGE]",
+            67348, timestamp = 11000 + 660_000)
+        val second = SteeringMessage("k2", "session", "测试2", setOf(67340), 67340, "已送达", 10000)
+        val third = SteeringMessage("k3", "session", "测试3", setOf(67340), 67340, "已送达", 10100)
+        val (pending, acknowledged) = reconcileSteeringMessages(listOf(merged), listOf(second, third))
+        assertEquals(emptyList<SteeringMessage>(), pending)
+        assertEquals(setOf("k2", "k3"), acknowledged.map { it.first.key }.toSet())
+        assertTrue(acknowledged.all { it.second.serverId == 67348L })
+        // 同一文本行不能被两条同文本 steering 重复确认
+        val dupeA = SteeringMessage("ka", "session", "测试2", setOf(67340), 67340, "已送达", 10000)
+        val dupeB = SteeringMessage("kb", "session", "测试2", setOf(67340), 67340, "已送达", 10100)
+        val (pendingDupe, ackDupe) = reconcileSteeringMessages(listOf(merged), listOf(dupeA, dupeB))
+        assertEquals(1, ackDupe.size)
+        assertEquals(1, pendingDupe.size)
+    }
 }

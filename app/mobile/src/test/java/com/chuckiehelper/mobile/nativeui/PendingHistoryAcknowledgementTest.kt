@@ -21,10 +21,11 @@ class PendingHistoryAcknowledgementTest {
         assertEquals(current, restoredPendingHistoryMatch("codex", pending, listOf(old, current)))
     }
     @Test fun oldUnloadedSameTextCannotConfirmOrReceiveNewAttachments() {
+        // 时间窗放宽到 -10s 后，10s 内的旧行只能靠 existing（发送时已见过的 serverId）挡住。
         val old = HermesMessage("user", "继续", 41, timestamp = 500)
-        assertNull(currentSubmissionHistoryMatch("hermes", pending, emptySet(), listOf(old)))
+        assertNull(currentSubmissionHistoryMatch("hermes", pending, setOf(41), listOf(old)))
         val actual = HermesMessage("user", "继续", 42, timestamp = 11000)
-        assertEquals(actual, currentSubmissionHistoryMatch("hermes", pending, emptySet(), listOf(old, actual)))
+        assertEquals(actual, currentSubmissionHistoryMatch("hermes", pending, setOf(41), listOf(old, actual)))
         assertNull(currentSubmissionHistoryMatch("hermes", pending, emptySet(), listOf(actual, actual.copy(serverId = 43))))
     }
     @Test fun hermesRequiresAUserIdAfterTheLastKnownNativeItem() {
