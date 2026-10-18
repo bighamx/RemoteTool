@@ -35,6 +35,6 @@ internal static class CodexToolHistory
             if (last != null) active = Tools(last);
         }
         ToolHistoryCache.Save("codex", session, "active", active, running, path: path);
-        ToolHistoryCache.Keep("codex", session, ids);
+        if (!thread.B("history_partial")) ToolHistoryCache.Keep("codex", session, ids);
     }
 }

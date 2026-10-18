@@ -10,12 +10,12 @@ internal fun agentHistoryMessage(agent: String, row: JSONObject): HermesMessage?
         if (entries.isEmpty()) return null
         return HermesMessage("system", content, row.optLong("id"),
             timestamp = parseMessageTimestamp(row.opt("timestamp")), editable = false,
-            nativeTurnId = "interaction", interactions = entries)
+            nativeTurnId = row.cleanSetting("turn_id").takeIf { it.isNotBlank() }, interactions = entries, messageType = "interaction")
     }
     if (role == "system" && row.optString("type") in setOf("contextCompaction", "toolSummary")) {
         return HermesMessage("system", content.ifBlank { "上下文压缩" }, row.optLong("id"),
             timestamp = parseMessageTimestamp(row.opt("timestamp")), editable = false,
-            nativeTurnId = row.optString("type").takeIf { it == "toolSummary" })
+            nativeTurnId = row.cleanSetting("turn_id").takeIf { it.isNotBlank() }, messageType = row.optString("type"))
     }
     val description = if (agent == "hermes" && role == "assistant" && content.isBlank()) historyToolNarration(row) else null
     val text = if (role == "user") agentUserMessageText(agent, content) else description ?: content

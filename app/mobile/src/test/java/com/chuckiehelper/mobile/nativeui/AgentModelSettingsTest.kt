@@ -5,6 +5,23 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AgentModelSettingsTest {
+    @Test fun officialAliasesShareCardButKeepOriginalSessionProvider() {
+        val merged = JSONObject("""{"slug":"custom","aliases":["custom","openai"],"supports_service_tier":true}""")
+        assertTrue(providerMatches(merged, "openai"))
+        assertTrue(providerMatches(merged, "custom"))
+        assertFalse(providerMatches(merged, "local"))
+        assertEquals("openai", providerSelectionId(merged, "openai"))
+        assertEquals("custom", providerSelectionId(merged, "custom"))
+        assertEquals("custom", providerSelectionId(merged, "local"))
+        assertTrue(supportsServiceTier(merged))
+    }
+    @Test fun thirdPartyProvidesReasoningButHidesSpeed() {
+        val local = JSONObject("""{"slug":"local","supports_service_tier":false,"models":[{"id":"glm","supportedReasoningEfforts":[{"reasoningEffort":"none"},{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"}]}]}""")
+        assertEquals(listOf("none", "low", "medium", "high"), reasoningChoices("codex", local, "glm"))
+        assertFalse(supportsServiceTier(local))
+        assertFalse(supportsServiceTier(JSONObject("""{"slug":"local"}""")))
+        assertTrue(supportsServiceTier(JSONObject("""{"slug":"openai"}""")))
+    }
     private val provider = JSONObject("""{"models":[{"id":"display-id","model":"m","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"max"}],"serviceTiers":[{"id":"priority","name":"Fast"}]}]}""")
     @Test fun codexUsesAdvertisedEffortsAndActualFastTierId() {
         assertEquals(listOf("low", "max"), reasoningChoices("codex", provider, "m"))

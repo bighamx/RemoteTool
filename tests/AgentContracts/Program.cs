@@ -130,7 +130,7 @@ try {
     var missingReset=CodexWorkspaceUsage.MergeResetCreditApplicability(new JsonObject(),baselineReset);
     Check(missingReset["rateLimitResetCredits"]!.L("availableCount")==3,"missing reset details fall back to baseline counts");
 } finally { Directory.Delete(authTest,true); }
-var selection = CodexModelSettings.Validate(JsonNode.Parse("""{"model":"m","provider":"custom","reasoning_effort":"high","service_tier":"priority"}""")!.AsObject(), catalog);
+var selection = CodexModelSettings.Validate(JsonNode.Parse("""{"model":"m","provider":"openai","reasoning_effort":"high","service_tier":"priority"}""")!.AsObject(), catalog);
 var tomlTest = Path.Combine(Path.GetTempPath(), "chuckie-codex-routing-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(tomlTest);
 try {
     File.WriteAllText(Path.Combine(tomlTest, "config.toml"), "model = \"m\"\r\nmodel_provider = \"custom\"\r\nmodel_context_window = 1000\r\n\r\n[model_providers.custom]\r\nname = \"Relay\"\r\nbase_url = \"http://127.0.0.1:9/v1\"\r\n\r\n[model_providers.other]\r\nname = \"Other\"\r\n");
@@ -164,12 +164,12 @@ var mode = JsonNode.Parse("""{"mode":"plan","settings":{"model":"old","reasoning
 CodexModelSettings.ApplyTurn(turn, selection, catalog["data"]![0]!.AsObject(), mode);
 Check(turn["collaborationMode"]?["mode"]?.ToString() == "plan" && turn["collaborationMode"]?["settings"]?["model"]?.ToString() == "m" && turn["collaborationMode"]?["settings"]?["reasoning_effort"]?.ToString() == "high", "desktop collaboration mode honors selected model/effort");
 Check(mode["settings"]?["model"]?.ToString() == "old", "does not mutate inherited mode");
-var reset = CodexModelSettings.Validate(JsonNode.Parse("""{"model":"m","provider":"custom","reasoning_effort":"","service_tier":""}""")!.AsObject(), catalog);
+var reset = CodexModelSettings.Validate(JsonNode.Parse("""{"model":"m","provider":"openai","reasoning_effort":"","service_tier":""}""")!.AsObject(), catalog);
 CodexModelSettings.ApplyTurn(turn, reset, catalog["data"]![0]!.AsObject());
 Check(turn["effort"]?.ToString() == "low" && turn["serviceTier"]?.ToString() == "priority", "reset resolves catalog defaults");
-var standard = CodexModelSettings.Validate(JsonNode.Parse("""{"model":"m","provider":"custom","service_tier":"standard"}""")!.AsObject(), catalog);
+var standard = CodexModelSettings.Validate(JsonNode.Parse("""{"model":"m","provider":"openai","service_tier":"standard"}""")!.AsObject(), catalog);
 Check(standard["serviceTier"]?.ToString() == "default", "standard explicitly disables fast");
-foreach (var bad in new[] { """{"model":"m","provider":"custom","reasoning_effort":"ultra"}""", """{"model":"m","provider":"custom","service_tier":"ultrafast"}""", """{"model":"","provider":"custom"}""" }) {
+foreach (var bad in new[] { """{"model":"m","provider":"openai","reasoning_effort":"ultra"}""", """{"model":"m","provider":"openai","service_tier":"ultrafast"}""", """{"model":"","provider":"custom"}""" }) {
     try { CodexModelSettings.Validate(JsonNode.Parse(bad)!.AsObject(), catalog); throw new Exception("invalid setting accepted"); }
     catch (CodexError) { count++; }
 }
@@ -298,6 +298,8 @@ CodexHistoryCacheChecks.Run();
 CodexEventReplayChecks.Run();
 CodexNotificationScopeChecks.Run();
 CodexToolEventChecks.Run();
+await CodexProviderModelChecks.Run();
+await CodexHistoryWindowChecks.Run();
 var streamedTurn = JsonNode.Parse("""{"items":[{"type":"agentMessage","phase":"commentary","text":"先检查改动"},{"type":"agentMessage","phase":"commentary","text":"测试通过"},{"type":"agentMessage","phase":"final_answer","text":"已提交推送"}]}""")!;
 if (CodexAssistantMessageStream.FinalAnswer(streamedTurn) != "已提交推送")
     throw new Exception("Run output must contain only the final answer, never concatenated commentary");

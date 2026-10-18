@@ -30,6 +30,7 @@ data class HermesMessage(
     val requestKey: String? = null,
     /** clarify / request_user_input cards: [{question, answer, status, choices[]}] for role=system type=interaction. */
     val interactions: List<JSONObject> = emptyList(),
+    val messageType: String? = null,
 )
 
 data class HermesEvent(val type: String, val text: String, val detail: String = "", val itemId: String? = null)
@@ -190,7 +191,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 if (!sendInput(input.ifBlank { "请查看附件" })) setError(session, "原消息已撤回，编辑草稿已保留，请点击发送")
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                setError(session, (if (rewound) "原消息已撤回，尚未重发；" else "撤回未确认，不会自动重发；") + "编辑内容已保留。" + connectionFailureMessage(e))
+                val prefix = when {
+                    rewound -> "原消息已撤回，尚未重发；"
+                    e is ApiRequestFailure && e.delivery == "rejected" -> "撤回未执行；"
+                    else -> "撤回未确认，不会自动重发；"
+                }
+                setError(session, prefix + "编辑内容已保留。" + connectionFailureMessage(e))
                 if (rewound && selectedId == session) onDone()
             } finally {
                 if (session in messageActionSessions) { messageActionSessions = messageActionSessions - session; setSubmitting(session, false) }
@@ -2797,7 +2803,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (slug.isBlank() || slug == "custom") return ""
         if (this::api.isInitialized) {
             modelOptions.array("providers").objects()
-                .firstOrNull { it.optString("slug") == slug }
+                .firstOrNull { providerMatches(it, slug) }
                 ?.optString("name")?.takeIf { it.isNotBlank() }?.let { return it }
         }
         return displayProvider(slug)
@@ -2926,8 +2932,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         try {
         val body = obj("provider" to provider, "model" to model)
         body.put("reasoning_effort", effort)
-        if (agent == "codex") body.put("service_tier", tier)
-        else if (!global) body.put("model_options", obj("reasoning" to hermesReasoning(effort)))
+        if (agent == "codex") {
+            val metadata = modelOptions.array("providers").objects().firstOrNull { providerMatches(it, provider) }
+            if (supportsServiceTier(metadata)) body.put("service_tier", tier)
+        } else if (!global) body.put("model_options", obj("reasoning" to hermesReasoning(effort)))
         if (global) {
             body.put("scope", "main")
             body.put("confirm_expensive_model", confirm)

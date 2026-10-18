@@ -9,19 +9,28 @@ internal static class CodexModelSettings
         var model = body.S("model").Trim(); var provider = body.S("provider").Trim();
         if (model.Length is 0 or > 256 || provider.Length is 0 or > 80) throw new CodexError("请选择 Provider 和模型");
         var detail = catalog.A("data").FirstOrDefault(row => row.S("model", row.S("id")) == model);
+        if (detail == null) throw new CodexError("该 Provider 未提供所选模型，请刷新模型列表");
         var result = Obj(("model", model), ("modelProvider", provider));
+        var official = provider == "openai" || catalog.B("official_provider");
+        if (official) result["officialProvider"] = true;
+        if (!official && CodexRuntimeCatalog.Window(detail) > 0) result["modelMetadata"] = detail.DeepClone();
+        if (provider != "openai" && catalog.S("base_url").Length > 0) result["providerBaseUrl"] = catalog.S("base_url");
         if (body.ContainsKey("reasoning_effort")) {
             var effort = body.S("reasoning_effort");
             if (effort.Length > 0 && !detail.A("supportedReasoningEfforts").Any(option => option.S("reasoningEffort") == effort))
                 throw new CodexError("该模型未提供所选思考程度，请刷新模型列表");
-            result["reasoningEffort"] = effort.Length == 0 ? null : JsonValue.Create(effort);
+            // Config overrides are TOML values, not nullable turn fields. A null override
+            // becomes an empty effort and Codex rejects the entire configuration.
+            var defaultEffort = detail.S("defaultReasoningEffort").Trim();
+            result["reasoningEffort"] = effort.Length == 0 ? defaultEffort.Length > 0 ? defaultEffort : "medium" : effort;
         }
-        if (body.ContainsKey("service_tier")) {
+        if (!official) result["serviceTier"] = "default";
+        else if (body.ContainsKey("service_tier")) {
             var tier = body.S("service_tier");
             if (tier == "standard") tier = "default";
             if (tier.Length > 0 && tier != "default" && !detail.A("serviceTiers").Any(option => option.S("id") == tier))
                 throw new CodexError("该模型未提供所选速度档位，请刷新模型列表");
-            result["serviceTier"] = tier.Length == 0 ? null : JsonValue.Create(tier);
+            result["serviceTier"] = tier.Length == 0 ? JsonValue.Create(detail.S("defaultServiceTier", "default")) : JsonValue.Create(tier);
         }
         return result;
     }
@@ -29,7 +38,18 @@ internal static class CodexModelSettings
         request["model"] = selection["model"]?.DeepClone();
         request["modelProvider"] = selection["modelProvider"]?.DeepClone();
         if (selection.ContainsKey("serviceTier")) request["serviceTier"] = selection["serviceTier"]?.DeepClone();
-        if (selection.ContainsKey("reasoningEffort")) request["config"] = Obj(("model_reasoning_effort", selection["reasoningEffort"]));
+        if (selection.S("reasoningEffort").Length > 0) {
+            request["config"] ??= new JsonObject();
+            request["config"]!["model_reasoning_effort"] = selection["reasoningEffort"]!.DeepClone();
+        }
+        if (selection.S("providerBaseUrl").Length > 0) {
+            request["config"] ??= new JsonObject();
+            request["config"]!["model_providers." + selection.S("modelProvider") + ".base_url"] = selection.S("providerBaseUrl");
+        }
+        if (selection["modelMetadata"] is JsonObject metadata && CodexRuntimeCatalog.Window(metadata) > 0) {
+            request["config"] ??= new JsonObject();
+            CodexRuntimeCatalog.ApplyContext(request["config"]!.AsObject(), metadata);
+        }
     }
     public static void ApplyTurn(JsonObject request, JsonObject selection, JsonObject defaults, JsonObject collaborationMode = null) {
         request["model"] = selection["model"]?.DeepClone();

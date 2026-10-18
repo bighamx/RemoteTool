@@ -14,7 +14,8 @@ internal sealed partial class CodexAgent {
             if (target.item == null) throw new CodexError("消息已变更或未保存，请刷新后重试", 409);
             if (action == "fork") {
                 if (target.turn.S("status") == "inProgress") throw new CodexError("请等待该轮任务结束再分叉", 409);
-                var owner = NewRuntime();
+                JsonObject forkSelection; lock (gate) forkSelection = sessionOverrides.GetValueOrDefault(id)?.DeepClone().AsObject();
+                var owner = await CreateRuntime(forkSelection);
                 JsonObject created;
                 try {
                     await owner.Initialize(ct);
@@ -45,7 +46,7 @@ internal sealed partial class CodexAgent {
                 var runtime = await EnsureRuntime(id);
                 await runtime.Call("thread/resume", await ResumeSessionRequest(id), ct);
                 await runtime.Call("thread/revert", Obj(("threadId", id), ("beforeTurnId", target.turn.S("id"))), ct);
-                lock (gate) loaded.Remove(id);
+                lock (gate) { loaded.Remove(id); messageSnapshots.Remove(id); }
                 return Obj(("rewound", true));
             } catch (CodexError error) { throw TranslateBusyThread(id, error); }
         } finally { settingsLock.Release(); }

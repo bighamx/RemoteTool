@@ -18,15 +18,17 @@ internal static class CodexPreviewRollout
             if (!Directory.Exists(directory)) return "";
             string[] paths;
             lock (gate) {
-                if (aliases.TryGetValue(id, out var indexed) && DateTime.UtcNow - indexed.Checked < TimeSpan.FromSeconds(10)) paths = indexed.Paths;
+                if (aliases.TryGetValue(id, out var indexed) && DateTime.UtcNow - indexed.Checked < TimeSpan.FromSeconds(indexed.Paths.Length > 0 ? 10 : 1)) paths = indexed.Paths;
                 else {
-                    paths = Directory.EnumerateFiles(directory, "rollout-*-" + id + "_*.jsonl", new EnumerationOptions {
+                    paths = Directory.EnumerateFiles(directory, "rollout-*-" + id + "*.jsonl", new EnumerationOptions {
                         RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true
-                    }).ToArray();
+                    }).Where(path => Path.GetFileName(path).EndsWith("-" + id + ".jsonl", StringComparison.OrdinalIgnoreCase) ||
+                        Path.GetFileName(path).Contains("-" + id + "_", StringComparison.OrdinalIgnoreCase)).ToArray();
                     if (aliases.Count > 512) aliases.Clear();
                     aliases[id] = (DateTime.UtcNow, paths);
                 }
             }
+            if (requireAlias) paths = paths.Where(path => Path.GetFileName(path).Contains("-" + id + "_", StringComparison.OrdinalIgnoreCase)).ToArray();
             if (paths.Length == 0 && requireAlias) return "";
             var candidates = paths.Concat(string.IsNullOrWhiteSpace(original) ? Array.Empty<string>() : new[] { original });
             var file = candidates.Where(path => Path.GetFullPath(path).StartsWith(Path.GetFullPath(home) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))

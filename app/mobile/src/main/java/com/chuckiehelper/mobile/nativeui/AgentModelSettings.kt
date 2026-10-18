@@ -23,6 +23,15 @@ internal fun fastTier(provider: JSONObject?, model: String?): String? =
         it.cleanSetting("id") in listOf("priority", "fast") || it.cleanSetting("name").equals("fast", true)
     }?.cleanSetting("id")
 
+internal fun supportsServiceTier(provider: JSONObject?): Boolean =
+    provider?.let { it.optBoolean("supports_service_tier", it.cleanSetting("slug") == "openai") } == true
+
+internal fun providerMatches(provider: JSONObject?, id: String): Boolean = id.isNotBlank() && provider != null &&
+    (provider.cleanSetting("slug") == id || (0 until provider.array("aliases").length()).any { provider.array("aliases").optString(it) == id })
+
+internal fun providerSelectionId(provider: JSONObject, current: String): String =
+    if (providerMatches(provider, current)) current else provider.cleanSetting("slug")
+
 internal fun effortLabel(effort: String): String = when (effort) {
     "" -> "默认"
     "none" -> "关闭"

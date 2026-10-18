@@ -645,13 +645,13 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                 ChatRowKind.Message -> {
                     val item = requireNotNull(row.message)
                     val message = item.message
-                    if (message.role == "system" && message.nativeTurnId == "interaction") {
+                    if (message.role == "system" && message.messageType == "interaction") {
                         InteractionCard(message, agentName)
                     } else if (message.role == "system") {
-                        Row(Modifier.fillMaxWidth().then(if (message.nativeTurnId == "toolSummary") Modifier.clickable { toolDetails = message.serverId.toString() } else Modifier)
+                        Row(Modifier.fillMaxWidth().then(if (message.messageType == "toolSummary") Modifier.clickable { toolDetails = message.serverId.toString() } else Modifier)
                             .padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically) {
-                            Icon(if (message.nativeTurnId == "toolSummary") Icons.Outlined.Build else Icons.Outlined.CheckCircle,
+                            Icon(if (message.messageType == "toolSummary") Icons.Outlined.Build else Icons.Outlined.CheckCircle,
                                 null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                             Spacer(Modifier.width(6.dp))
                             Text(message.text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1468,7 +1468,7 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
     // 会话详情里的 provider 由服务端注入权威值（state.db 的 model_config.provider）；
     // 这里只做 slug → 显示名的解析，供头部文案使用。高亮按 slug 精确匹配。
     val providerCatalog = model.modelOptions.array("providers").objects()
-    val resolvedProvider = currentProvider
+    val resolvedProvider = providerCatalog.firstOrNull { providerMatches(it, currentProvider) }?.cleanSetting("slug") ?: currentProvider
     val resolvedProviderName = providerCatalog.firstOrNull { it.optString("slug") == resolvedProvider }?.optString("name", displayProvider(resolvedProvider)) ?: displayProvider(resolvedProvider)
     LaunchedEffect(provider?.optString("slug"), global, resolvedProvider, currentModel) {
         selected = if (provider?.optString("slug") == resolvedProvider) currentModel.takeIf { it.isNotBlank() } else null
@@ -1477,7 +1477,7 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
         val isCurrent = selected == currentModel && provider?.optString("slug") == resolvedProvider
         val choices = reasoningChoices(model.agent, provider, selected)
         effort = if (isCurrent && currentEffort in choices) currentEffort else ""
-        tier = if (isCurrent) currentTier else ""
+        tier = if (isCurrent && supportsServiceTier(provider)) currentTier else ""
         if (tier !in listOf("", "default", "standard", fastTier(provider, selected))) tier = ""
     }
     fun previous() {
@@ -1604,6 +1604,9 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                 }
                         if (selected != null) Column {
                             HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                            provider?.cleanSetting("models_warning")?.takeIf { it.isNotBlank() }?.let {
+                                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                            }
                             val efforts = reasoningChoices(model.agent, provider, selected)
                             if (efforts.isNotEmpty()) {
                                 Text("思考程度", style = MaterialTheme.typography.labelLarge)
@@ -1614,7 +1617,10 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                                     }
                                 }
                             } else Text("该模型未提供可选思考档位", style = MaterialTheme.typography.labelSmall)
-                            if (model.agent == "codex") {
+                            if (model.agent == "codex" && provider?.optBoolean("is_user_defined") == true)
+                                Text("思考等级会传给供应商，实际支持范围由模型决定。供应商须支持 Responses API。",
+                                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (model.agent == "codex" && supportsServiceTier(provider)) {
                                 Text("速度", style = MaterialTheme.typography.labelLarge)
                                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     FilterChip(tier.isBlank(), { tier = "" }, label = { Text("默认") }, enabled = !model.modelSaving)
@@ -1650,7 +1656,7 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
                     onClick = {
                         selected?.let {
                             model.setModel(
-                                provider!!.getString("slug"),
+                                providerSelectionId(provider!!, currentProvider),
                                 it,
                                 global,
                                 onClose,
@@ -1790,6 +1796,11 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
                                 label = { Text(label) },
                             )
                         }
+                    if (model.agent == "codex") Text(
+                        "Codex 仅支持 Responses API，仅支持 Chat Completions 的地址不能直接使用。填写 API 基础地址（通常以 /v1 结尾）。Key 用于手机连接；独立桌面端 / CLI 需另行配置相同的鉴权环境。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             },
             confirmButton = {

@@ -57,7 +57,10 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
         return StatusCode(status, payload);
     }
     private async Task<(int Status, JsonNode? Payload)> MessagesCore(string id, int limit, string from_id, string older_before, CancellationToken ct) {
-        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{id}/messages", null, ct);
+        var query = $"?limit={Math.Clamp(limit, 1, 500)}" +
+            (string.IsNullOrEmpty(from_id) ? "" : "&from_id=" + Uri.EscapeDataString(from_id)) +
+            (string.IsNullOrEmpty(older_before) ? "" : "&older_before=" + Uri.EscapeDataString(older_before));
+        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{id}/messages{query}", null, ct);
         if (!upstream.IsSuccessStatusCode) return ((int)upstream.StatusCode, JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)));
         var json = JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct));
         json = AgentHistoryWindow.Select(json, limit, from_id, older_before);
@@ -69,33 +72,25 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     {
         Response.Headers.CacheControl = "no-store";
         var sessionId = Id(id);
-        async Task<JsonObject?> Part(Func<Task<JsonObject?>> work) {
-            try { return await work(); }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception) { return null; }
-        }
+        Task<JsonObject?> Part(Func<CancellationToken, Task<JsonObject?>> work) => AgentOverview.ReadPart(work, ct);
         async Task<JsonObject?> Upstream(string path, CancellationToken? token = null) {
             var requestToken = token ?? ct;
             using var response = await bridge.SendAsync(HttpMethod.Get, path, null, requestToken);
             return response.IsSuccessStatusCode ? await JsonNode.ParseAsync(await response.Content.ReadAsStreamAsync(requestToken), cancellationToken: requestToken) as JsonObject : null;
         }
-        var detailTask = Part(() => Upstream($"sessions/{sessionId}"));
-        var contextTask = Part(async () => {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(6));
-            return await Upstream($"sessions/{sessionId}/context", timeout.Token);
-        });
-        var runStateTask = Part(() => Upstream($"sessions/{sessionId}/active-run"));
-        var queueTask = Part(() => Upstream($"sessions/{sessionId}/queue"));
-        var historyTask = Part(async () => {
-            var (status, payload) = await MessagesCore(sessionId, Math.Clamp(limit, 1, 100), null, null, ct);
+        var detailTask = Part(token => Upstream($"sessions/{sessionId}", token));
+        var contextTask = Part(token => Upstream($"sessions/{sessionId}/context", token));
+        var runStateTask = Part(token => Upstream($"sessions/{sessionId}/active-run", token));
+        var queueTask = Part(token => Upstream($"sessions/{sessionId}/queue", token));
+        var historyTask = Part(async token => {
+            var (status, payload) = await MessagesCore(sessionId, Math.Clamp(limit, 1, 100), null, null, token);
             return status == 200 ? payload as JsonObject : null;
         });
-        var activityTask = Part(() => ActivityAsync(sessionId, ct));
+        var activityTask = Part(token => ActivityAsync(sessionId, token));
         await Task.WhenAll(detailTask, contextTask, runStateTask, queueTask, historyTask, activityTask);
         JsonObject? run = AgentOverview.RunDocument(runStateTask.Result, sessionId);
         if (run == null && runStateTask.Result?["run_id"]?.ToString() is string runId && Regex.IsMatch(runId, "^[a-zA-Z0-9_-]{1,160}$"))
-            run = await Part(() => Upstream($"runs/{runId}"));
+            run = await Part(token => Upstream($"runs/{runId}", token));
         JsonNode? files = null;
         try { files = JsonSerializer.SerializeToNode(new { data = attachments.List(sessionId) }); }
         catch (Exception) { /* The app can use the existing files endpoint. */ }

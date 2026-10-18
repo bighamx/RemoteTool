@@ -23,6 +23,10 @@
     <Compile Include="../../WebApplication/Services/Codex/CodexCompactionEvent.cs" Link="CodexCompactionEvent.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexAssistantMessageStream.cs" Link="CodexAssistantMessageStream.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexModelSettings.cs" Link="CodexModelSettings.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexProviderModels.cs" Link="CodexProviderModels.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexRuntimeCatalog.cs" Link="CodexRuntimeCatalog.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexHistoryWindow.cs" Link="CodexHistoryWindow.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexPreviewRollout.cs" Link="CodexPreviewRollout.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexRollout.cs" Link="CodexRollout.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexSessionDetails.cs" Link="CodexSessionDetails.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexRolloutSnapshot.cs" Link="CodexRolloutSnapshot.cs" />

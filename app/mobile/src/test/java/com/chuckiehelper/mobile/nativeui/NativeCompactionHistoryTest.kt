@@ -8,7 +8,8 @@ class NativeCompactionHistoryTest {
         val row = obj("id" to 42, "role" to "system", "type" to "toolSummary", "content" to "调用了 12 次工具")
         val message = agentHistoryMessage("hermes", row)!!
         assertEquals("调用了 12 次工具", message.text)
-        assertEquals("toolSummary", message.nativeTurnId)
+        assertEquals("toolSummary", message.messageType)
+        assertNull(message.nativeTurnId)
         assertFalse(message.editable)
     }
     @Test fun nativeOrderSurvivesMissingTimesAndLegacyOverlays() {
