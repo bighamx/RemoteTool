@@ -21,9 +21,9 @@ internal static class LatestSessionPreview
         if (string.IsNullOrWhiteSpace(content)) return "";
         var text = content.Replace("\r\n", "\n").Trim();
         try {
-            if (text.StartsWith('[') && JsonNode.Parse(text) is JsonArray parts && parts.OfType<JsonObject>().Any(part => part["type"]?.ToString() is "text" or "input_text" or "image" or "image_url" or "input_image"))
+            if (text.StartsWith('[') && ToolPayloadJson.Parse(text) is JsonArray parts && parts.OfType<JsonObject>().Any(part => part["type"]?.ToString() is "text" or "input_text" or "image" or "image_url" or "input_image"))
                 text = ContentText(parts);
-            else if (codex && text.StartsWith('{') && JsonNode.Parse(text) is JsonObject item && item["type"]?.ToString() == "userMessage")
+            else if (codex && text.StartsWith('{') && ToolPayloadJson.Parse(text) is JsonObject item && item["type"]?.ToString() == "userMessage")
                 text = ContentText(item["content"] as JsonArray ?? new());
         } catch (JsonException) { }
         // Codex transports persist client metadata as user-role response items.
@@ -51,7 +51,7 @@ internal static class LatestSessionPreview
         if (text.StartsWith("<send_user_message_question_reply>", StringComparison.Ordinal)) {
             try {
                 var json = text["<send_user_message_question_reply>".Length..].Split("</send_user_message_question_reply>", 2)[0];
-                if (JsonNode.Parse(json) is JsonArray replies) text = string.Join("；", replies.OfType<JsonObject>().Select(reply => "回答：" + reply["answer"]?.ToString()));
+                if (ToolPayloadJson.Parse(json) is JsonArray replies) text = string.Join("；", replies.OfType<JsonObject>().Select(reply => "回答：" + reply["answer"]?.ToString()));
             } catch (JsonException) { }
         }
         text = Regex.Replace(text, "\\s+", " ").Trim();
@@ -70,9 +70,11 @@ internal static class LatestSessionPreview
                 : $"SELECT session_id AS session, content FROM (SELECT session_id,content,ROW_NUMBER() OVER(PARTITION BY session_id ORDER BY id DESC) AS position FROM messages WHERE role='user' AND session_id IN ({parameters})) WHERE position<=32 ORDER BY session,position";
             var result = ids.ToDictionary(id => id, _ => "");
             foreach (var row in connection.Query<PreviewRow>(sql, ids.Cast<object>().ToArray())) {
-                if (result[row.Session].Length > 0) continue;
-                var text = Text(row.Content, codex);
-                if (text.Length > 0) result[row.Session] = text;
+                if (!result.TryGetValue(row.Session, out var previous) || previous.Length > 0) continue;
+                SessionReadIsolation.Try(row.Session, "preview", () => {
+                    var text = Text(row.Content, codex);
+                    if (text.Length > 0) result[row.Session] = text;
+                });
             }
             return result;
         } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException or DllNotFoundException or TypeInitializationException) {

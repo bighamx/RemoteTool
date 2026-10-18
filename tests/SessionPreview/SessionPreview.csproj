@@ -4,5 +4,7 @@
     <PackageReference Include="sqlite-net-pcl" Version="1.9.172" />
     <Compile Include="../../WebApplication/Services/LatestSessionPreview.cs" Link="LatestSessionPreview.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexPreviewRollout.cs" Link="CodexPreviewRollout.cs" />
-  </ItemGroup>
+      <Compile Include="../../WebApplication/Services/SessionReadIsolation.cs" Link="SessionReadIsolation.cs" />
+    <Compile Include="../../WebApplication/Services/ToolPayloadJson.cs" Link="ToolPayloadJson.cs" />
+</ItemGroup>
 </Project>

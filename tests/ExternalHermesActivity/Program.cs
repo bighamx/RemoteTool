@@ -27,6 +27,14 @@ Check(!Read("cli")["running"].GetValue<bool>(), "open CLI session without a turn
 db.Execute("INSERT INTO session_turn_leases VALUES('cli','pid=123:turn=t',?,?)", now-10, now+100);
 var active = Read("cli");
 Check(active["running"].GetValue<bool>() && active["started_at"].GetValue<long>() == (long)((now-10)*1000), "lease proves task and gives accurate start");
+db.Execute("INSERT INTO sessions VALUES('bad',NULL,'cli',NULL,'{}','',?)", now-100);
+db.Execute("INSERT INTO session_turn_leases VALUES('bad','bad-holder',?,?)", now-10, now+100);
+foreach (var ids in new[] { new[] { "bad", "cli" }, new[] { "cli", "bad" } }) {
+    var batch = HermesSessionActivity.ReadDatabase(path, ids, false, now, (holder, _) =>
+        holder == "bad-holder" ? throw new InvalidOperationException("bad session fixture") : true);
+    Check(!batch["bad"]["available"].GetValue<bool>() && batch["cli"]["running"].GetValue<bool>(),
+        "one failed session cannot discard healthy activity before or after it");
+}
 Check(active["last_response_at"] == null, "no model response time is invented before first reply");
 Check(!active.ToJsonString().Contains("pid=123"), "private lease holder is not exposed");
 Check(!Read("cli", (_, _) => false)["running"].GetValue<bool>(), "dead or recycled process cannot keep a run active");
@@ -43,6 +51,12 @@ Check(progress[0]["status"].ToString() == "completed" && progress[1]["status"].T
 Check(progress[0]["preview"].ToString() == "echo hello", "command preview excludes raw JSON wrapper");
 Check(active["last_response_at"].GetValue<long>() == (long)((now-8)*1000), "tool result updates response clock");
 var identity = active["activity_id"].ToString();
+var duplicateArguments = """{"operations":[],"operations":[1],"command":"first","command":"last"}""";
+db.Execute("UPDATE messages SET tool_calls=? WHERE id=2", new JsonArray(
+    new JsonObject { ["id"] = "a", ["function"] = new JsonObject { ["name"] = "terminal", ["arguments"] = duplicateArguments } },
+    new JsonObject { ["id"] = "b", ["function"] = new JsonObject { ["name"] = "terminal", ["arguments"] = "{}" } }
+).ToJsonString());
+Check(Read("cli")["progress"][0]["preview"].ToString() == "last", "duplicate model argument keys cannot break running activity or history");
 db.Execute("INSERT INTO messages VALUES(4,'cli','tool',?,'b',NULL,'{\"error\":\"test error\"}',NULL,1)", now-7);
 Check(Read("cli")["progress"][1]["status"].ToString() == "failed", "tool failures remain failures");
 db.Execute("UPDATE session_turn_leases SET acquired_at=? WHERE conversation_id='cli'", now-2);

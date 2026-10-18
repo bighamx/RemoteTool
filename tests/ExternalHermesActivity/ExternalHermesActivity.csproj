@@ -6,5 +6,7 @@
     <PackageReference Include="sqlite-net-pcl" Version="1.8.116" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
     <Compile Include="../../WebApplication/Services/HermesSessionActivity.cs" Link="HermesSessionActivity.cs" />
-  </ItemGroup>
+    <Compile Include="../../WebApplication/Services/ToolPayloadJson.cs" Link="ToolPayloadJson.cs" />
+      <Compile Include="../../WebApplication/Services/SessionReadIsolation.cs" Link="SessionReadIsolation.cs" />
+</ItemGroup>
 </Project>

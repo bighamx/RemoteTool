@@ -23,7 +23,10 @@ try {
         db.Execute("CREATE TABLE thread_items(thread_id TEXT,item_json TEXT,item_type TEXT,rollout_ordinal INTEGER,created_at_ms INTEGER)");
         foreach (var (ordinal, text) in new[] { (1, "真正的最后一条消息"), (2, environment), (3, page) })
             db.Execute("INSERT INTO thread_items VALUES(?,?,?,?,?)", "thread", Item(text), "userMessage", ordinal, ordinal);
+        db.Execute("INSERT INTO thread_items VALUES(?,?,?,?,?)", "bad", "{\"type\":\"userMessage\",\"type\":\"userMessage\",\"content\":{}}", "userMessage", 1, 1);
     }
+    Check(LatestSessionPreview.Read(database, new[] { "bad", "thread" }, true)["thread"] == "真正的最后一条消息", "malformed preview does not discard another session");
+    Check(LatestSessionPreview.Text("{\"type\":\"old\",\"type\":\"userMessage\",\"content\":[{\"type\":\"text\",\"text\":\"kept\"}]}", true) == "kept", "duplicate preview keys follow upstream semantics");
     Check(LatestSessionPreview.Read(database, new[] { "thread" }, true)["thread"] == "真正的最后一条消息", "database skips newer metadata records");
     var home = Path.Combine(fixture, "home"); Directory.CreateDirectory(Path.Combine(home, "sessions"));
     var rollout = Path.Combine(home, "sessions", "rollout-test-thread_alias.jsonl");

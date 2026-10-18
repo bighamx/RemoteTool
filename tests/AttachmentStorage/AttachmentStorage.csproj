@@ -9,5 +9,6 @@
     <Compile Include="../../WebApplication/Services/CompletedToolHistory.cs" Link="CompletedToolHistory.cs" />
     <Using Include="Microsoft.AspNetCore.Http" />
       <Compile Include="../../WebApplication/Services/ToolHistoryCache.cs" Link="ToolHistoryCache.cs" />
+    <Compile Include="../../WebApplication/Services/ToolPayloadJson.cs" Link="ToolPayloadJson.cs" />
 </ItemGroup>
 </Project>

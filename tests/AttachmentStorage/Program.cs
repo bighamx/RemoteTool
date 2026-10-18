@@ -43,8 +43,9 @@ try {
     var finished = CompletedToolHistory.Reduce(ToolFixture(), false)["data"].AsArray();
     Check(finished.All(row => row["role"].ToString() != "tool" && row["tool_calls"] == null), "completed history sends no tool details");
     Check(finished.Count(row => row["type"]?.ToString() == "toolSummary") == 2 && finished.Where(row => row["type"]?.ToString() == "toolSummary").All(row => row["tool_count"].GetValue<int>() == 1), "completed calls counted once despite matching results");
-    var activeTools = CompletedToolHistory.Reduce(ToolFixture(), true, 3000)["data"].AsArray();
-    Check(activeTools.Any(row => row["id"]?.ToString() == "7" && row["content"]?.ToString() == "live result"), "active turn keeps tool results");
+    var activeTools = CompletedToolHistory.Reduce(ToolFixture(), true, 3000, "active-tool-fixture")["data"].AsArray();
+    Check(activeTools.All(row => row["id"]?.ToString() != "7"), "raw tool output is excluded from chat bubbles");
+    Check(ToolHistoryCache.Read("hermes", "active-tool-fixture", "active", 0, true)["data"][0]["status"].ToString() == "completed", "active tool results remain available through progress details");
     Check(activeTools.Any(row => row["id"]?.ToString() == "6" && row["tool_calls"] != null), "active turn keeps tool arguments");
     Check(activeTools.Count(row => row["type"]?.ToString() == "toolSummary") == 1, "only completed turn gets tool summary");
     var raw = new JsonArray();

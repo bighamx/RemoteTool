@@ -38,5 +38,7 @@
     <Compile Include="../../WebApplication/Services/AgentOverview.cs" Link="AgentOverview.cs" />
     <Compile Include="../../WebApplication/Services/LatestSessionPreview.cs" Link="LatestSessionPreview.cs" />
     <Compile Include="../../WebApplication/Services/ToolHistoryCache.cs" Link="ToolHistoryCache.cs" />
+    <Compile Include="../../WebApplication/Services/ToolPayloadJson.cs" Link="ToolPayloadJson.cs" />
+    <Compile Include="../../WebApplication/Services/SessionReadIsolation.cs" Link="SessionReadIsolation.cs" />
 </ItemGroup>
 </Project>

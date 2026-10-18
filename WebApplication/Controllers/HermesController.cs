@@ -60,7 +60,9 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             .Where(id => Regex.IsMatch(id, "^[a-zA-Z0-9_-]{1,80}$")).Distinct(StringComparer.OrdinalIgnoreCase).Take(40).ToArray();
         var result = new System.Text.Json.Nodes.JsonObject();
         if (wanted.Length == 0) return Ok(result);
-        var providers = activity.SessionModelInfo(wanted).ToDictionary(pair => pair.Key, pair => pair.Value.Provider);
+        var providers = new Dictionary<string, string>();
+        SessionReadIsolation.Try("batch", "models", () =>
+            providers = activity.SessionModelInfo(wanted).ToDictionary(pair => pair.Key, pair => pair.Value.Provider));
         var models = new Dictionary<string,string>();
         try {
             using var upstream = await bridge.SendAsync(HttpMethod.Get, "api/sessions?limit=50", null, null, ct);
@@ -86,7 +88,8 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                         if (tokens > 0) { ContextCache[id] = (DateTime.UtcNow, tokens, limit); answered[id] = Obj2(tokens, limit); }
                         else answered[id] = new System.Text.Json.Nodes.JsonObject();
                     } finally { gate.Release(); }
-                } catch (Exception error) when (error is OperationCanceledException or InvalidOperationException or HttpRequestException or IOException) { }
+                } catch (Exception error) when (!ct.IsCancellationRequested &&
+                    (error is OperationCanceledException or HttpRequestException || SessionReadIsolation.Recoverable(error))) { }
             }).ToArray());
             foreach (var pair in answered) result[pair.Key] = pair.Value;
         } catch (OperationCanceledException) { } finally { budget.Dispose(); }
@@ -188,11 +191,13 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             var result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!;
             if (result["data"] is System.Text.Json.Nodes.JsonArray rows) {
                 var ids = rows.Select(row => row?["id"]?.ToString()).ToArray();
-                var activities = activity.ReadMany(ids);
-                var previews = LatestSessionPreview.Read(activity.DatabasePath, ids, false);
-                var runningIds = new HashSet<string>();
+                IReadOnlyDictionary<string, JsonObject> activities = new Dictionary<string, JsonObject>();
+                IReadOnlyDictionary<string, string> previews = new Dictionary<string, string>();
+                SessionReadIsolation.Try("batch", "activities", () => activities = activity.ReadMany(ids));
+                SessionReadIsolation.Try("batch", "previews", () => previews = LatestSessionPreview.Read(activity.DatabasePath, ids, false));
                 foreach (var row in rows.OfType<System.Text.Json.Nodes.JsonObject>()) {
                     if (row["id"]?.ToString() is not string id) continue;
+                    SessionReadIsolation.Try(id, "list", () => {
                     var running = activities.TryGetValue(id, out var state) && state["available"]?.GetValue<bool>() == true && state["running"]?.GetValue<bool>() == true;
                     if (previews.TryGetValue(id, out var text)) { row["latest_user_message"] = text; row["preview"] = text; }
                     if (activities.TryGetValue(id, out state) && state["available"]?.GetValue<bool>() == true)
@@ -200,6 +205,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                     if (ContextCache.TryGetValue(id, out var cached) && DateTime.UtcNow - cached.At < TimeSpan.FromMinutes(running ? 0.5 : 10)) {
                         if (cached.Tokens > 0 && cached.Limit > 0) { row["context_used"] = cached.Tokens; row["context_window"] = cached.Limit; }
                     }
+                    });
                 }
             }
             return Ok(result);

@@ -19,7 +19,7 @@ public static class ToolHistoryCache
     public static string Description(JsonNode value) {
         var text = value?.ToString() ?? "";
         if (text.Length <= 256 * 1024) try {
-            if (JsonNode.Parse(text) is JsonObject args)
+            if (ToolPayloadJson.Parse(text) is JsonObject args)
                 text = (args["cmd"] ?? args["command"] ?? args["path"] ?? args["file_path"] ?? args["query"] ?? args["description"])?.ToString()
                     ?? "参数：" + string.Join("、", args.Select(pair => pair.Key).Take(4));
         } catch (System.Text.Json.JsonException) { }
@@ -37,8 +37,8 @@ public static class ToolHistoryCache
     public static JsonArray HermesTools(IEnumerable<JsonNode> rows, bool running) {
         var source = rows.ToArray(); var result = new Dictionary<string, JsonObject>();
         foreach (var row in source.Where(row => row?["role"]?.ToString() == "assistant")) {
-            JsonArray calls = row?["tool_calls"] as JsonArray;
-            if (calls == null) try { calls = JsonNode.Parse(row?["tool_calls"]?.ToString() ?? "null") as JsonArray; } catch (System.Text.Json.JsonException) { }
+            JsonArray calls = null;
+            try { calls = ToolPayloadJson.Parse(row?["tool_calls"]?.ToString() ?? "null") as JsonArray; } catch (System.Text.Json.JsonException) { }
             if (calls == null) continue;
             for (var index = 0; index < calls.Count; index++) {
                 var call = calls[index]; var id = call?["id"]?.ToString() ?? row?["id"] + ":" + index;
@@ -46,7 +46,7 @@ public static class ToolHistoryCache
                 var status = output == null ? running ? "running" : "unknown" : "completed";
                 if (output?["finish_reason"]?.ToString() == "error") status = "failed";
                 if (output?["content"]?.ToString() is string content && content.Length <= 256 * 1024) try {
-                    if (JsonNode.Parse(content) is JsonObject value && (value["error"] != null || value["isError"]?.ToString() == "true" ||
+                    if (ToolPayloadJson.Parse(content) is JsonObject value && (value["error"] != null || value["isError"]?.ToString() == "true" ||
                         int.TryParse((value["exit_code"] ?? value["exitCode"])?.ToString(), out var code) && code != 0)) status = "failed";
                 } catch (System.Text.Json.JsonException) { }
                 result[id] = Tool(id, call?["function"]?["name"]?.ToString() ?? "工具", call?["function"]?["arguments"], status);

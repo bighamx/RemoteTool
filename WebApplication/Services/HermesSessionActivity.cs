@@ -35,11 +35,12 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
             using var db = new SQLiteConnection(database, SQLiteOpenFlags.ReadOnly | SQLiteOpenFlags.FullMutex);
             db.BusyTimeout = TimeSpan.FromMilliseconds(250);
             foreach (var id in ids.Distinct()) {
+                try {
                 var row = db.Query<SessionProviderRow>("SELECT model_config, billing_provider FROM sessions WHERE id=?", id).FirstOrDefault();
                 if (row == null) continue;
                 var provider = row.BillingProvider; var effort = ""; var model = "";
                 try {
-                    if (!string.IsNullOrEmpty(row.ModelConfig) && System.Text.Json.Nodes.JsonNode.Parse(row.ModelConfig) is System.Text.Json.Nodes.JsonObject config) {
+                    if (!string.IsNullOrEmpty(row.ModelConfig) && ToolPayloadJson.Parse(row.ModelConfig) is System.Text.Json.Nodes.JsonObject config) {
                         var fromConfig = config["provider"]?.ToString();
                         if (string.IsNullOrEmpty(fromConfig)) fromConfig = (config["gateway_runtime"] as System.Text.Json.Nodes.JsonObject)?["provider"]?.ToString();
                         // 浏览器/移动端锁定的提供方（browser_model_lock）优先于计费归属：
@@ -54,8 +55,11 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
                             effort = reasoning["enabled"]?.GetValue<bool>() == false ? "none" : reasoning["effort"]?.ToString() ?? "";
                         }
                     }
-                } catch (System.Text.Json.JsonException) { }
+                } catch (Exception error) when (SessionReadIsolation.Recoverable(error)) { }
                 if (!string.IsNullOrEmpty(provider) || !string.IsNullOrEmpty(effort) || !string.IsNullOrEmpty(model)) result[id] = new SessionModelSetting(provider, effort, model);
+                } catch (Exception error) when (SessionReadIsolation.Recoverable(error)) {
+                    System.Diagnostics.Trace.TraceWarning("Session model unavailable: {0} ({1})", id, error.GetType().Name);
+                }
             }
         } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException or DllNotFoundException or TypeInitializationException) { }
         return result;
@@ -110,7 +114,7 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
     private static bool IndependentChild(SessionRow row) {
         if (row.Source is "branch" or "fork" or "delegate" or "session_reset") return true;
         try {
-            if (JsonNode.Parse(row.Config ?? "{}") is JsonObject config)
+            if (ToolPayloadJson.Parse(row.Config ?? "{}") is JsonObject config)
                 return new[] { "_branched_from", "_delegate_from", "_reset_from" }.Any(key => config[key]?.ToString() == row.Parent);
         } catch (JsonException) { }
         return false;
@@ -143,6 +147,7 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
             db.BusyTimeout = TimeSpan.FromMilliseconds(250);
             var now = clock ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
             foreach (var id in targets) {
+                try {
                 const string fields = "id,parent_session_id,source,end_reason,model_config,last_activity_description";
                 SessionRow Get(string key) => db.Query<SessionRow>($"SELECT {fields} FROM sessions WHERE id=?", key).FirstOrDefault();
                 var requested = Get(id); if (requested == null) { output[id]["available"] = true; continue; }
@@ -188,7 +193,7 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
                 foreach (var row in rows.AsEnumerable().Reverse()) {
                     if (row.Role != "assistant" || string.IsNullOrWhiteSpace(row.Calls)) continue;
                     try {
-                        if (JsonNode.Parse(row.Calls) is not JsonArray calls) continue;
+                        if (ToolPayloadJson.Parse(row.Calls) is not JsonArray calls) continue;
                         var index = 0;
                         foreach (var call in calls.OfType<JsonObject>()) {
                             var callId = call["id"]?.ToString();
@@ -196,7 +201,7 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
                             var completed = rows.FirstOrDefault(item => item.Role == "tool" && item.CallId == callId && item.Id > row.Id);
                             var preview = function?["arguments"]?.ToString() ?? "";
                             try {
-                                var parsed = JsonNode.Parse(preview);
+                                var parsed = ToolPayloadJson.Parse(preview);
                                 preview = parsed?["command"]?.ToString() ?? parsed?["path"]?.ToString() ?? preview;
                             } catch (Exception error) when (error is JsonException or InvalidOperationException) { }
                             preview = Regex.Replace(preview, @"\s+", " ").Trim(); if (preview.Length > 160) preview = preview[..160] + "…";
@@ -207,9 +212,13 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
                     } catch (JsonException) { }
                 }
                 result["progress"] = new JsonArray(progress.TakeLast(30).Select(row => (JsonNode)row).ToArray());
+                } catch (Exception error) when (SessionReadIsolation.Recoverable(error)) {
+                    output[id] = Unknown(id);
+                    System.Diagnostics.Trace.TraceWarning("Session activity unavailable: {0} ({1})", id, error.GetType().Name);
+                }
             }
         } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException or DllNotFoundException or TypeInitializationException) {
-            return targets.ToDictionary(id => id, Unknown);
+            return output;
         }
         return output;
     }

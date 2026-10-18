@@ -6,5 +6,7 @@
     <Compile Include="../../WebApplication/Services/Codex/CodexDesktopRunResume.cs" Link="CodexDesktopRunResume.cs" />
     <Compile Include="../../WebApplication/Services/LatestSessionPreview.cs" Link="LatestSessionPreview.cs" />
     <PackageReference Include="sqlite-net-pcl" Version="1.9.172" />
-  </ItemGroup>
+      <Compile Include="../../WebApplication/Services/ToolPayloadJson.cs" Link="ToolPayloadJson.cs" />
+    <Compile Include="../../WebApplication/Services/SessionReadIsolation.cs" Link="SessionReadIsolation.cs" />
+</ItemGroup>
 </Project>
