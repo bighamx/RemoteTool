@@ -217,6 +217,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     /** codex 项目分组折叠状态（按组名持久化，跨页同名节共享状态）。 */
     private val groupCollapsed = mutableStateOf(prefs.getStringSet("codex_collapsed_groups", setOf("已存档"))?.toSet() ?: setOf("已存档"))
     fun isGroupCollapsed(group: String) = group in groupCollapsed.value
+    fun reloadCloudDisplaySettings() {
+        groupByProject = prefs.getBoolean("codex_group_by_project", true)
+        groupCollapsed.value = prefs.getStringSet("codex_collapsed_groups", setOf("已存档"))?.toSet() ?: setOf("已存档")
+    }
     fun toggleSessionGroup(group: String) {
         groupCollapsed.value = if (group in groupCollapsed.value) groupCollapsed.value - group else groupCollapsed.value + group
         prefs.edit().putStringSet("codex_collapsed_groups", groupCollapsed.value).apply()
@@ -755,7 +759,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val rows = JSONObject(prefs.getString("pendingSubmissions", "{}").orEmpty())
         rows.keys().asSequence().associateWith { id ->
             val row = rows.getJSONObject(id)
-            PendingAgentSubmission(row.getString("key"), row.getString("input"), row.array("attachments").let { ids -> (0 until ids.length()).map { ids.getString(it) } }, row.optLong("timestamp"), row.optString("questionId").takeIf { it.isNotBlank() && it != "null" })
+            PendingAgentSubmission(row.getString("key"), row.getString("input"), row.array("attachments").let { ids -> (0 until ids.length()).map { ids.getString(it) } }, row.optLong("timestamp"), row.optString("questionId").takeIf { it.isNotBlank() && it != "null" }, row.cleanSetting("modelSettings").takeIf { it.isNotBlank() })
         }.toMutableMap().apply {
             val session = prefs.getString("pendingSession", null)
             val key = prefs.getString("pendingKey", null)
@@ -764,7 +768,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }.getOrDefault(emptyMap<String, PendingAgentSubmission>()))
     private fun savePending() {
         val rows = JSONObject()
-        pendingSubmissions.forEach { (id, pending) -> rows.put(id, obj("key" to pending.key, "input" to pending.input, "attachments" to org.json.JSONArray(pending.attachmentIds), "timestamp" to pending.timestamp, "questionId" to pending.questionId)) }
+        pendingSubmissions.forEach { (id, pending) -> rows.put(id, obj("key" to pending.key, "input" to pending.input, "attachments" to org.json.JSONArray(pending.attachmentIds), "timestamp" to pending.timestamp, "questionId" to pending.questionId, "modelSettings" to pending.modelSettings)) }
         prefs.edit().putString("pendingSubmissions", rows.toString()).remove("pendingKey").remove("pendingInput").remove("pendingSession").remove("pendingAttachments").remove("pendingTimestamp").apply()
     }
     private fun removePending(session: String) { pendingSubmissions = pendingSubmissions - session; savePending(); syncWatchService() }
@@ -2167,7 +2171,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     private fun dispatchQueuedMessage(row: QueuedChatMessage, response: JSONObject?) {
         if (conversationUi.entry(row.session).submitting || hasPendingFor(row.session)) return
-        val pending = PendingAgentSubmission(row.key, row.text, row.files.map { it.getString("id") }, System.currentTimeMillis())
+        val pending = PendingAgentSubmission(row.key, row.text, row.files.map { it.getString("id") }, System.currentTimeMillis(), modelSettings = submissionModelSettings(row.session))
         currentSubmissionKeys += row.key
         if (response == null) {
             pendingSubmissions = pendingSubmissions + (row.session to pending); savePending()
@@ -2315,7 +2319,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             return true
         }
         val pending = PendingAgentSubmission(UUID.randomUUID().toString(), input,
-            if (isQuestion) emptyList() else pendingFiles.map { it.getString("id") }, System.currentTimeMillis(), questionId)
+            if (isQuestion) emptyList() else pendingFiles.map { it.getString("id") }, System.currentTimeMillis(), questionId, submissionModelSettings(session))
         pendingSubmissions = pendingSubmissions + (session to pending); savePending()
         if (isQuestion) prefs.edit().putString("answeringQuestion:$session", questionId).apply()
         submit(pending, session)
@@ -2364,6 +2368,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     "account_id" to currentCodexAccountId(),
                     "attachment_ids" to org.json.JSONArray(pending.attachmentIds))
                 if (agent == "codex" && pending.questionId != null) payload.put("question_reply_id", pending.questionId)
+                if (agent == "codex") pending.modelSettings?.let { payload.put("model_settings", JSONObject(it)) }
                 if (agent == "hermes") {
                     provider.takeIf { it.isNotBlank() }?.let { payload.put("provider", it) }
                     model.takeIf { it.isNotBlank() }?.let { payload.put("model", it) }
@@ -2505,15 +2510,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     approval = result.optJSONObject("approval")
                     result.optJSONObject("runtime")?.let { rt ->
                         val sseProvider = rt.optString("provider")
-                        // SSE 事件的 provider 可能是 billing 壳值（如 "custom"）：壳值不采纳，
-                        // 只在它是目录里可解析的 slug 时才覆盖，否则只补模型名。
-                        val sseProviderKnown = sseProvider.isNotBlank() &&
-                            modelOptions.array("providers").objects().any { it.optString("slug") == sseProvider }
+                        // Codex reports the actual routing provider, including custom and
+                        // official aliases. Hermes may report an unresolved billing shell.
+                        val sseProviderKnown = sseProvider.isNotBlank() && (agent == "codex" ||
+                            modelOptions.array("providers").objects().any { providerMatches(it, sseProvider) })
                         if (sseProviderKnown) {
                             runtime = listOf(providerDisplayName(sseProvider), rt.optString("model")).filter { piece -> piece.isNotBlank() }.joinToString(" · ")
                             if (selectedId == runSession) { sessionProvider = sseProvider; sessionModel = rt.optString("model") }
                         } else if (sessionModel.isBlank()) {
-                            // sessionProvider 可能是 billing 壳值 "custom"：走统一显示（回落全局默认），不裸拼。
+                            // Without a provider report, retain the confirmed selection.
                             sessionModel = rt.optString("model")
                             updateRuntimeDisplay()
                         }
@@ -2812,21 +2817,32 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     /** slug → 用户可读的 provider 显示名：优先 modelOptions 目录里的 name，回落去前缀的 slug。 */
     private fun providerDisplayName(slug: String): String {
-        // "custom" 是 billing 壳值（自定义提供方的真 slug 是 custom:xxx），显示时不算已知提供方。
-        if (slug.isBlank() || slug == "custom") return ""
+        if (slug.isBlank() || agent == "hermes" && slug == "custom") return ""
         if (this::api.isInitialized) {
             modelOptions.array("providers").objects()
                 .firstOrNull { providerMatches(it, slug) }
                 ?.optString("name")?.takeIf { it.isNotBlank() }?.let { return it }
         }
-        return displayProvider(slug)
+        return if (agent == "codex" && slug == "custom") slug else displayProvider(slug)
     }
 
-    /** 头部 provider/模型显示：会话未锁定（新建会话/壳值）时回落到全局默认，与实际提交行为一致。 */
+    private fun effectiveSelection() = effectiveAgentSelection(agent,
+        AgentSelection(sessionProvider, sessionModel, sessionEffort, sessionTier), modelOptions)
+
+    private fun submissionModelSettings(session: String): String? {
+        if (agent != "codex") return null
+        val selection = if (selectedId == session) effectiveSelection() else {
+            val saved = cachedSessionRuntime(session)
+            effectiveAgentSelection(agent, AgentSelection(saved?.cleanSetting("provider").orEmpty(),
+                saved?.cleanSetting("model").orEmpty(), saved?.cleanSetting("effort").orEmpty(), saved?.cleanSetting("tier").orEmpty()), modelOptions)
+        }
+        return codexModelSettingsSnapshot(selection)
+    }
+
+    /** Header and submission share one effective selection, including actual custom providers. */
     private fun updateRuntimeDisplay() {
-        val provider = sessionProvider.takeIf { it.isNotBlank() && it != "custom" } ?: modelOptions.optString("provider")
-        val model = sessionModel.ifBlank { modelOptions.optString("model") }
-        runtime = listOf(providerDisplayName(provider), model).filter { it.isNotBlank() }.joinToString(" · ")
+        val selection = effectiveSelection()
+        runtime = listOf(providerDisplayName(selection.provider), selection.model).filter { it.isNotBlank() }.joinToString(" · ")
     }
 
     fun fetchModels() = launch {

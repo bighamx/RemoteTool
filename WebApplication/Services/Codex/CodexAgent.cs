@@ -39,6 +39,56 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private string CurrentWorkspace() { try { return CodexAccountStore.Identity(accounts.CurrentAuth()).S("workspace_id"); } catch (CodexError) { return ""; } }
     private readonly HashSet<string> desktopAnnounced = new();
     private readonly Dictionary<string, JsonObject> sessionOverrides = new();
+    private readonly HashSet<string> staleModelRuntimes = new();
+
+    private async Task<JsonObject> SessionSelection(string id, bool prepare = false) {
+        JsonObject saved;
+        lock (gate) {
+            saved = sessionOverrides.GetValueOrDefault(id)?.DeepClone().AsObject();
+            // Do not change the advertised settings of an already accepted turn.
+            if (active.TryGetValue(id, out var run) && runs[run].S("status") is "started" or "queued") return saved;
+        }
+        if (saved != null) {
+            var config = await Config();
+            var resolved = CodexSessionModelSelection.Reconcile(saved, config);
+            if (saved.S("modelProvider") != resolved.S("modelProvider") && resolved.B("officialProvider"))
+                resolved = CodexSessionModelSelection.Reconcile(saved, config, await rpc.Call("model/list", new()));
+            lock (gate) {
+                if (active.TryGetValue(id, out var running) && runs[running].S("status") is "started" or "queued")
+                    return sessionOverrides.GetValueOrDefault(id)?.DeepClone().AsObject();
+                // A concurrent settings save takes precedence over this read.
+                if (sessionOverrides.GetValueOrDefault(id)?.ToJsonString() == saved.ToJsonString() && resolved.ToJsonString() != saved.ToJsonString()) {
+                    if (CodexSessionModelSelection.RoutingChanged(saved, resolved)) staleModelRuntimes.Add(id);
+                    sessionOverrides[id] = resolved; PersistModels();
+                }
+                saved = sessionOverrides.GetValueOrDefault(id)?.DeepClone().AsObject();
+            }
+        }
+        bool stale; lock (gate) stale = prepare && staleModelRuntimes.Contains(id);
+        if (stale) {
+            if (await NativeQueueStillOwns(id)) throw new CodexError("此会话仍有原生队列任务，请等待队列结束后更新模型配置。", 409, "session_writer_busy", "rejected");
+            await ReleaseSessionCore(id);
+            lock (gate) staleModelRuntimes.Remove(id);
+        }
+        return saved;
+    }
+
+    private async Task ApplyRequestedSelection(string id, JsonObject body, CancellationToken ct) {
+        if (!body.ContainsKey("model_settings")) { await SessionSelection(id, prepare: true); return; }
+        if (body["model_settings"] is not JsonObject requested) throw new CodexError("模型配置格式无效");
+        CodexSessionModelSelection.RequireCurrentRequest(requested, await Config());
+        var selection = CodexModelSettings.Validate(requested, await ProviderCatalog(requested.S("provider"), ct));
+        if (await NativeQueueStillOwns(id))
+            throw new CodexError("此会话仍有原生队列任务，请等待队列结束后按当前模型配置发送；本次消息未写入。", 409, "session_writer_busy", "rejected");
+        JsonObject current; lock (gate) loaded.TryGetValue(id, out current);
+        var unpersisted = current != null && !File.Exists(current["thread"].S("path"));
+        if (unpersisted && current.S("modelProvider") != selection.S("modelProvider"))
+            throw new CodexError("新会话尚未落盘，请先在模型设置中确认 Provider 后发送；本次消息未写入。", 409, "model_settings_changed", "rejected");
+        // The submitted UI snapshot is authoritative. Drop only our idle owner,
+        // but retain a new thread's only in-memory copy until its first message.
+        if (!unpersisted) await ReleaseSessionCore(id);
+        lock (gate) { sessionOverrides[id] = selection; staleModelRuntimes.Remove(id); PersistModels(); }
+    }
     private readonly Dictionary<string, JsonObject> contexts = new();
     private sealed record HistorySnapshot(CodexHistoryFileStamp Stamp, JsonObject Payload, string Window);
     private readonly Dictionary<string, HistorySnapshot> messageSnapshots = new();
@@ -176,11 +226,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         return NewRuntime(path, metadata);
     }
     private async Task<CodexRpc> EnsureRuntime(string id, JsonObject selection = null) {
+        var inherited = selection == null;
+        if (inherited) selection = await SessionSelection(id, prepare: true);
         CodexRpc client; lock (gate) sessionRpcs.TryGetValue(id, out client);
         if (client?.Running == true) return client;
         if (client != null) await ReleaseSessionCore(id);
-        var inherited = selection == null;
-        if (inherited) lock (gate) if (sessionOverrides.TryGetValue(id, out var saved)) selection = saved.DeepClone().AsObject();
         client = await CreateRuntime(selection);
         try {
             await client.Initialize();
@@ -279,7 +329,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             var project = (await rpc.Call("project/read", Obj(("projectId", thread.S("projectId")))))["project"]!;
             request["runtimeWorkspaceRoots"] = new JsonArray(project.A("roots").Select(root => (JsonNode)JsonValue.Create(root.S("path"))).ToArray());
         }
-        if (applySelection) lock (gate) if (sessionOverrides.TryGetValue(id, out var selected)) CodexModelSettings.ApplyResume(request, selected);
+        if (applySelection && await SessionSelection(id) is { } selected) CodexModelSettings.ApplyResume(request, selected);
         return request;
     }
     private async Task NotifyDesktop(IEnumerable<string> ids, bool force = false) {
@@ -1021,6 +1071,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             active[session] = run; Persist();
         }
         try {
+            await ApplyRequestedSelection(session, body, ct);
             bool desktopOwner = false;
             string steeringTurn = "";
             var questionReply = body.S("question_reply_id");
@@ -1042,6 +1093,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     var thread = (await ReadThread(session, false))["thread"]!;
                     if (questionReply.Length == 0 && (thread["status"].S("type") == "active" || CodexRollout.IsRunning(home, RolloutPath(thread)))) throw new CodexError("此会话正在另一端执行任务，本次消息未写入；可等待结束，或选择中断并接管。", 409, "session_writer_busy");
                     desktopOwner = true;
+                    lock (gate) if (body.ContainsKey("model_settings") && sessionOverrides.TryGetValue(session, out var requested) &&
+                        requested.S("modelProvider") != thread.S("modelProvider"))
+                        throw new CodexError("桌面端当前 Provider 与本次模型设置不一致，请先在桌面切换 Provider；本次消息未写入。", 409, "model_settings_changed", "rejected");
                     resumed = Obj(("model", CodexRollout.LastModel(home, RolloutPath(thread))), ("modelProvider", thread.S("modelProvider")),
                         ("collaborationMode", CodexRollout.LastSettings(home, RolloutPath(thread))["collaborationMode"]));
                 }
@@ -1058,6 +1112,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 var catalog = selection.S("modelProvider") == "openai" || selection.B("officialProvider") ? await rpc.Call("model/list", new(), ct) : new JsonObject();
                 var detail = catalog.A("data").FirstOrDefault(row => row.S("model", row.S("id")) == selection.S("model")) as JsonObject ?? new();
                 CodexModelSettings.ApplyTurn(turnRequest, selection, detail, resumed["collaborationMode"] as JsonObject);
+                lock (gate) runs[run]!["model"] = turnRequest["model"]?.DeepClone();
             }
             ct.ThrowIfCancellationRequested(); // No new write after the HTTP caller has left during preparation.
             lock (gate) { runs[run]!["status"] = "started"; runs[run]!["phase"] = "dispatching"; Persist(); }
@@ -1175,8 +1230,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private static long MessageId(string id) => CodexHistoryWindow.MessageId(id);
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
-        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 24), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("native_session_search", true), ("state_version", 24));
+        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 25), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("native_session_search", true), ("model_settings_snapshot", true), ("state_version", 25));
         if (path == "sessions/search" && method == "GET") {
             var query = context.Request.Query["query"].ToString().Trim();
             if (query.Length is < 1 or > 500) throw new CodexError("搜索关键词应为 1 至 500 字", 400);
@@ -1402,13 +1457,14 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 return detail;
             }
             if (p.Length == 2 && method == "GET") {
+                var selection = await SessionSelection(session);
                 var result = await ReadThread(session, false, context.RequestAborted);
                 var thread = result["thread"]!; var model = CodexRollout.LastModel(home, RolloutPath(thread)); var provider = thread.S("modelProvider");
                 lock (gate) if (loaded.TryGetValue(session, out var current)) { model = current.S("model", model); provider = current.S("modelProvider", provider); }
-                lock (gate) if (sessionOverrides.TryGetValue(session, out var selected)) { model = selected.S("model", model); provider = selected.S("modelProvider", provider); }
+                if (selection != null) { model = selection.S("model", model); provider = selection.S("modelProvider", provider); }
                 var info = Session(thread); info["model"] = model; info["provider"] = provider;
                 var tuning = CodexRollout.LastSettings(home, RolloutPath(thread));
-                lock (gate) if (sessionOverrides.TryGetValue(session, out var chosen)) tuning = chosen.DeepClone().AsObject();
+                if (selection != null) tuning = selection.DeepClone().AsObject();
                 info["reasoning_effort"] = tuning["reasoningEffort"]?.DeepClone(); info["service_tier"] = tuning["serviceTier"]?.DeepClone();
                 var detail = CodexSessionDetails.Read(home, RolloutPath(thread)); info["context"] = detail["context"]?.DeepClone();
                 info["usage"] = detail["usage"]?.DeepClone(); info["question"] = detail["question"]?.DeepClone();
@@ -1460,6 +1516,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 await settingsLock.WaitAsync();
                 try {
                     lock (gate) if (active.ContainsKey(session)) throw new CodexError("请先停止任务再切换模型", 409);
+                    CodexSessionModelSelection.RequireCurrentRequest(body, await Config());
                     var selection = CodexModelSettings.Validate(body, await ProviderCatalog(body.S("provider"), context.RequestAborted));
                     var request = await ResumeSessionRequest(session, applySelection: false); CodexModelSettings.ApplyResume(request, selection);
                     try {

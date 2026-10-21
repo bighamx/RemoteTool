@@ -81,6 +81,10 @@ fun prepareHermesUpload(app: Application, uri: Uri, image: Boolean): HermesUploa
     }
 }
 
+private fun localFileDownloadKey(file: JSONObject): String = file.getString("url").let {
+    if (file.optBoolean("localLink")) it else it.substringBefore('?')
+}
+
 fun downloadHermesFile(context: Context, api: NativeApi, file: JSONObject) {
     val request =
         DownloadManager.Request(Uri.parse(api.base + file.getString("url")))
@@ -95,13 +99,13 @@ fun downloadHermesFile(context: Context, api: NativeApi, file: JSONObject) {
     val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     val downloadId = manager.enqueue(request)
     val prefs = context.getSharedPreferences("hermes-local-files", Context.MODE_PRIVATE)
-    val key = file.getString("url").substringBefore('?')
+    val key = localFileDownloadKey(file)
     val ids = prefs.getStringSet(key, emptySet()).orEmpty() + downloadId.toString()
     prefs.edit().putStringSet(key, ids).apply()
 }
 
 private fun hasHermesDownload(context: Context, file: JSONObject): Boolean {
-    val key = file.getString("url").substringBefore('?')
+    val key = localFileDownloadKey(file)
     val ids = context.getSharedPreferences("hermes-local-files", Context.MODE_PRIVATE)
         .getStringSet(key, emptySet()).orEmpty().mapNotNull { it.toLongOrNull() }
     if (ids.isEmpty()) return false
@@ -111,7 +115,7 @@ private fun hasHermesDownload(context: Context, file: JSONObject): Boolean {
 
 private fun clearHermesLocalFile(context: Context, api: NativeApi, file: JSONObject) {
     val prefs = context.getSharedPreferences("hermes-local-files", Context.MODE_PRIVATE)
-    val key = file.getString("url").substringBefore('?')
+    val key = localFileDownloadKey(file)
     val ids = prefs.getStringSet(key, emptySet()).orEmpty().mapNotNull { it.toLongOrNull() }
     if (ids.isNotEmpty()) (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager)
         .remove(*ids.toLongArray())

@@ -66,6 +66,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
                 },
         )
     val agentName = model.agentName
+    LaunchedEffect(model) { model.reloadCloudDisplaySettings() }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(api.base) { model.bind(api) }
     LaunchedEffect(api.base, agent, lifecycle) {
@@ -1279,56 +1280,7 @@ private fun RunTimers(runId: String?, timing: AgentRunTiming, responseLabel: Str
 
 @Composable
 private fun InteractionCard(message: HermesMessage, agentName: String) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(14.dp)) {
-                Text("提问", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.height(8.dp))
-                message.interactions.forEachIndexed { index, entry ->
-                    if (index > 0) {
-                        HorizontalDivider(Modifier.padding(vertical = 10.dp),
-                            color = MaterialTheme.colorScheme.outlineVariant)
-                    }
-                    val question = entry.optString("question")
-                    val answer = entry.optString("answer")
-                    val status = entry.optString("status")
-                    val choices = entry.optJSONArray("choices")?.let { array ->
-                        (0 until array.length()).map { array.optString(it) }
-                    }.orEmpty()
-                    if (question.isNotBlank())
-                        Text(question, style = MaterialTheme.typography.bodyMedium)
-                    if (choices.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            choices.forEach { choice ->
-                                val picked = choice == answer
-                                Surface(shape = MaterialTheme.shapes.small,
-                                    color = if (picked) MaterialTheme.colorScheme.primaryContainer
-                                        else MaterialTheme.colorScheme.surfaceContainerHighest) {
-                                    Text(choice, Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = if (picked) MaterialTheme.colorScheme.onPrimaryContainer
-                                            else MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row {
-                        Text("回答", style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            answer.ifBlank { when (status) { "answered" -> "已回答"; "declined" -> "已取消"; else -> "未回答" } },
-                            style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
-        }
-    }
+    CodexQuestionAnswerCard(message.interactions, Modifier.padding(vertical = 6.dp))
 }
 
 @Composable
@@ -1360,6 +1312,22 @@ private fun MessageBubble(
 ) {
     val context = LocalContext.current
     var preview by remember { mutableStateOf<JSONObject?>(null) }
+    var resolvingFile by remember { mutableStateOf(false) }
+    val fileScope = rememberCoroutineScope()
+    val openFile: (JSONObject) -> Unit = { file ->
+        if (api != null && !resolvingFile) {
+            if (!file.optBoolean("localLink")) preview = file
+            else {
+                resolvingFile = true
+                fileScope.launch {
+                    try { preview = resolveMarkdownAttachment(api, file) }
+                    catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+                    catch (error: Exception) { android.widget.Toast.makeText(context, error.message ?: "打开失败", android.widget.Toast.LENGTH_SHORT).show() }
+                    finally { resolvingFile = false }
+                }
+            }
+        }
+    }
     var actions by remember { mutableStateOf(false) }
     var bubbleOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     var menuPoint by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
@@ -1367,7 +1335,11 @@ private fun MessageBubble(
         menuPoint = windowPoint - bubbleOrigin
         actions = true
     }
-    val presentation = presentHermesMessage(text, attachments, availableFiles, role)
+    val presentation = remember(text, attachments, availableFiles, role) {
+        presentHermesMessage(text, attachments, availableFiles, role)
+    }
+    val replyParts = remember(text, role) { if (role == "user") codexQuestionReplyParts(text) else emptyList() }
+    val hasQuestionReply = replyParts.any { it.replies.isNotEmpty() }
     val hasImages = presentation.files.any { hermesFileKind(it) == "图片" }
     Row(
         Modifier.fillMaxWidth(),
@@ -1386,15 +1358,31 @@ private fun MessageBubble(
             SelectionContainer {
                 Column(Modifier.padding(14.dp)) {
                     val time = formatMessageTimestamp(timestamp)
-                    val inlineTime = presentation.text.isNotBlank() && presentation.files.isEmpty() &&
+                    val inlineTime = !hasQuestionReply && presentation.text.isNotBlank() && presentation.files.isEmpty() &&
                         presentation.unavailable.isEmpty()
                     val metadata = listOfNotNull(delivery, time.takeIf { it.isNotBlank() }).joinToString(" · ")
                     val body = if (role == "assistant") displayNarration(presentation.text, narration, narrationTexts) else presentation.text
-                    if (presentation.text.isNotBlank()) HermesMarkdown(
+                    if (hasQuestionReply) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            replyParts.forEach { part ->
+                                if (part.replies.isNotEmpty()) CodexQuestionAnswerCard(part.replies)
+                                else if (part.text.isNotBlank()) HermesMarkdown(part.text.trim(), onBubbleTap = openActions)
+                            }
+                        }
+                    } else if (presentation.text.isNotBlank()) HermesMarkdown(
                         body,
                         footer = if (inlineTime) metadata else "",
                         onBubbleTap = openActions,
                         streaming = streaming && role == "assistant",
+                        onLinkTap = { destination ->
+                            val path = markdownFilePath(destination)
+                            if (role == "assistant" && path != null) {
+                                val file = presentation.files.firstOrNull { sameAttachmentPath(it.optString("mediaPath"), path) }
+                                if (file != null) openFile(file)
+                                else android.widget.Toast.makeText(context, "文件暂不可用", android.widget.Toast.LENGTH_SHORT).show()
+                                true
+                            } else false
+                        },
                     )
                     if (!inlineTime) delivery?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     presentation.unavailable.forEach { name ->
@@ -1414,12 +1402,12 @@ private fun MessageBubble(
                                     modifier =
                                         Modifier.widthIn(max = 240.dp).fillMaxWidth()
                                             .heightIn(min = 80.dp, max = 220.dp)
-                                            .clickable { preview = file },
+                                            .clickable { openFile(file) },
                                     contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                                     alignment = Alignment.CenterStart,
                                 )
-                            } else if (hermesFileKind(file) == "视频") HermesVideoThumbnail(api, file, { preview = file })
-                            else HermesAttachmentCard(file, { preview = file })
+                            } else if (hermesFileKind(file) == "视频") HermesVideoThumbnail(api, file, { openFile(file) })
+                            else HermesAttachmentCard(file, { openFile(file) })
                         }
                     if (!inlineTime && time.isNotBlank()) Text(
                         time,

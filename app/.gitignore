@@ -3,3 +3,6 @@
 local.properties
 **/build/
 *.apk
+signing/
+*.keystore
+*.jks

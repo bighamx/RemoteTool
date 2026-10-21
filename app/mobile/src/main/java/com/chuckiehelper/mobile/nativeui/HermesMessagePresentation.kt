@@ -60,6 +60,12 @@ fun presentHermesMessage(text: String, attached: List<JSONObject>, available: Li
             false // Keep unresolved text visible instead of silently removing it.
         }
     }
+    for (path in markdownFilePaths(display)) {
+        ((attached + available).firstOrNull { sameAttachmentPath(it.optString("mediaPath"), path) }
+            ?: markdownLinkAttachment(path))?.let { file ->
+            if (files.none { it.optString("id") == file.optString("id") }) files += file
+        }
+    }
     return HermesPresentation(parsed.text, files, unavailable.distinct())
 }
 
@@ -73,7 +79,7 @@ fun hermesFileKind(file: JSONObject): String {
         mime.startsWith("image/") || ext in listOf("png", "jpg", "jpeg", "gif", "webp", "bmp") -> "图片"
         mime.startsWith("video/") || ext in listOf("mp4", "mkv", "webm", "mov", "avi", "wmv", "m4v") -> "视频"
         mime.startsWith("audio/") || ext in listOf("mp3", "m4a", "aac", "wav", "ogg", "flac", "opus") -> "音频"
-        mime.startsWith("text/") || ext in listOf("txt", "md", "json", "log", "csv", "yaml", "yml", "xml", "ini") -> "文本"
+        mime.startsWith("text/") || ext in listOf("txt", "md", "markdown", "json", "log", "csv", "yaml", "yml", "xml", "ini") -> "文本"
         else -> "文档"
     }
 }

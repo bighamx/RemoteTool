@@ -292,6 +292,17 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         browsingDevices = false
     }
 
+    var configurationVersion by mutableIntStateOf(0)
+        private set
+
+    fun reloadCloudConfiguration() {
+        devices = readDevices()
+        session = session?.let { current ->
+            current.copy(device = devices.find { it.id == current.device.id } ?: current.device)
+        }
+        configurationVersion++
+    }
+
     var connecting by mutableStateOf(false)
         private set
 
@@ -339,7 +350,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
     init {
         val lastId = prefs.getString("last_device", null)
         val last = devices.find { it.id == lastId }
-            ?: devices.singleOrNull()?.takeIf { prefs.contains("channel_${it.id}") }
+            ?: devices.singleOrNull()?.takeIf { !prefs.getBoolean("cloud_requires_connection_selection", false) && prefs.contains("channel_${it.id}") }
         if (last != null) connect(last)
     }
 
@@ -553,7 +564,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
                                 api,
                             )
                         prefs.edit().putString("channel_${device.id}", selected.url)
-                            .putString("last_device", device.id).apply()
+                            .putString("last_device", device.id).remove("cloud_requires_connection_selection").apply()
                         browsingDevices = false
                         channelDevice = null
                     }

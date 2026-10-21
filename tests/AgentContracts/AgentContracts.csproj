@@ -23,6 +23,7 @@
     <Compile Include="../../WebApplication/Services/Codex/CodexCompactionEvent.cs" Link="CodexCompactionEvent.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexAssistantMessageStream.cs" Link="CodexAssistantMessageStream.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexModelSettings.cs" Link="CodexModelSettings.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexSessionModelSelection.cs" Link="CodexSessionModelSelection.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexProviderModels.cs" Link="CodexProviderModels.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexRuntimeCatalog.cs" Link="CodexRuntimeCatalog.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexHistoryWindow.cs" Link="CodexHistoryWindow.cs" />
@@ -35,6 +36,7 @@
     <Compile Include="../../WebApplication/Services/RemoteControl/WebSocketTextReader.cs" Link="WebSocketTextReader.cs" />
       <Compile Include="../../WebApplication/Services/CompletedToolHistory.cs" Link="CompletedToolHistory.cs" />
     <Compile Include="../../WebApplication/Services/AgentHistoryWindow.cs" Link="AgentHistoryWindow.cs" />
+    <Compile Include="../../WebApplication/Services/HermesHistoryPages.cs" Link="HermesHistoryPages.cs" />
     <Compile Include="../../WebApplication/Services/AgentOverview.cs" Link="AgentOverview.cs" />
     <Compile Include="../../WebApplication/Services/LatestSessionPreview.cs" Link="LatestSessionPreview.cs" />
     <Compile Include="../../WebApplication/Services/ToolHistoryCache.cs" Link="ToolHistoryCache.cs" />

@@ -27,6 +27,8 @@
 - 会话列表及每个文件目录保存滚动位置，Windows 路径缓存统一尾部分隔符和大小写。
 - 工作目录默认是桌面用户的 Documents/Codex/Mobile；已有会话保留其原工作目录。
 - Provider/模型选择复用两步界面。Provider 要求 Responses API 兼容，已有密钥不返回手机；新密钥只在私有配置目录保存并注入子进程环境。全局配置修改通过官方 config/batchWrite，在修改前备份 config.toml。
+- 模型显示和发送使用同一份有效配置。Codex 的 `custom` 是实际 Provider ID，不能当作占位值隐藏后显示另一个全局提供方。新消息携带 `model_settings`（provider/model/reasoning_effort/service_tier）快照，服务端校验后优先使用；待确认消息保留原快照，不因切换会话或修改模型而改变同一请求标识的内容。
+- `model-selections.json` 仅持久化每会话偏好，不得使旧路由覆盖用户选择。读取及恢复前校验失效 Provider、已停用的 CC Switch 管理代理、过期地址覆盖；修复后写回偏好并在下次使用前释放本服务的旧空闲连接。仍有效的独立第三方选择保留；显式提交已停用代理返回 `model_settings_changed`，不暗中换 Provider、不发送模型消息、不重试推理。运行中及原生队列中的连接不因修复被中断。
 
 ## 账户及 ChatGPT 工作空间
 
@@ -47,6 +49,8 @@
 ## 附件
 
 沿用手机原生附件 UI：500 MiB 上传、Markdown、图片缩放、视频缩略图及播放、音频/文本预览、文档交给本机应用打开、单独下载及清理手机副本。
+
+助手 Markdown 链接的目标为绝对本机文件路径时，App 同时提供附件卡片，并将原链接的点击行为接入附件预览。排除用户消息、代码块和行内代码。已有附件优先复用，其余文件使用原有文件管理接口核对并读取，无需升级设备服务。Markdown 文件复用 Markwon 预览，无需安装其它阅读器。
 
 Codex 附件目录独立于 Hermes：ProgramData/RemoteTool/codex-attachments。图片通过 localImage 输入；其他文件保留本机路径供工具读取。生成文件写到独立回合的 outbox，MEDIA 标记转换为可点击附件。服务端每日清理超过三个日历月且大于 100 MiB 的附件，避开链接和正在使用的文件。
 

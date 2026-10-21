@@ -82,6 +82,10 @@ internal class AppUpdateModel(app: Application) : AndroidViewModel(app) {
     fun updateWifiOnly(value: Boolean) {
         wifiOnly = value; prefs.edit().putBoolean("wifi_only", value).apply()
     }
+    fun reloadCloudSettings() {
+        automatic = prefs.getBoolean("automatic", true)
+        wifiOnly = prefs.getBoolean("wifi_only", true)
+    }
     fun open() { panelVisible = true; check(manual = true) }
     fun later() {
         release?.let { prefs.edit().putLong("ignored_version", it.versionCode).apply() }

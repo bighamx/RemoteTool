@@ -295,9 +295,12 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     }
     private async Task<JsonNode> HistoryAsync(string id, int limit, string from_id, string older_before, CancellationToken ct)
     {
-        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions/{id}/messages?inline_images=false", null, null, ct);
-        if (!upstream.IsSuccessStatusCode) throw new InvalidOperationException("无法读取 Hermes 会话历史");
-        var json = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct));
+        var json = await HermesHistoryPages.ReadAsync(async (pageSize, offset, token) => {
+            using var upstream = await bridge.SendAsync(HttpMethod.Get,
+                $"api/sessions/{id}/messages?inline_images=false&order=latest&limit={pageSize}&offset={offset}", null, null, token);
+            if (!upstream.IsSuccessStatusCode) throw new InvalidOperationException("无法读取 Hermes 会话历史");
+            return System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(token));
+        }, limit, from_id, older_before, ct);
         var state = activity.Read(id);
         json = CompletedToolHistory.Reduce(json, state["running"]?.GetValue<bool>() == true,
             state["started_at"]?.GetValue<long>() ?? 0, id, state["revision"]?.ToString() ?? "");

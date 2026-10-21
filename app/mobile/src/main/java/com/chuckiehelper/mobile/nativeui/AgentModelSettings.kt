@@ -47,8 +47,21 @@ internal fun effortLabel(effort: String): String = when (effort) {
 
 internal data class AgentSelection(val provider: String, val model: String, val effort: String, val tier: String)
 
-/** Provider 的展示名：hermes 自定义提供方去掉 "custom:" 前缀（匹配仍用原 slug）；
-    codex 的 modelProvider 恒为无区分度的 "custom"（官方/三方一致），直接不显示。 */
+/** Display and dispatch resolve the same settings. Codex's custom is a real provider ID. */
+internal fun effectiveAgentSelection(agent: String, session: AgentSelection, defaults: JSONObject): AgentSelection = AgentSelection(
+    session.provider.takeIf { it.isNotBlank() && (agent == "codex" || it != "custom") }
+        ?: defaults.cleanSetting("provider"),
+    session.model.ifBlank { defaults.cleanSetting("model") },
+    if (session.model.isNotBlank()) session.effort else defaults.cleanSetting("reasoning_effort"),
+    if (session.model.isNotBlank()) session.tier else defaults.cleanSetting("service_tier"),
+)
+
+internal fun codexModelSettingsSnapshot(selection: AgentSelection): String? =
+    if (selection.provider.isBlank() || selection.model.isBlank()) null else JSONObject()
+        .put("provider", selection.provider).put("model", selection.model)
+        .put("reasoning_effort", selection.effort).put("service_tier", selection.tier).toString()
+
+/** Hermes 自定义提供方去掉 custom: 前缀；Codex 展示名优先由 Provider 目录解析。 */
 internal fun displayProvider(raw: String): String {
     val stripped = raw.removePrefix("custom:")
     return if (stripped == "custom" || stripped.isBlank()) "" else stripped

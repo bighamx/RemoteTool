@@ -51,7 +51,7 @@ fun HermesAttachmentCard(file: JSONObject, open: () -> Unit) {
                 Text(file.optString("name"), maxLines = 2,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.titleSmall)
-                Text("$kind · ${bytes(file.optDouble("size"))} · 点击打开", style = MaterialTheme.typography.labelSmall)
+                Text(listOfNotNull(kind, if (file.has("size")) bytes(file.optDouble("size")) else null, "点击打开").joinToString(" · "), style = MaterialTheme.typography.labelSmall)
             }
         }
     }
@@ -109,7 +109,7 @@ private suspend fun cacheHermesDocument(context: Context, api: NativeApi, file: 
     val ext = file.optString("name").substringAfterLast('.', "bin").filter { it.isLetterOrDigit() }.take(12)
     val directory = File(context.cacheDir, "hermes-open").apply { mkdirs() }
     val destination = File(directory, hermesPreviewKey(url) + ".$ext")
-    if (destination.exists() && destination.length() == file.optLong("size")) return@withContext destination
+    if (!file.optBoolean("localLink") && destination.exists() && destination.length() == file.optLong("size")) return@withContext destination
     val temporary = File(directory, destination.name + ".part")
     try {
         api.response(api.request(file.getString("url"))).use { response ->
@@ -132,15 +132,30 @@ fun HermesAttachmentViewer(api: NativeApi, file: JSONObject, close: () -> Unit) 
     var text by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
+    var truncated by remember { mutableStateOf(false) }
+    val markdown = file.optString("name").substringAfterLast('.', "").lowercase() in setOf("md", "markdown") ||
+        file.optString("mime").equals("text/markdown", true)
     LaunchedEffect(api.base, file.getString("url")) {
         try {
-            if (kind == "文本" && file.optLong("size") <= 1024 * 1024) {
-                text = withContext(Dispatchers.IO) {
+            if (kind == "文本" && (markdown || file.optLong("size") <= 1024 * 1024)) {
+                val loaded = withContext(Dispatchers.IO) {
                     api.response(api.request(file.getString("url"))).use {
                         if (!it.isSuccessful) throw java.io.IOException("读取失败 HTTP ${it.code}")
-                        it.body!!.string()
+                        it.body!!.charStream().use { reader ->
+                            val content = StringBuilder()
+                            val buffer = CharArray(8192)
+                            val limit = 1024 * 1024
+                            while (content.length < limit) {
+                                val count = reader.read(buffer, 0, minOf(buffer.size, limit - content.length))
+                                if (count < 0) break
+                                content.append(buffer, 0, count)
+                            }
+                            content.toString() to (reader.read() >= 0)
+                        }
                     }
                 }
+                text = loaded.first
+                truncated = loaded.second
             } else {
                 val local = cacheHermesDocument(context, api, file)
                 val uri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".hermes.files", local)
@@ -161,6 +176,7 @@ fun HermesAttachmentViewer(api: NativeApi, file: JSONObject, close: () -> Unit) 
             Column {
                 if (loading) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("正在打开…") }
                 error?.let { Text(it) }
+                if (truncated) Text("内容较长，仅显示部分；可下载查看全文", style = MaterialTheme.typography.bodySmall)
                 text?.let { value ->
                     androidx.compose.foundation.text.selection.SelectionContainer {
                         Column(Modifier.heightIn(max = 430.dp).then(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()))) {

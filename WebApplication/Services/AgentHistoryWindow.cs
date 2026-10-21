@@ -22,7 +22,7 @@ public static class AgentHistoryWindow
             }
         }
         document["data"] = new JsonArray(rows.Skip(start).Select(row => row?.DeepClone()).ToArray());
-        document["has_more"] = document["has_more"]?.ToString() == "true" || rows.Take(start).Any(Visible);
+        document["has_more"] = string.Equals(document["has_more"]?.ToString(), "true", StringComparison.OrdinalIgnoreCase) || rows.Take(start).Any(Visible);
         document["oldest_id"] = start < rows.Count ? rows[start]?["id"]?.DeepClone() : null;
         return document;
     }

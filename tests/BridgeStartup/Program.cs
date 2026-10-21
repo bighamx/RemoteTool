@@ -26,3 +26,4 @@ if (args.Length > 1 && args[1] == "sid") {
     Console.WriteLine("PASS interactive user SID: " + sid);
 }
 if (args.Length > 2 && args[1] == "upgrade") await CodexRuntimeUpgradeChecks.Run(assembly, Path.GetFullPath(args[2]));
+if (args.Length > 2 && args[1] == "selection") await CodexModelSelectionChecks.Run(assembly, Path.GetFullPath(args[2]));

@@ -8,12 +8,13 @@ const source = fs.readFileSync(path.join(__dirname, '../../WebApplication/wwwroo
 function createHarness(responses, agent = 'codex') {
     const storage = new Map();
     const posts = [];
+    const bodies = [];
     let history = [];
     let options;
     let nextKey = 0;
     const api = {
         id: encodeURIComponent,
-        async post(route) { posts.push(route); return responses.shift(); },
+        async post(route, body) { posts.push(route); bodies.push(JSON.parse(JSON.stringify(body))); return responses.shift(); },
         async get(route) { if (route.includes('/messages?')) return { data: history }; throw new Error(`Unexpected GET: ${route}`); }
     };
     const context = {
@@ -37,7 +38,7 @@ function createHarness(responses, agent = 'codex') {
     state.ensureEventStream = () => {};
     state.hasRenderableContent = () => true;
     Object.defineProperty(state, 'displayMessages', { get: () => options.computed.displayMessages.call(state) });
-    return { state, posts, storage, setHistory: rows => { history = rows; } };
+    return { state, posts, bodies, storage, setHistory: rows => { history = rows; } };
 }
 
 async function testAcceptedAndDeduped() {
@@ -104,10 +105,24 @@ async function testSessionSwitchDuringSend() {
     assert.equal(h.storage.has('remotetool:web:pending:codex:session-1'), false);
 }
 
+async function testConfirmedSettingsOverrideUncommittedDialogAndSurviveUnknownSend() {
+    const h = createHarness([{run_id:'run-5',status:'acceptance_unknown',delivery:'unknown'}]);
+    h.state.selected = {provider:'openai',model:'user-model',reasoning_effort:'high',service_tier:'default'};
+    h.state.modelSelection = {provider:'custom',model:'unsaved-dialog-model',effort:'low',tier:'priority'};
+    h.state.draft = 'use the displayed model';
+    await h.state.send();
+    assert.deepEqual(h.bodies[0].model_settings,{provider:'openai',model:'user-model',reasoning_effort:'high',service_tier:'default'});
+    h.state.modelSelection.model = 'later-change';
+    const saved = JSON.parse(h.storage.get('remotetool:web:pending:codex:session-1'));
+    assert.equal(saved.modelSettings.model,'user-model');
+    assert.equal(saved.modelSettings.provider,'openai');
+}
+
 (async () => {
     await testAcceptedAndDeduped();
     await testUnknownStaysBlocked();
     await testRestoredEcho();
     await testSessionSwitchDuringSend();
-    console.log('Agent web send: 4 checks passed');
+    await testConfirmedSettingsOverrideUncommittedDialogAndSurviveUnknownSend();
+    console.log('Agent web send: 5 checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

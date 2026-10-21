@@ -18,6 +18,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import android.text.method.ArrowKeyMovementMethod
 import io.noties.markwon.Markwon
+import io.noties.markwon.AbstractMarkwonPlugin
+import io.noties.markwon.MarkwonConfiguration
+import io.noties.markwon.LinkResolverDef
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
@@ -26,19 +29,28 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal fun createMessageMarkwon(context: Context): Markwon = Markwon.builder(context)
+internal fun createMessageMarkwon(context: Context, onLinkTap: ((String) -> Boolean)? = null): Markwon = Markwon.builder(context)
     .usePlugin(TablePlugin.create(context))
     .usePlugin(StrikethroughPlugin.create())
     .usePlugin(LinkifyPlugin.create())
+    .usePlugin(object : AbstractMarkwonPlugin() {
+        override fun configureConfiguration(builder: MarkwonConfiguration.Builder) {
+            val fallback = LinkResolverDef()
+            builder.linkResolver { view, link ->
+                if (onLinkTap?.invoke(link) != true) fallback.resolve(view, link)
+            }
+        }
+    })
     .build()
 
 private data class MarkdownFrame(val source: String, val parsed: Spanned)
 
 @Composable
 fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String = "", onBubbleTap: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
-    streaming: Boolean = false) {
+    streaming: Boolean = false, onLinkTap: ((String) -> Boolean)? = null) {
     val context = LocalContext.current
-    val markwon = remember(context) { createMessageMarkwon(context) }
+    val currentLinkTap by rememberUpdatedState(onLinkTap)
+    val markwon = remember(context) { createMessageMarkwon(context) { currentLinkTap?.invoke(it) == true } }
     val color = MaterialTheme.colorScheme.onSurface.toArgb()
     val link = MaterialTheme.colorScheme.primary.toArgb()
     val footerColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f).toArgb()

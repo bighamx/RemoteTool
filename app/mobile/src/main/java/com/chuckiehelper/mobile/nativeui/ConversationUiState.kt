@@ -16,4 +16,5 @@ data class ConversationUiState(private val entries: Map<String?, ConversationUiE
 data class PendingAgentSubmission(
     val key: String, val input: String, val attachmentIds: List<String>, val timestamp: Long,
     val questionId: String? = null,
+    val modelSettings: String? = null,
 )

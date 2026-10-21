@@ -38,7 +38,14 @@ import org.json.JSONObject
 
 @Composable
 fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
+    val cloud: CloudAccountModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val updates: AppUpdateModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    LaunchedEffect(cloud.configurationVersion) {
+        if (cloud.configurationVersion > 0) {
+            model.reloadCloudConfiguration()
+            updates.reloadCloudSettings()
+        }
+    }
     val savedScreens = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val dark = isSystemInDarkTheme()
     val colors =
@@ -219,7 +226,7 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
                             Spacer(Modifier.height(16.dp))
                             Text("正在验证设备并检测通道…")
                         }
-                    session == null -> DeviceScreen(model)
+                    session == null -> DeviceScreen(model, cloud)
                     model.loginNeeded -> key(session.device.id) {
                         LoginScreen(session.api, model.savedUsername(session.device.id),
                             onLogin = { username, password -> model.login(session, username, password) },
@@ -228,7 +235,7 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
                     choosingShare -> ShareTargetScreen(shares!!, session.api, session.device.id, session.device.name,
                         changeDevice = { model.showDevices() })
                     else ->
-                        key(session.api.base, session.device.id) {
+                        key(session.api.base, session.device.id, model.configurationVersion) {
                             val api = session.api
                             val error: (String) -> Unit = {
                                 if (it.contains("登录已过期")) model.loginNeeded = true
@@ -262,6 +269,7 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
                                             Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
                                             verticalArrangement = Arrangement.spacedBy(12.dp),
                                         ) {
+                                            CloudAccountEntry(cloud)
                                             ToolRow("文件管理", "浏览 · 传输 · 图片与视频预览", Icons.Outlined.Folder) { detail = "文件" }
                                             ToolRow(
                                                 "Docker",
@@ -304,6 +312,7 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
         }
         model.channelDevice?.let { ChannelDialog(model, it) }
         AppUpdateHost(updates)
+        CloudAccountHost(cloud)
     }
 }
 
@@ -365,7 +374,7 @@ fun SelectionContainerCompat(value: String) {
 }
 
 @Composable
-private fun DeviceScreen(model: NativeModel) {
+private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel) {
     var addTo by remember { mutableStateOf<Device?>(null) }
     var adding by remember { mutableStateOf(false) }
     var manage by remember { mutableStateOf<Device?>(null) }
@@ -376,6 +385,7 @@ private fun DeviceScreen(model: NativeModel) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        item { CloudAccountEntry(cloud) }
         item { Text("优先连接上次通道，不可达时尝试其他地址；可在设备内手动切换。", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(model.devices, key = { it.id }) { device ->
             ElevatedCard(Modifier.fillMaxWidth()) {

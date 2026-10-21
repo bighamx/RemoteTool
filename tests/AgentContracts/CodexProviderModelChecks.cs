@@ -12,6 +12,35 @@ internal static class CodexProviderModelChecks
         var mirror = Obj(("name", "OpenAI"), ("requires_openai_auth", true));
         Check(CodexProviderModels.IsOfficial("custom", mirror), "cc-switch official mirror is native OpenAI");
         Check(!CodexProviderModels.IsOfficial("relay", Obj(("name", "OpenAI"), ("requires_openai_auth", true), ("base_url", "https://relay.example/v1"))), "same-name third-party endpoint stays distinct");
+        var stale = Obj(("model", "gpt-native"), ("modelProvider", "custom"), ("reasoningEffort", "high"),
+            ("serviceTier", "priority"), ("providerBaseUrl", "http://127.0.0.1:15721/v1"),
+            ("modelMetadata", Obj(("context_window", 1000000))));
+        var routing = Obj(("model", "gpt-native"), ("model_providers", Obj(("custom", Obj(
+            ("name", "CC Switch"), ("base_url", "http://127.0.0.1:15721/v1"), ("experimental_bearer_token", "PROXY_MANAGED"))))));
+        var repaired = CodexSessionModelSelection.Reconcile(stale, routing, native);
+        Check(repaired.S("modelProvider") == "openai" && repaired.S("model") == "gpt-native" && repaired.B("officialProvider"), "dormant CC Switch session resumes with effective official provider");
+        Check(!repaired.ContainsKey("providerBaseUrl") && !repaired.ContainsKey("modelMetadata"), "repair removes stale endpoint and third-party runtime capacity");
+        Check(repaired.S("reasoningEffort") == "high" && repaired.S("serviceTier") == "priority", "repair preserves valid user model tuning");
+        Check(stale.S("modelProvider") == "custom" && CodexSessionModelSelection.RoutingChanged(stale,repaired), "repair is isolated and invalidates the old session owner");
+        var actualResume = new JsonObject(); CodexModelSettings.ApplyResume(actualResume,repaired);
+        Check(actualResume.S("modelProvider") == "openai" && actualResume["config"]?["model_providers.custom.base_url"] == null, "actual resume no longer injects proxy routing");
+        var customModel = stale.DeepClone().AsObject(); customModel["model"] = "third-party-only";
+        Check(CodexSessionModelSelection.Reconcile(customModel,routing,native).S("model") == "gpt-native", "provider-specific model cannot leak into official recovery");
+        routing["model_provider"] = "custom";
+        Check(CodexSessionModelSelection.Reconcile(stale,routing).S("modelProvider") == "custom", "active CC Switch third-party selection remains usable");
+        CodexSessionModelSelection.RequireCurrentRequest(Obj(("provider","custom")),routing);
+        routing.Remove("model_provider");
+        try { CodexSessionModelSelection.RequireCurrentRequest(Obj(("provider","custom")),routing); throw new Exception("stale explicit UI accepted"); }
+        catch (CodexError error) { Check(error.Status == 409 && error.Code == "model_settings_changed" && error.Delivery == "rejected", "stale UI is rejected before inference, never silently rerouted"); }
+        var relayConfig = Obj(("model_providers", Obj(("relay", Obj(("base_url","https://relay.example/v1"))))));
+        var relaySelection = Obj(("model","glm"),("modelProvider","relay"),("providerBaseUrl","https://relay.example/v1"));
+        Check(CodexSessionModelSelection.Reconcile(relaySelection,relayConfig).S("modelProvider") == "relay", "valid explicit third-party session does not follow an unrelated global default");
+        relaySelection["providerBaseUrl"] = "https://old-relay.example/v1";
+        Check(!CodexSessionModelSelection.Reconcile(relaySelection,relayConfig).ContainsKey("providerBaseUrl"), "edited provider endpoint wins over discovery cache");
+        var officialSelection = Obj(("model","gpt-native"),("modelProvider","openai"),("providerBaseUrl","http://localhost:15721/v1"));
+        Check(!CodexSessionModelSelection.Reconcile(officialSelection,routing).ContainsKey("providerBaseUrl"), "official selections never carry a cached endpoint override");
+        var missing = Obj(("model","removed-model"),("modelProvider","deleted"));
+        Check(CodexSessionModelSelection.Reconcile(missing,routing,native).S("modelProvider") == "openai", "removed cached providers recover to current user configuration");
         var mirrorConfig = Obj(("model_providers", Obj(("custom", mirror))));
         var mirrorModels = CodexProviderModels.Catalog("custom", mirrorConfig, new JsonObject(), native, null);
         Check(mirrorModels.B("official_provider") && mirrorModels.A("data")[0].S("model") == "gpt-native", "mirror uses complete native catalog");

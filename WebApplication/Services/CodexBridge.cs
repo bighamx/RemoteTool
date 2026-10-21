@@ -53,7 +53,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             if (!response.IsSuccessStatusCode) return false;
             using var status = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
             return status.RootElement.TryGetProperty("implementation", out var implementation) && implementation.GetString() == "dotnet-v2" &&
-                status.RootElement.TryGetProperty("state_version", out var version) && version.GetInt32() >= 24;
+                status.RootElement.TryGetProperty("state_version", out var version) && version.GetInt32() >= 25;
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
         catch (HttpRequestException) { return false; }
         catch (JsonException) { return false; }
@@ -70,7 +70,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
                 return JsonNode.Parse(await response.Content.ReadAsStringAsync(timeout.Token))!.AsObject();
             }
             var health = await Get("health");
-            if (health.S("implementation") != "dotnet-v2" || health.L("state_version") >= 24) return null;
+            if (health.S("implementation") != "dotnet-v2" || health.L("state_version") >= 25) return null;
             var saved = Read(statusPath);
             using var worker = Process.GetProcessById((int)saved.L("pid"));
             using var cli = Process.GetProcessById((int)health.L("cli_pid"));
@@ -78,14 +78,14 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             var active = new JsonObject();
             var prior = Read(Path.Combine(folder, "connection.json"));
             var journal = Read(Path.Combine(prior.S("state_folder", folder), "runs.json"));
-            var candidates = journal.Where(entry => entry.Value.S("status") is "started" or "submitting").Select(entry => entry.Key)
+            var candidates = journal.Where(entry => entry.Value.S("status") is "started" or "submitting" or "queued").Select(entry => entry.Key)
                 .Concat((prior["handoff"]?["runs"] as JsonObject ?? new()).Select(entry => entry.Key)).Distinct();
             foreach (var run in candidates) {
                 var state = await Get("runs/" + run);
-                if (state.S("status") is not ("started" or "submitting")) continue;
+                if (state.S("status") is not ("started" or "submitting" or "queued")) continue;
                 var id = state.S("session_id");
                 var info = await Get("sessions/" + id);
-                if (info["session"]?["status"].S("type") == "active") active[run] = id;
+                if (state.S("status") == "queued" || info["session"]?["status"].S("type") == "active") active[run] = id;
             }
             return Obj(("port", port), ("pid", worker.Id), ("process_started_ticks", worker.StartTime.ToUniversalTime().Ticks),
                 ("cli_pid", cli.Id), ("cli_started_ticks", cli.StartTime.ToUniversalTime().Ticks), ("runs", active));

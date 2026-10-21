@@ -11,8 +11,8 @@ android {
         applicationId 'com.chuckiehelper.mobile'
         minSdk 26
         targetSdk 34
-        versionCode 68
-        versionName "0.3.65"
+        versionCode 71
+        versionName "0.3.68"
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -20,6 +20,13 @@ android {
     }
     kotlinOptions { jvmTarget = '17' }
     buildFeatures { compose true; buildConfig true }
+    // Existing installations use this original certificate; never replace it with a new SDK debug key.
+    def updateStorePath = providers.gradleProperty('remoteToolSigningStore')
+        .orElse(providers.environmentVariable('REMOTE_TOOL_SIGNING_STORE')).orNull
+    def projectUpdateStore = rootProject.file('signing/RemoteTool-release-signing-debug.keystore')
+    def updateStore = updateStorePath ? file(updateStorePath) : (projectUpdateStore.isFile() ? projectUpdateStore : new File(System.getProperty('user.home'), '.android/debug-hermes.keystore'))
+    if (updateStorePath && !updateStore.isFile()) throw new GradleException('RemoteTool signing store does not exist')
+    if (updateStore.isFile()) signingConfigs.debug.storeFile = updateStore
     testOptions { unitTests.includeAndroidResources = true }
     buildTypes {
         release {

@@ -4,6 +4,8 @@ package com.chuckiehelper.mobile.nativeui
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreVert
@@ -287,15 +290,28 @@ fun CodexQuestions(request: JSONObject, submit: (JSONObject) -> Unit) {
     var answers by remember(request.optString("request_id")) { mutableStateOf(mapOf<String, String>()) }
     val questions = request.array("questions").objects()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        questions.forEach { question ->
+        questions.forEachIndexed { index, question ->
             val id = question.getString("id")
-            Text(question.optString("question"), style = MaterialTheme.typography.titleSmall)
+            if (index > 0) HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primaryContainer) {
+                    Text("${index + 1}", Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+                Text(question.optString("question"), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            }
             question.array("options").objects().forEach { option ->
-                Row(Modifier.fillMaxWidth().clickable { answers = answers + (id to option.optString("label")) }, verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(answers[id] == option.optString("label"), { answers = answers + (id to option.optString("label")) })
-                    Column(Modifier.weight(1f)) {
-                        Text(option.optString("label"), style = MaterialTheme.typography.bodyMedium)
-                        if (option.optString("description").isNotBlank()) Text(option.optString("description"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val selected = answers[id] == option.optString("label")
+                Surface(shape = MaterialTheme.shapes.medium,
+                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) {
+                    Row(Modifier.fillMaxWidth().selectable(selected = selected, role = Role.RadioButton,
+                        onClick = { answers = answers + (id to option.optString("label")) }).padding(vertical = 6.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected, onClick = null, modifier = Modifier.padding(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(option.optString("label"), style = MaterialTheme.typography.bodyMedium)
+                            if (option.optString("description").isNotBlank()) Text(option.optString("description"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }
@@ -306,6 +322,6 @@ fun CodexQuestions(request: JSONObject, submit: (JSONObject) -> Unit) {
             val body = JSONObject()
             answers.forEach { (id, value) -> body.put(id, obj("answers" to org.json.JSONArray(listOf(value)))) }
             submit(body)
-        }, enabled = questions.all { !answers[it.getString("id")].isNullOrBlank() }) { Text("发送回答") }
+        }, modifier = Modifier.fillMaxWidth(), enabled = questions.all { !answers[it.getString("id")].isNullOrBlank() }) { Text("发送回答") }
     }
 }
