@@ -80,6 +80,17 @@ public class SystemController : ControllerBase
         }
     }
 
+    [HttpPost("screen-off")]
+    public async Task<IActionResult> ScreenOff()
+    {
+        try {
+            await _systemService.ScreenOffAsync();
+            return ApiResult(null, "已发送息屏请求");
+        }
+        catch (PlatformNotSupportedException ex) { return StatusCode(501, new { message = ex.Message }); }
+        catch (Exception ex) { return ApiError($"息屏失败：{ex.Message}"); }
+    }
+
     [HttpPost("hibernate")]
     public IActionResult Hibernate()
     {

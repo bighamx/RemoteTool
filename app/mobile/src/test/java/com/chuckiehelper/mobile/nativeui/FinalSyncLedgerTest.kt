@@ -5,6 +5,37 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FinalSyncLedgerTest {
+    @Test fun oldCompactionStatusBubbleIsRemovedOnlyAfterRunKindIsConfirmed() {
+        val compact = FinalSyncState("session", "codex-compact", null, null, "上下文已压缩", 2_000L, null)
+        val answer = compact.copy(run = "codex-answer", item = "answer-item")
+        val other = compact.copy(session = "other", run = "other-run")
+        val states = restoreFinalSyncStates(JSONArray(listOf(compact.json(), answer.json(), other.json())).toString())
+        val history = listOf(HermesMessage("system", "上下文压缩完成", 42,
+            timestamp = 1_000L, messageType = "contextCompaction"))
+        assertTrue(compact.needsCompactionCheck())
+        assertFalse(answer.needsCompactionCheck())
+        // A real assistant can use exactly the same words. Never remove it by text.
+        assertEquals(states, reconcileCompactionRunSync(states, compact.run,
+            obj("status" to "completed", "output" to "上下文已压缩")))
+        val cleaned = reconcileCompactionRunSync(states, compact.run,
+            obj("kind" to "compact", "status" to "completed", "output" to "上下文已压缩"))
+        assertEquals(listOf(answer, other), cleaned)
+        assertEquals(history, projectFinalSyncRows(history, cleaned.filterNot { it == answer }, "session"))
+        assertEquals(cleaned, restoreFinalSyncStates(JSONArray(cleaned.map { it.json() }).toString()))
+        assertEquals(history, projectFinalSyncRows(history, emptyList(), "session"))
+    }
+
+    @Test fun failedAndHermesCompactionNeverRepresentAssistantReplies() {
+        val pending = FinalSyncState("session", "run", null, null, "", null, null, false)
+        for (status in listOf("completed", "failed", "cancelled", "interrupted", "acceptance_unknown")) {
+            val result = obj("kind" to "compact", "status" to status)
+            assertTrue(isCompactionRun("run", result))
+            assertEquals(emptyList<FinalSyncState>(), reconcileCompactionRunSync(listOf(pending), "run", result))
+        }
+        assertTrue(isCompactionRun("hcompact_123", obj("status" to "completed")))
+        assertFalse(isCompactionRun("codex_123", obj("status" to "completed", "output" to "上下文已压缩")))
+    }
+
     @Test fun cumulativeRunOutputDoesNotRepeatNativeCommentary() {
         val rows = listOf(
             HermesMessage("assistant", "先检查改动", narrationMessageId("note-a"), nativeTurnId = "turn-a", narration = true),

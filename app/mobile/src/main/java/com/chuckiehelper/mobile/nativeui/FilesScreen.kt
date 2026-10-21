@@ -47,9 +47,19 @@ fun directoryPositionKey(path: String): String {
 }
 
 @Composable
-fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -> Unit) {
+private fun FileDirectionToggle(descending: Boolean, onChange: (Boolean) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FilterChip(selected = !descending, onClick = { onChange(false) },
+            label = { Text("升序", style = MaterialTheme.typography.labelMedium) }, modifier = Modifier.height(28.dp))
+        FilterChip(selected = descending, onClick = { onChange(true) },
+            label = { Text("降序", style = MaterialTheme.typography.labelMedium) }, modifier = Modifier.height(28.dp))
+    }
+}
+@Composable
+fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onClose: (() -> Unit)? = null, onCompose: (String) -> Unit) {
     var path by rememberSaveable { mutableStateOf("") }
     var inputPath by rememberSaveable { mutableStateOf("") }
+    var editingPath by remember { mutableStateOf(false) }
     var files by remember { mutableStateOf<List<JSONObject>?>(null) }
     var filesPath by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -65,7 +75,28 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
     var gitOperation by remember { mutableStateOf<Pair<String, String>?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val visibleFiles = files.orEmpty()
+    val fileRowHeight = (52f * androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)).dp
+    val viewPrefs = remember(context) { context.getSharedPreferences("file-view", Context.MODE_PRIVATE) }
+    var viewSettings by remember {
+        mutableStateOf(FileViewSettings(
+            sort = runCatching { FileSort.valueOf(viewPrefs.getString("sort", "NAME") ?: "NAME") }.getOrDefault(FileSort.NAME),
+            secondarySort = viewPrefs.getString("secondarySort", null)?.let { runCatching { FileSort.valueOf(it) }.getOrNull() },
+            descending = viewPrefs.getBoolean("descending", false),
+            secondaryDescending = viewPrefs.getBoolean("secondaryDescending", false),
+            foldersFirst = viewPrefs.getBoolean("foldersFirst", true),
+        ))
+    }
+    var viewDialog by remember { mutableStateOf(false) }
+    var createKind by remember { mutableStateOf(false) }
+    val visibleFiles = remember(files, viewSettings) { sortRemoteFiles(files.orEmpty(), viewSettings) }
+    fun updateView(value: FileViewSettings) {
+        viewSettings = value
+        viewPrefs.edit().putString("sort", value.sort.name)
+            .putString("secondarySort", value.secondarySort?.name)
+            .putBoolean("descending", value.descending)
+            .putBoolean("secondaryDescending", value.secondaryDescending)
+            .putBoolean("foldersFirst", value.foldersFirst).apply()
+    }
     var directoryPositions by rememberSaveable { mutableStateOf(hashMapOf<String, ArrayList<Int>>()) }
     val fileScroll = rememberSaveable(path, saver = LazyListState.Saver) {
         val saved = directoryPositions[directoryPositionKey(path)] ?: arrayListOf(0, 0)
@@ -98,13 +129,14 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
     }
     BackHandler(
         enabled =
-            path.isNotEmpty() &&
+            (selected.isNotEmpty() || path.isNotEmpty()) &&
                 document == null &&
                 media == null &&
                 input == null &&
                 pending == null
     ) {
-        navigate(parentPath(path))
+        if (selected.isNotEmpty()) selected = emptySet()
+        else navigate(parentPath(path))
     }
     LaunchedEffect(api, path, refresh) {
         val requestedPath = path
@@ -234,7 +266,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                         target,
                         when (name) {
                             "重命名" -> target
-                            "修改磁盘名称" -> file.optString("name")
+                            "修改卷标" -> file.optString("name")
                             "压缩" -> target + ".zip"
                             else -> path
                         },
@@ -286,78 +318,51 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                 }
         }
     Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            IconButton(onClick = { navigate(parentPath(path)) }, enabled = path.isNotEmpty()) {
-                Icon(Icons.Outlined.ArrowUpward, "上一级")
-            }
-            OutlinedTextField(
-                inputPath,
-                { inputPath = it },
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                label = { Text("路径") },
-                trailingIcon = {
-                    IconButton(onClick = { navigate(inputPath) }) {
-                        Icon(Icons.Outlined.ArrowForward, "前往")
-                    }
-                },
-            )
-            IconButton(onClick = { refresh++ }) { Icon(Icons.Outlined.Refresh, "刷新") }
-        }
-        FlowRowCompat {
-            TextButton(
-                enabled = !busy && path.isNotBlank(),
-                onClick = { input = Triple("新建文件夹", "", path) },
-            ) {
-                Icon(Icons.Outlined.CreateNewFolder, null)
-                Text("新建")
-            }
-            TextButton(
-                enabled = !busy && path.isNotBlank(),
-                onClick = { uploader.launch(arrayOf("*/*")) },
-            ) {
-                Icon(Icons.Outlined.UploadFile, null)
-                Text("上传")
-            }
-            if (selected.isNotEmpty()) {
-                Text("已选 ${selected.size}", Modifier.padding(12.dp))
-                listOf("复制", "移动", "删除").forEach { name ->
-                    TextButton(
-                        enabled = !busy,
-                        onClick = {
-                            operation(
-                                name,
-                                files.orEmpty().filter { it.optString("path") in selected },
-                            )
-                        },
-                    ) {
-                        Text(name)
-                    }
+        Surface(tonalElevation = 2.dp) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                if (onClose != null) IconButton(onClick = { if (selected.isNotEmpty()) selected = emptySet() else onClose() }) { Icon(Icons.Outlined.ArrowBack, "返回") }
+                Column(Modifier.weight(1f).clickable { inputPath = path; editingPath = true }.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                    Text(path.ifBlank { "服务器磁盘" }, style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text(if (files == null || filesPath != path) "正在读取…" else
+                        "文件夹 ${visibleFiles.count { it.optBoolean("isDirectory") }} · 文件 ${visibleFiles.count { !it.optBoolean("isDirectory") }}" +
+                            if (selected.isNotEmpty()) " · 已选 ${selected.size}" else "",
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                TextButton(onClick = { selected = emptySet() }) { Text("取消") }
+                IconButton(onClick = { viewDialog = true }) { Icon(Icons.Outlined.Settings, "视图设置") }
             }
         }
+        HorizontalDivider()
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        Box(Modifier.weight(1f).fillMaxWidth()) {
         if (files == null || filesPath != path) ErrorPane(error) { refresh++ }
         else
             LazyColumn(
                 state = fileScroll,
-                contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(7.dp),
+                contentPadding = PaddingValues(vertical = 2.dp),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
+                if (path.isNotEmpty()) item(key = "parent-directory") {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable {
+                        if (selected.isNotEmpty()) selected = emptySet() else navigate(parentPath(path))
+                    }.padding(horizontal = 10.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Folder, null, Modifier.size(26.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text("..", Modifier.padding(start = 8.dp), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
                 if (visibleFiles.isEmpty()) item { Text("此目录为空", Modifier.padding(24.dp)) }
                 items(visibleFiles, key = { it.optString("path") }) { file ->
                     val target = file.optString("path")
                     val isDir = file.optBoolean("isDirectory")
-                    OutlinedCard(Modifier.fillMaxWidth()) {
+                    Surface(Modifier.fillMaxWidth(), color = if (target in selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface) {
+                        val isDiskRow = file.has("totalBytes")
                         Row(
-                            Modifier.fillMaxWidth()
+                            Modifier.fillMaxWidth().height(if (isDiskRow) fileRowHeight + 12.dp else fileRowHeight)
                                 .combinedClickable(
                                     onClick = {
-                                        if (selected.isNotEmpty())
+                                        if (selected.isNotEmpty() && !isDiskRow)
                                             selected =
                                                 if (target in selected) selected - target
                                                 else selected + target
@@ -391,12 +396,12 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                                             media = file
                                         else edit(file, false)
                                     },
-                                    onLongClick = { selected = selected + target },
+                                    onLongClick = if (!isDiskRow && path.isNotEmpty()) { { selected = selected + target } } else null,
                                 )
-                                .padding(start = 14.dp, top = 10.dp, bottom = 10.dp),
+                                .padding(start = 10.dp, top = 2.dp, bottom = 2.dp),
                             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                         ) {
-                            if (selected.isNotEmpty())
+                            if (selected.isNotEmpty() && !isDiskRow)
                                 Checkbox(
                                     target in selected,
                                     onCheckedChange = {
@@ -407,29 +412,49 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                                 Icon(
                                     fileIcon(file),
                                     null,
-                                    Modifier.size(30.dp),
+                                    Modifier.size(26.dp),
                                     tint =
                                         if (isDir) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.secondary,
                                 )
-                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
                                 Text(
                                     file.optString("name"),
-                                    style = MaterialTheme.typography.titleSmall,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 )
-                                val modified = if (file.has("totalBytes")) "" else formatFileModifiedTime(file.optString("modified"))
+                                val modified = if (isDiskRow) "" else formatFileModifiedTime(file.optString("modified"))
                                 Text(
                                     (if (isDir)
-                                        if (file.has("totalBytes"))
-                                            "可用 ${bytes(file.optDouble("freeBytes"))} / ${bytes(file.optDouble("totalBytes"))}"
-                                        else "文件夹"
+                                        if (isDiskRow) {
+                                            val total = file.optDouble("totalBytes")
+                                            val usedPct = if (total > 0) (((total - file.optDouble("freeBytes")) / total) * 100).toInt() else 0
+                                            "已用 $usedPct% · 可用 ${bytes(file.optDouble("freeBytes"))} / ${bytes(total)}"
+                                        } else "文件夹"
                                     else bytes(file.optDouble("size"))) +
                                         if (modified.isNotEmpty()) " · $modified" else "",
                                     maxLines = 1,
                                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                                if (isDiskRow) {
+                                    val total = file.optDouble("totalBytes")
+                                    val usedFraction =
+                                        if (total > 0) (((total - file.optDouble("freeBytes")) / total).toFloat()).coerceIn(0f, 1f) else 0f
+                                    LinearProgressIndicator(
+                                        progress = { usedFraction },
+                                        modifier = Modifier.fillMaxWidth().padding(top = 3.dp).height(4.dp),
+                                        color = when {
+                                            usedFraction >= 0.9f -> MaterialTheme.colorScheme.error
+                                            usedFraction >= 0.75f -> MaterialTheme.colorScheme.tertiary
+                                            else -> MaterialTheme.colorScheme.primary
+                                        },
+                                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                                        gapSize = 0.dp,
+                                        drawStopIndicator = {},
+                                    )
+                                }
                             }
                             Box {
                                 IconButton(onClick = { menuFile = file }) {
@@ -439,18 +464,22 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                                     expanded = menuFile?.optString("path") == target,
                                     onDismissRequest = { menuFile = null },
                                 ) {
-                                    val actions = mutableListOf("复制路径", "重命名", "复制", "移动", "压缩")
-                                    if (file.optString("name").equals(".git", ignoreCase = true))
+                                    val isDisk = file.has("totalBytes")
+                                    // 磁盘行只支持查看路径与改卷标：重命名即修改卷标，不提供删除。
+                                    val actions = if (isDisk) mutableListOf("复制路径", "修改卷标")
+                                    else mutableListOf("复制路径", "重命名", "复制", "移动", "压缩")
+                                    if (!isDisk && file.optString("name").equals(".git", ignoreCase = true))
                                         actions.addAll(0, listOf("Git 状态", "Git 提交并推送", "Git 推送", "Git 拉取"))
                                     if (
                                         !isDir &&
-                                            file
-                                                .optString("name")
-                                                .substringAfterLast('.')
-                                                .lowercase() in listOf("yml", "yaml")
+                                            !isDisk &&
+                                                file
+                                                    .optString("name")
+                                                    .substringAfterLast('.')
+                                                    .lowercase() in listOf("yml", "yaml")
                                     )
                                         actions.add(0, "Compose 管理")
-                                    if (!isDir) actions.addAll(listOf("下载", "文本编辑", "十六进制"))
+                                    if (!isDir && !isDisk) actions.addAll(listOf("下载", "文本编辑", "十六进制"))
                                     if (
                                         file
                                             .optString("name")
@@ -458,12 +487,14 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                                             .lowercase() in listOf("zip", "rar", "7z", "gz", "tar")
                                     )
                                         actions.add("解压")
-                                    if (file.has("totalBytes")) actions.add("修改磁盘名称")
-                                    actions.add("删除")
+                                    if (!isDisk) actions.add("删除")
                                     actions.forEach { name ->
                                         DropdownMenuItem(
-                                            text = { Text(name) },
+                                            text = { Text(name, color = if (name == "删除") MaterialTheme.colorScheme.error else LocalContentColor.current) },
+                                            leadingIcon = { Icon(fileActionIcon(name), null, Modifier.size(18.dp),
+                                                tint = if (name == "删除") MaterialTheme.colorScheme.error else LocalContentColor.current) },
                                             onClick = { operation(name, listOf(file)) },
+                                            modifier = Modifier.heightIn(min = 40.dp),
                                         )
                                     }
                                 }
@@ -472,7 +503,85 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                     }
                 }
             }
+
+        }
+        HorizontalDivider()
+        Surface(tonalElevation = 3.dp) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                if (selected.isEmpty()) {
+                    FileToolbarButton("磁盘", Icons.Outlined.Storage, !busy, Modifier.weight(1f)) { navigate("") }
+                    FileToolbarButton("上级", Icons.Outlined.ArrowUpward, !busy && path.isNotEmpty(), Modifier.weight(1f)) { navigate(parentPath(path)) }
+                    FileToolbarButton("新建", Icons.Outlined.CreateNewFolder, !busy && path.isNotBlank(), Modifier.weight(1f)) { createKind = true }
+                    FileToolbarButton("上传", Icons.Outlined.UploadFile, !busy && path.isNotBlank(), Modifier.weight(1f)) { uploader.launch(arrayOf("*/*")) }
+                    FileToolbarButton("刷新", Icons.Outlined.Refresh, !busy, Modifier.weight(1f)) { refresh++ }
+                } else {
+                    FileToolbarButton("取消", Icons.Outlined.Close, !busy, Modifier.weight(1f)) { selected = emptySet() }
+                    listOf(
+                        "复制" to Icons.Outlined.ContentCopy,
+                        "移动" to Icons.Outlined.DriveFileMove,
+                        "压缩" to Icons.Outlined.FolderZip,
+                        "删除" to Icons.Outlined.Delete,
+                    ).forEach { (name, icon) ->
+                        FileToolbarButton(name, icon, !busy, Modifier.weight(1f)) {
+                            operation(name, files.orEmpty().filter { it.optString("path") in selected })
+                        }
+                    }
+                }
+            }
+        }
     }
+    if (editingPath) InputDialog("前往目录", "服务器上的目录路径", inputPath, { editingPath = false }) {
+        editingPath = false; navigate(it)
+    }
+    if (createKind) AlertDialog(
+        onDismissRequest = { createKind = false },
+        title = { Text("新建") },
+        text = { Text("选择要创建的类型") },
+        confirmButton = {
+            TextButton(onClick = { createKind = false; input = Triple("新建文件夹", "", path) }) { Text("文件夹") }
+        },
+        dismissButton = {
+            TextButton(onClick = { createKind = false; input = Triple("新建文件", "", path) }) { Text("文件") }
+        },
+    )
+    if (viewDialog) AlertDialog(onDismissRequest = { viewDialog = false }, title = { Text("视图设置") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text("排序方式", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                    FileDirectionToggle(viewSettings.descending) { updateView(viewSettings.copy(descending = it)) }
+                }
+                FlowRowCompat {
+                    FileSort.entries.forEach { sort ->
+                        FilterChip(selected = viewSettings.sort == sort,
+                            onClick = { updateView(viewSettings.copy(sort = sort)) },
+                            label = { Text(sort.label, style = MaterialTheme.typography.labelMedium) },
+                            modifier = Modifier.height(30.dp))
+                    }
+                }
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text("次要排序", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                    FileDirectionToggle(viewSettings.secondaryDescending) { updateView(viewSettings.copy(secondaryDescending = it)) }
+                }
+                FlowRowCompat {
+                    FilterChip(selected = viewSettings.secondarySort == null,
+                        onClick = { updateView(viewSettings.copy(secondarySort = null)) },
+                        label = { Text("无", style = MaterialTheme.typography.labelMedium) },
+                        modifier = Modifier.height(30.dp))
+                    FileSort.entries.forEach { sort ->
+                        FilterChip(selected = viewSettings.secondarySort == sort,
+                            onClick = { updateView(viewSettings.copy(secondarySort = sort)) },
+                            label = { Text(sort.label, style = MaterialTheme.typography.labelMedium) },
+                            modifier = Modifier.height(30.dp))
+                    }
+                }
+                Row(Modifier.fillMaxWidth().clickable { updateView(viewSettings.copy(foldersFirst = !viewSettings.foldersFirst)) },
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text("文件夹始终置顶", Modifier.weight(1f))
+                    Switch(checked = viewSettings.foldersFirst, onCheckedChange = { updateView(viewSettings.copy(foldersFirst = it)) })
+                }
+            }
+        }, confirmButton = { TextButton(onClick = { viewDialog = false }) { Text("完成") } })
     gitOperation?.let { (metadata, action) ->
         FileGitDialog(api, metadata, action, close = { gitOperation = null }, changed = { refresh++ })
     }
@@ -483,6 +592,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
             task {
                 when (name) {
                     "新建文件夹" -> api.json("/api/files/create-directory", obj("path" to dest))
+                    "新建文件" -> api.json("/api/files/write", obj("path" to dest, "content" to ""))
                     "重命名" ->
                         api.json("/api/files/rename", obj("oldPath" to target, "newPath" to dest))
                     "复制",
@@ -508,7 +618,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
                             "/api/files/decompress",
                             obj("archivePath" to target, "destPath" to dest),
                         )
-                    "修改磁盘名称" ->
+                    "修改卷标" ->
                         api.json(
                             "/api/files/set-drive-label",
                             obj("path" to target, "label" to dest),
@@ -523,7 +633,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
         else
             InputDialog(
                 name,
-                if (name == "修改磁盘名称") "磁盘名称" else "服务器上的完整目标路径",
+                if (name == "修改卷标") "卷标名称" else "服务器上的完整目标路径",
                 initial,
                 { input = null },
                 submit,
@@ -566,6 +676,26 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onCompose: (String) -
 fun isComposeFile(name: String) =
     name.lowercase().matches(Regex("(?:docker-)?compose(?:[.-].+)?\\.ya?ml"))
 
+private fun fileActionIcon(name: String): ImageVector = when (name) {
+    "复制路径" -> Icons.Outlined.Link
+    "重命名" -> Icons.Outlined.Edit
+    "复制" -> Icons.Outlined.ContentCopy
+    "移动" -> Icons.Outlined.DriveFileMove
+    "压缩" -> Icons.Outlined.FolderZip
+    "解压" -> Icons.Outlined.Unarchive
+    "下载" -> Icons.Outlined.Download
+    "文本编辑" -> Icons.Outlined.EditNote
+    "十六进制" -> Icons.Outlined.Code
+    "Compose 管理" -> Icons.Outlined.Layers
+    "Git 状态" -> Icons.Outlined.AccountTree
+    "Git 提交并推送" -> Icons.Outlined.Commit
+    "Git 推送" -> Icons.Outlined.CloudUpload
+    "Git 拉取" -> Icons.Outlined.CloudDownload
+    "修改卷标", "修改磁盘名称" -> Icons.Outlined.DriveFileRenameOutline
+    "删除" -> Icons.Outlined.Delete
+    else -> Icons.Outlined.MoreHoriz
+}
+
 private fun fileIcon(file: JSONObject): ImageVector =
     if (file.optBoolean("isDirectory"))
         if (file.has("totalBytes")) Icons.Outlined.Storage else Icons.Outlined.Folder
@@ -607,3 +737,14 @@ private fun fileIcon(file: JSONObject): ImageVector =
             "yml" -> Icons.Outlined.Code
             else -> Icons.Outlined.Description
         }
+
+@Composable
+private fun FileToolbarButton(label: String, icon: ImageVector, enabled: Boolean, modifier: Modifier, action: () -> Unit) {
+    TextButton(onClick = action, enabled = enabled, modifier = modifier.heightIn(min = 52.dp),
+        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp)) {
+        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+            Icon(icon, null, Modifier.size(22.dp))
+            Text(label, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}

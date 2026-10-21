@@ -37,7 +37,7 @@ fun AgentContextInfo(info: JSONObject?, runtime: String = "", onClick: (() -> Un
         Text(context + runtime.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
             modifier = Modifier.fillMaxWidth(), maxLines = 1, overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (ratio != null) LinearProgressIndicator(progress = { ratio.toFloat().coerceIn(0f, 1f) },
+        if (ratio != null) LinearProgressIndicator(gapSize = 0.dp, progress = { ratio.toFloat().coerceIn(0f, 1f) },
             modifier = Modifier.fillMaxWidth().padding(top = 2.dp).height(2.dp), drawStopIndicator = {},
             color = if (ratio >= .9) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
     }

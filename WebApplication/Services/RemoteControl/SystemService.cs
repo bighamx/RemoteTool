@@ -450,6 +450,13 @@ public class SystemService : ISystemControlService
     /// <summary>
     /// 锁定工作站
     /// </summary>
+    public Task ScreenOffAsync()
+    {
+        if (IsSession0) return DesktopAgent.ScreenOffAsync();
+        DisplayPower.ScreenOff();
+        return Task.CompletedTask;
+    }
+
     public void LockWorkstation()
     {
         if (IsSession0)

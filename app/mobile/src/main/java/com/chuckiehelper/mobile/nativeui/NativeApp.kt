@@ -37,7 +37,7 @@ import kotlinx.coroutines.*
 import org.json.JSONObject
 
 @Composable
-fun NativeApp(model: NativeModel) {
+fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
     val updates: AppUpdateModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val savedScreens = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val dark = isSystemInDarkTheme()
@@ -88,8 +88,13 @@ fun NativeApp(model: NativeModel) {
         DisposableEffect(exitToast) { onDispose { exitToast.cancel() } }
         val pages = rememberSaveableStateHolder()
         var route by rememberSaveable { mutableStateOf("系统") }
+        val sharedDraft = shares?.ready?.takeIf { it.deviceId == session?.device?.id }
+        val choosingShare = shares?.pending == true && sharedDraft == null
         LaunchedEffect(route) { if (route == "文件") route = "Codex" }
         var detail by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(sharedDraft?.id) {
+            sharedDraft?.let { detail = null; route = if (it.agent == "codex") "Codex" else "Hermes" }
+        }
         var composeTarget by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
         val keyboardVisible = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
@@ -119,7 +124,7 @@ fun NativeApp(model: NativeModel) {
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },
             topBar = {
-                if (session == null || model.loginNeeded || (detail ?: route) !in listOf("Codex", "Hermes")) TopAppBar(
+                if (choosingShare || session == null || model.loginNeeded || (detail ?: route) !in listOf("Codex", "Hermes", "文件")) TopAppBar(
                     title = {
                         Column {
                             Text(
@@ -167,7 +172,7 @@ fun NativeApp(model: NativeModel) {
                 )
             },
             bottomBar = {
-                if (session != null && !model.loginNeeded && detail == null && !keyboardVisible)
+                if (!choosingShare && session != null && !model.loginNeeded && detail == null && !keyboardVisible)
                     NavigationBar(modifier = Modifier.selectableGroup()) {
                         listOf(
                                 "系统" to Icons.Outlined.Speed,
@@ -220,6 +225,8 @@ fun NativeApp(model: NativeModel) {
                             onLogin = { username, password -> model.login(session, username, password) },
                             onError = { model.message = it })
                     }
+                    choosingShare -> ShareTargetScreen(shares!!, session.api, session.device.id, session.device.name,
+                        changeDevice = { model.showDevices() })
                     else ->
                         key(session.api.base, session.device.id) {
                             val api = session.api
@@ -239,7 +246,7 @@ fun NativeApp(model: NativeModel) {
                                     "进程" -> ProcessScreen(api, error)
                                     "远程" -> RemoteScreen(api)
                                     "文件" -> savedScreens.SaveableStateProvider("files-${session.device.id}") {
-                                        FilesScreen(api, error) { path ->
+                                        FilesScreen(api, error, onClose = { detail = null }) { path ->
                                             composeTarget = path
                                             detail = "Compose 管理"
                                         }
@@ -248,8 +255,8 @@ fun NativeApp(model: NativeModel) {
                                     "Compose 管理" -> ComposeScreen(api, error, composeTarget)
                                     "终端" -> TerminalScreen(api, error)
                                     "Hangfire" -> JobsScreen(api, error)
-                                    "Hermes" -> savedScreens.SaveableStateProvider("hermes-${session.device.id}") { HermesScreen(api, session.device.id) }
-                                    "Codex" -> savedScreens.SaveableStateProvider("codex-${session.device.id}") { HermesScreen(api, session.device.id, "codex") }
+                                    "Hermes" -> savedScreens.SaveableStateProvider("hermes-${session.device.id}") { HermesScreen(api, session.device.id, incoming = sharedDraft?.takeIf { it.agent == "hermes" }, onSharedHandled = { shares?.finishDelivery(it) }) }
+                                    "Codex" -> savedScreens.SaveableStateProvider("codex-${session.device.id}") { HermesScreen(api, session.device.id, "codex", incoming = sharedDraft?.takeIf { it.agent == "codex" }, onSharedHandled = { shares?.finishDelivery(it) }) }
                                     else ->
                                         Column(
                                             Modifier.verticalScroll(rememberScrollState()).padding(16.dp),

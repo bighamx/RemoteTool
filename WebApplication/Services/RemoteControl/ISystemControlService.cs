@@ -14,6 +14,7 @@ public interface ISystemControlService
     void Sleep();
     void Hibernate();
     void LockWorkstation();
+    Task ScreenOffAsync() => Task.FromException(new PlatformNotSupportedException("当前系统尚不支持息屏"));
 
     // Process
     Task<List<ProcessInfo>> GetProcessListAsync();

@@ -50,7 +50,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 
 @Composable
-fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
+fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", incoming: SharedChatDraft? = null, onSharedHandled: (Boolean) -> Unit = {}) {
     val app = LocalContext.current.applicationContext as Application
     val model: HermesModel =
         viewModel(
@@ -79,6 +79,14 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
         }
     }
     var list by rememberSaveable { mutableStateOf(true) }
+    LaunchedEffect(incoming?.id) {
+        incoming?.let {
+            model.bind(api)
+            val accepted = model.acceptSharedDraft(it)
+            if (accepted) list = false
+            onSharedHandled(accepted)
+        }
+    }
     DisposableEffect(model, list, lifecycle) {
         fun update() { model.setObserving(!list && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
         val observer = LifecycleEventObserver { _, _ -> update() }
@@ -562,7 +570,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes") {
                         val contextWindow = session.optLong("context_window", 0)
                         if (contextUsed > 0 && contextWindow > 0) {
                             // 与 AgentContextInfo 的会话上下文条同款（默认轨道色，≥90% 变红）
-                            LinearProgressIndicator(
+                            LinearProgressIndicator(gapSize = 0.dp,
                                 progress = { (contextUsed.toDouble() / contextWindow).coerceIn(0.02, 1.0).toFloat() },
                                 modifier = Modifier.fillMaxWidth().height(2.dp),
                                 drawStopIndicator = {},

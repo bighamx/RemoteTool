@@ -78,6 +78,7 @@ fun SystemScreen(
             FlowRowCompat {
                 listOf(
                         "锁定" to "lock",
+                        "息屏" to "screen-off",
                         "睡眠" to "sleep",
                         "休眠" to "hibernate",
                         "取消关机" to "cancel-shutdown",
@@ -296,7 +297,8 @@ fun sensorLabel(name: String): String =
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun FlowRowCompat(content: @Composable () -> Unit) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), content = { content() })
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp), content = { content() })
 }
 
 @Composable

@@ -147,7 +147,7 @@ private fun DetailBar(label: String, value: String, fraction: Float) {
             Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
             Text(value, style = MaterialTheme.typography.labelMedium)
         }
-        LinearProgressIndicator(
+        LinearProgressIndicator(gapSize = 0.dp,
             progress = { fraction.coerceIn(0f, 1f) },
             drawStopIndicator = {},
             modifier = Modifier.fillMaxWidth().height(5.dp),

@@ -69,7 +69,7 @@ internal fun AppUpdateHost(model: AppUpdateModel) {
                 when (model.phase) {
                     UpdatePhase.Checking -> LinearProgressIndicator(Modifier.fillMaxWidth())
                     UpdatePhase.Downloading -> {
-                        LinearProgressIndicator(progress = { (model.downloaded.toFloat() / (release?.size ?: 1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                        LinearProgressIndicator(gapSize = 0.dp, progress = { (model.downloaded.toFloat() / (release?.size ?: 1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
                         Text("${updateBytes(model.downloaded)} / ${updateBytes(release?.size ?: 0)}", style = MaterialTheme.typography.labelMedium)
                         Text("可关闭此窗口，下载会继续。", style = MaterialTheme.typography.bodySmall)
                     }

@@ -21,7 +21,7 @@ public static class DesktopAgent
     /// <summary>
     /// 代理协议版本号（每次修改代理协议时递增，用于检测旧版本代理）
     /// </summary>
-    public const int ProtocolVersion = 20;
+    public const int ProtocolVersion = 21;
 
     /// <summary>
     /// 代理空闲超时时间（无连接时自动退出）
@@ -252,6 +252,7 @@ public static class DesktopAgent
                 "keyboard_multi" => HandleKeyboardMulti(root, systemService),
                 "native_input" => HandleNativeInput(root),
                 "lock" => HandleLock(systemService),
+                "screen_off" => HandleScreenOff(),
                 "screen_bounds" => HandleScreenBounds(systemService),
                 "launch_ffmpeg" => HandleLaunchFFmpeg(root),
                 "session_state" => HandleSessionState(),
@@ -363,6 +364,12 @@ public static class DesktopAgent
     private static byte[] HandleLock(SystemService svc)
     {
         svc.LockWorkstation();
+        return OkResponse();
+    }
+
+    private static byte[] HandleScreenOff()
+    {
+        DisplayPower.ScreenOff();
         return OkResponse();
     }
 
@@ -1243,6 +1250,16 @@ public static class DesktopAgent
     {
         await EnsureAgentRunningAsync();
         await SendCommandInternalAsync("{\"type\":\"lock\"}", TimeSpan.FromSeconds(5));
+    }
+
+    public static async Task ScreenOffAsync()
+    {
+        await EnsureAgentRunningAsync();
+        var response = await SendCommandInternalAsync("{\"type\":\"screen_off\"}", TimeSpan.FromSeconds(5));
+        if (response == null || response.Length == 0) throw new InvalidOperationException("桌面代理未确认息屏操作");
+        using var document = JsonDocument.Parse(response);
+        if (!document.RootElement.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.True)
+            throw new InvalidOperationException("桌面代理执行息屏失败");
     }
 
     /// <summary>

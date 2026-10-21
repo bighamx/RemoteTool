@@ -9,11 +9,17 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application android:label="RemoteTool" android:icon="@mipmap/ic_launcher" android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="true" android:allowBackup="false">
-        <activity android:name=".NativeActivity" android:exported="true" android:windowSoftInputMode="adjustResize"
+        <activity android:name=".NativeActivity" android:exported="true" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|smallestScreenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="*/*"/>
             </intent-filter>
         </activity>
         <activity android:name=".RemoteActivity" android:exported="false" android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden"/>

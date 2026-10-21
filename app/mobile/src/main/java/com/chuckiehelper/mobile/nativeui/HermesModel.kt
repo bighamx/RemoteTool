@@ -857,6 +857,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private fun saveFinalSyncStates() {
         prefs.edit().putString("finalSyncStates", org.json.JSONArray(finalSyncStates.map { it.json() }).toString()).apply()
     }
+    private fun discardCompactionReply(run: String, result: JSONObject) {
+        val remaining = reconcileCompactionRunSync(finalSyncStates, run, result)
+        if (remaining.size != finalSyncStates.size) {
+            finalSyncStates.clear(); finalSyncStates.addAll(remaining); saveFinalSyncStates()
+        }
+        if (isCompactionRun(run, result) && outgoingFiles.removeAll { it.run == run }) saveOutgoingFiles()
+    }
     private fun saveOutgoingFiles() {
         prefs.edit().putString("outgoingFiles", org.json.JSONArray(outgoingFiles.map { it.json() }).toString()).apply()
     }
@@ -2012,9 +2019,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 delay(5000)
                 if (selectedId != session || api !== connection || !needsFinalSyncPolling(session)) return@launch
                 try {
-                    finalSyncStates.filter { it.session == session && !it.canConfirm }.toList().forEach { pending ->
+                    finalSyncStates.filter { it.session == session && (!it.canConfirm || it.needsCompactionCheck()) }.toList().forEach { pending ->
                         try {
                             val status = connection.json("$root/runs/${pending.run}")
+                            if (isCompactionRun(pending.run, status)) {
+                                discardCompactionReply(pending.run, status)
+                                return@forEach
+                            }
                             val recovered = status.optString("output").removePrefix(pending.flushedPrefix)
                             if (recovered.isNotBlank()) {
                                 keepFinalSync(pending.copy(text = recovered, item = null, canConfirm = true))
@@ -2511,11 +2522,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         result.optString("status") in
                             setOf("completed", "failed", "cancelled", "interrupted", "acceptance_unknown")
                     ) {
+                        val compact = isCompactionRun(id, result)
+                        if (compact) discardCompactionReply(id, result)
                         runSession?.let { recordCompactionCompletion(id, it, result) }
                         if (result.optString("status") != "completed")
                             error = result.optString("error").ifBlank { state }
-                        val statusText = if (result.optString("status") == "acceptance_unknown") "" else result.optString("output")
-                        val terminalText = terminalSyncText(pendingText, pendingPhase, streamGap, statusText, flushedStreamPrefix)
+                        val statusText = if (compact || result.optString("status") == "acceptance_unknown") "" else result.optString("output")
+                        val terminalText = if (compact) "" else terminalSyncText(pendingText, pendingPhase, streamGap, statusText, flushedStreamPrefix)
                         val statusTail = statusText.removePrefix(flushedStreamPrefix)
                         val canConfirm = terminalText.isNotBlank() &&
                             (statusTail.isNotBlank() && terminalText.trim() == statusTail.trim() || finalSnapshotReceived)
@@ -2531,7 +2544,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         val finalSync = FinalSyncState(watchedSession, id, terminalItem, runTurnId, terminalText,
                             pendingTextTimestamp ?: System.currentTimeMillis(), runTimings[id]?.startedAt, canConfirm,
                             flushedStreamPrefix)
-                        if (finishedSession != null && completedMessageKey.isNotBlank()) {
+                        if (!compact && finishedSession != null && completedMessageKey.isNotBlank()) {
                             outgoingFiles.removeAll { it.run == id }
                             outgoingFiles.add(OutgoingFiles(finishedSession, id, finalSync.item, finalSync.turn,
                                 finalSync.text, finalSync.startedAt, returned.map { it.getString("id") },
@@ -2539,7 +2552,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                             saveOutgoingFiles()
                         }
                         finishedSession?.let { loadHistory(it) }
-                        val historyReady = finishedSession == null ||
+                        val historyReady = compact || finishedSession == null ||
                             finalSyncAcknowledged(finalSync, cachedHistory[finishedSession].orEmpty())
                         if (finishedSession != null && !historyReady) keepFinalSync(finalSync)
                         runId = null
@@ -2835,6 +2848,19 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 } while (filesRefreshPending)
             } finally { if (filesReadEpoch == epoch) filesReadJob = null }
         }
+    }
+
+    private val acceptedShares = mutableSetOf<String>()
+    fun acceptSharedDraft(shared: SharedChatDraft): Boolean {
+        if (shared.id in acceptedShares) return true
+        val session = shared.session.getString("id")
+        val combined = (draftFiles[session].orEmpty() + shared.attachments).distinctBy { it.optString("id") }
+        if (uploading || combined.size > 8) return false
+        select(shared.session)
+        draftFiles = draftFiles + (session to combined)
+        if (shared.text.isNotBlank()) draft = listOf(draft, shared.text).filter { it.isNotBlank() }.joinToString("\n")
+        acceptedShares += shared.id
+        return true
     }
 
     fun removePendingFile(id: String) {

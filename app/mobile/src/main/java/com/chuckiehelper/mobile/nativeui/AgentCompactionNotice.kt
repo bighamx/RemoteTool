@@ -54,8 +54,11 @@ internal fun coalesceCompactionNotices(notices: List<AgentCompactionNotice>): Li
     return rows
 }
 
+internal fun isCompactionRun(run: String, result: JSONObject): Boolean =
+    result.optString("kind") == "compact" || run.startsWith("hcompact_")
+
 fun successfulCompaction(run: String, result: JSONObject): Boolean =
-    result.optString("status") == "completed" && (result.optString("kind") == "compact" || run.startsWith("hcompact_"))
+    result.optString("status") == "completed" && isCompactionRun(run, result)
 
 /** Codex returns native compaction items in history order; discard legacy local overlays. */
 internal fun mergeAgentCompactionNotices(agent: String, history: List<HermesMessage>, notices: List<AgentCompactionNotice>): List<HermesMessage> =

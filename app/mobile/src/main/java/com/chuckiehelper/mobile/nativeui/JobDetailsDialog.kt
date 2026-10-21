@@ -229,7 +229,7 @@ fun JobDetailsDialog(api: NativeApi, id: String, close: () -> Unit) {
     if (line.optString("type") == "progress") {
         Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             Row { Text(line.optString("name").takeUnless { it.isBlank() || it == "null" } ?: "任务进度", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium); Text("${line.optDouble("progress").toInt()}%", style = MaterialTheme.typography.labelMedium) }
-            LinearProgressIndicator(progress = { (line.optDouble("progress") / 100).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp), drawStopIndicator = {})
+            LinearProgressIndicator(gapSize = 0.dp, progress = { (line.optDouble("progress") / 100).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp), drawStopIndicator = {})
         }
     } else {
         var expanded by remember(line.optInt("index")) { mutableStateOf(false) }

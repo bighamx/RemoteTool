@@ -69,6 +69,15 @@ internal fun finalSyncAcknowledged(sync: FinalSyncState, history: List<HermesMes
 internal fun retainFinalSync(states: List<FinalSyncState>, incoming: FinalSyncState): List<FinalSyncState> =
     states.filterNot { it.run == incoming.run } + incoming
 
+/** Old versions mistook the compact operation's status output for an assistant answer.
+ * Text only selects candidates; the run endpoint must confirm the operation kind. */
+internal fun FinalSyncState.needsCompactionCheck(): Boolean =
+    item == null && text.trim() in setOf("上下文已压缩", "上下文压缩完成")
+
+internal fun reconcileCompactionRunSync(states: List<FinalSyncState>, run: String,
+    result: JSONObject): List<FinalSyncState> =
+    if (isCompactionRun(run, result)) states.filterNot { it.run == run } else states
+
 internal fun reconcileFinalSync(states: List<FinalSyncState>, session: String,
     history: List<HermesMessage>): List<FinalSyncState> =
     states.filterNot { it.session == session && finalSyncAcknowledged(it, history) }

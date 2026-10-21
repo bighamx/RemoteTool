@@ -62,7 +62,7 @@ private fun CodexUsageValues(usage: JSONObject?, compact: Boolean, onClick: () -
             val remaining = if (used >= 0 && used.isFinite()) (100 - used).coerceIn(0.0, 100.0) else null
             Column(Modifier.weight(1f)) {
                 Text("$label · ${remaining?.let { "剩余 ${it.toInt()}%" } ?: "暂无数据"}", style = MaterialTheme.typography.labelSmall)
-                if (remaining != null) LinearProgressIndicator(progress = { remaining.toFloat() / 100f },
+                if (remaining != null) LinearProgressIndicator(gapSize = 0.dp, progress = { remaining.toFloat() / 100f },
                     modifier = Modifier.fillMaxWidth().padding(top = if (compact) 2.dp else 4.dp).height(if (compact) 2.dp else 3.dp),
                     color = if (remaining < 20) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     drawStopIndicator = {})
