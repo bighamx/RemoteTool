@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using RemoteTool.WebApi.Services.Codex;
 
 await HermesHistoryPagesChecks.Run();
+await CodexHandoffQueueChecks.Run();
 
 {
     var pinTest = Path.Combine(Path.GetTempPath(), "remotetool-pins-" + Guid.NewGuid().ToString("N"));

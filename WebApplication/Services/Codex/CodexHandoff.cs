@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text.Json.Nodes;
+using Microsoft.AspNetCore.Http;
 using static RemoteTool.WebApi.Services.Codex.CodexJson;
 
 namespace RemoteTool.WebApi.Services.Codex;
@@ -36,7 +37,7 @@ internal sealed class CodexHandoff : IDisposable
     public async Task<bool> SessionBusy(string session) {
         foreach (var entry in pending.Where(entry => entry.Value == session)) {
             var state = await Read(entry.Key);
-            if (state.S("status") is "started" or "submitting") return true;
+            if (state.S("status") is "started" or "submitting" or "queued") return true;
             Finish(entry.Key, state);
         }
         return false;
@@ -59,7 +60,7 @@ internal sealed class CodexHandoff : IDisposable
         context.Response.Headers.CacheControl = "no-store";
         if (parts.Length == 2 && response.IsSuccessStatusCode) {
             var state = JsonNode.Parse(await response.Content.ReadAsStringAsync(context.RequestAborted))!.AsObject();
-            if (state.S("status") is not ("started" or "submitting")) Finish(parts[1], state);
+            if (state.S("status") is not ("started" or "submitting" or "queued")) Finish(parts[1], state);
             await context.Response.WriteAsJsonAsync(state, context.RequestAborted);
         } else {
             context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>()?.DisableBuffering();
@@ -80,7 +81,7 @@ internal sealed class CodexHandoff : IDisposable
                 foreach (var entry in pending.ToArray()) {
                     try {
                         var state = await Read(entry.Key, stopping.Token);
-                        if (state.S("status") is not ("started" or "submitting")) Finish(entry.Key, state);
+                        if (state.S("status") is not ("started" or "submitting" or "queued")) Finish(entry.Key, state);
                     } catch (Exception error) when (error is HttpRequestException or OperationCanceledException && !stopping.IsCancellationRequested) {
                         if (OldProcessAlive()) continue; // A transient timeout must never terminate a live owner.
                         var unknown = Obj(("run_id", entry.Key), ("session_id", entry.Value), ("status", "acceptance_unknown"),
