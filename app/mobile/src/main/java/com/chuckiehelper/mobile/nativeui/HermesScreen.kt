@@ -1283,7 +1283,7 @@ private fun RunTimers(runId: String?, timing: AgentRunTiming, responseLabel: Str
     }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf(
-            (if (compacting) "等待压缩" else if (timing.lastResponseAt == null) "等待响应" else responseLabel.replace("距上次已保存响应", "距保存响应").replace("距上次响应", "距响应")) to (timing.lastResponseAt ?: timing.startedAt),
+            (if (compacting) "等待压缩" else if (timing.lastResponseAt == null) "等待响应" else responseLabel.replace("距上次已保存响应", "上次保存响应").replace("距上次响应", "上次响应")) to (timing.lastResponseAt ?: timing.startedAt),
             (if (compacting) "压缩" else "已运行") to timing.startedAt,
         ).forEach { (label, since) ->
             Text("$label ${formatRunElapsed(since, now)}", Modifier.weight(1f),

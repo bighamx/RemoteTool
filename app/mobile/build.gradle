@@ -28,6 +28,13 @@ android {
     if (updateStorePath && !updateStore.isFile()) throw new GradleException('RemoteTool signing store does not exist')
     if (updateStore.isFile()) signingConfigs.debug.storeFile = updateStore
     testOptions { unitTests.includeAndroidResources = true }
+    // Deliverable naming follows the project name (RemoteTool), not the legacy package.
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            outputFileName = "RemoteTool-${variant.versionName}-${variant.versionCode}.apk"
+        }
+    }
+
     buildTypes {
         release {
             // Preserve the certificate used by installed APKs so updates keep app data.
