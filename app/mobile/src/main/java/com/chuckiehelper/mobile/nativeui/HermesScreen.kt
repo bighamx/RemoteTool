@@ -197,6 +197,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
     val messageItems = remember(messageRows, textStream, assistantIdentities) {
         chatMessageItems(messageRows, textStream, assistantIdentities)
     }
+    // Keep expansion outside the lazy row: offscreen row disposal must not collapse it.
+    var activityExpanded by rememberSaveable(deviceId, agent, model.selectedId, model.executionKey) { mutableStateOf(false) }
     val timelineRows = chatTimelineRows(messageItems, model.hasExecution, model.approval != null, model.selectedId == null)
     val sessionsScroll = model.sessionsListState
     val searchingSessions = filter.isNotBlank()
@@ -696,7 +698,6 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
                     }
                 }
                 ChatRowKind.Execution -> {
-                        var showTools by remember(model.executionKey) { mutableStateOf(false) }
                         Card(Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
@@ -716,17 +717,17 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
                                         )
                                         if (!model.executionCompacting && model.executionEvents.isNotEmpty())
                                             TextButton(onClick = {
-                                                if (showTools) {
+                                                if (activityExpanded) {
                                                     // Collapse and reset the reverse-list offset in the same measure.
                                                     // Keeping an offset from the tall card would expose older messages.
                                                     val executionIndex = timelineRows.indexOfFirst { it.key == row.key }
                                                     if (executionIndex >= 0) scroll.requestScrollToItem(executionIndex)
                                                 }
-                                                showTools = !showTools
+                                                activityExpanded = !activityExpanded
                                             }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) {
                                                 // 显示本 run 收到的工具/进度事件总数（events 列表只保留最近 30 条，直接用 size 会一直显示截断后的值）
-                                                Text("${if (showTools) "收起详情" else "详情"} · ${model.executionEventCount}", maxLines = 1)
-                                                Icon(if (showTools) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null, Modifier.size(18.dp))
+                                                Text("${if (activityExpanded) "收起" else "展开"} · ${model.executionEventCount}", maxLines = 1)
+                                                Icon(if (activityExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null, Modifier.size(18.dp))
                                             }
                                         if (!model.requestingCompaction && (model.runId != null || agent == "hermes" && model.externalRunning))
                                             TextButton(onClick = { stop = true }, enabled = !model.stopping,
@@ -743,12 +744,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
                                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                                 if (!model.executionCompacting)
-                                    key(model.executionKey) { ExecutionActivityPreview(model.executionEvents, agent == "codex") }
-                                if (showTools && !model.executionCompacting)
-                                    model.executionEvents.forEach {
-                                        ToolProgressRow(it.text,
-                                            if (agent == "codex") compactCodexToolPreview(it.detail) else it.detail,
-                                            it.type)
+                                    key(model.executionKey) {
+                                        ExecutionActivityPreview(model.executionEvents, agent == "codex", activityExpanded)
                                     }
                             }
                         }
