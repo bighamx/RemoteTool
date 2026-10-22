@@ -72,8 +72,13 @@ internal fun readAgentSelection(session: JSONObject): AgentSelection {
     val lock = config?.optJSONObject("browser_model_lock")
     val reasoning = lock?.optJSONObject("model_options")?.optJSONObject("reasoning")
     val effort = if (reasoning?.optBoolean("enabled", true) == false) "none" else reasoning?.cleanSetting("effort").orEmpty()
+    val lockedProvider = lock?.cleanSetting("provider").orEmpty()
+    val reportedProvider = session.cleanSetting("provider").ifBlank { session.cleanSetting("modelProvider") }
+    // A legacy billing placeholder must not hide the server's endpoint-resolved identity.
+    val provider = if (lockedProvider == "custom" && reportedProvider.isNotBlank() && reportedProvider != "custom") reportedProvider
+        else lockedProvider.ifBlank { reportedProvider.ifBlank { config?.cleanSetting("requested_provider").orEmpty() } }
     return AgentSelection(
-        lock?.cleanSetting("provider").orEmpty().ifBlank { session.cleanSetting("provider").ifBlank { config?.cleanSetting("requested_provider").orEmpty() } },
+        provider,
         lock?.cleanSetting("model").orEmpty().ifBlank { config?.cleanSetting("requested_model").orEmpty().ifBlank { session.cleanSetting("model") } },
         if (lock != null) effort else session.cleanSetting("reasoning_effort"),
         session.cleanSetting("service_tier"),

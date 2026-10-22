@@ -2,7 +2,6 @@ package com.chuckiehelper.mobile.nativeui
 
 import android.app.Application
 import androidx.compose.runtime.*
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -66,23 +65,6 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private lateinit var api: NativeApi
     val sessionsListState = LazyListState()
 
-    /** 会话列表视口锚点（首个可见项的 key + 像素偏移）。恢复按 key 而非 index+像素：
-        运行中会话按活跃时间重排、行高变化时，index 会指向别的会话，key 始终指向同一条。 */
-    var sessionsViewportAnchor by mutableStateOf<Triple<String, Int, Int>?>(null)
-        private set
-    fun captureSessionsViewport(key: String?, offset: Int, index: Int) {
-        sessionsViewportAnchor = if (key != null) Triple(key, offset, index) else null
-    }
-    /** suspend：必须在组合上下文调用（需要 MonotonicFrameClock），勿再包 viewModelScope.launch。 */
-    suspend fun restoreSessionsViewport() {
-        val anchor = sessionsViewportAnchor ?: return
-        if (sessionsListState.isScrollInProgress) return
-        withFrameNanos { }
-        val info = sessionsListState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == anchor.first } ?: return
-        if (info.offset == anchor.second) return
-        if (anchor.second >= 0) sessionsListState.scrollToItem(info.index, anchor.second)
-        else { sessionsListState.scrollToItem(info.index); sessionsListState.scrollBy(anchor.second.toFloat()) }
-    }
     var sessionSearchQuery by mutableStateOf("")
         private set
     var sessionSearchResults by mutableStateOf<List<JSONObject>>(emptyList())
@@ -129,7 +111,6 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             finally { if (epoch == sessionSearchEpoch) sessionSearchLoading = false }
         }
     }
-    var sessionsListTouched by mutableStateOf(false)
     var sessions by mutableStateOf<List<JSONObject>>(runCatching {
         org.json.JSONArray(prefs.getString("offlineSessions", "[]")).objects()
     }.getOrDefault(emptyList()))
@@ -369,8 +350,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     val hasExecution get() = requestingCompaction || (runStateVerified && runSession == selectedId) || externalRunning
     val executionKey get() = if (requestingCompaction) "compact-request-${compactionRequest?.second}" else runId ?: externalActivity?.optString("activity_id")?.takeIf { externalRunning }?.let { "external-$it" }
     val executionTiming get() = if (requestingCompaction) AgentRunTiming(startedAt = compactionRequest?.second) else if (streamCompacting) AgentRunTiming(startedAt = streamCompaction?.second) else if (runId != null) currentRunTiming else externalActivityTiming(externalActivity)
-    val executionEvents get() = if (runId != null) events else externalActivityEvents(externalActivity)
-    val executionEventCount get() = if (runId != null) eventCount else externalActivity?.optInt("event_count") ?: 0
+    private var runActivitySnapshot by mutableStateOf<Pair<String, JSONObject>?>(null)
+    private var runActivityObservedAt by mutableLongStateOf(0L)
+    private var runActivityAttempt: Pair<String, Long>? = null
+    private val currentRunActivity get() = runActivitySnapshot?.takeIf {
+        it.first == runId && it.second.optString("session_id") == selectedId && activityNow - runActivityObservedAt <= 30_000L
+    }?.second
+    val executionEvents get() = if (runId != null) {
+        val saved = currentRunActivity
+        if (saved != null && (!streamConnected || events.isEmpty() || streamGap)) externalActivityEvents(saved).ifEmpty { events } else events
+    } else externalActivityEvents(externalActivity)
+    val executionEventCount get() = if (runId != null) maxOf(eventCount, currentRunActivity?.optInt("event_count") ?: 0) else externalActivity?.optInt("event_count") ?: 0
     val executionState get() = if (requestingCompaction) "正在提交压缩请求" else if (streamCompacting) "正在压缩上下文" else if (runId != null) state else externalActivityLabel(externalActivity)
     val executionCompacting get() = requestingCompaction || executionState == "正在压缩上下文"
 
@@ -2443,6 +2433,25 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
+    /** A live run receipt can outlast its SSE transport. Rebuild progress from durable tool rows. */
+    private suspend fun refreshRunActivity(id: String, session: String, connection: NativeApi) {
+        if (agent != "hermes" || (streamConnected && events.isNotEmpty() && !streamGap) || executionCompacting) return
+        val now = activityClock()
+        if (runActivityAttempt?.let { it.first == id && now - it.second < 5_000L } == true) return
+        runActivityAttempt = id to now
+        try {
+            val snapshot = withTimeout(5_000L) { connection.json("$root/sessions/${q(session)}/activity") }
+            if (runId != id || runSession != session || selectedId != session || api !== connection) return
+            if (snapshot.optString("session_id") != session || !snapshot.optBoolean("available") || !snapshot.optBoolean("running")) return
+            val started = parseMessageTimestamp(snapshot.opt("started_at"))
+            // Do not hydrate progress from a preceding turn whose lease has not yet cleared.
+            if (started != null && currentRunTiming.startedAt?.let { started < it - 5_000L } == true) return
+            runActivitySnapshot = id to snapshot
+            runActivityObservedAt = activityClock()
+        } catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { /* Keep SSE/status observation independent of this optional read. */ }
+    }
+
     private fun watch() {
         val epoch = ++observationEpoch
         watching?.cancel()
@@ -2459,7 +2468,6 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         streamJob =
             viewModelScope.launch {
                 var reconnects = 0
-                var eventsGone = false
                 while (isActive && observation.active && runId == id) {
                     val started = activityClock()
                     try {
@@ -2470,19 +2478,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         // Gateway dropped the event transport for a still-running run (or it is
                         // already terminal). Stop hammering /events; the status poller below stays
                         // authoritative and loadHistory() keeps the message list current.
-                        eventsGone = true
                         if (streamGapRun == id) streamGap = true
                         watchedSession.let { launch { loadHistory(it) } }
+                        streamRecovering = false
+                        wake.trySend(Unit)
+                        break
                     } catch (_: Exception) {
                         /* Status polling remains authoritative; reconnect only this GET stream. */
                     }
                     if (runId != id) break
-                    if (eventsGone) {
-                        // Re-probe occasionally: a terminal run needs no stream, but if a later
-                        // observation re-attaches this run it calls watch() again anyway. Just idle.
-                        delay(5_000)
-                        continue
-                    }
                     if (activityClock() - started >= 15_000) reconnects = 0
                     reconnects++
                     if (epoch == observationEpoch) streamRecovering = reconnects < 4
@@ -2508,12 +2512,16 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     state = if (stoppingRunId == id && result.optString("status") in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval")) "正在停止"
                         else if (result.optString("kind") == "compact" && result.optString("status") == "started") "正在压缩上下文" else statusLabel(result.optString("status"))
                     approval = result.optJSONObject("approval")
+                    if (result.optString("status") in setOf("started", "running", "stopping", "waiting_for_approval")) {
+                        refreshRunActivity(id, watchedSession, connection)
+                        if (runId != id || api !== connection) return@launch
+                    }
                     result.optJSONObject("runtime")?.let { rt ->
                         val sseProvider = rt.optString("provider")
                         // Codex reports the actual routing provider, including custom and
                         // official aliases. Hermes may report an unresolved billing shell.
                         val sseProviderKnown = sseProvider.isNotBlank() && (agent == "codex" ||
-                            modelOptions.array("providers").objects().any { providerMatches(it, sseProvider) })
+                            sseProvider != "custom" && modelOptions.array("providers").objects().any { providerMatches(it, sseProvider) })
                         if (sseProviderKnown) {
                             runtime = listOf(providerDisplayName(sseProvider), rt.optString("model")).filter { piece -> piece.isNotBlank() }.joinToString(" · ")
                             if (selectedId == runSession) { sessionProvider = sseProvider; sessionModel = rt.optString("model") }

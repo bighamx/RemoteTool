@@ -234,7 +234,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         if (upstream.IsSuccessStatusCode && System.Text.Json.Nodes.JsonNode.Parse(payload) is System.Text.Json.Nodes.JsonObject node)
         {
             var session = (node["session"] as System.Text.Json.Nodes.JsonObject) ?? node;
-            var info = activity.SessionModelInfo(new[] { Id(id) }).GetValueOrDefault(Id(id));
+            var info = await SessionModelSettingAsync(Id(id), ct);
             if (!string.IsNullOrEmpty(info?.Provider))
             {
                 session["provider"] = info.Provider;
@@ -246,6 +246,21 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         Response.StatusCode = (int)upstream.StatusCode;
         Response.ContentType = upstream.Content.Headers.ContentType?.ToString() ?? "application/json";
         await Response.WriteAsync(payload, ct);
+    }
+    private async Task<HermesSessionActivity.SessionModelSetting?> SessionModelSettingAsync(string id, CancellationToken ct)
+    {
+        var info = activity.SessionModelInfo(new[] { id }).GetValueOrDefault(id);
+        if (info == null || (!string.IsNullOrEmpty(info.Provider) && info.Provider != "custom") || string.IsNullOrWhiteSpace(info.BaseUrl)) return info;
+        try {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            using var response = await bridge.SendAsync(HttpMethod.Get, "api/model/options", null, null, timeout.Token);
+            if (response.IsSuccessStatusCode && JsonNode.Parse(await response.Content.ReadAsStringAsync(timeout.Token)) is JsonObject catalog)
+                return info with { Provider = HermesProviderIdentity.Resolve(info.Provider, info.BaseUrl, catalog) };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception error) when (error is OperationCanceledException or InvalidOperationException or HttpRequestException or IOException or JsonException) { }
+        return info;
     }
     [HttpPost("sessions/{id}/fork")] public Task<IActionResult> ForkSession(string id, [FromBody] JsonElement body, CancellationToken ct) => MessageAction(id, "fork", body, ct);
     [HttpPost("sessions/{id}/rewind")] public Task<IActionResult> RewindSession(string id, [FromBody] JsonElement body, CancellationToken ct) => MessageAction(id, "rewind", body, ct);
@@ -341,7 +356,9 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             {
                 var runSessionId = body.TryGetProperty("session_id", out var rs) ? rs.GetString() : null;
                 if (!string.IsNullOrEmpty(runSessionId)) {
-                    var info = activity.SessionModelInfo(new[] { Id(runSessionId) }).GetValueOrDefault(Id(runSessionId));
+                    var info = body.TryGetProperty("provider", out var selectedProvider) && selectedProvider.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(selectedProvider.GetString())
+                        ? activity.SessionModelInfo(new[] { Id(runSessionId) }).GetValueOrDefault(Id(runSessionId))
+                        : await SessionModelSettingAsync(Id(runSessionId), ct);
                     if (info != null) {
                         var patched = System.Text.Json.Nodes.JsonNode.Parse(body.GetRawText())!.AsObject();
                         // 壳值 "custom" 只是计费占位（billing_provider 对自定义提供方恒为 custom），
@@ -449,7 +466,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             if (!upstream.IsSuccessStatusCode) return null;
             if (System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)) is not JsonObject detail) return null;
             var session = (detail["session"] as JsonObject) ?? detail;
-            var info = activity.SessionModelInfo(new[] { sessionId }).GetValueOrDefault(sessionId);
+            var info = await SessionModelSettingAsync(sessionId, ct);
             if (!string.IsNullOrEmpty(info?.Provider)) { session["provider"] = info.Provider; session["modelProvider"] = info.Provider; }
             if (!string.IsNullOrEmpty(info?.Effort)) session["reasoning_effort"] = info.Effort;
             return detail;
