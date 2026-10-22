@@ -697,20 +697,43 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
                 }
                 ChatRowKind.Execution -> {
                         var showTools by remember(model.executionKey) { mutableStateOf(false) }
-                        Card(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(12.dp)) {
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        model.executionState,
-                                        Modifier.weight(1f),
-                                        style = MaterialTheme.typography.titleSmall,
-                                    )
-                                    if (!model.requestingCompaction && (model.runId != null || agent == "hermes" && model.externalRunning))
-                                        TextButton(onClick = { stop = true }, enabled = !model.stopping) { Text(if (model.stopping) "正在停止" else "停止") }
-                                    else if (!model.requestingCompaction && model.canTakeover) TextButton(onClick = { takeover = true }) { Text("中断并接管") }
+                        Card(Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            model.executionState,
+                                            Modifier.weight(1f),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        )
+                                        if (!model.executionCompacting && model.executionEvents.isNotEmpty())
+                                            TextButton(onClick = {
+                                                if (showTools) {
+                                                    // Collapse and reset the reverse-list offset in the same measure.
+                                                    // Keeping an offset from the tall card would expose older messages.
+                                                    val executionIndex = timelineRows.indexOfFirst { it.key == row.key }
+                                                    if (executionIndex >= 0) scroll.requestScrollToItem(executionIndex)
+                                                }
+                                                showTools = !showTools
+                                            }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) {
+                                                // 显示本 run 收到的工具/进度事件总数（events 列表只保留最近 30 条，直接用 size 会一直显示截断后的值）
+                                                Text("${if (showTools) "收起详情" else "详情"} · ${model.executionEventCount}", maxLines = 1)
+                                                Icon(if (showTools) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null, Modifier.size(18.dp))
+                                            }
+                                        if (!model.requestingCompaction && (model.runId != null || agent == "hermes" && model.externalRunning))
+                                            TextButton(onClick = { stop = true }, enabled = !model.stopping,
+                                                modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text(if (model.stopping) "正在停止" else "停止", maxLines = 1) }
+                                        else if (!model.requestingCompaction && model.canTakeover) TextButton(onClick = { takeover = true },
+                                            modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text("中断并接管", maxLines = 1) }
+                                    }
                                 }
                                 if (!model.requestingCompaction) RunTimers(model.executionKey, model.executionTiming,
                                     responseLabel = if (model.runId == null) "距上次已保存响应" else "距上次响应", compacting = model.executionCompacting)
@@ -719,11 +742,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
                                     Text(if (model.requestingCompaction) "正在等待服务端确认" else "正在整理上下文，完成后可继续对话", Modifier.padding(top = 8.dp),
                                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                if (!model.executionCompacting && model.executionEvents.isNotEmpty())
-                                    TextButton(onClick = { showTools = !showTools }) {
-                                        // 显示本 run 收到的工具/进度事件总数（events 列表只保留最近 30 条，直接用 size 会一直显示截断后的值）
-                                        Text("工具与进度 · ${model.executionEventCount}")
-                                    }
+                                if (!model.executionCompacting)
+                                    key(model.executionKey) { ExecutionActivityPreview(model.executionEvents, agent == "codex") }
                                 if (showTools && !model.executionCompacting)
                                     model.executionEvents.forEach {
                                         ToolProgressRow(it.text,
@@ -1264,16 +1284,14 @@ private fun RunTimers(runId: String?, timing: AgentRunTiming, responseLabel: Str
             while (true) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) }
         }
     }
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf(
-            (if (compacting) "等待压缩结果" else if (timing.lastResponseAt == null) "等待首次响应" else responseLabel) to (timing.lastResponseAt ?: timing.startedAt),
-            (if (compacting) "压缩已运行" else "任务已运行") to timing.startedAt,
+            (if (compacting) "等待压缩" else if (timing.lastResponseAt == null) "等待响应" else responseLabel.replace("距上次已保存响应", "距保存响应").replace("距上次响应", "距响应")) to (timing.lastResponseAt ?: timing.startedAt),
+            (if (compacting) "压缩" else "已运行") to timing.startedAt,
         ).forEach { (label, since) ->
-            Column(Modifier.weight(1f)) {
-                Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(formatRunElapsed(since, now), style = MaterialTheme.typography.titleSmall,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
-            }
+            Text("$label ${formatRunElapsed(since, now)}", Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

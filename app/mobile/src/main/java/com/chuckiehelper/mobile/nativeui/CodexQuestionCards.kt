@@ -23,7 +23,7 @@ fun CodexQuestionAnswerCard(entries: List<JSONObject>, modifier: Modifier = Modi
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     Icon(Icons.Outlined.HelpOutline, null, Modifier.size(18.dp), tint = colors.primary)
-                    Text("提问与回答", style = MaterialTheme.typography.labelLarge, color = colors.primary)
+                    Text("询问", style = MaterialTheme.typography.labelLarge, color = colors.primary)
                 }
                 entries.forEachIndexed { index, entry ->
                     if (index > 0) HorizontalDivider(color = colors.outlineVariant)
