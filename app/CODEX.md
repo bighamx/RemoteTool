@@ -26,6 +26,10 @@
 - 新建、模型选择及任务完成后释放手机 app-server 的空闲订阅。新手机会话及删除事件通过桌面 IPC 更新目录。新项目来自官方项目数据库，桌面保存项目的界面缓存由桌面管理。
 - 会话列表仅保存可见项索引与像素偏移；会话重排不按会话 ID 锚定恢复。文件目录保留原有滚动位置，Windows 路径缓存统一尾部分隔符和大小写。
 - Hermes 运行回执可能比 SSE 事件流存活更久；事件流缺失时，从当前会话的 activity 快照恢复已落盘工具进度，不将事件流 404 视为任务结束。快照校验 run、会话、连接与有效期，避免显示另一轮任务的进度。
+- Hermes 会话列表顶部可切换已有 Profile，按设备记住选择；每个 Profile 使用独立 ViewModel、历史缓存、草稿、附件、队列与滚动状态。切换只改变当前客户端的请求范围，原任务继续执行，不修改 Hermes 的 active_profile、不重启网关。外部分享沿用该设备选中的 Profile。
+- Hermes 列表菜单是 Profile/网关管理入口，会话菜单仅保留会话操作并提供管理页跳转。管理页编辑 memories/MEMORY.md、memories/USER.md、SOUL.md，提供预览、文件版本冲突检查、原子保存和备份恢复；工作目录 AGENTS.md 不冒充 Profile 全局指令。配置与网关管理分区，网关操作影响全部 Profile。
+- Windows 网关维护通过桌面用户的一次性计划任务托管，状态和原始日志保存在 Hermes Home/cache/remotetool-maintenance。暂停接单后核对全部 Profile 的有效任务租约及网关活跃工作，安全排空后请求正常退出，禁止强杀。更新使用官方 update --yes --no-gateway-restart；使用官方备份、暂存和恢复本地修改流程，--yes 自动确认配置迁移与恢复暂存修改；不额外导出差异或阻止有本地修改的更新，不强制更新、删除未知锁或任务。完成要求新 PID、运行代码 SHA、平台连接及 API 均核对成功。App/Web 每两秒增量读取日志，关闭界面不取消维护；等待阶段可取消，最多等待 30 分钟。维护状态未知时不自动重试。
+- 服务端 `GET /api/hermes/profiles` 列出已有 Profile 及可用状态；命名 Profile 使用 `/api/hermes/profiles/{profile}/...`，代理到 Hermes `/p/{profile}/...`，密钥仅在服务端从该 Profile 的 `.env` 读取。管理子进程、本地数据库、活跃任务、上下文缓存、自动标题与附件均隔离；默认 Profile 保留原接口和数据位置。缺少独立 API_SERVER_KEY 或未被网关服务的 Profile 不可切换；不会自动创建密钥或修改网关配置。Web 按站点保存选择，并通过重新载入页面切断旧订阅。
 - 工作目录默认是桌面用户的 Documents/Codex/Mobile；已有会话保留其原工作目录。
 - Provider/模型选择复用两步界面。Provider 要求 Responses API 兼容，已有密钥不返回手机；新密钥只在私有配置目录保存并注入子进程环境。全局配置修改通过官方 config/batchWrite，在修改前备份 config.toml。
 - 模型显示和发送使用同一份有效配置。Codex 的 `custom` 是实际 Provider ID，不能当作占位值隐藏后显示另一个全局提供方。新消息携带 `model_settings`（provider/model/reasoning_effort/service_tier）快照，服务端校验后优先使用；待确认消息保留原快照，不因切换会话或修改模型而改变同一请求标识的内容。

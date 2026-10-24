@@ -52,15 +52,49 @@ import kotlinx.coroutines.flow.first
 @Composable
 fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", incoming: SharedChatDraft? = null, onSharedHandled: (Boolean) -> Unit = {}) {
     val app = LocalContext.current.applicationContext as Application
+    val preferences = remember(deviceId) { app.getSharedPreferences("hermes-profiles-$deviceId", 0) }
+    var profile by rememberSaveable(deviceId, agent) { mutableStateOf(if (agent == "hermes") preferences.getString("selected", "default") ?: "default" else "default") }
+    var profiles by remember(api.base) { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var profileError by remember(api.base) { mutableStateOf<String?>(null) }
+    var refreshProfiles by remember { mutableIntStateOf(0) }
+    LaunchedEffect(incoming?.id) {
+        if (agent == "hermes" && incoming?.agent == agent) {
+            profile = incoming.profile
+            preferences.edit().putString("selected", profile).apply()
+        }
+    }
+    LaunchedEffect(api.base, agent, refreshProfiles) {
+        if (agent == "hermes") try {
+            val rows = api.json("/api/hermes/profiles").optJSONArray("data")
+            profiles = (0 until (rows?.length() ?: 0)).map { rows!!.getJSONObject(it) }
+            profileError = null
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (error: Exception) { profileError = error.message ?: "Profile 读取失败" }
+    }
+    key(deviceId, agent, profile) {
+        val scopedApi = remember(api, profile) { api.withHermesProfile(profile) }
+        HermesProfileScreen(scopedApi, deviceId, agent, incoming, onSharedHandled, profile, profiles, profileError,
+            onRefreshProfiles = { refreshProfiles++ }, onProfileSelected = {
+                preferences.edit().putString("selected", it).apply()
+                profile = it
+            })
+    }
+}
+
+@Composable
+private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String, incoming: SharedChatDraft?, onSharedHandled: (Boolean) -> Unit,
+    profile: String, profiles: List<JSONObject>, profileError: String?, onRefreshProfiles: () -> Unit, onProfileSelected: (String) -> Unit) {
+    val app = LocalContext.current.applicationContext as Application
+    var profileMenu by remember { mutableStateOf(false) }
     val model: HermesModel =
         viewModel(
-            key = "$agent-$deviceId",
+            key = "$agent-$deviceId-profile-$profile",
             factory =
-                remember(deviceId, agent) {
+                remember(deviceId, agent, profile) {
                     object : ViewModelProvider.Factory {
                         override fun <T : ViewModel> create(modelClass: Class<T>): T {
                             @Suppress("UNCHECKED_CAST")
-                            return HermesModel(app, deviceId, agent) as T
+                            return HermesModel(app, deviceId, agent, profile) as T
                         }
                     }
                 },
@@ -82,6 +116,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
     var list by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(incoming?.id) {
         incoming?.let {
+            if (it.agent != agent || agent == "hermes" && it.profile != profile) return@let
             model.bind(api)
             val accepted = model.acceptSharedDraft(it)
             if (accepted) list = false
@@ -103,6 +138,8 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
     var models by remember { mutableStateOf(false) }
     var providers by remember { mutableStateOf(false) }
     var titleModelDialog by remember { mutableStateOf(false) }
+    var admin by remember { mutableStateOf(false) }
+    var globalModels by remember { mutableStateOf(false) }
     var accountsPanel by remember { mutableStateOf(false) }
     var createCodex by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
@@ -239,6 +276,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
         when (value.trim().substringBefore(' ')) {
             "/new" -> createChat()
             "/model" -> {
+                globalModels = false
                 models = true
                 model.fetchModels()
             }
@@ -290,6 +328,24 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
                         modifier = Modifier.weight(1f, fill = false),
                         maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
+                    if (agent == "hermes" && list) Box {
+                        TextButton(onClick = { profileMenu = true; onRefreshProfiles() }) {
+                            Text(profile, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp))
+                            Icon(Icons.Outlined.ArrowDropDown, contentDescription = "切换 Profile")
+                        }
+                        DropdownMenu(expanded = profileMenu, onDismissRequest = { profileMenu = false }) {
+                            profiles.forEach { row ->
+                                val id = row.optString("id")
+                                DropdownMenuItem(enabled = row.optBoolean("available") || id == profile,
+                                    text = { Column {
+                                        Text((if (id == profile) "✓ " else "") + row.optString("name", id))
+                                        row.optString("reason").takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+                                    } }, onClick = { profileMenu = false; if (id != profile) onProfileSelected(id) })
+                            }
+                            if (profileError != null) DropdownMenuItem(text = { Text(profileError) }, enabled = false, onClick = {})
+                            if (profiles.isEmpty() && profileError == null) DropdownMenuItem(text = { Text("读取中…") }, enabled = false, onClick = {})
+                        }
+                    }
                     // 本地已有数据、正在同步最新历史：标题后的小型加载指示
                     if (model.recovering || !list && model.historyLoading && model.messages.isNotEmpty())
                         CircularProgressIndicator(Modifier.padding(start = 8.dp).size(14.dp), strokeWidth = 2.dp)
@@ -323,6 +379,24 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
             Box {
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.MoreVert, "$agentName 菜单") }
                 DropdownMenu(menu, { menu = false }) {
+                    if (agent == "hermes") {
+                        if (!list) {
+                            DropdownMenuItem(text = { Text("会话详情") }, onClick = { menu = false; detailsChat = obj("id" to model.selectedId, "title" to model.title) })
+                            DropdownMenuItem(text = { Text("复制会话 ID") }, onClick = {
+                                menu = false
+                                (app.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("会话 ID", model.selectedId.orEmpty()))
+                                android.widget.Toast.makeText(app, "已复制会话 ID", android.widget.Toast.LENGTH_SHORT).show()
+                            })
+                            DropdownMenuItem(text = { Text("查看附件") }, onClick = { menu = false; filesDialog = true })
+                            DropdownMenuItem(text = { Text("当前会话模型") }, onClick = { menu = false; globalModels = false; models = true; model.fetchModels() })
+                            DropdownMenuItem(text = { Text("重命名") }, onClick = { menu = false; renameChat = obj("id" to model.selectedId, "title" to model.title) })
+                            val current = model.sessions.firstOrNull { it.optString("id") == model.selectedId }
+                            if (current != null) DropdownMenuItem(text = { Text(if (model.isSessionPinned(current)) "取消置顶" else "置顶会话") }, onClick = { menu = false; model.toggleSessionPin(current) })
+                            HorizontalDivider()
+                        }
+                        DropdownMenuItem(text = { Text(if (list) "Hermes 管理" else "Hermes 管理 ↗") }, onClick = { menu = false; admin = true })
+                        DropdownMenuItem(text = { Text(if (list) "刷新列表" else "刷新会话") }, onClick = { menu = false; model.reconnect() })
+                    } else {
                     if (!list && model.canHandoverSession) DropdownMenuItem(
                         text = { Text("放弃写入权") },
                         onClick = {
@@ -342,6 +416,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
                                 },
                             )
                         }
+                    }
                 }
             }
             }
@@ -350,7 +425,7 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
         if (agent == "codex") CodexUsage(model, compact = true) { accountsPanel = true; model.fetchAccounts() }
         if (!list && model.selectedId != null) AgentContextInfo(model.contextInfo,
             model.runtime + if (model.sessionEffort.isNotBlank()) " · ${effortLabel(model.sessionEffort)}思考" else "",
-            onClick = { models = true; model.fetchModels() })
+            onClick = { globalModels = false; models = true; model.fetchModels() })
         if (!list && model.error == null && model.canTakeover) model.writeAccessMessage?.let { message ->
             FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.Center) {
                 Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth())
@@ -1110,7 +1185,11 @@ fun HermesScreen(api: NativeApi, deviceId: String, agent: String = "hermes", inc
     if (takeover) ConfirmDialog("中断并接管当前会话", "请求中断此会话在其他端的任务，已执行的操作不会撤销。确认原任务结束且会话可写入后，再由你发送保留的草稿。其他端已启动新任务时会取消接管。", { takeover = false }) {
         takeover = false; model.takeover()
     }
-    if (models) HermesModelPicker(model) { models = false }
+    if (admin) HermesAdminScreen(api, api.base, profile,
+        onModels = { globalModels = true; models = true; model.fetchModels() },
+        onProviders = { providers = true; model.fetchProviders() },
+        onTitle = { titleModelDialog = true; model.fetchTitleModel() }, onClose = { admin = false })
+    if (models) HermesModelPicker(model, if (agent == "hermes") globalModels else null) { models = false }
     if (providers) HermesProviderDialog(model) { providers = false }
     if (titleModelDialog) CodexTitleModelDialog(model) { titleModelDialog = false }
     if (accountsPanel) CodexAccountsDialog(model, { accountsPanel = false }) { list = true }
@@ -1456,8 +1535,8 @@ private fun MessageBubble(
 }
 
 @Composable
-private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
-    var global by remember { mutableStateOf(model.selectedId == null) }
+private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, onClose: () -> Unit) {
+    var global by remember { mutableStateOf(fixedGlobal ?: (model.selectedId == null)) }
     var provider by remember { mutableStateOf<JSONObject?>(null) }
     var selected by remember { mutableStateOf<String?>(null) }
     var filter by remember { mutableStateOf("") }
@@ -1493,7 +1572,7 @@ private fun HermesModelPicker(model: HermesModel, onClose: () -> Unit) {
         title = { Text(if (provider == null) "1 · 选择 Provider" else "2 · 选择模型") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row {
+                if (fixedGlobal == null) Row {
                     FilterChip(
                         !global,
                         {

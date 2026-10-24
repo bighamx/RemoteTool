@@ -56,12 +56,13 @@ internal fun currentCodexIdentity(accounts: JSONObject, workspaces: JSONObject):
         .takeIf { it.isNotBlank() && it != "null" }
 
 /** Durable run ids, never a persisted provider secret or automatically replayed prompt. */
-class HermesModel(application: Application, deviceId: String, val agent: String = "hermes") : AndroidViewModel(application) {
+class HermesModel(application: Application, deviceId: String, val agent: String = "hermes", val profile: String = "default") : AndroidViewModel(application) {
     val agentName = if (agent == "codex") "Codex" else "Hermes"
-    private val root = "/api/$agent"
-    private val prefs = application.getSharedPreferences("$agent-$deviceId", 0)
+    private val identity = "$agent-$deviceId" + if (agent == "hermes" && profile != "default") "-profile-$profile" else ""
+    private val root = if (agent == "hermes" && profile != "default") "/api/hermes/profiles/${android.net.Uri.encode(profile)}" else "/api/$agent"
+    private val prefs = application.getSharedPreferences(identity, 0)
     private val appContext = application.applicationContext
-    private val watchOwner = "$agent-$deviceId"
+    private val watchOwner = identity
     private lateinit var api: NativeApi
     val sessionsListState = LazyListState()
 
@@ -644,7 +645,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             (row.requestKey ?: confirmedMessageKeys["$session:${row.serverId}"])?.let { row.copy(localKey = it) } ?: row
         else row
     }
-    private val historyCache = AgentHistoryCache(application.noBackupFilesDir.resolve("conversation-history"), "$agent-$deviceId")
+    private val historyCache = AgentHistoryCache(application.noBackupFilesDir.resolve("conversation-history"), identity)
     var historyCacheStatus by mutableStateOf<String?>(null)
     // 会话历史首次加载中（本地无任何数据可回放）：true 时对话区域显示大加载动画。
     var historyLoading by mutableStateOf(false)
@@ -2709,7 +2710,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                                             .optString("preview")
                                                             .let { if (agent == "codex") compactCodexToolPreview(it) else it }
                                                             .replace(Regex("\\s+"), " ")
-                                                            .take(100),
+                                                            .take(200),
                                                          event.optString("item_id").ifBlank { event.optString("call_id") }.takeIf { it.isNotBlank() },
                                                     ))
                                                 .takeLast(20)
@@ -2876,6 +2877,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     private val acceptedShares = mutableSetOf<String>()
     fun acceptSharedDraft(shared: SharedChatDraft): Boolean {
+        if (shared.agent != agent || agent == "hermes" && shared.profile != profile) return false
         if (shared.id in acceptedShares) return true
         val session = shared.session.getString("id")
         val combined = (draftFiles[session].orEmpty() + shared.attachments).distinctBy { it.optString("id") }

@@ -108,6 +108,10 @@ namespace RemoteTool.WebApi
             // Remote Control Services
             builder.Services.AddRemoteControlServices();
             builder.Services.AddSingleton<DeviceIdentity>();
+            builder.Services.AddSingleton<HermesProfiles>();
+            builder.Services.AddSingleton<HermesAdminFiles>();
+            builder.Services.AddSingleton<HermesGatewayAdmin>();
+            builder.Services.AddTransient<HermesProfileFilter>();
             builder.Services.AddSingleton<HermesBridge>();
             builder.Services.AddSingleton<HermesTitleService>();
             builder.Services.AddSingleton<RunRegistry>();

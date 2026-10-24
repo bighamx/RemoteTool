@@ -14,7 +14,7 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
 {
     public string DatabasePath {
         get {
-            var home = configuration["Hermes:HomeDirectory"] ?? RemoteToolPaths.HermesHome;
+            var home = new HermesProfiles(configuration).Home;
             return Path.Combine(home, "state.db");
         }
     }
@@ -208,7 +208,7 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
                                 var parsed = ToolPayloadJson.Parse(preview);
                                 preview = parsed?["command"]?.ToString() ?? parsed?["path"]?.ToString() ?? preview;
                             } catch (Exception error) when (error is JsonException or InvalidOperationException) { }
-                            preview = Regex.Replace(preview, @"\s+", " ").Trim(); if (preview.Length > 160) preview = preview[..160] + "…";
+                            preview = Regex.Replace(preview, @"\s+", " ").Trim(); if (preview.Length > 200) preview = preview[..200] + "…";
                             progress.Add(new JsonObject { ["id"] = $"{row.Id}:{index++}:{callId}", ["tool"] = function?["name"]?.ToString() ?? "工具",
                                 ["preview"] = preview, ["status"] = completed == null ? "running" : completed.Failed ? "failed" : "completed",
                                 ["timestamp"] = (long)((completed?.Timestamp ?? row.Timestamp) * 1000) });

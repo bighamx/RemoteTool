@@ -122,7 +122,7 @@ internal static class CodexRolloutSnapshot
                         } catch (JsonException) { }
                         if (preview.Length > 2048) preview = preview[..2048];
                         preview = System.Text.RegularExpressions.Regex.Replace(preview, @"\s+", " ").Trim();
-                        if (preview.Length > 160) preview = preview[..160] + "…";
+                        if (preview.Length > 200) preview = preview[..200] + "…";
                         state.Tools[id] = Obj(("id", id), ("tool", name), ("preview", preview), ("status", "running"), ("timestamp", timestamp));
                         state.ToolCount++; state.LastResponseAt = Math.Max(state.LastResponseAt, timestamp); state.ActivityRevision++;
                         if (state.Tools.Count > 128) state.Tools.Remove(state.Tools.Keys.First());

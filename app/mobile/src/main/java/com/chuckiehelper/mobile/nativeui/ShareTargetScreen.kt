@@ -15,8 +15,11 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 @Composable
-fun ShareTargetScreen(inbox: ShareInboxModel, api: NativeApi, deviceId: String, deviceName: String,
+fun ShareTargetScreen(inbox: ShareInboxModel, deviceApi: NativeApi, deviceId: String, deviceName: String,
     changeDevice: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val profile = remember(deviceId) { context.getSharedPreferences("hermes-profiles-$deviceId", 0).getString("selected", "default") ?: "default" }
+    val api = remember(deviceApi, profile) { deviceApi.withHermesProfile(profile) }
     var agent by rememberSaveable { mutableStateOf("codex") }
     var query by remember { mutableStateOf("") }
     var rows by remember { mutableStateOf<List<JSONObject>>(emptyList()) }

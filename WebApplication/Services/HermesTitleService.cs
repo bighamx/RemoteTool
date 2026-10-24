@@ -9,11 +9,14 @@ public interface ITitleModelGateway { Task<JsonObject> TitleRequest(string path,
 
 public sealed class HermesTitleService {
     private readonly HermesBridge bridge;
-    private readonly CodexTitleGenerator titles;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, CodexTitleGenerator> generators = new();
+    private readonly string folder;
+    private CodexTitleGenerator titles => generators.GetOrAdd(HermesProfileScope.Name, name =>
+        new(name == "default" ? folder : Path.Combine(folder, "hermes-profiles", name), "hermes"));
     private readonly Func<string, JsonObject, CancellationToken, Task<JsonObject>> titleRequest;
     public HermesTitleService(HermesBridge bridge, ITitleModelGateway gateway) : this(bridge, RemoteToolPaths.CodexBridge) { titleRequest = gateway.TitleRequest; }
     internal HermesTitleService(HermesBridge bridge, string folder) {
-        this.bridge = bridge; titles = new(folder, "hermes");
+        this.bridge = bridge; this.folder = folder;
         titleRequest = async (path, body, ct) => path.EndsWith("/models") ? await titles.Models(body, ct) : Obj(("title", await titles.Generate(body.S("input", "修复手机会话的消息顺序与状态显示"), ct)));
     }
     private readonly SemaphoreSlim rename = new(1, 1);

@@ -31,7 +31,7 @@ internal fun sharedUris(intent: Intent): List<Uri> {
 }
 
 data class SharedChatDraft(val id: String, val deviceId: String, val agent: String, val session: JSONObject,
-    val text: String, val attachments: List<JSONObject>)
+    val text: String, val attachments: List<JSONObject>, val profile: String = "default")
 data class SharedDirectoryUpload(val deviceId: String, val path: String, val count: Int)
 
 /** Copy granted content immediately; no dependency on the sender after returning to it. */
@@ -115,10 +115,10 @@ class ShareInboxModel(app: Application, private val saved: SavedStateHandle) : A
 
     fun prepare(api: NativeApi, device: String, agent: String, session: JSONObject) {
         if (uploading || importing || !readable) return
-        val target = "$device:$agent:${session.getString("id")}"
+        val target = "$device:$agent:${api.hermesProfile}:${session.getString("id")}"
         uploadFiles(api, target, "/api/$agent/sessions/${android.net.Uri.encode(session.getString("id"))}/files") {
             ready = SharedChatDraft(UUID.randomUUID().toString(), device, agent, session, text,
-                files.mapNotNull { uploaded[it.absolutePath] })
+                files.mapNotNull { uploaded[it.absolutePath] }, if (agent == "hermes") api.hermesProfile else "default")
         }
     }
 

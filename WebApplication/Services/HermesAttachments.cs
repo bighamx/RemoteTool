@@ -8,15 +8,18 @@ namespace RemoteTool.WebApi.Services;
 
 public sealed class HermesAttachments
 {
-    private readonly string root;
+    private readonly string storageRoot;
+    private string root => agent == "hermes" && HermesProfileScope.Name != "default"
+        ? Path.Combine(storageRoot, ".profiles", HermesProfileScope.Name) : storageRoot;
+    private string apiRoot => agent == "hermes" ? HermesProfileScope.ApiRoot : "/api/" + agent;
     private readonly string agent;
     public HermesAttachments(string agent = "hermes") : this(agent, RemoteToolPaths.Attachments(agent)) { }
     internal HermesAttachments(string agent, string directory) {
         if (agent is not ("hermes" or "codex")) throw new ArgumentException("无效 Agent");
         this.agent = agent;
-        root = Path.GetFullPath(directory);
+        storageRoot = Path.GetFullPath(directory);
     }
-    public (int Count, long Bytes) Cleanup(DateTime utcNow) => CleanupDirectory(root, utcNow);
+    public (int Count, long Bytes) Cleanup(DateTime utcNow) => CleanupDirectory(storageRoot, utcNow);
 
     internal static (int Count, long Bytes) CleanupDirectory(string directory, DateTime utcNow)
     {
@@ -71,7 +74,7 @@ public sealed class HermesAttachments
     private JsonObject[] Inherited(string session) => InheritedMap(session).SelectMany(pair => pair.Value?.AsArray() ?? new JsonArray())
         .OfType<JsonObject>().GroupBy(file => file["id"]?.ToString()).Select(group => group.First()).ToArray();
     private string ResolveInherited(JsonObject file) {
-        var match = Regex.Match(file["url"]?.ToString() ?? "", $"^/api/{agent}/sessions/([a-zA-Z0-9_-]{{1,160}})/files/([a-f0-9]{{64}})(?:\\?v=[0-9]+)?$");
+        var match = Regex.Match(file["url"]?.ToString() ?? "", $"^{Regex.Escape(apiRoot)}/sessions/([a-zA-Z0-9_-]{{1,160}})/files/([a-f0-9]{{64}})(?:\\?v=[0-9]+)?$");
         if (!match.Success) return null;
         var source = match.Groups[1].Value; var id = match.Groups[2].Value;
         return Paths(source).FirstOrDefault(path => Identifier(Path.GetRelativePath(Folder(source), path)) == id);
@@ -117,7 +120,7 @@ public sealed class HermesAttachments
         return new { id = Identifier(Path.GetRelativePath(Folder(session), path)), name, size = file.Length,
             mime = Mime(path), outgoing = Path.GetRelativePath(Folder(session), path).StartsWith("outbox" + Path.DirectorySeparatorChar),
             messageKey = Path.GetRelativePath(Folder(session), path).Split(Path.DirectorySeparatorChar) is var pieces && pieces.Length >= 3 && pieces[0] == "outbox" ? pieces[1] : "",
-            url = $"/api/{agent}/sessions/{session}/files/{Identifier(Path.GetRelativePath(Folder(session), path))}?v={file.LastWriteTimeUtc.Ticks}" };
+            url = $"{apiRoot}/sessions/{session}/files/{Identifier(Path.GetRelativePath(Folder(session), path))}?v={file.LastWriteTimeUtc.Ticks}" };
     }
     public static string Mime(string path) => Path.GetExtension(path).ToLowerInvariant() switch {
         ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".webp" => "image/webp", ".gif" => "image/gif",

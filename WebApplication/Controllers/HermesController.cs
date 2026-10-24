@@ -8,9 +8,10 @@ using RemoteTool.WebApi.Services.Codex;
 
 namespace RemoteTool.WebApi.Controllers;
 
-[ApiController, Authorize, Route("api/hermes")]
+[ApiController, Authorize, Route("api/hermes"), Route("api/hermes/profiles/{profile}"), ServiceFilter(typeof(HermesProfileFilter))]
 public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, HermesSessionActivity activity, HermesTitleService titles) : ControllerBase
 {
+    [HttpGet("profiles")] public IActionResult Profiles([FromServices] HermesProfiles profiles) => Ok(profiles.List());
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效的会话或任务标识");
     [HttpGet("sessions/search")] public async Task<IActionResult> SearchSessions([FromQuery] string query, [FromQuery] int offset = 0, CancellationToken ct = default) {
         query = query?.Trim();
@@ -79,13 +80,13 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 try {
                     await gate.WaitAsync(budget.Token);
                     try {
-                        if (ContextCache.TryGetValue(id, out var cached) && DateTime.UtcNow - cached.At < TimeSpan.FromMinutes(10)) {
+                        if (ContextCache.TryGetValue(HermesProfileScope.Key(id), out var cached) && DateTime.UtcNow - cached.At < TimeSpan.FromMinutes(10)) {
                             answered[id] = cached.Tokens > 0 ? Obj2(cached.Tokens, cached.Limit) : new System.Text.Json.Nodes.JsonObject();
                             return;
                         }
                         var (tokens, limit) = await ContextUsageAsync(id, providers.GetValueOrDefault(id, ""), models.GetValueOrDefault(id, ""), budget.Token);
                         // 0 值（网关对繁忙/刚创建会话的临时空结果）不写缓存，否则真数据要等 TTL 才能回来。
-                        if (tokens > 0) { ContextCache[id] = (DateTime.UtcNow, tokens, limit); answered[id] = Obj2(tokens, limit); }
+                        if (tokens > 0) { ContextCache[HermesProfileScope.Key(id)] = (DateTime.UtcNow, tokens, limit); answered[id] = Obj2(tokens, limit); }
                         else answered[id] = new System.Text.Json.Nodes.JsonObject();
                     } finally { gate.Release(); }
                 } catch (Exception error) when (!ct.IsCancellationRequested &&
@@ -168,7 +169,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         var limit = result["limit"]?.GetValue<long>() ?? 0;
         var name = result["model"]?.ToString();
         if (!string.IsNullOrEmpty(name)) model = name;
-        var key = (provider ?? "") + "/" + (model ?? "");
+        var key = HermesProfileScope.Key((provider ?? "") + "/" + (model ?? ""));
         // 自定义网关（custom:*）上 hermes 无法得知真实上下文窗口，会按保守默认值（如 256K）上报；
         // 已知模型的真实窗口以本表为准，仅上调不下调。
         var knownWindow = KnownModelWindows.TryGetValue(model ?? "", out var knownMax) ? knownMax : 0;
@@ -202,7 +203,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                     if (previews.TryGetValue(id, out var text)) { row["latest_user_message"] = text; row["preview"] = text; }
                     if (activities.TryGetValue(id, out state) && state["available"]?.GetValue<bool>() == true)
                         row["status"] = running ? "running" : "idle";
-                    if (ContextCache.TryGetValue(id, out var cached) && DateTime.UtcNow - cached.At < TimeSpan.FromMinutes(running ? 0.5 : 10)) {
+                    if (ContextCache.TryGetValue(HermesProfileScope.Key(id), out var cached) && DateTime.UtcNow - cached.At < TimeSpan.FromMinutes(running ? 0.5 : 10)) {
                         if (cached.Tokens > 0 && cached.Limit > 0) { row["context_used"] = cached.Tokens; row["context_window"] = cached.Limit; }
                     }
                     });
@@ -387,7 +388,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 var runId = doc.RootElement.TryGetProperty("run_id", out var r) ? r.GetString() : null;
                 var sessionId = body.TryGetProperty("session_id", out var s) ? s.GetString() : null;
                 if (!string.IsNullOrEmpty(runId) && !string.IsNullOrEmpty(sessionId)) {
-                    runs.Register("hermes", sessionId, runId);
+                    runs.Register(HermesProfileScope.AgentKey, sessionId, runId);
                     titles.Accepted(sessionId, body.TryGetProperty("input", out var input) ? input.ToString() : "");
                 }
             }
@@ -413,7 +414,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     /// <summary>返回当前活跃 run 的完整文档；无活跃 run 时返回 null。供 /active-run 与 /overview 共用。</summary>
     private async Task<JsonObject?> ActiveRunAsync(string sessionId, CancellationToken ct)
     {
-        var registered = runs.Query("hermes", sessionId);
+        var registered = runs.Query(HermesProfileScope.AgentKey, sessionId);
         var candidates = new[] { registered }.Concat(activity.ActiveRunCandidates(sessionId))
             .Where(run => !string.IsNullOrEmpty(run)).Distinct();
         foreach (var runId in candidates) {
@@ -422,14 +423,14 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                     var status = compaction.Status(runId);
                     if (status["status"]?.ToString() is "started" or "submitting") return status;
                 } catch (KeyNotFoundException) { }
-                runs.Clear("hermes", sessionId, runId); continue;
+                runs.Clear(HermesProfileScope.AgentKey, sessionId, runId); continue;
             }
             // The local database only discovers IDs. Hermes verifies the credential's
             // ownership and the authoritative run state before it is exposed to the phone.
             using var upstream = await bridge.SendAsync(HttpMethod.Get, $"v1/runs/{runId}", null, null, ct, null);
             if (upstream.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                runs.Clear("hermes", sessionId, runId);
+                runs.Clear(HermesProfileScope.AgentKey, sessionId, runId);
                 continue;
             }
             if (!upstream.IsSuccessStatusCode) throw new InvalidOperationException("无法核对 Hermes 当前任务，请稍后重试");
@@ -437,10 +438,10 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             var state = run["status"]?.ToString() ?? "";
             var owner = run["session_id"]?.ToString();
             if (owner != sessionId || state is "completed" or "failed" or "cancelled" or "interrupted" or "acceptance_unknown") {
-                runs.Clear("hermes", sessionId, runId); continue;
+                runs.Clear(HermesProfileScope.AgentKey, sessionId, runId); continue;
             }
             if (state is not ("started" or "submitting" or "queued" or "running" or "stopping" or "waiting_for_approval")) continue;
-            if (registered != runId) runs.Register("hermes", sessionId, runId);
+            if (registered != runId) runs.Register(HermesProfileScope.AgentKey, sessionId, runId);
             return run;
         }
         return null;
@@ -557,12 +558,20 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 if (root.TryGetProperty("message", out var text) && text.ValueKind == JsonValueKind.String) message = text.GetString();
                 if (root.TryGetProperty("code", out var kind) && kind.ValueKind == JsonValueKind.String) code = kind.GetString();
                 if (root.TryGetProperty("delivery", out var state) && state.ValueKind == JsonValueKind.String) delivery = state.GetString();
+                if (root.TryGetProperty("error", out var nested) && nested.ValueKind == JsonValueKind.Object) {
+                    if (string.IsNullOrWhiteSpace(message) && nested.TryGetProperty("message", out var detail) && detail.ValueKind == JsonValueKind.String) message = detail.GetString();
+                    if (string.IsNullOrWhiteSpace(code) && nested.TryGetProperty("code", out var nestedCode) && nestedCode.ValueKind == JsonValueKind.String) code = nestedCode.GetString();
+                    if (delivery == null && nested.TryGetProperty("delivery", out var nestedDelivery) && nestedDelivery.ValueKind == JsonValueKind.String) delivery = nestedDelivery.GetString();
+                }
             }
         } catch (JsonException) { }
         message = !string.IsNullOrWhiteSpace(message) && message.Length <= 500 ? message : $"Hermes 请求失败（HTTP {(int)status}）";
         code = code is { Length: <= 80 } && Regex.IsMatch(code, "^[a-zA-Z0-9_-]+$") ? code : null;
         delivery = delivery is "accepted" or "rejected" or "unknown" ? delivery :
+            status == System.Net.HttpStatusCode.Conflict && code is ("permission_denied" or "admission_conflict" or "invalid_params") ? "rejected" :
             status is System.Net.HttpStatusCode.BadRequest or System.Net.HttpStatusCode.UnprocessableEntity ? "rejected" : "unknown";
+        if (status == System.Net.HttpStatusCode.Conflict && code == "permission_denied")
+            message = "Hermes 拒绝当前接口接续此会话。旧 CLI 会话可从最后一条回复分叉后继续，原会话会保留。";
         await Response.WriteAsJsonAsync(new { message, code, delivery }, ct);
     }
 

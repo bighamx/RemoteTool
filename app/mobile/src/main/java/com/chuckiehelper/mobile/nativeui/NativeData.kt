@@ -78,6 +78,7 @@ class NativeApi(
     private val noRetry: Boolean = false,
     private val onReadSuccess: (() -> Unit)? = null,
     private val authentication: DeviceAuthSession? = null,
+    val hermesProfile: String = "default",
 ) {
     /** Called once when a request comes back 401: return a fresh token (or null).
      *  Set by the model on the session's API instance; copied by [withReadPolicy]. */
@@ -98,12 +99,20 @@ class NativeApi(
         else CookieManager.getInstance().getCookie(base) ?: ""
 
     fun withReadPolicy(noRetry: Boolean, onReadSuccess: (() -> Unit)? = null) =
-        NativeApi(base, noRetry = noRetry, onReadSuccess = onReadSuccess, authentication = authentication)
+        NativeApi(base, noRetry = noRetry, onReadSuccess = onReadSuccess, authentication = authentication, hermesProfile = hermesProfile)
             .also { it.onUnauthorized = onUnauthorized }
+
+    fun withHermesProfile(profile: String) =
+        NativeApi(base, probing, noRetry, onReadSuccess, authentication, profile)
+            .also { it.onUnauthorized = onUnauthorized }
+
+    private fun scopedPath(path: String): String =
+        if (hermesProfile != "default" && path.startsWith("/api/hermes/") && !path.startsWith("/api/hermes/profiles"))
+            "/api/hermes/profiles/${android.net.Uri.encode(hermesProfile)}/" + path.removePrefix("/api/hermes/") else path
 
     fun request(path: String, body: JSONObject? = null): Request =
         Request.Builder()
-            .url(base + path)
+            .url(base + scopedPath(path))
             .apply {
                 if (!probing) header("Cookie", cookie())
                 if (body != null)

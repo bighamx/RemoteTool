@@ -19,7 +19,7 @@ internal fun ExecutionActivityPreview(events: List<HermesEvent>, codex: Boolean,
     val content = remember(events, codex) {
         events.takeLast(30).joinToString("\n") { event ->
             val detail = (if (codex) compactCodexToolPreview(event.detail) else event.detail).trim()
-            listOf(event.type.trim(), event.text.trim(), detail.take(1600))
+            listOf(event.type.trim(), event.text.trim(), detail.take(200))
                 .filter { it.isNotBlank() }.joinToString(" · ")
         }.ifBlank { "等待操作进度…" }
     }

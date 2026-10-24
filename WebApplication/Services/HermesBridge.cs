@@ -9,19 +9,12 @@ public sealed class HermesBridge(IHttpClientFactory clients, IConfiguration conf
 {
     public async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, JsonElement? body, string? idempotency, CancellationToken ct, string? lastEvent = null)
     {
-        var keyPath = configuration["Hermes:KeyFile"] ?? Environment.GetEnvironmentVariable("HERMES_API_KEY_FILE")
-            ?? RemoteToolPaths.HermesKeyFile;
-        string? key = null;
-        if (File.Exists(keyPath))
-            foreach (var line in File.ReadLines(keyPath))
-            {
-                var parts = line.Split('=', 2);
-                if (parts.Length == 2 && parts[0].Trim() == "API_SERVER_KEY") { key = parts[1].Trim().Trim('"', '\''); break; }
-            }
+        var key = new HermesProfiles(configuration).ApiKey(HermesProfileScope.Name);
         if (string.IsNullOrWhiteSpace(key)) throw new InvalidOperationException("服务端尚未配置 Hermes API_SERVER_KEY 文件");
         var root = new Uri(configuration["Hermes:BaseUrl"] ?? "http://127.0.0.1:8642/");
         if (!root.IsLoopback || root.Scheme is not ("http" or "https")) throw new InvalidOperationException("Hermes 必须使用服务端本机地址");
-        using var request = new HttpRequestMessage(method, new Uri(root, path));
+        var routedPath = HermesProfileScope.Name == "default" ? path : "p/" + HermesProfileScope.Name + "/" + path;
+        using var request = new HttpRequestMessage(method, new Uri(root, routedPath));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
         if (idempotency != null) request.Headers.Add("Idempotency-Key", idempotency);
         if (long.TryParse(lastEvent, out var sequence) && sequence >= 0) request.Headers.Add("Last-Event-ID", sequence.ToString());

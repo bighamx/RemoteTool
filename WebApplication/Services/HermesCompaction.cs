@@ -25,14 +25,14 @@ public sealed class HermesCompaction
     }
     public JsonObject Start(string session, string key) {
         lock (gate) {
-            var existing = runs.FirstOrDefault(row => row.Value.S("key") == key);
+            var existing = runs.FirstOrDefault(row => Owns(row.Value) && row.Value.S("key") == key);
             if (existing.Value != null) {
                 if (existing.Value.S("session_id") != session) throw new InvalidOperationException("相同请求标识对应了其他会话");
                 return Obj(("run_id", existing.Key), ("replayed", true));
             }
-            if (runs.Values.Any(row => row.S("status") == "started")) throw new InvalidOperationException("已有上下文正在压缩，请等待完成");
+            if (runs.Values.Any(row => Owns(row) && row.S("status") == "started")) throw new InvalidOperationException("已有上下文正在压缩，请等待完成");
             var id = "hcompact_" + Guid.NewGuid().ToString("N");
-            runs[id] = Obj(("run_id", id), ("session_id", session), ("key", key), ("kind", "compact"), ("status", "started"), ("output", ""));
+            runs[id] = Obj(("run_id", id), ("profile", HermesProfileScope.Name), ("session_id", session), ("key", key), ("kind", "compact"), ("status", "started"), ("output", ""));
             Atomic(Path.Combine(folder, id + ".json"), runs[id]);
             var cancellation = cancellations[id] = new();
             _ = Execute(id, session, cancellation);
@@ -58,8 +58,9 @@ public sealed class HermesCompaction
             cancellation.Dispose();
         }
     }
-    public JsonObject Status(string id) { lock (gate) return runs.TryGetValue(id, out var state) ? state.DeepClone().AsObject() : throw new KeyNotFoundException(); }
-    public void Stop(string id) { lock (gate) { if (!runs.ContainsKey(id)) throw new KeyNotFoundException(); if (cancellations.TryGetValue(id, out var cancel)) cancel.Cancel(); } }
+    private static bool Owns(JsonObject state) => state.S("profile", "default") == HermesProfileScope.Name;
+    public JsonObject Status(string id) { lock (gate) return runs.TryGetValue(id, out var state) && Owns(state) ? state.DeepClone().AsObject() : throw new KeyNotFoundException(); }
+    public void Stop(string id) { lock (gate) { if (!runs.TryGetValue(id, out var state) || !Owns(state)) throw new KeyNotFoundException(); if (cancellations.TryGetValue(id, out var cancel)) cancel.Cancel(); } }
     public async Task Events(string id, HttpResponse response, CancellationToken ct) {
         response.ContentType = "text/event-stream"; response.Headers.CacheControl = "no-store";
         while (!ct.IsCancellationRequested) {

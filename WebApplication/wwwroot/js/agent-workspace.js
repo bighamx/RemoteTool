@@ -3,9 +3,16 @@
     const root = document.getElementById(document.currentScript?.dataset.agentRootId)?.querySelector('[data-agent]') || document.getElementById('agent-app');
     const agent = root?.dataset.agent;
     if (!['codex','hermes'].includes(agent)) return;
-    const base = `/api/${agent}`;
-    const receiptKey = id => `remotetool:web:pending:${agent}:${id}`;
-    const echoKey = id => `remotetool:web:delivered:${agent}:${id}`;
+    const profilePreference = 'remotetool:web:hermes:profile';
+    const requestedProfile = new URLSearchParams(location.search).get('profile') || localStorage.getItem(profilePreference) || 'default';
+    const profile = agent === 'hermes' && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(requestedProfile) ? requestedProfile : 'default';
+    const storageAgent = agent === 'hermes' && profile !== 'default' ? `${agent}:profile:${profile}` : agent;
+    const base = agent === 'hermes' && profile !== 'default' ? `/api/hermes/profiles/${encodeURIComponent(profile)}` : `/api/${agent}`;
+    const receiptKey = id => `remotetool:web:pending:${storageAgent}:${id}`;
+    const echoKey = id => `remotetool:web:delivered:${storageAgent}:${id}`;
+    const draftKey = id => `remotetool:web:draft:${storageAgent}:${id}`;
+    const draftFilesKey = id => `remotetool:web:draft-files:${storageAgent}:${id}`;
+    const selectedSessionKey = `remotetool:web:selected:${storageAgent}`;
     // Web Crypto's randomUUID only exists in a secure context (https or localhost).
     // Over the LAN plain http address it is undefined, which broke send/compact/fork/queue
     // with "crypto.randomUUID is not a function"; fall back to getRandomValues, then to
@@ -40,9 +47,11 @@
     let streamAbort = null;
     let timelineResizeObserver = null;
     let scrollRestoreTimer = null;
+    let adminTimer = null;
     const readVersions = new Map();
     const app = Vue.createApp({
-        data: () => ({ agent, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
+        data: () => ({ agent, profile, profiles: [], profileError: '', sessionDetails: null, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
+            adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminSettings:{},adminProvider:{},adminEndpoints:[],adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [],
             activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0,
@@ -52,6 +61,13 @@
             showCreateDialog: false, createTitle: '', createProjectId: '', createMode: 'existing', createRoot: '', createRoots: [], createProjectName: '', createProjectSearch: '', createBrowser: false, createBrowserPath: '', createBrowserDirs: [], createBrowserLoading: false, createBrowserError: '', createBrowserNew: '', createBrowserMkdir: false, creating: false, createError: '', showEditDialog: false, editText: '', editTarget: null, editFiles: [], editing: false, editError: '', messageMenu: null, sessionMenu: null,
             liveSegments: [], liveTools: [], streamRun: null, streamSeq: 0, streamConnected: false, streamGone: false, toolTimer: null, externalRunning: false, externalActivity: null, toolsCollapsed: true, apiServer: null, enablingApiServer: false }),
         computed: {
+            adminGatewayStatus() {
+                const live=this.adminGateway.gateway;
+                if(this.adminGateway.read_error || !live)return '状态不可用';
+                if(!live.running)return '已停止';
+                if(!live.fresh)return '进程存在，心跳已过期';
+                return ({running:'运行中',draining:'排空中',starting:'启动中',stopping:'停止中'}[live.state] || live.state || '状态未知') + ` · 活跃任务 ${live.active} · PID ${live.pid}`;
+            },
             headerQuotaWindows() {const windows=this.quotaGroups(this.codexUsage).flatMap(group=>group.windows);return [[300,'5 小时'],[10080,'周额度']].map(([minutes,label])=>({minutes,label,remaining:windows.find(w=>w.minutes===minutes)?.remaining??null}));},
             currentWorkspaceName() {return this.workspaceName((this.workspaces.data||[]).find(row=>row.id===this.workspaces.current)||(this.accounts.data||[]).find(row=>row.id===this.accounts.current)||this.accounts.current_identity);},
             agentName() { return this.agent==='codex'?'Codex':'Hermes'; },
@@ -136,6 +152,141 @@
             approvalText() { const a=this.approval; return a?.reason||a?.message||a?.description||'当前任务请求确认'; }
         },
         methods: {
+            async adminAction(action) {
+                if (this.adminBusy) return;
+                this.adminBusy = true; this.adminError = '';
+                try { await action(); }
+                catch (error) { this.adminError = error.message; if (error.code === 'file_changed') this.adminConflict = true; }
+                finally { this.adminBusy = false; }
+            },
+            editAdminProvider(endpoint = null) {
+                if (this.adminBusy || this.adminProviderOriginal && JSON.stringify(this.adminProvider)!==this.adminProviderOriginal && !confirm('放弃提供方未保存的修改？')) return;
+                this.adminProvider=endpoint?{...endpoint,api_key:''}:{name:'',base_url:'',model:'',api_key:'',api_mode:''};
+                this.adminProviderOriginal=JSON.stringify(this.adminProvider);
+            },
+            adminDirty() { return this.adminText !== this.adminOriginal || !!this.adminSettingsOriginal && JSON.stringify(this.adminSettings)!==this.adminSettingsOriginal || !!this.adminProviderOriginal && JSON.stringify(this.adminProvider)!==this.adminProviderOriginal; },
+            adminMayLeave() { return !this.adminBusy && (!this.adminDirty() || confirm('放弃未保存的修改？')); },
+            guardAdminUnload(event) { if (this.adminOpen && this.adminDirty()) { event.preventDefault(); event.returnValue = ''; } },
+            async openHermesAdmin() {
+                this.closeSessionMenu(); this.closeSessionMenus(); this.adminOpen = true;
+                window.addEventListener('beforeunload', this.guardAdminUnload);
+                await this.adminAction(async () => { this.adminFiles = (await api.get(`${base}/admin/files`)).data || []; });
+                this.pollAdminGateway();
+            },
+            closeHermesAdmin() { if (!this.adminMayLeave()) return; this.adminOpen=false;this.adminDoc=null;this.adminText='';this.adminOriginal='';this.adminSettings={};this.adminProvider={};this.adminSettingsOriginal='';this.adminProviderOriginal='';clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
+            async pollAdminGateway() {
+                clearTimeout(adminTimer);
+                if (!this.adminOpen) return;
+                try {
+                    this.adminGateway = await api.get(`${base}/admin/gateway`);
+                    const chunk=await api.get(`${base}/admin/gateway/log?offset=${this.adminLogOffset}&key=${api.id(this.adminLogKey)}`);
+                    if(chunk.key!==this.adminLogKey){this.adminLogKey=chunk.key;this.adminLogText='';}
+                    this.adminLogText=(this.adminLogText+(chunk.text||'')).slice(-120000);this.adminLogOffset=chunk.offset||0;
+                    await this.$nextTick();if(this.adminLogFollow&&this.$refs.adminLog)this.$refs.adminLog.scrollTop=this.$refs.adminLog.scrollHeight;
+                } catch(error) { this.adminGateway = {...this.adminGateway,read_error:error.message}; }
+                if (this.adminOpen) adminTimer = setTimeout(()=>this.pollAdminGateway(),2000);
+            },
+            acceptAdminDoc(doc) { this.adminDoc=doc;this.adminText=doc.content||'';this.adminOriginal=this.adminText;this.adminConflict=false;this.adminPreview=false; },
+            async openAdminFile(file) { if(!this.adminMayLeave())return;await this.adminAction(async()=>{this.acceptAdminDoc(await api.get(`${base}/admin/files/${api.id(file.id)}`));this.adminMode='files';this.adminSettingsOriginal='';this.adminProviderOriginal='';this.adminSettings={};this.adminProvider={};}); },
+            async saveAdminFile(overwrite=false,backup=null) {
+                if (!this.adminDoc) return;
+                if ((overwrite||backup) && !confirm(backup?'恢复此备份？当前文件会先备份，未保存的编辑将被替换。':'覆盖电脑上的最新版本？覆盖前会备份。')) return;
+                await this.adminAction(async()=>{this.acceptAdminDoc(await api.post(`${base}/admin/files/${api.id(this.adminDoc.id)}`,{revision:this.adminDoc.revision,content:this.adminText,overwrite,backup_id:backup}));this.$Message.success('已保存');});
+            },
+            async openAdminSettings(mode) {
+                if (!this.adminMayLeave()) return;
+                await this.adminAction(async()=>{
+                    this.adminDoc=null;this.adminText='';this.adminOriginal='';
+                    if(mode==='models') {const data=await api.get(`${base}/default-model`);this.adminSettings={provider:data.provider||'',model:data.model||'',reasoning_effort:data.reasoning_effort||''};this.models=(await api.get(`${base}/model-options`)).providers||[];const endpoints=await api.get(`${base}/providers`);this.adminEndpoints=endpoints.endpoints||[];this.adminProvider={name:'',base_url:'',model:'',api_key:'',api_mode:''};}
+                    if(mode==='title') {this.adminSettings={...await api.get(`${base}/title-model`),api_key:''};}
+                    this.adminMode=mode;
+                    this.adminSettingsOriginal=mode==='models'||mode==='title'?JSON.stringify(this.adminSettings):'';this.adminProviderOriginal=mode==='models'?JSON.stringify(this.adminProvider):'';
+                });
+            },
+            async saveAdminSettings() { await this.adminAction(async()=>{const result=await api.post(`${base}/${this.adminMode==='models'?'default-model':'title-model'}`,this.adminSettings);if(result.confirm_required){this.adminError='模型配置需要额外确认，请在电脑上完成。';return;}this.adminSettings.api_key='';this.adminSettingsOriginal=JSON.stringify(this.adminSettings);this.$Message.success('已保存');}); },
+            async saveAdminProvider() {await this.adminAction(async()=>{const result=await api.post(`${base}/providers`,Object.fromEntries(Object.entries({...this.adminProvider,make_default:false}).filter(([key,value])=>key!=='api_key'||!!value)));if(result.confirm_required){this.adminError='配置需要额外确认，请在电脑上完成。';return;}this.adminProvider.api_key='';this.adminProviderOriginal=JSON.stringify(this.adminProvider);this.adminEndpoints=(await api.get(`${base}/providers`)).endpoints||[];this.models=(await api.get(`${base}/model-options`)).providers||[];this.$Message.success('已保存');});},
+            async restartAdminGateway(wait) { if(!confirm(wait?'暂停接收新任务，等待全部 Profile 空闲后重启？':'重启当前设备的网关？将影响全部 Profile。'))return;await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/restart`,{wait});}); },
+            async cancelAdminGateway() {await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/cancel`,{});});},
+            async updateAdminHermes() {if(!confirm('等待全部 Profile 空闲后按官方流程更新并重启？将自动确认恢复本地修改。'))return;await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/update`,{});});},
+            async copySessionId(target = null) {
+                const session = target?.id ? target : this.selected;
+                this.closeSessionMenu(); this.closeSessionMenus();
+                if (!session?.id) return;
+                try {
+                    const text = String(session.id);
+                    let copied = false;
+                    try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); copied = true; } } catch {}
+                    if (!copied) {
+                        const focused = document.activeElement;
+                        const input = document.createElement('textarea');
+                        input.value = text; input.readOnly = true;
+                        input.style.cssText = 'position:fixed;left:0;top:0;opacity:0;pointer-events:none';
+                        document.body.appendChild(input);
+                        try { input.focus(); input.select(); input.setSelectionRange(0, text.length); copied = document.execCommand('copy'); }
+                        finally { input.remove(); focused?.focus?.({preventScroll:true}); }
+                    }
+                    if (!copied) throw new Error('复制失败，请在会话详情中选择 ID 复制');
+                    this.$Message.success('已复制会话 ID');
+                } catch (error) { this.$Message.error(error.message || '复制失败'); }
+            },
+            async showSessionDetails(target = null) {
+                const session = target?.id ? target : this.selected;
+                this.closeSessionMenu(); this.closeSessionMenus();
+                if (!session?.id) return;
+                const key = newKey();
+                this.sessionDetails = {key, session: {...session}, loading: true, error: '', sections: this.sessionDetailSections(session)};
+                const path = `${base}/sessions/${api.id(session.id)}`;
+                const results = await Promise.allSettled([api.get(path), api.get(`${path}/context`), api.get(`${path}/activity`)]);
+                if (this.sessionDetails?.key !== key) return;
+                const value = index => results[index].status === 'fulfilled' ? results[index].value : null;
+                const detail = {...session, ...(value(0)?.session || value(0) || {})};
+                this.sessionDetails.session = detail;
+                this.sessionDetails.sections = this.sessionDetailSections(detail, value(1), value(2));
+                this.sessionDetails.error = results.some(row => row.status === 'rejected') ? '部分信息读取失败，可重试。' : '';
+                this.sessionDetails.loading = false;
+            },
+            sessionDetailSections(session, response = null, activity = null) {
+                const sections = [];
+                const section = (title, rows) => { const fields = rows.filter(([,value]) => value !== undefined && value !== null && value !== ''); if (fields.length) sections.push({title, fields}); };
+                const stamp = raw => { if (raw == null || raw === '') return null; const number = Number(raw); const date = Number.isFinite(number) ? new Date(number < 1e12 ? number * 1000 : number) : new Date(raw); return Number.isNaN(date.getTime()) ? null : date.toLocaleString(); };
+                const tokens = value => value == null || value === '' || !Number.isFinite(Number(value)) ? null : Number(value).toLocaleString();
+                const flag = value => value == null ? null : value ? '是' : '否';
+                const cost = value => value == null || value === '' || !Number.isFinite(Number(value)) ? null : '$' + Number(value).toFixed(6);
+                let config = session.model_config || {}; if (typeof config === 'string') { try { config = JSON.parse(config); } catch { config = {}; } }
+                const lock = config.browser_model_lock || {};
+                const status = typeof session.status === 'object' ? session.status?.type : session.status;
+                section('基本信息', [['标题',session.title], ['会话 ID',session.id], ['Profile',agent==='hermes'?profile:null], ['来源',session.source], ['originator',session.originator], ['工作目录',session.cwd], ['项目 ID',session.project_id], ['创建时间',stamp(session.started_at||session.created_at)], ['最后活跃',stamp(session.last_active||session.updated_at)], ['结束时间',stamp(session.ended_at)], ['结束原因',session.end_reason], ['父会话 ID',session.parent_session_id], ['置顶',flag(session.pinned)], ['归档',flag(session.archived)]]);
+                section('模型与运行状态', [['模型',lock.model||session.model], ['提供方',session.modelProvider||session.provider||lock.provider], ['推理强度',session.reasoning_effort||lock.model_options?.reasoning?.effort], ['服务等级',session.service_tier], ['状态',activity?.available?(activity.running?'运行中':'空闲'):status], ['任务开始',stamp(activity?.started_at)], ['写入状态',({mobile:'手机端持有',busy:'其他客户端正在运行',writer_held:'其他客户端持有写入权',available:'可写入'})[session.control?.state]], ['写入说明',session.control?.message]]);
+                const context = agent === 'codex' ? response?.context : response;
+                section('上下文', [['已用 Token',tokens(context?.tokens)], ['上限',tokens(context?.limit)], ['用量性质',context?.available?(context.estimated?'估算':'已记录'):null]]);
+                const usage = agent === 'codex' ? response?.usage || session.usage || {} : session;
+                const sum = values => { const numbers = values.filter(value => value != null && value !== '' && Number.isFinite(Number(value))).map(Number); return numbers.length ? numbers.reduce((a,b)=>a+b,0) : null; };
+                const hit = agent === 'codex' ? usage.cached_input_tokens : usage.cache_read_tokens;
+                const miss = agent === 'codex' ? (usage.input_tokens != null && hit != null ? Math.max(0,Number(usage.input_tokens)-Number(hit)) : null) : sum([usage.input_tokens,usage.cache_write_tokens]);
+                const input = agent === 'codex' ? usage.input_tokens : sum([usage.input_tokens,usage.cache_read_tokens,usage.cache_write_tokens]);
+                section('累计用量', [['输入 Token',tokens(input)], ['缓存命中',tokens(hit)], ['未命中',tokens(miss)], ['输出 Token',tokens(usage.output_tokens)], ['消息数',tokens(session.message_count)], ['工具调用数',tokens(session.tool_call_count)], ['API 调用数',tokens(session.api_call_count)], ['预估费用',cost(session.estimated_cost_usd)], ['实际费用',cost(session.actual_cost_usd)]]);
+                return sections;
+            },
+            async loadProfiles() {
+                if (agent !== 'hermes') return;
+                try { this.profiles = (await api.get('/api/hermes/profiles')).data || []; this.profileError = ''; }
+                catch (error) { this.profileError = error.message; }
+            },
+            switchProfile(name) {
+                const target = this.profiles.find(row => row.id === name);
+                if (!target?.available || name === profile || this.sending || this.uploading) return;
+                if (this.selectedId) {
+                    localStorage.setItem(draftKey(this.selectedId), this.draft);
+                    localStorage.setItem(draftFilesKey(this.selectedId), JSON.stringify(this.attachments));
+                }
+                localStorage.setItem(profilePreference, name);
+                const url = new URL(location.href);
+                url.searchParams.set('profile', name); url.searchParams.delete('session');
+                if (window.RemoteToolWorkspace) url.hash = '#/hermes';
+                // A new page owns immutable routing and subscriptions; old responses cannot enter it.
+                this.stopEventStream();
+                location.assign(url.href);
+            },
             // Session epoch protects navigation; per-resource versions protect concurrent reads
             // within the same session (SSE, timers and manual refresh may overlap).
             startRead(kind, epoch=this.epoch) {
@@ -231,7 +382,8 @@
                     const fromUrl=window.RemoteToolWorkspace
                         ? (location.hash.startsWith(`#/${agent}?`) ? new URLSearchParams(location.hash.split('?')[1]||'').get('session') : null)
                         : new URLSearchParams(location.search).get('session');
-                    const wanted=keepSelection?this.selectedId||fromUrl:fromUrl;
+                    const remembered=agent==='hermes'?localStorage.getItem(selectedSessionKey):null;
+                    const wanted=keepSelection?this.selectedId||fromUrl||remembered:fromUrl||remembered;
                     const selected=this.sessions.find(s=>s.id===wanted)||this.sessions[0];
                     if (selected && selected.id!==this.selectedId) await this.select(selected);
                     else if (selected) this.selected=selected;
@@ -261,12 +413,18 @@
             contextBarTitle(item) { const pct=this.contextPct(item); return pct>0?`${this.contextTokens(Number(item.context_used||0))} / ${this.contextTokens(Number(item.context_window||0))} tokens · ${pct}%`:''; },
             async moreSessions() { if (this.loadingList||!this.hasMore) return; this.loadingList=true; try { const query=this.agent==='codex'?`cursor=${api.id(this.nextCursor||'')}`:`offset=${this.offset}`; const result=await api.get(`${base}/sessions?${query}`); const ids=new Set(this.sessions.map(x=>x.id)); this.sessions.push(...(result.data||[]).filter(x=>!ids.has(x.id))); this.offset+=result.data?.length||0; this.nextCursor=result.next_cursor||null; this.hasMore=!!result.has_more; } catch(e) { this.listError=e.message; } finally { this.loadingList=false; } },
             async select(item) {
+                if (agent === 'hermes' && this.selectedId) {
+                    localStorage.setItem(draftKey(this.selectedId), this.draft);
+                    localStorage.setItem(draftFilesKey(this.selectedId), JSON.stringify(this.attachments));
+                }
                 this.stopEventStream();
                 this.olderLoading=false;
                 if(this.scrollFrame!==null){cancelAnimationFrame(this.scrollFrame);this.scrollFrame=null;}
                 const current=++this.epoch; if(scrollRestoreTimer){clearTimeout(scrollRestoreTimer);scrollRestoreTimer=null;} this.selected=item; this.selectedId=item.id; this.selectedStatusKnown=false; this.sessionsOpen=false;this.dialog=null;this.showEditDialog=false;this.messages=[];this.historyLoading=true; this.historyHasMore=false; this.oldestId=null; this.followLatest=true;this.showJumpToLatest=false;this.lastTimelineTop=0; this.activeRun=null; this.externalRunning=false;this.externalActivity=null;this.approval=null; this.context={}; this.queue=[]; this.attachments=[]; this.sessionFiles=[];this.mediaSignature='';this.filesRefreshAt=0;this.error='';this.liveSegments=[];this.liveTools=[];this.streamSeq=0;this.streamGone=false;
-                this.pending=this.restorePending(item.id);this.delivered=this.restoreDelivered(item.id);if(this.pending?.delivery==='已发送')this.acceptPending(item.id,this.pending.key); this.draft=localStorage.getItem(`remotetool:web:draft:${agent}:${item.id}`)||'';
-                if (window.RemoteToolWorkspace) { const route=location.hash.match(/^#\/(codex|hermes)(?=\?|$)/)?.[1]; if(route===agent){const query=new URLSearchParams(location.hash.split('?')[1]||'');query.set('session',item.id);history.replaceState(null,'',`${location.pathname}${location.search}#/${agent}?${query}`);} } else history.replaceState(null,'',`${location.pathname}?session=${api.id(item.id)}`);
+                this.pending=this.restorePending(item.id);this.delivered=this.restoreDelivered(item.id);if(this.pending?.delivery==='已发送')this.acceptPending(item.id,this.pending.key); this.draft=localStorage.getItem(draftKey(item.id))||'';
+                if (agent === 'hermes') localStorage.setItem(selectedSessionKey, item.id);
+                try { this.attachments = JSON.parse(localStorage.getItem(draftFilesKey(item.id)) || '[]'); } catch { this.attachments = []; }
+                if (window.RemoteToolWorkspace) { const route=location.hash.match(/^#\/(codex|hermes)(?=\?|$)/)?.[1]; if(route===agent){const query=new URLSearchParams(location.hash.split('?')[1]||'');query.set('session',item.id);history.replaceState(null,'',`${location.pathname}${location.search}#/${agent}?${query}`);} } else {const url=new URL(location.href);url.searchParams.set('session',item.id);if(agent==='hermes')url.searchParams.set('profile',profile);history.replaceState(null,'',url.href);}
                 try { await this.refreshAll(current); if(current===this.epoch){await this.$nextTick();this.scrollToLatest();} } finally { if(current===this.epoch)this.historyLoading=false; }
             },
             async refreshAll(epoch=this.epoch) { if (!this.selectedId) return;
@@ -429,7 +587,7 @@
             async forkMessage(message) {if(!this.selectedId||!message.id)return;try{const result=await api.post(`${base}/sessions/${api.id(this.selectedId)}/fork`,{message_id:message.id,fork_id:`web_fork_${newKey().replaceAll('-','')}`});const session=result.session||result;await this.refreshSessions();if(session.id)await this.select(this.sessions.find(s=>s.id===session.id)||session);}catch(e){this.error='分叉结果尚未确认，请先刷新会话列表核对。'+e.message;}},
             openMessageMenu(event,message) {if(!message?.id)return;this.messageMenu={x:Math.max(8,Math.min(event.clientX,innerWidth-190)),y:Math.max(8,Math.min(event.clientY,innerHeight-145)),message};},
             closeMessageMenu() {this.messageMenu=null;},
-            openSessionMenu(event,item) {if(!item?.id)return;this.sessionMenu={x:Math.max(8,Math.min(event.clientX,innerWidth-190)),y:Math.max(8,Math.min(event.clientY,innerHeight-200)),session:item};},
+            openSessionMenu(event,item) {if(!item?.id)return;this.sessionMenu={x:Math.max(8,Math.min(event.clientX,innerWidth-190)),y:Math.max(8,Math.min(event.clientY,innerHeight-(agent==='codex'?370:300))),session:item};},
             closeSessionMenu() {this.sessionMenu=null;},
             escapeMessageMenu(event) {if(event.key==='Escape'){this.closeMessageMenu();this.closeSessionMenu();this.closeSessionMenus();}},
             canEditMessage(message) {return message?.role==='user'&&!!message.id&&message.editable!==false&&!this.activeRun&&!this.pending;},
@@ -468,7 +626,9 @@
             async showTool(id) {try{this.toolOffset=0;const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/tools/${api.id(id)}?offset=0`);this.dialog={title:`工具 ${result.tools||0} 次 · 文件修改 ${result.file_changes||0} 次`,tools:result.data||[],text:'',files:[],more:!!result.has_more,toolId:id};this.toolOffset=(result.data||[]).length;}catch(e){this.error=e.message;}},
             async loadMoreTool() {if(this.dialog?.activeTools){await this.refreshActiveTools(this.toolOffset);return;}if(!this.dialog?.toolId)return;try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/tools/${api.id(this.dialog.toolId)}?offset=${this.toolOffset}`);this.dialog.tools.push(...(result.data||[]));this.dialog.more=!!result.has_more;this.toolOffset+=(result.data||[]).length;}catch(e){this.error=e.message;}}
         },
-        watch: { draft(value) {if(this.selectedId)localStorage.setItem(`remotetool:web:draft:${agent}:${this.selectedId}`,value);}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
+        created() { this.loadProfiles(); },
+        unmounted() { clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
+        watch: { draft(value) {if(this.selectedId)localStorage.setItem(draftKey(this.selectedId),value);}, attachments: {deep:true,handler(value){if(agent==='hermes'&&this.selectedId)localStorage.setItem(draftFilesKey(this.selectedId),JSON.stringify(value));}}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
         mounted() {this.refreshSessions();this.loadCapabilities();this.loadModels();this.loadCodexAdmin();this.loadCurrentUsage();this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible')this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible')return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
         beforeUnmount() {this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}
     });

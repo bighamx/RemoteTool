@@ -8,7 +8,8 @@ public static class ToolHistoryCache
     private sealed record Entry(JsonArray Tools, string Revision, string Path, string Stamp, bool Running, DateTime At);
     private static readonly object gate = new();
     private static readonly Dictionary<string, Entry> entries = new();
-    private static string Key(string agent, string session, string id) => agent + ":" + session + ":" + id;
+    private static string Scope(string agent) => agent == "hermes" ? HermesProfileScope.AgentKey : agent;
+    private static string Key(string agent, string session, string id) => Scope(agent) + ":" + session + ":" + id;
     public static string Stamp(string path) {
         if (string.IsNullOrEmpty(path)) return "";
         try { var file = new FileInfo(path); return file.Exists ? file.Length + ":" + file.LastWriteTimeUtc.Ticks : "missing"; }
@@ -65,7 +66,7 @@ public static class ToolHistoryCache
         }
     }
     public static void Keep(string agent, string session, HashSet<string> ids) {
-        var prefix = agent + ":" + session + ":";
+        var prefix = Scope(agent) + ":" + session + ":";
         lock (gate) foreach (var key in entries.Keys.Where(key => key.StartsWith(prefix) && !ids.Contains(key[prefix.Length..])).ToArray()) entries.Remove(key);
     }
     public static JsonObject Read(string agent, string session, string id, int offset, bool hit, string revision = null) {

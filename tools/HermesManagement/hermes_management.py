@@ -122,6 +122,15 @@ def api_server_action(action, body):
 def main():
     request = json.load(sys.stdin)
     action = request.get("action")
+    if action.startswith("admin_"):
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                from hermes_admin import invoke
+                result = invoke(action, request.get("body") or {})
+        except Exception as error:
+            result = {"error": str(error)}
+        print(json.dumps(result, ensure_ascii=True))
+        return
     if action == "session_search":
         with contextlib.redirect_stdout(io.StringIO()):
             from hermes_state import SessionDB
