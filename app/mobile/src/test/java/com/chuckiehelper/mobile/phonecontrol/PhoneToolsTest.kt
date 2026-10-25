@@ -53,6 +53,27 @@ class PhoneToolsTest {
         assertTrue(engine.settings.enabled)
         assertEquals("cancelled", engine.agentUi.result("direct", help.getString("notice_id")).getString("status"))
     }
+    @Test fun explanationsAreOptionalValidatedMetadataAndDoNotChangeDeliveryIdentity() {
+        val file = "explanation-${java.util.UUID.randomUUID()}.txt"
+        val args = JSONObject().put("action", "upload").put("name", file).put("data_base64", "aGVsbG8=").put("explanation", "上传测试文件")
+        val first = engine.invoke("phone_transfer_file", args, "explained-upload")
+        assertFalse(first.getBoolean("isError"))
+        val retry = engine.invoke("phone_transfer_file", JSONObject(args.toString()).put("explanation", "核对同一上传请求"), "explained-upload")
+        assertEquals(first.toString(), retry.toString())
+        assertEquals("上传测试文件", args.getString("explanation"))
+        val downloaded = engine.invoke("phone_transfer_file", JSONObject().put("action", "download").put("name", file), "explained-download")
+        assertEquals("aGVsbG8=", downloaded.getJSONObject("structuredContent").getString("data_base64"))
+        for (bad in listOf<Any>(123, "字".repeat(241))) {
+            val result = engine.invoke("phone_get_capabilities", JSONObject().put("explanation", bad), "bad-explanation-${bad.hashCode()}")
+            assertEquals("invalid_arguments", result.getJSONObject("structuredContent").getString("code"))
+        }
+        val catalog = PhoneToolCatalog.tools(true)
+        for (i in 0 until catalog.length()) {
+            val schema = catalog.getJSONObject(i).getJSONObject("inputSchema")
+            assertEquals("string", schema.getJSONObject("properties").getJSONObject("explanation").getString("type"))
+            assertFalse((0 until schema.getJSONArray("required").length()).any { schema.getJSONArray("required").getString(it) == "explanation" })
+        }
+    }
     @Test fun stoppedEngineRejectsRequests() {
         engine.stop()
         assertEquals("disabled", engine.invoke("phone_get_capabilities", JSONObject(), "after-stop").getJSONObject("structuredContent").getString("code"))

@@ -63,8 +63,13 @@ class PhoneAgentUi(private val context: Context) {
     fun webDisconnected() { ledger.disconnectWeb(); refresh() }
     fun beginUi(id: String, message: String, seconds: Int) { ledger.beginUi(id, message, seconds); refresh() }
     fun endUi(id: String) { ledger.endUi(id); refresh() }
-    fun toolStarted(id: String, tool: String) { label(tool)?.let { ledger.toolStarted(id, it); refresh() } }
-    fun toolFinished(id: String, tool: String) { if (label(tool) != null) { ledger.toolFinished(id); refresh() } }
+    fun toolStarted(id: String, tool: String, explanation: String = ""): Boolean {
+        val label = label(tool)
+        if (label == null && explanation.isBlank()) return false
+        ledger.toolStarted(id, label.orEmpty(), explanation); refresh()
+        return true
+    }
+    fun toolFinished(id: String) { ledger.toolFinished(id); refresh() }
     fun notify(id: String, message: String, help: Boolean, seconds: Int): JSONObject {
         val row = ledger.notify(id, message, help, seconds); refresh()
         return noticeJson(row).put("overlay_allowed", Settings.canDrawOverlays(context))
@@ -99,13 +104,13 @@ class PhoneAgentUi(private val context: Context) {
         // Keep a visible assistance card stable while unrelated observation/tap
         // tools run, so its buttons and accessibility nodes are not recreated.
         val state = ledger.snapshot().let { value ->
-            if (value.notice != null) value.copy(agent = value.notice.agent, operating = false, operation = "") else value
+            if (value.notice != null) value.copy(agent = value.notice.agent, operating = false, operation = "", explanation = "") else value
         }
         val show = settings.agentOverlay && Settings.canDrawOverlays(context) && (state.connected || state.notice != null)
         if (state == rendered && (overlay != null) == show) return
         rendered = state
         val title = when { state.notice?.help == true -> "等待协助"; state.operating -> "Agent 操作"; else -> "Agent 连接" }
-        val detail = state.notice?.message ?: state.operation.ifBlank { "${state.agent} 已连接" }
+        val detail = state.notice?.message ?: listOf(state.operation, state.explanation).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "${state.agent} 已连接" }
         val focus = if (settings.agentIsland && state.connected && state.notice == null)
             HyperIslandSupport.extras(context, island, title, detail, false) else null
         BackgroundNotification.update(context, "phone-tools", if (state.connected) "$title · $detail" else "手机操控", focus)
@@ -126,7 +131,13 @@ class PhoneAgentUi(private val context: Context) {
                     if (state.notice.help) addView(button("已完成") { reply(state.notice.id, "done") })
                     addView(button(if (state.notice.help) "暂不处理" else "知道了") { reply(state.notice.id, "dismissed") })
                 })
-            } else if (state.operation.isNotBlank()) addView(text(state.operation, 11f, Color.WHITE))
+            } else {
+                if (state.operation.isNotBlank()) addView(text(state.operation, 11f, Color.WHITE))
+                if (state.explanation.isNotBlank()) addView(text(state.explanation, 11f, Color.WHITE).apply {
+                    maxWidth = minOf(dp(320), (context.resources.displayMetrics.widthPixels - dp(48)).coerceAtLeast(dp(120)))
+                    maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+            }
         }
         val layout = WindowManager.LayoutParams(
             if (state.notice != null) (context.resources.displayMetrics.widthPixels - dp(24)).coerceAtLeast(dp(160)) else -2,

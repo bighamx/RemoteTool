@@ -67,6 +67,8 @@ python remotetool_phone.py download application.apk ./application.apk
 
 28 个工具入口（schema version 2）：
 
+每个工具均可选传入 `explanation`（字符串，最多 240 字符），用用户的语言说明本次操作和目的，例如 `phone_tap({"x":120,"y":300,"explanation":"打开网络设置，检查当前连接"})`。手机会在当前操作下方显示说明，同时更新后台状态通知，无需另发消息；不传时沿用原来的操作提示。说明随调用结束短暂保留后清理，`phone_disconnect` 立即撤下所有本 Agent 提示。待处理的用户协助卡片优先显示，不会被操作说明覆盖。说明仅用于展示，不传给底层命令、输入框或其他执行后端；同一 request_id 只改变说明不会重复执行操作。请求用户回应仍使用 `phone_notify_user(kind=help)`，说明文本不含密码、令牌或内部推理。旧版客户端工具定义没有此参数时不要传入。
+
 - 设备/观察：`phone_list_devices`、`phone_get_capabilities`、`phone_observe`、`phone_find_nodes`、`phone_wait`、`phone_screenshot`。
 - 界面：`phone_tap`、`phone_swipe`、`phone_input_text`、`phone_key`、`phone_ui_action`、`phone_gesture`。
 - 应用/文件：`phone_launch_app`、`phone_list_apps`、`phone_transfer_file`、`phone_manage_app`、`phone_files`。

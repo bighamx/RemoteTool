@@ -32,8 +32,10 @@ class PhoneEngine(val context: Context) {
             if (!settings.enabled) fail("disabled", "手机操控未开启")
             if (!Regex("[a-zA-Z0-9_.:-]{1,160}").matches(requestId)) fail("invalid_arguments", "Invalid request_id")
             PhoneToolCatalog.validate(name, arguments)
+            val explanation = arguments.optString("explanation").trim()
+            val operationArguments = JSONObject(arguments.toString()).apply { remove("explanation") }
             if (name in PhoneToolCatalog.advanced && (!settings.advanced || !allowAdvanced)) fail("advanced_disabled", "高级操作未开启")
-            val digest = MessageDigest.getInstance("SHA-256").digest((agentId + ":" + name + ":" + allowAdvanced + ":" + canonical(arguments)).toByteArray()).joinToString("") { "%02x".format(it) }
+            val digest = MessageDigest.getInstance("SHA-256").digest((agentId + ":" + name + ":" + allowAdvanced + ":" + canonical(operationArguments)).toByteArray()).joinToString("") { "%02x".format(it) }
             journal.existing(requestId, digest)?.let { return it }
             // Assistance and metadata must stay available even while an Android UI
             // binder call is slow. They never execute arbitrary device mutations.
@@ -45,15 +47,15 @@ class PhoneEngine(val context: Context) {
                 journal.begin(requestId, digest)
                 agentUi.seen(agentId, agentName)
                 val epoch = generation
-                agentUi.toolStarted(agentId, name)
+                val hasIndicator = agentUi.toolStarted(agentId, name, explanation)
                 val result = try {
-                    val data = execute(name, arguments, epoch, deadline, agentId)
+                    val data = execute(name, operationArguments, epoch, deadline, agentId)
                     val failed = data.has("exit_code") && data.optInt("exit_code", -1) != 0 || data.optBoolean("timed_out") || data.has("accepted") && !data.optBoolean("accepted")
                     if (failed) data.put("code", if (data.optBoolean("timed_out")) "delivery_unknown" else "operation_failed")
                     JSONObject().put("isError", failed).put("content", JSONArray().put(JSONObject().put("type", "text").put("text", data.toString())))
                         .put("structuredContent", data)
                 } catch (error: Exception) { errorResult(error) }
-                finally { agentUi.toolFinished(agentId, name) }
+                finally { if (hasIndicator) agentUi.toolFinished(agentId) }
                 // Large image data is carried separately from structured metadata.
                 result.optJSONObject("structuredContent")?.optString("image_base64")?.takeIf { it.isNotBlank() }?.let { image ->
                     val data = result.getJSONObject("structuredContent"); val mime = data.optString("image_mime", "image/jpeg")

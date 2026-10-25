@@ -10,6 +10,7 @@ object PhoneToolCatalog {
     private fun field(type: String, description: String = "") = JSONObject().put("type", type).put("description", description).apply { if (type == "array") put("items", JSONObject().put("type", "string")) }
     private fun tool(name: String, description: String, fields: Map<String, JSONObject> = emptyMap(), required: List<String> = emptyList(), read: Boolean = false): JSONObject {
         val properties = JSONObject(); fields.forEach { (key, value) -> properties.put(key, value) }
+        properties.put("explanation", field("string", "Optional brief user-facing explanation of what this call is doing and why, in the user's language (max 240 characters). Shown with the operation on the phone; do not include credentials, sensitive input or hidden reasoning. No separate notification call is needed.").put("maxLength", 240))
         return JSONObject().put("name", name).put("description", description)
             .put("inputSchema", JSONObject().put("type", "object").put("properties", properties).put("required", JSONArray(required)).put("additionalProperties", false))
             .put("annotations", JSONObject().put("readOnlyHint", read).put("destructiveHint", name in advanced).put("openWorldHint", true))
@@ -57,6 +58,7 @@ object PhoneToolCatalog {
             val value = args.get(key)
             val valid = when (expected) { "string" -> value is String; "boolean" -> value is Boolean; "integer" -> value is Int || value is Long; "number" -> value is Number; "object" -> value is JSONObject; "array" -> value is JSONArray; else -> false }
             if (!valid) fail("invalid_arguments", "$key must be $expected")
+            if (key == "explanation" && (value as String).length > 240) fail("invalid_arguments", "explanation must be at most 240 characters")
         }
         schema.getJSONArray("required").let { required -> for (i in 0 until required.length()) if (!args.has(required.getString(i))) fail("invalid_arguments", "Missing ${required.getString(i)}") }
     }

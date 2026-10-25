@@ -55,10 +55,11 @@ class PhoneClientTests(unittest.TestCase):
         self.server.shutdown(); self.server.server_close(); self.thread.join()
 
     def test_http_call_carries_explicit_idempotency_key_and_auth(self):
-        result = cli.PhoneClient(self.url, "test-token").call("phone_observe", {}, "stable-call")
+        result = cli.PhoneClient(self.url, "test-token").call("phone_observe", {"explanation": "读取界面以定位设置入口"}, "stable-call")
         self.assertEqual("stable-call", result["request_id"])
         self.assertEqual("stable-call", self.calls[0][2]["params"]["_meta"]["remotetool/request_id"])
         self.assertEqual("/mcp", self.calls[0][0])
+        self.assertEqual("读取界面以定位设置入口", self.calls[0][2]["params"]["arguments"]["explanation"])
 
     def test_auth_failure_is_not_retried(self):
         with self.assertRaises(Exception):
@@ -84,10 +85,11 @@ class PhoneClientTests(unittest.TestCase):
                 denied = plugin._handler("phone_observe")({"session_id": "session-a"}, session_id="session-b")
                 self.assertIn("not enabled", denied)
                 self.assertEqual(0, len(self.calls))
-                result = plugin._handler("phone_observe")({}, session_id="session-a")
+                result = plugin._handler("phone_observe")({"explanation": "检查当前页面"}, session_id="session-a")
                 self.assertTrue(result["_multimodal"])
                 self.assertEqual("data:image/jpeg;base64,YWJj", result["content"][1]["image_url"]["url"])
                 self.assertEqual("session-a", self.calls[0][1]["X-Phone-Session"])
+                self.assertEqual("检查当前页面", self.calls[0][2]["arguments"]["explanation"])
 
     def test_catalog_registers_native_hermes_schemas(self):
         registrations = []
@@ -95,6 +97,10 @@ class PhoneClientTests(unittest.TestCase):
         self.assertGreaterEqual(len(registrations), 20)
         self.assertTrue(all(item["schema"]["parameters"]["type"] == "object" for item in registrations))
         self.assertEqual(len(registrations), len({item["name"] for item in registrations}))
+        for item in registrations:
+            schema = item["schema"]["parameters"]
+            self.assertEqual("string", schema["properties"]["explanation"]["type"])
+            self.assertNotIn("explanation", schema["required"])
 
 
 if __name__ == "__main__":

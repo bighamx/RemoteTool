@@ -68,6 +68,7 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
             : "本会话绑定未开放高级工具。请使用上面列出的工具范围；手机端具备 Root 或 Shizuku 并不代表本会话已获准执行高级操作。");
         if (enabled) {
             text.AppendLine("使用流程：");
+            if (tools.Any(tool => tool["inputSchema"]?["properties"]?["explanation"] != null)) text.AppendLine("工具支持可选 explanation 参数：每次调用可直接用用户的语言简短说明正在做什么、为什么做（最多 240 字符），会随本次操作显示在手机悬浮提示中，无需为普通操作说明额外调用 phone_notify_user。只写面向用户的目的或动作摘要，不写敏感输入、凭据或内部推理。需要用户回应的协助请求仍使用 phone_notify_user(kind=help)。未提供该参数的工具不要传入；phone_disconnect 仍会立即撤下提示。");
             text.AppendLine("1. 首次操作先调用 phone_get_capabilities 核对实际能力；以本次返回的设备、权限和可用后端为准，不把连接成功当成操作成功。");
             if (names.Contains("phone_begin_ui") && names.Contains("phone_end_ui")) text.AppendLine("开始查看或操作界面前，先调用 phone_begin_ui，用简短 message 告知用户正在做什么；长操作在声明过期前续期。再调用 phone_observe 或 phone_screenshot 查看当前界面，按实际页面操作，避免使用过时坐标。");
             text.AppendLine("2. 以各工具的参数 Schema 为准。界面坐标使用原始屏幕像素；按节点操作时使用最新观察结果中的 snapshot_id 和节点标识，节点标识在 30 秒后失效。界面变化后重新观察，不要沿用旧节点或猜测控件位置。");

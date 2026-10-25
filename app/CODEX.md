@@ -8,6 +8,8 @@
 
 入口：更多 → Codex。底部导航为系统、远程、文件、Hermes、更多；Docker 位于更多。
 
+手机工具的公共可选参数 `explanation` 用于简短说明动作及目的（最多 240 字符），统一由共享引擎和悬浮提示处理，不传给底层操作后端，也不计入请求去重摘要。两版 App、Hermes 插件 schema、MCP instructions 和按能力注入的提示词必须同步；普通说明不需要另调消息工具，用户协助仍使用带回执的 help 消息。
+
 ## 接入方式
 
 手机经当前设备的 `/api/codex/*` 接口连接，沿用 RemoteTool 登录和所选连接通道。服务端以桌面登录用户身份启动同一 WebApi 程序的 `--codex-bridge` 模式，再以 stdio JSON-RPC 连接本机 `codex app-server`。桥接只监听随机本机回环端口，用私有随机令牌认证。Codex 模块的运行代码全部是 C# 和 Kotlin，不需要 Python。

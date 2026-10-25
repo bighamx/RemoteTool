@@ -5,7 +5,7 @@ import java.util.UUID
 internal data class AgentUserNotice(val id: String, val owner: String, val agent: String, val message: String,
     val help: Boolean, val expiresAt: Long, var status: String = "pending")
 internal data class AgentDisplayState(val connected: Boolean, val agent: String, val operating: Boolean,
-    val operation: String, val notice: AgentUserNotice?)
+    val operation: String, val notice: AgentUserNotice?, val explanation: String = "")
 
 /** Stateless MCP clients have activity leases, rather than a fabricated permanent connection. */
 internal class AgentActivityLedger(private val clock: () -> Long) {
@@ -14,6 +14,7 @@ internal class AgentActivityLedger(private val clock: () -> Long) {
     private val notices = linkedMapOf<String, AgentUserNotice>()
     private var operationOwner = ""
     private var operation = ""
+    private var explanation = ""
     private var operationUntil = 0L
 
     @Synchronized fun seen(id: String, name: String = "Agent") {
@@ -25,7 +26,7 @@ internal class AgentActivityLedger(private val clock: () -> Long) {
     }
     @Synchronized fun disconnect(id: String) {
         agents.remove(id)
-        if (operationOwner == id) { operation = ""; operationUntil = 0 }
+        if (operationOwner == id) { operationOwner = ""; operation = ""; explanation = ""; operationUntil = 0 }
         notices.values.filter { it.owner == id && it.status == "pending" }.forEach { it.status = "cancelled" }
     }
     @Synchronized fun disconnectWeb() { agents.keys.filter { it.startsWith("web:") }.toList().forEach(::disconnect) }
@@ -36,10 +37,16 @@ internal class AgentActivityLedger(private val clock: () -> Long) {
     }
     @Synchronized fun endUi(id: String) {
         agents[id]?.let { it.uiUntil = 0; it.goal = "" }
-        if (operationOwner == id) { operation = ""; operationUntil = 0 }
+        if (operationOwner == id) {
+            val completingWithExplanation = operation.isEmpty() && explanation.isNotBlank()
+            operation = ""
+            if (!completingWithExplanation) operationUntil = 0
+        }
     }
-    @Synchronized fun toolStarted(id: String, label: String) {
-        operationOwner = id; operation = label; operationUntil = clock() + 40_000
+    @Synchronized fun toolStarted(id: String, label: String, purpose: String = "") {
+        operationOwner = id; operation = label
+        explanation = purpose.filter { !it.isISOControl() || it == '\n' }.trim().take(240)
+        operationUntil = clock() + 40_000
     }
     @Synchronized fun toolFinished(id: String) {
         if (operationOwner == id) operationUntil = clock() + 2_000
@@ -63,13 +70,14 @@ internal class AgentActivityLedger(private val clock: () -> Long) {
         val active = agents.values.lastOrNull { it.seenUntil > now || it.uiUntil > now }
         val declared = agents.values.lastOrNull { it.uiUntil > now }
         val op = operation.takeIf { operationUntil > now && agents.containsKey(operationOwner) }.orEmpty()
-        val name = (if (op.isNotEmpty()) agents[operationOwner]?.name else null) ?: declared?.name ?: active?.name ?: "Agent"
+        val purpose = explanation.takeIf { operationUntil > now && agents.containsKey(operationOwner) }.orEmpty()
+        val name = (if (op.isNotEmpty() || purpose.isNotEmpty()) agents[operationOwner]?.name else null) ?: declared?.name ?: active?.name ?: "Agent"
         return AgentDisplayState(active != null, name, declared != null || op.isNotEmpty(),
             op.ifBlank { declared?.goal.orEmpty().ifBlank { if (declared != null) "正在操作屏幕" else "" } },
-            notices.values.lastOrNull { it.status == "pending" }?.copy())
+            notices.values.lastOrNull { it.status == "pending" }?.copy(), purpose)
     }
     @Synchronized fun clear() {
-        agents.clear(); operation = ""; operationUntil = 0
+        agents.clear(); operationOwner = ""; operation = ""; explanation = ""; operationUntil = 0
         notices.values.filter { it.status == "pending" }.forEach { it.status = "cancelled" }
     }
     private fun expire() {

@@ -4,6 +4,41 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AgentActivityLedgerTest {
+    @Test fun explanationsFollowTheCurrentOperationAndExpireWithoutBecomingNotices() {
+        var now = 0L
+        val state = AgentActivityLedger { now }
+        state.seen("a", "Codex")
+        state.toolStarted("a", "正在点击屏幕", "打开网络设置，检查当前连接")
+        assertEquals("正在点击屏幕", state.snapshot().operation)
+        assertEquals("打开网络设置，检查当前连接", state.snapshot().explanation)
+        assertNull(state.snapshot().notice)
+        state.toolFinished("a")
+        now = 2001
+        assertEquals("", state.snapshot().explanation)
+        assertFalse(state.snapshot().operating)
+        state.toolStarted("a", "读取界面")
+        assertEquals("", state.snapshot().explanation)
+    }
+    @Test fun readOnlyExplanationsAndUiCompletionDoNotDeclareUiOperations() {
+        val state = AgentActivityLedger { 0 }
+        state.seen("a", "Codex"); state.seen("b", "Hermes")
+        state.toolStarted("a", "", "检查手机能力")
+        assertFalse(state.snapshot().operating)
+        assertEquals("检查手机能力", state.snapshot().explanation)
+        state.beginUi("a", "检查界面", 300)
+        state.toolStarted("a", "", "界面检查完成")
+        state.endUi("a")
+        assertFalse(state.snapshot().operating)
+        assertEquals("界面检查完成", state.snapshot().explanation)
+        state.disconnect("b")
+        assertEquals("界面检查完成", state.snapshot().explanation)
+        state.disconnect("a")
+        assertEquals("", state.snapshot().explanation)
+        assertFalse(state.snapshot().connected)
+        state.toolFinished("a")
+        state.seen("a", "Codex")
+        assertEquals("", state.snapshot().explanation)
+    }
     @Test fun idleClientsExpireAndAnExpiredDeclarationCannotStayOnScreen() {
         var now = 0L
         val state = AgentActivityLedger { now }
