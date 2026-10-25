@@ -36,7 +36,11 @@ public sealed class PhoneToolsController(PhoneGateway gateway, ILogger<PhoneTool
         return Ok(await gateway.Invoke(phone, body["tool"]!.ToString(), body["arguments"] as JsonObject ?? new(), body["request_id"]?.ToString() ?? Guid.NewGuid().ToString("N"), advanced, ct, id, gateway.AgentName(id, row["agent"]?.ToString() ?? "Agent")));
     }
     [HttpPost("bound/{id}/mcp")]
-    public async Task<IActionResult> Mcp(string id, [FromBody] JsonObject body, CancellationToken ct) {
+    public async Task<IActionResult> Mcp(string id, CancellationToken ct) {
+        // 自行读取请求体：客户端若按 GBK 发送或发生双重编码，ASP.NET 的 UTF-8 绑定
+        // 会静默变成替换字符，这里统一修复后再进入 JSON-RPC 处理。
+        var body = await Services.TextEncodingRepair.ReadJsonObjectAsync(Request, ct);
+        if (body == null) return BadRequest(new { error = "invalid_request", detail = "Body must be a JSON object" });
         try { return await McpCore(id, body, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (InvalidOperationException error) when (error.Message == "phone_offline") {

@@ -3,6 +3,7 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="sqlite-net-pcl" Version="1.8.116" />
+    <Compile Include="../../WebApplication/Services/TextEncodingRepair.cs" Link="Services/TextEncodingRepair.cs" />
     <Compile Include="../../WebApplication/Services/RemoteToolPaths.cs" Link="RemoteToolPaths.cs" />
     <Using Include="Microsoft.Extensions.Configuration" />
     <Compile Include="../../WebApplication/Services/HermesBridge.cs" Link="HermesBridge.cs" />
