@@ -14,7 +14,14 @@ function Get-ApkSha256([string]$LiteralPath) {
     finally { $digest.Dispose(); $stream.Dispose() }
 }
 $taskRepo = Split-Path -Parent $PSScriptRoot
-if (-not $ApkPath) { $ApkPath = Join-Path $taskRepo 'app\mobile\build\outputs\apk\release\mobile-release.apk' }
+if (-not $ApkPath) {
+    $apkDirectory = Join-Path $taskRepo 'app\mobile\build\outputs\apk\full\release'
+    $metadataPath = Join-Path $apkDirectory 'output-metadata.json'
+    if (-not (Test-Path -LiteralPath $metadataPath)) { throw 'Build :mobile:assembleFullRelease first, or pass -ApkPath.' }
+    $metadata = Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (@($metadata.elements).Count -ne 1) { throw 'Expected one full Release APK; pass -ApkPath explicitly.' }
+    $ApkPath = Join-Path $apkDirectory $metadata.elements[0].outputFile
+}
 $apkSource = (Resolve-Path -LiteralPath $ApkPath).Path
 if (-not $AndroidSdk) { $AndroidSdk = $env:ANDROID_HOME }
 if (-not $AndroidSdk) { $AndroidSdk = $env:ANDROID_SDK_ROOT }

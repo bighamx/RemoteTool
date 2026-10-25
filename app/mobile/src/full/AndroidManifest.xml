@@ -1,0 +1,21 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <application>
+        <activity android:name="com.chuckiehelper.mobile.NativeActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+        <activity android:name="com.chuckiehelper.mobile.RemoteActivity" android:exported="false" android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden" />
+        <service android:name="com.chuckiehelper.mobile.nativeui.AgentWatchService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <provider android:name="com.chuckiehelper.mobile.nativeui.HermesFileProvider" android:authorities="${applicationId}.hermes.files" android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/hermes_file_paths" />
+        </provider>
+        <provider android:name="com.chuckiehelper.mobile.nativeui.AppUpdateFileProvider" android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/app_update_paths" />
+        </provider>
+    </application>
+</manifest>

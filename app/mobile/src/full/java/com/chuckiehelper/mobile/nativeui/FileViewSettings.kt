@@ -6,7 +6,6 @@ import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.Locale
 
-internal enum class FileSort(val label: String) { NAME("名称"), MODIFIED("修改时间"), SIZE("大小"), TYPE("类型") }
 internal data class FileViewSettings(val sort: FileSort = FileSort.NAME, val secondarySort: FileSort? = null,
     val descending: Boolean = false, val secondaryDescending: Boolean = false, val foldersFirst: Boolean = true)
 

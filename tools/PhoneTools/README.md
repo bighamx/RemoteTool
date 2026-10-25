@@ -118,7 +118,7 @@ IIS 部署需避免 WebDAV handler/module 拦截 DELETE；项目 web.config 已�
 工具 Schema 权威定义在 Android `PhoneToolCatalog.kt`；Android 测试导出 `app/mobile/build/phone-tools-catalog.json`，更新后复制到本目录 `hermes_plugin/tools.json`，用于 Hermes 适配器。发布时需保持两者一致。
 
 ```text
-app/gradlew.bat :mobile:testDebugUnitTest :mobile:lintRelease :mobile:assembleRelease
+app/gradlew.bat :mobile:testFullDebugUnitTest :mobile:testPhoneDebugUnitTest :mobile:lintFullRelease :mobile:lintPhoneRelease :mobile:assembleFullRelease :mobile:assemblePhoneRelease
 dotnet run --project tests/PhoneTools/PhoneTools.csproj
 python -m unittest discover -s tools/PhoneTools/tests -v
 python tools/PhoneTools/tests/check_codex_protocol.py <实际使用的codex.exe>

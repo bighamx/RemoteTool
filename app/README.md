@@ -2,7 +2,9 @@
 
 ## 独立手机操控 App
 
-`:phonecontrol` 构建单独的“手机操控”应用（`com.chuckiehelper.phonecontrol`），可与 RemoteTool 同时安装。精简版通过 `BuildConfig.PHONE_COMPANION` 选择相同的 `NativeApp` 页面：设备、云账户登录与配置上传/下载、手机操控、TCP/UDP 端口转发、日志和开机自启；不提供聊天、桌面远控、终端及 Docker 入口。界面、配置模型和依赖直接共享，功能修改同时生效。运行 `gradlew.bat :phonecontrol:assembleRelease`，安装包位于 `phonecontrol/build/outputs/apk/release/`。
+`:mobile` 使用 `full`、`phone` 两个构建版本：主 App 包名 `com.chuckiehelper.mobile`，独立“手机操控”包名 `com.chuckiehelper.phonecontrol`，两者可同时安装。`src/main` 维护同一套设备、云账户登录与配置上传/下载、手机操控、TCP/UDP 端口转发、设置、日志、自启动页面及服务；主 App 的聊天、桌面远控、文件管理、终端和 Docker 实现在 `src/full`，不会进入独立版的源码编译。`src/phone` 仅提供精简版入口和图标，专属媒体、Markdown 和图片依赖限定为 `fullImplementation`。两版共用包内 namespace、公共 Manifest、依赖与签名配置，保留各自的包名、版本号和数据。
+
+在 `app` 目录运行 `./build-app.ps1 -Edition full` 或 `./build-app.ps1 -Edition phone`（默认 Release；`-Edition both` 构建两版）。对应 Gradle 任务为 `:mobile:assembleFullRelease`、`:mobile:assemblePhoneRelease`，产物目录分别为 `mobile/build/outputs/apk/full/release/` 和 `mobile/build/outputs/apk/phone/release/`。版本专属导航在各自的 `AppEditionFactory.kt`，公共页面在 `NativeApp.kt`；修改公共功能只需维护一份实现。
 
 与主 App 一样添加设备登录，或通过云账户下载配置，再进入手机操控设置启用转发通道并启动服务；也可仅使用直连。默认直连端口为 `18792`，与主 App 的 `18791` 分开。独立 App 的系统授权、Root/Shizuku 授权、Keystore 和连接身份均独立；关闭主 App 不会主动停止独立操控服务。两版属于同一云应用，使用相同 PKCE 公共客户端；登录随机 state 增加版本前缀，将浏览器回调转发给同签名的正确 App，再由目标 App 校验完整 state、时效及自己的 PKCE verifier，避免同时安装时串号。
 
@@ -79,16 +81,16 @@ Windows 桌面代理在专用线程上绑定当前输入桌面，并保留服务
 发行包使用 Release 构建，启用 R8 代码优化、未使用代码移除和资源裁剪：
 
 ```powershell
-rtk proxy .\gradlew.bat :mobile:assembleRelease :mobile:lintRelease --no-daemon "-Pkotlin.compiler.execution.strategy=in-process"
+rtk proxy .\gradlew.bat :mobile:assembleFullRelease :mobile:lintFullRelease --no-daemon "-Pkotlin.compiler.execution.strategy=in-process"
 ```
 
-产物为 `mobile/build/outputs/apk/release/mobile-release.apk`，`tools/Publish-AppUpdate.ps1` 默认读取这个发行包。当前 Release 沿用已安装版本的签名，构建机必须使用同一签名密钥；发布脚本可通过 `-PreviousApkPath` 检查签名一致和版本递增。不要通过卸载 App 来解决签名不一致。
+主 App 产物位于 `mobile/build/outputs/apk/full/release/`，`tools/Publish-AppUpdate.ps1` 默认根据该目录的 `output-metadata.json` 读取版本化文件名。当前 Release 沿用已安装版本的签名，构建机必须使用同一签名密钥；发布脚本可通过 `-PreviousApkPath` 检查签名一致和版本递增。不要通过卸载 App 来解决签名不一致。
 
 开发调试仍可使用以下命令：
 
 ```powershell
-.\gradlew.bat :mobile:assembleDebug
-.\gradlew.bat :mobile:testDebugUnitTest
+.\gradlew.bat :mobile:assembleFullDebug :mobile:assemblePhoneDebug
+.\gradlew.bat :mobile:testFullDebugUnitTest :mobile:testPhoneDebugUnitTest
 adb connect 192.168.1.219:5555
 adb -s 192.168.1.219:5555 install -r .\mobile\build\outputs\apk\debug\mobile-debug.apk
 ```

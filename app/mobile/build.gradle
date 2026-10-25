@@ -11,11 +11,31 @@ android {
         applicationId 'com.chuckiehelper.mobile'
         minSdk 26
         targetSdk 34
-        versionCode 91
-        versionName "0.3.88"
-        buildConfigField 'boolean', 'PHONE_COMPANION', 'false'
-        manifestPlaceholders.xiaomiAppId = providers.gradleProperty('mobileXiaomiAppId').orElse('').get()
-        manifestPlaceholders.xiaomiDebug = providers.gradleProperty('mobileXiaomiDebug').orElse('false').get()
+    }
+    flavorDimensions += 'edition'
+    productFlavors {
+        full {
+            dimension 'edition'
+            applicationId 'com.chuckiehelper.mobile'
+            versionCode 91
+            versionName '0.3.88'
+            buildConfigField 'boolean', 'PHONE_COMPANION', 'false'
+            manifestPlaceholders = [appLabel: 'RemoteTool', appIcon: '@mipmap/ic_launcher',
+                siblingPackage: 'com.chuckiehelper.phonecontrol', accessibilityLabel: 'RemoteTool 手机操控', notificationLabel: 'RemoteTool 手机通知',
+                xiaomiAppId: providers.gradleProperty('mobileXiaomiAppId').orElse('').get(),
+                xiaomiDebug: providers.gradleProperty('mobileXiaomiDebug').orElse('false').get()]
+        }
+        phone {
+            dimension 'edition'
+            applicationId 'com.chuckiehelper.phonecontrol'
+            versionCode 3
+            versionName '0.2.1'
+            buildConfigField 'boolean', 'PHONE_COMPANION', 'true'
+            manifestPlaceholders = [appLabel: '手机操控', appIcon: '@drawable/ic_phone_control',
+                siblingPackage: 'com.chuckiehelper.mobile', accessibilityLabel: '手机操控 · 无障碍', notificationLabel: '手机操控 · 通知读取',
+                xiaomiAppId: providers.gradleProperty('phonecontrolXiaomiAppId').orElse('').get(),
+                xiaomiDebug: providers.gradleProperty('phonecontrolXiaomiDebug').orElse('false').get()]
+        }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -23,7 +43,6 @@ android {
     }
     kotlinOptions { jvmTarget = '17' }
     buildFeatures { compose true; buildConfig true; aidl true }
-    sourceSets.main.java.srcDir '../phone-shared/src/main/java'
     // Existing installations use this original certificate; never replace it with a new SDK debug key.
     def updateStorePath = providers.gradleProperty('remoteToolSigningStore')
         .orElse(providers.environmentVariable('REMOTE_TOOL_SIGNING_STORE')).orNull
@@ -35,7 +54,17 @@ android {
     // Deliverable naming follows the project name (RemoteTool), not the legacy package.
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
-            outputFileName = "RemoteTool-${variant.versionName}-${variant.versionCode}.apk"
+            def prefix = variant.flavorName == 'phone' ? 'RemoteTool-PhoneControl' : 'RemoteTool'
+            outputFileName = "${prefix}-${variant.versionName}-${variant.versionCode}.apk"
+        }
+        if (variant.buildType.name == 'release') {
+            def prefix = variant.flavorName == 'phone' ? 'RemoteTool-PhoneControl' : 'RemoteTool'
+            def archive = tasks.register("archive${variant.name.capitalize()}CrashMapping", Copy) {
+                from layout.buildDirectory.file("outputs/mapping/${variant.name}/mapping.txt")
+                into layout.buildDirectory.dir('outputs/crash-mappings')
+                rename { "${prefix}-${variant.versionName}-${variant.versionCode}-mapping.txt" }
+            }
+            variant.assembleProvider.configure { finalizedBy(archive) }
         }
     }
 
@@ -51,13 +80,3 @@ android {
 }
 
 apply from: rootProject.file('shared-dependencies.gradle')
-
-// Retain a versioned mapping beside build outputs for diagnosing obfuscated release stacks.
-tasks.register('archiveReleaseCrashMapping', Copy) {
-    from layout.buildDirectory.file('outputs/mapping/release/mapping.txt')
-    into layout.buildDirectory.dir('outputs/crash-mappings')
-    rename { "RemoteTool-${android.defaultConfig.versionName}-${android.defaultConfig.versionCode}-mapping.txt" }
-}
-tasks.configureEach {
-    if (name == 'assembleRelease') finalizedBy('archiveReleaseCrashMapping')
-}

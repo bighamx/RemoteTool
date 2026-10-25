@@ -2,7 +2,9 @@
 
 ## 主 App 与手机操控精简版
 
-`mobile` 与 `phonecontrol` 共享 `mobile/src/main/java`、`phone-shared/src/main/java` 和 `shared-dependencies.gradle`。精简版只用 `BuildConfig.PHONE_COMPANION` 筛选入口；已有的设备、云账户、配置、手机操控、端口转发、日志及自启动页面必须直接复用，不另写同功能页面，后续 UI 与协议修改要同时适用两版。云登录共用应用与公共 PKCE 客户端，以随机 state 前缀和安装签名匹配路由回正确 App，再由各自私有状态完成校验。
+只有 `:mobile` 一个应用模块，使用 `full`、`phone` 两个 product flavor 分别构建 RemoteTool 与独立手机操控。`src/main` 维护唯一的设备、云账户、配置、手机操控、端口转发、日志、自启动页面及服务；`src/full` 放聊天、远控、文件管理等完整版本专属实现、资源和 Manifest 组件；`src/phone` 只放精简版的入口装配和图标。公共 `AppEdition` 契约由两个 flavor 各自实现，不能让 `main` 或 `phone` 引用 `full` 类或依赖；不要用 `PHONE_COMPANION` 条件语句把完整功能重新塞回公共目录。该常量只保留给两版身份、云回调和默认端口等差异。公共页面必须复用，修改同时适用两版。云登录共用应用与公共 PKCE 客户端，以随机 state 前缀和安装签名匹配路由回正确 App，再由各自私有状态完成校验。
+
+构建使用 `:mobile:assembleFullRelease`、`:mobile:assemblePhoneRelease`，或 `app/build-app.ps1 -Edition full|phone|both`。公共测试在 `src/test`，主 App 专属测试在 `src/testFull`，分别执行 `:mobile:testFullDebugUnitTest` 与 `:mobile:testPhoneDebugUnitTest`。`python tools/check_android_editions.py` 仅检查源码边界、身份、Manifest 和资源，不执行编译。发布脚本默认从 `outputs/apk/full/release/output-metadata.json` 读取主 App 产物；两版包名、签名、原生 Activity 类名和各自的数据目录不变。
 
 手机工具 schema 2 提供 `phone_begin_ui`、`phone_end_ui`、`phone_disconnect`、`phone_notify_user`、`phone_get_user_reply`。所有手机操作与核验完成后，最后调用 `phone_disconnect`，立即撤下本 Agent 的连接／操作提示及待处理消息；服务和授权保留，其他 Agent 不受影响。`phone_end_ui` 仅结束 UI 声明，不等于断开；`ping` 和工具发现不能重新点亮提示，新工具调用或 `initialize` 才恢复。每个 Web 绑定单独维护声明和回执；回执未完成、过期或丢失都不能当作用户已完成。顶部提示与 HyperOS 通知使用同一状态；普通前台服务继续共用一条后台通知，协助消息独立显示。超级岛使用官方接口，除系统协议和 `canShowFocus` 开关外仍需小米平台 App ID、证书及鉴权通过；不能把开关开启当成上岛成功，不伪装媒体或改系统白名单。完整调用约定在 `tools/PhoneTools/README.md`。
 
