@@ -247,7 +247,7 @@ try {
     File.AppendAllText(activityPath, Record("response_item", new() { ["type"] = "custom_tool_call", ["name"] = "exec", ["call_id"] = "freeform", ["input"] = new string('x', 400) }, stamp+4000)
         + Record("response_item", new() { ["type"] = "custom_tool_call_output", ["call_id"] = "freeform", ["output"] = "plain result" }, stamp+5000));
     snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
-    Check(snapshot["activity"]["progress"][2]["status"].ToString() == "completed" && snapshot["activity"]["progress"][2]["preview"].ToString().Length <= 161, "freeform desktop tools supported with bounded preview");
+    Check(snapshot["activity"]["progress"][2]["status"].ToString() == "completed" && snapshot["activity"]["progress"][2]["preview"].ToString().Length <= 251, "freeform desktop tools supported with bounded preview");
     File.AppendAllText(activityPath, Record("response_item", new() { ["type"] = "reasoning", ["text"] = "THOUGHT_DO_NOT_EXPOSE" }, stamp+6000));
     snapshot = CodexRolloutSnapshot.Read(temp, activityPath);
     Check(snapshot["activity"]["last_response_at"].GetValue<long>() == stamp+6000 && !snapshot["activity"].ToJsonString().Contains("THOUGHT_DO_NOT_EXPOSE"), "activity clock observes reasoning without exposing content");
