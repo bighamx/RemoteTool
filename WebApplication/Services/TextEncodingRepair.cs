@@ -20,7 +20,10 @@ public static class TextEncodingRepair {
         var bytes = buffer.ToArray();
         if (bytes.Length == 0) return null;
         var text = RepairText(Decode(bytes, Charset(request.ContentType)));
-        var node = JsonNode.Parse(text);
+        if (text.Length > 0 && text[0] == '\uFEFF') text = text[1..];
+        JsonNode? node;
+        try { node = JsonNode.Parse(text); }
+        catch (System.Text.Json.JsonException) { return null; }
         if (node is JsonObject obj) { RepairTree(obj); return obj; }
         return null;
     }

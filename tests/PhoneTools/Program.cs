@@ -89,6 +89,24 @@ Check(!presenceEvents.Reader.TryRead(out _), "discovery and ping do not reactiva
 await McpProbe("initialize", "{\"clientInfo\":{\"name\":\"Codex\"}}");
 await McpProbe("tools/call", "{\"name\":\"phone_observe\",\"arguments\":{}}");
 Check(presenceEvents.Reader.TryRead(out var connectedAgent) && connectedAgent == external["id"]!.ToString(), "initialize explicitly reactivates the same agent");
+Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+const string clientName = "编码验证：中文正常";
+const string initializeChinese = """{"jsonrpc":"2.0","id":11,"method":"initialize","params":{"clientInfo":{"name":"编码验证：中文正常"}}}""";
+foreach (var encodingCase in new[] {
+    ("utf8", Encoding.UTF8.GetBytes(initializeChinese)),
+    ("gbk", Encoding.GetEncoding(936).GetBytes(initializeChinese)),
+    ("double-encoded", Encoding.UTF8.GetBytes(Encoding.Latin1.GetString(Encoding.UTF8.GetBytes(initializeChinese)))),
+    ("utf8-bom", new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes(initializeChinese)).ToArray())
+}) {
+    using var content = new ByteArrayContent(encodingCase.Item2);
+    content.Headers.ContentType = new("application/json");
+    using var response = await mcpClient.PostAsync(mcpUrl, content);
+    Check(response.IsSuccessStatusCode && gateway.AgentName(external["id"]!.ToString()) == clientName, "MCP raw request encoding: " + encodingCase.Item1);
+}
+foreach (var malformed in new[] { "{", "[]", "null", "\"text\"" }) {
+    using var response = await mcpClient.PostAsync(mcpUrl, new StringContent(malformed, Encoding.UTF8, "application/json"));
+    Check(response.StatusCode == System.Net.HttpStatusCode.BadRequest, "invalid JSON body returns 400");
+}
 if (Environment.GetEnvironmentVariable("REMOTETOOL_MCP_TEST_PYTHON") is { Length: > 0 } python) {
     var info = new System.Diagnostics.ProcessStartInfo(python) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
     var repo = new DirectoryInfo(AppContext.BaseDirectory);
