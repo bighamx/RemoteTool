@@ -7,6 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, '../../WebApplication/wwwroo
 let options;
 const root = { dataset: { agent: 'hermes' } };
 const sandbox = {
+    URLSearchParams, location: { search: '' }, localStorage: { getItem() { return null; } },
     document: { currentScript: null, getElementById: id => id === 'agent-app' ? root : null },
     window: { RemoteToolApi: {} },
     Vue: { createApp: value => { options = value; return { use() {}, mount() {} }; } },
@@ -20,9 +21,9 @@ const now = Date.now();
 const context = messages => ({
     messages,
     liveSegments: [
-        { id: 'i1', text: '第一条旁白内容', createdAt: now - 1000 },
-        { id: 'i2', text: '第二条旁白内容', createdAt: now - 990 },
-        { id: 'snap', text: '第一条旁白内容\n\n第二条旁白内容\n\n第三条还没落库', createdAt: now - 980 },
+        { id: 'i1', text: '第一条旁白内容', createdAt: now - 1000, historyIds: [] },
+        { id: 'i2', text: '第二条旁白内容', createdAt: now - 990, historyIds: [] },
+        { id: 'snap', text: '第一条旁白内容\n\n第二条旁白内容\n\n第三条还没落库', createdAt: now - 980, historyIds: [] },
     ],
     ...(Object.fromEntries(['asText', 'narrationNormalized', 'narrationCovers', 'sameNarration', 'messageStamp', 'messageText', 'messageTextRaw', 'unwrapOob']
         .map(name => [name, (options.methods && options.methods[name]) || options.computed[name]]))),

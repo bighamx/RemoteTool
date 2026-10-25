@@ -124,12 +124,52 @@ internal sealed partial class CodexAgent
     }
 
     private async Task<bool> NativeQueueStillOwns(string session) {
-        CodexRpc owner;bool queued;
-        lock(gate){sessionRpcs.TryGetValue(session,out owner);queued=runs.Any(entry=>entry.Value.B("native_queue") && entry.Value.S("session_id")==session && entry.Value.S("status")=="queued");}
-        if(!queued || owner?.Running!=true)return false;
-        // A consumed submission may be awaiting its ordered turn/started notification.
-        // Snapshot thread status can lag, so retain the owner until the journal binds it.
-        await Task.CompletedTask;
-        return true;
+        CodexRpc owner;
+        JsonObject[] queued;
+        lock (gate) {
+            sessionRpcs.TryGetValue(session, out owner);
+            queued = runs.Select(entry => entry.Value as JsonObject).Where(row => row != null &&
+                row.B("native_queue") && row.S("session_id") == session && row.S("status") == "queued").ToArray();
+        }
+        if (queued.Length == 0) return false;
+        lock (gate) if (ActiveTurnBlocksQueueReconciliation(session)) return true;
+        var reader = owner?.Running == true ? owner : rpc;
+        if (reader?.Running != true) return false;
+        try {
+            if ((await reader.Call("thread/queue/list", Obj(("threadId", session), ("limit", 100)))).A("data").Count > 0) return true;
+            var thread = (await reader.Call("thread/read", Obj(("threadId", session), ("includeTurns", false))))["thread"];
+            if (NativeQueueThreadBusy(thread)) return true;
+            // An empty queue can precede turn/started. Keep recent receipts until
+            // the ordered notification has had time to bind the consumed entry.
+            var cutoff = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeSeconds();
+            if (queued.Any(row => row.S("enqueued_at").Length > 0 &&
+                long.TryParse(row.S("enqueued_at"), out var timestamp) && timestamp > cutoff)) return true;
+            if ((await reader.Call("thread/queue/list", Obj(("threadId", session), ("limit", 100)))).A("data").Count > 0) return true;
+            lock (gate) {
+                sessionRpcs.TryGetValue(session, out var current);
+                if (ActiveTurnBlocksQueueReconciliation(session) || current != owner) return true;
+                foreach (var row in queued.Where(row => row.S("status") == "queued")) {
+                    row["status"] = "acceptance_unknown";
+                    row["error_code"] = "queue_tracking_lost";
+                    row["error"] = "原生队列已为空且会话空闲，请查看历史核对这条旧队列消息；不会自动重发。";
+                }
+                Persist();
+            }
+            return false;
+        } catch (CodexError) {
+            // An unverifiable native queue must never be treated as empty.
+            return true;
+        }
+    }
+
+    private bool ActiveTurnBlocksQueueReconciliation(string session) =>
+        active.TryGetValue(session, out var run) && runs[run].S("phase") != "preparing";
+
+    private bool NativeQueueThreadBusy(JsonNode thread) {
+        var status = thread?["status"].S("type");
+        if (status == "idle") return false;
+        if (status != "notLoaded") return true;
+        var path = RolloutPath(thread);
+        return CodexRollout.WriterLocked(home, path) || CodexRollout.IsRunning(home, path);
     }
 }

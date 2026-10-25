@@ -4,6 +4,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConversationUiStateTest {
+    @Test fun accountViewResetAndProcessRestartPreserveDraftsButNotSubmittingFlags() {
+        val saved = ConversationUiState().draft("account-a-session", "keep a")
+            .draft("account-b-session", "keep b").submitting("account-a-session", true)
+        assertTrue(saved.hasSubmitting())
+        val restored = ConversationUiState.restoreDrafts(saved.savedDrafts())
+        assertEquals("keep a", restored.entry("account-a-session").draft)
+        assertEquals("keep b", restored.entry("account-b-session").draft)
+        assertFalse(restored.hasSubmitting())
+    }
     @Test fun lateFailureAndDraftRestorationStayInTheirOriginatingChat() {
         var state = ConversationUiState().draft("A", "允许").submitting("A", true)
         state = state.draft("B", "另一个问题")

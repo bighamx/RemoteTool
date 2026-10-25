@@ -60,6 +60,7 @@ class PhoneClientTests(unittest.TestCase):
         self.assertEqual("stable-call", self.calls[0][2]["params"]["_meta"]["remotetool/request_id"])
         self.assertEqual("/mcp", self.calls[0][0])
         self.assertEqual("读取界面以定位设置入口", self.calls[0][2]["params"]["arguments"]["explanation"])
+        self.assertEqual("application/json; charset=utf-8", self.calls[0][1]["Content-Type"])
 
     def test_auth_failure_is_not_retried(self):
         with self.assertRaises(Exception):

@@ -109,6 +109,14 @@ class PhoneToolsTest {
             val result = request("/mcp", true, """{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"phone_get_capabilities","arguments":{}}}""")
             assertEquals(200, result.first)
             assertFalse(JSONObject(result.second).getJSONObject("result").getBoolean("isError"))
+            val chinese = "中文说明与草稿🙂：不要变成替换字符"
+            val params = JSONObject().put("name", "phone_notify_user").put("arguments", JSONObject().put("message", chinese))
+            val unicodeMcp = request("/mcp", true, JSONObject().put("jsonrpc", "2.0").put("id", 8)
+                .put("method", "tools/call").put("params", params).toString())
+            assertEquals(chinese, JSONObject(unicodeMcp.second).getJSONObject("result").getJSONObject("structuredContent").getString("message"))
+            val unicodeRest = request("/api/phone/v1/invocations", true, JSONObject().put("tool", "phone_notify_user")
+                .put("request_id", "utf8-rest").put("arguments", JSONObject().put("message", chinese)).toString())
+            assertEquals(chinese, JSONObject(unicodeRest.second).getJSONObject("structuredContent").getString("message"))
         } finally { server.stop() }
     }
     @Test fun exportAuthoritativeCatalogForAgentAdapters() {

@@ -484,29 +484,13 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     }
     private void Persist() { lock (gate) Atomic(journal, runs); }
     private async Task<bool> QueuedWorkBlocksToolRefresh() {
-        JsonObject[] queued;
-        lock (gate) queued = runs.Select(entry => entry.Value as JsonObject)
-            .Where(row => row != null && row.B("native_queue") && row.S("status") == "queued").ToArray();
-        foreach (var group in queued.GroupBy(row => row.S("session_id"))) {
-            CodexRpc owner; lock (gate) sessionRpcs.TryGetValue(group.Key, out owner);
-            try {
-                var reader = owner?.Running == true ? owner : rpc;
-                var waiting = (await reader.Call("thread/queue/list", Obj(("threadId", group.Key), ("limit", 100)))).A("data");
-                if (waiting.Count > 0) return true;
-                // Empty queue alone is ambiguous: a submission may have just started.
-                var thread = (await reader.Call("thread/read", Obj(("threadId", group.Key), ("includeTurns", false))))["thread"];
-                if (thread?["status"].S("type") != "idle") return true;
-                lock (gate) {
-                    if (active.Count > 0) return true;
-                    foreach (var row in group) if (row.S("status") == "queued") {
-                        row["status"] = "acceptance_unknown";
-                        row["error_code"] = "queue_tracking_lost";
-                        row["error"] = "原生队列已为空且会话空闲，请查看历史核对这条旧队列消息；不会自动重发。";
-                    }
-                    Persist();
-                }
-            } catch (CodexError) { return true; }
+        string[] sessions;
+        lock (gate) {
+            if (active.Count > 0) return true;
+            sessions = runs.Select(entry => entry.Value).Where(row => row.B("native_queue") && row.S("status") == "queued")
+                .Select(row => row.S("session_id")).Distinct().ToArray();
         }
+        foreach (var session in sessions) if (await NativeQueueStillOwns(session)) return true;
         return false;
     }
     private string RolloutPath(JsonNode thread) => CodexPreviewRollout.LatestPath(home, thread.S("id"), thread.S("path"));
@@ -1594,7 +1578,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     var text=role=="user"?string.Join('\n',item.A("content").Where(c=>c.S("type")=="text").Select(c=>c.S("text"))):item.S("text");
                     object timestamp=source.Resolve(item.S("id"),role,text,ref position,out var nativeTime)?nativeTime:
                         times.TryGetValue(item.S("id"),out var exact)?exact:null;
-                    rows.Add(Obj(("id",MessageId(item.S("id"))),("role",role),("timestamp",timestamp),("content",text),("phase",role=="assistant"?item.S("phase"):null),
+                    rows.Add(Obj(("id",MessageId(item.S("id"))),("native_item_id",item.S("id")),("role",role),("timestamp",timestamp),("content",text),("phase",role=="assistant"?item.S("phase"):null),
                         ("turn_id", turn.S("id")), ("client_request_id", requestKey), ("editable", firstUser)));
                 }
                 var toolCount = turn.A("items").Count(item => item.S("type") is

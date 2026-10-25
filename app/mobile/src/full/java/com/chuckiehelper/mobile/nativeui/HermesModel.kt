@@ -150,7 +150,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         messageActionSessions = messageActionSessions + session; setSubmitting(session, true)
         setError(session, null)
         // Preserve the edited draft before the irreversible request. Unknown outcomes never resend.
-        setDraft(session, input); draftFiles = draftFiles + (session to attached)
+        setDraft(session, input); draftFiles = draftFiles + (session to attached); saveDraftFiles()
         launch {
             var rewound = false
             try {
@@ -426,11 +426,18 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
-    private var conversationUi by mutableStateOf(ConversationUiState())
+    private var conversationUi by mutableStateOf(ConversationUiState.restoreDrafts(prefs.getString("conversationDrafts", null)))
     var draft: String
         get() = conversationUi.entry(selectedId).draft
-        set(value) { conversationUi = conversationUi.draft(selectedId, value) }
-    private fun setDraft(session: String?, value: String) { conversationUi = conversationUi.draft(session, value) }
+        set(value) { setDraft(selectedId, value) }
+    private fun setDraft(session: String?, value: String) {
+        conversationUi = conversationUi.draft(session, value)
+        prefs.edit().putString("conversationDrafts", conversationUi.savedDrafts()).apply()
+    }
+    private fun forgetConversationUi(session: String?) {
+        conversationUi = conversationUi.forget(session)
+        prefs.edit().putString("conversationDrafts", conversationUi.savedDrafts()).apply()
+    }
     private fun setError(session: String?, value: String?) { conversationUi = conversationUi.error(session, value) }
 
             /** 服务端确认会话在本机已无记录（thread_missing）：自动退出并清掉本地残留，避免反复同步失败。 */
@@ -440,7 +447,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 backgroundRuns.remove(session); if (runSession == session) { runId = null; runSession = null }
                 approval = null; pendingText = ""; flushedStreamPrefix = ""; pendingItemId = null; pendingPhase = ""
                 events = emptyList(); eventCount = 0; finalSyncJob?.cancel()
-                conversationUi = conversationUi.forget(session)
+                forgetConversationUi(session)
                 // 与 deleteSession 同一套本地状态清理：会话已不存在，pending/插话/队列不可能再被
                 // 服务端确认，残留会让前台服务和唤醒锁永久持有（队列非空时 syncWatchService 恒 true）。
                 if (session != null) {
@@ -452,7 +459,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     narrations = narrations.filterNot { it.session == session }; saveNarrations()
                     compactionNotices = compactionNotices.filterNot { it.session == session }; saveCompactionNotices()
                     steering = steering.filterNot { it.session == session }; saveSteering()
-                    draftFiles = draftFiles - session
+                    draftFiles = draftFiles - session; saveDraftFiles()
                     messageQueue.purgeSession(session)
                     purgeSessionRuntime(session)
                     launch { withContext(Dispatchers.IO) { historyCache.remove(session) } }
@@ -499,10 +506,18 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var filesRefreshPending = false
     private var filesReadEpoch = 0L
 
-    private var draftFiles by mutableStateOf<Map<String?, List<JSONObject>>>(emptyMap())
+    private var draftFiles by mutableStateOf<Map<String?, List<JSONObject>>>(runCatching {
+        val saved = JSONObject(prefs.getString("draftFiles", "{}").orEmpty())
+        saved.keys().asSequence().associate { key -> key.takeIf { it.isNotEmpty() } to saved.array(key).objects() }
+    }.getOrDefault(emptyMap()))
+    private fun saveDraftFiles() {
+        prefs.edit().putString("draftFiles", JSONObject().apply {
+            draftFiles.forEach { (session, files) -> put(session.orEmpty(), org.json.JSONArray(files)) }
+        }.toString()).apply()
+    }
     var pendingFiles: List<JSONObject>
         get() = draftFiles[selectedId].orEmpty()
-        private set(value) { draftFiles = draftFiles + (selectedId to value) }
+        private set(value) { draftFiles = draftFiles + (selectedId to value); saveDraftFiles() }
 
     var capabilities by mutableStateOf(JSONObject())
         private set
@@ -751,7 +766,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val rows = JSONObject(prefs.getString("pendingSubmissions", "{}").orEmpty())
         rows.keys().asSequence().associateWith { id ->
             val row = rows.getJSONObject(id)
-            PendingAgentSubmission(row.getString("key"), row.getString("input"), row.array("attachments").let { ids -> (0 until ids.length()).map { ids.getString(it) } }, row.optLong("timestamp"), row.optString("questionId").takeIf { it.isNotBlank() && it != "null" }, row.cleanSetting("modelSettings").takeIf { it.isNotBlank() })
+            PendingAgentSubmission(row.getString("key"), row.getString("input"), row.array("attachments").let { ids -> (0 until ids.length()).map { ids.getString(it) } }, row.optLong("timestamp"), row.optString("questionId").takeIf { it.isNotBlank() && it != "null" }, row.cleanSetting("modelSettings").takeIf { it.isNotBlank() }, row.cleanSetting("accountId").takeIf { it.isNotBlank() })
         }.toMutableMap().apply {
             val session = prefs.getString("pendingSession", null)
             val key = prefs.getString("pendingKey", null)
@@ -760,7 +775,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }.getOrDefault(emptyMap<String, PendingAgentSubmission>()))
     private fun savePending() {
         val rows = JSONObject()
-        pendingSubmissions.forEach { (id, pending) -> rows.put(id, obj("key" to pending.key, "input" to pending.input, "attachments" to org.json.JSONArray(pending.attachmentIds), "timestamp" to pending.timestamp, "questionId" to pending.questionId, "modelSettings" to pending.modelSettings)) }
+        pendingSubmissions.forEach { (id, pending) -> rows.put(id, obj("key" to pending.key, "input" to pending.input, "attachments" to org.json.JSONArray(pending.attachmentIds), "timestamp" to pending.timestamp, "questionId" to pending.questionId, "modelSettings" to pending.modelSettings, "accountId" to pending.accountId)) }
         prefs.edit().putString("pendingSubmissions", rows.toString()).remove("pendingKey").remove("pendingInput").remove("pendingSession").remove("pendingAttachments").remove("pendingTimestamp").apply()
     }
     private fun removePending(session: String) { pendingSubmissions = pendingSubmissions - session; savePending(); syncWatchService() }
@@ -900,14 +915,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         org.json.JSONArray(prefs.getString("steeringMessages", "[]")).objects().map { row ->
             val ids = row.array("existingIds")
             SteeringMessage(row.getString("key"), row.getString("session"), row.getString("text"),
-                (0 until ids.length()).map { ids.getLong(it) }.toSet(), row.optLong("anchor"), row.optString("delivery", "发送状态待核对"), parseMessageTimestamp(row.opt("timestamp")), row.array("attachments").objects())
+                (0 until ids.length()).map { ids.getLong(it) }.toSet(), row.optLong("anchor"), row.optString("delivery", "发送状态待核对"), parseMessageTimestamp(row.opt("timestamp")), row.array("attachments").objects(), row.cleanSetting("accountId").takeIf { it.isNotBlank() })
         }
     }.getOrDefault(emptyList())
     private val checkingSteering = mutableSetOf<String>()
-    private fun reconcileSteeringReceipts(session: String, connection: NativeApi) {
+    private fun reconcileSteeringReceipts(session: String, connection: NativeApi, immediate: Boolean = false) {
         if (agent != "codex") return
-        steering.filter { it.session == session && it.delivery == "发送状态待核对" &&
-            it.timestamp?.let { at -> System.currentTimeMillis() - at > 120_000L } == true }
+        steering.filter { it.session == session && (it.accountId == null || it.accountId == currentCodexAccountId()) && it.delivery == "发送状态待核对" &&
+            (immediate || it.timestamp?.let { at -> System.currentTimeMillis() - at > 120_000L } == true) }
             .forEach { record ->
                 if (!checkingSteering.add(record.key)) return@forEach
                 launch {
@@ -921,12 +936,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                 updateSteering(record.key, "已送达")
                                 loadHistory(session)
                             }
-                            sameSession && result.optString("kind") == "steering" && result.optString("delivery") == "rejected" ||
-                                !result.optBoolean("found") -> {
+                            sameSession && result.optString("kind") == "steering" && result.optString("delivery") == "rejected" -> {
                                 steering = steering.filterNot { it.session == session && it.key == record.key }
                                 saveSteering()
                                 messages = messages.filterNot { it.localKey == record.key }
-                                setError(session, "未写入的插话已从本机待核对列表清除")
+                                if (conversationUi.entry(session).draft.isBlank()) setDraft(session, record.text)
+                                draftFiles = draftFiles + (session to record.attachments); saveDraftFiles()
+                                setError(session, "服务端确认插话未写入，草稿已恢复")
                             }
                         }
                     } catch (cancel: CancellationException) { throw cancel }
@@ -987,7 +1003,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private fun saveSteering() {
         prefs.edit().putString("steeringMessages", org.json.JSONArray(steering.map { row ->
             obj("key" to row.key, "session" to row.session, "text" to row.text, "existingIds" to org.json.JSONArray(row.existingIds.toList()),
-                "anchor" to row.anchor, "delivery" to if (row.delivery == "正在发送") "发送状态待核对" else row.delivery, "timestamp" to row.timestamp, "attachments" to org.json.JSONArray(row.attachments))
+                "anchor" to row.anchor, "delivery" to if (row.delivery == "正在发送") "发送状态待核对" else row.delivery, "timestamp" to row.timestamp, "attachments" to org.json.JSONArray(row.attachments), "accountId" to row.accountId)
         }).toString()).apply()
     }
     private fun updateSteering(key: String, delivery: String) {
@@ -1297,7 +1313,16 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun hasPendingFor(id: String) = pendingSubmissions.containsKey(id)
     fun clearPendingRecord(restoreDraft: Boolean = true) {
         val session = selectedId ?: return
-        val pending = pendingSubmissions[session] ?: return
+        val pending = pendingSubmissions[session]
+        if (pending == null) {
+            val uncertain = steering.lastOrNull { it.session == session && it.delivery == "发送状态待核对" } ?: return
+            steering = steering.filterNot { it.key == uncertain.key }; saveSteering()
+            messages = messages.filterNot { it.localKey == uncertain.key }
+            if (restoreDraft && draft.isBlank()) draft = uncertain.text
+            if (restoreDraft) pendingFiles = uncertain.attachments
+            error = null
+            return
+        }
         removePending(session)
         prefs.edit().remove("answeringQuestion:$session").apply()
         localSubmissions.remove(session)
@@ -1305,10 +1330,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         error = null; state = ""
         refresh()
     }
-    fun reconcilePending() = launch { reconcilePendingNow() }
+    fun reconcilePending() = launch {
+        reconcilePendingNow()
+        selectedId?.let { reconcileSteeringReceipts(it, api, immediate = true); loadHistory(it) }
+    }
     private suspend fun reconcilePendingNow(session: String? = selectedId) {
         if (session == null) return
         val pending = pendingSubmissions[session] ?: return
+        if (agent == "codex" && pending.accountId != null && pending.accountId != currentCodexAccountId()) {
+            setError(session, "上一条消息属于其他账号，请切回原账号核对；记录与附件已保留")
+            return
+        }
         val connection = api
         val result = if (agent == "hermes") {
             try { connection.json("$root/runs/lookup?key=${q(pending.key)}&session_id=${q(session)}") }
@@ -1584,6 +1616,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     fun switchAccount(id: String, workspace: Boolean, onDone: () -> Unit) = launch {
         if (switchingAccount) return@launch
+        if (conversationUi.hasSubmitting() || uploading) {
+            error = "请等待当前发送或上传完成后切换账号"
+            return@launch
+        }
+        val previousAccount = currentCodexAccountId()
+        pendingSubmissions = pendingSubmissions.mapValues { (_, pending) ->
+            if (pending.accountId == null) pending.copy(accountId = previousAccount) else pending
+        }; savePending()
+        steering = steering.map { if (it.accountId == null) it.copy(accountId = previousAccount) else it }; saveSteering()
+        saveDraftFiles()
+        prefs.edit().putString("conversationDrafts", conversationUi.savedDrafts()).apply()
         switchingAccount = true
         accountReadEpoch++ // Reject account reads begun before the switch.
         error = null
@@ -1598,7 +1641,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             watching?.cancel(); streamJob?.cancel()
             runId = null; runSession = null; approval = null; usage = null
             sessionActivities = emptyMap()
-            backgroundRuns.clear(); saveRuns(); pendingSubmissions = emptyMap(); savePending(); conversationUi = ConversationUiState(); draftFiles = emptyMap(); localSubmissions.clear()
+            backgroundRuns.clear(); saveRuns() // Preserve drafts, attachments and uncertain receipts across account changes.
             runNarrationUsers.clear()
             workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
             workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetUsing = emptySet(); workspaceResetErrors = emptyMap()
@@ -2127,8 +2170,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         compactionNotices = compactionNotices.filterNot { it.session == id }; saveCompactionNotices()
         narrations = narrations.filterNot { it.session == id }; saveNarrations()
         localSubmissions.remove(id)
-        draftFiles = draftFiles - id
-        conversationUi = conversationUi.forget(id)
+        draftFiles = draftFiles - id; saveDraftFiles()
+        forgetConversationUi(id)
         steering = steering.filterNot { it.session == id }
         saveSteering()
         if (selectedId == id) {
@@ -2174,7 +2217,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     private fun dispatchQueuedMessage(row: QueuedChatMessage, response: JSONObject?) {
         if (conversationUi.entry(row.session).submitting || hasPendingFor(row.session)) return
-        val pending = PendingAgentSubmission(row.key, row.text, row.files.map { it.getString("id") }, System.currentTimeMillis(), modelSettings = submissionModelSettings(row.session))
+        val pending = PendingAgentSubmission(row.key, row.text, row.files.map { it.getString("id") }, System.currentTimeMillis(), modelSettings = submissionModelSettings(row.session), accountId = row.accountId.takeIf { agent == "codex" })
         currentSubmissionKeys += row.key
         if (response == null) {
             pendingSubmissions = pendingSubmissions + (row.session to pending); savePending()
@@ -2273,7 +2316,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             val steerKey = UUID.randomUUID().toString()
             currentSubmissionKeys += steerKey
             val connection = api
-            val record = SteeringMessage(steerKey, session, input, messages.map { it.serverId }.filter { it > 0 }.toSet(), messages.lastOrNull { it.serverId > 0 }?.serverId ?: 0, timestamp = System.currentTimeMillis(), attachments = attached)
+            val record = SteeringMessage(steerKey, session, input, messages.map { it.serverId }.filter { it > 0 }.toSet(), messages.lastOrNull { it.serverId > 0 }?.serverId ?: 0, timestamp = System.currentTimeMillis(), attachments = attached, accountId = currentCodexAccountId())
             steering = steering + record; saveSteering()
             if (pendingText.isNotBlank()) {
                 messages = messages + HermesMessage("assistant", pendingText, localKey = "stream-$steerKey", timestamp = pendingTextTimestamp)
@@ -2295,7 +2338,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     if (selectedId == session && runId == id && api === connection)
                         messages.firstOrNull { it.role == "user" && it.localKey == steerKey }?.let { runNarrationUsers[id] = it }
                     val ids = attached.map { it.getString("id") }.toSet()
-                    draftFiles = draftFiles + (session to draftFiles[session].orEmpty().filterNot { it.optString("id") in ids })
+                    draftFiles = draftFiles + (session to draftFiles[session].orEmpty().filterNot { it.optString("id") in ids }); saveDraftFiles()
                     if (selectedId == session && api === connection) loadHistory(session)
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
@@ -2312,7 +2355,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         if (selectedId == session) { messages = messages.filterNot { it.localKey == steerKey } }
                     }
                     if (staleRunFailure(e)) clearRunTracking(session, id)
-                    if (!isQuestion && conversationUi.entry(session).draft.isBlank()) setDraft(session, input)
+                    if (writeWasRejected(e) && !isQuestion && conversationUi.entry(session).draft.isBlank()) setDraft(session, input)
                     if (isQuestion) prefs.edit().remove("answeringQuestion:$session").apply()
                     if (canRecoverAgentRead(e) && recoverState(session)) return@launch
                     if (selectedId == session && api === connection) try { loadHistory(session); loadSelection(session) }
@@ -2322,7 +2365,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             return true
         }
         val pending = PendingAgentSubmission(UUID.randomUUID().toString(), input,
-            if (isQuestion) emptyList() else pendingFiles.map { it.getString("id") }, System.currentTimeMillis(), questionId, submissionModelSettings(session))
+            if (isQuestion) emptyList() else pendingFiles.map { it.getString("id") }, System.currentTimeMillis(), questionId, submissionModelSettings(session), currentCodexAccountId())
         pendingSubmissions = pendingSubmissions + (session to pending); savePending()
         if (isQuestion) prefs.edit().putString("answeringQuestion:$session", questionId).apply()
         submit(pending, session)
@@ -2334,7 +2377,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val pending = pendingSubmissions[session] ?: return
         if (runId == null && !submitting) submit(pending, session)
     }
-    val hasPendingSubmission get() = selectedId?.let { hasPendingFor(it) } == true && runId == null
+    val hasPendingSubmission get() = (selectedId?.let { hasPendingFor(it) } == true && runId == null) ||
+        hasUnconfirmedSteering(steering, selectedId, currentCodexAccountId())
 
     private fun markSubmissionAccepted(session: String, key: String) {
         messageQueue.accepted(key)
@@ -2348,6 +2392,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     private fun submit(pending: PendingAgentSubmission, session: String, queuedFiles: List<JSONObject>? = null, clearDraft: Boolean = true) {
         val key = pending.key; val input = pending.input
+        if (agent == "codex" && pending.accountId != null && pending.accountId != currentCodexAccountId()) {
+            setError(session, "请切回原账号后核对发送结果；文字和附件已保留")
+            return
+        }
         currentSubmissionKeys += key
         // 壳值 "custom"（billing 占位）不下发：下发反而让网关解析到错误提供方；
         // 留空时服务端会用会话锁或全局默认补齐（与 /runs 注入跳过壳值同一语义）。
@@ -2368,7 +2416,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             var accepted = false
             try {
                 val payload = obj("input" to input, "session_id" to session,
-                    "account_id" to currentCodexAccountId(),
+                    "account_id" to (pending.accountId ?: currentCodexAccountId()),
                     "attachment_ids" to org.json.JSONArray(pending.attachmentIds))
                 if (agent == "codex" && pending.questionId != null) payload.put("question_reply_id", pending.questionId)
                 if (agent == "codex") pending.modelSettings?.let { payload.put("model_settings", JSONObject(it)) }
@@ -2895,7 +2943,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val combined = (draftFiles[session].orEmpty() + shared.attachments).distinctBy { it.optString("id") }
         if (uploading || combined.size > 8) return false
         select(shared.session)
-        draftFiles = draftFiles + (session to combined)
+        draftFiles = draftFiles + (session to combined); saveDraftFiles()
         if (shared.text.isNotBlank()) draft = listOf(draft, shared.text).filter { it.isNotBlank() }.joinToString("\n")
         acceptedShares += shared.id
         return true
@@ -2930,7 +2978,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                             val request = connection.request("$root/sessions/$session/files")
                                 .newBuilder().post(multipart).build()
                             val result = connection.json(request)
-                            draftFiles = draftFiles + (session to (draftFiles[session].orEmpty() + result))
+                            draftFiles = draftFiles + (session to (draftFiles[session].orEmpty() + result)); saveDraftFiles()
                         } finally {
                             file.temporary.delete()
                         }

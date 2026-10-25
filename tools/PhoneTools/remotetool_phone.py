@@ -33,7 +33,7 @@ class PhoneClient:
     def request(self, path, payload=None):
         data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(self.url + path, data=data, headers={
-            "Authorization": "Bearer " + self.token, "Content-Type": "application/json",
+            "Authorization": "Bearer " + self.token, "Content-Type": "application/json; charset=utf-8",
             "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25"})
         # Never retry a write: a lost response may follow a successful action.
         try:

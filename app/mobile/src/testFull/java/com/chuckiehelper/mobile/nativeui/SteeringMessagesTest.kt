@@ -4,6 +4,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SteeringMessagesTest {
+    @Test fun uncertainSteeringNeverExpiresOrUnlocksResendAndIsScopedToItsAccount() {
+        val uncertain = SteeringMessage("key", "session", "once", emptySet(), 0,
+            "发送状态待核对", 1000L, accountId = "account-a")
+        assertFalse(isAbandonedSteering(uncertain, 1000L + 7 * 86400000L))
+        assertTrue(hasUnconfirmedSteering(listOf(uncertain), "session", "account-a"))
+        assertFalse(hasUnconfirmedSteering(listOf(uncertain), "session", "account-b"))
+        assertFalse(hasUnconfirmedSteering(listOf(uncertain.copy(delivery = "已送达")), "session", "account-a"))
+        assertFalse(hasUnconfirmedSteering(listOf(uncertain.copy(delivery = "发送失败")), "session", "account-a"))
+    }
     @Test fun rejectedSteeringNeverReappearsAsRealHistory() {
         val busy = SteeringMessage("busy", "session", "插话", emptySet(), 0,
             BUSY_STEERING_DELIVERY, 1_000L)

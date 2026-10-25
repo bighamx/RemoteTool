@@ -18,6 +18,8 @@ function createHarness(responses, agent = 'codex') {
         async get(route) { if (route.includes('/messages?')) return { data: history }; throw new Error(`Unexpected GET: ${route}`); }
     };
     const context = {
+        location: { search: '' },
+        FormData: class { append() {} },
         window: { RemoteToolApi: api },
         document: { currentScript: { dataset: { agentRootId: 'test-root' } }, getElementById: () => ({ querySelector: () => ({ dataset: { agent } }) }) },
         Vue: { createApp(value) { options = value; return { use() { return this; }, mount() {} }; } },
@@ -38,7 +40,9 @@ function createHarness(responses, agent = 'codex') {
     state.ensureEventStream = () => {};
     state.hasRenderableContent = () => true;
     Object.defineProperty(state, 'displayMessages', { get: () => options.computed.displayMessages.call(state) });
-    return { state, posts, bodies, storage, setHistory: rows => { history = rows; } };
+    state.loadQueue = async () => {};
+    state.$Message = { success() {} };
+    return { state, posts, bodies, storage, api, options, setHistory: rows => { history = rows; } };
 }
 
 async function testAcceptedAndDeduped() {
@@ -118,7 +122,8 @@ async function testConfirmedSettingsOverrideUncommittedDialogAndSurviveUnknownSe
     assert.equal(saved.modelSettings.provider,'openai');
 }
 
-(async () => {
+module.exports = { createHarness };
+if (require.main === module) (async () => {
     await testAcceptedAndDeduped();
     await testUnknownStaysBlocked();
     await testRestoredEcho();

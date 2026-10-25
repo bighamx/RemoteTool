@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Collections;
 using System.Text.Json.Nodes;
 
 internal static class CodexRuntimeUpgradeChecks
@@ -33,7 +34,7 @@ internal static class CodexRuntimeUpgradeChecks
             Check(Pid() == oldPid, "tool refresh retains the process while an accepted turn is active");
             var startRun = type.GetMethod("StartRunCore", BindingFlags.NonPublic | BindingFlags.Instance)!;
             try {
-                await (Task<JsonObject>)startRun.Invoke(agent, [new JsonObject { ["session_id"] = "new-test-session", ["input"] = "must not send" }, "upgrade-test-key-1234"])!;
+                await (Task<JsonObject>)startRun.Invoke(agent, [new JsonObject { ["session_id"] = "new-test-session", ["input"] = "must not send" }, "upgrade-test-key-1234", CancellationToken.None])!;
                 throw new Exception("new turn accepted with missing tools");
             } catch (Exception error) when (error.GetType().Name == "CodexError") {
                 Check((string)error.GetType().GetProperty("Code")!.GetValue(error)! == "codex_update_pending" &&
@@ -54,6 +55,36 @@ internal static class CodexRuntimeUpgradeChecks
             var rpcCall = Rpc().GetType().GetMethod("Call")!;
             var created = await (Task<JsonObject>)rpcCall.Invoke(Rpc(), ["thread/start", new JsonObject { ["cwd"] = profile }, CancellationToken.None])!;
             var sid = created["thread"]!["id"]!.ToString();
+            var owners = (IDictionary)Field("sessionRpcs");
+            owners[sid] = Rpc();
+            runs["preparing-run"] = new JsonObject { ["status"] = "submitting", ["phase"] = "preparing", ["session_id"] = sid };
+            active[sid] = "preparing-run";
+            var queueCheck = type.GetMethod("NativeQueueStillOwns", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var stillOwned = await (Task<bool>)queueCheck.Invoke(agent, [sid])!;
+            Check(!stillOwned, "the current submission does not count as an older native queued task");
+            runs["stale-session-queue"] = new JsonObject { ["native_queue"] = true, ["status"] = "queued", ["session_id"] = sid,
+                ["enqueued_at"] = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeSeconds() };
+            stillOwned = await (Task<bool>)queueCheck.Invoke(agent, [sid])!;
+            Check(!stillOwned && runs["stale-session-queue"]!["status"]!.ToString() == "acceptance_unknown",
+                "preparing submission reconciles an orphaned native queue receipt before model selection");
+            var threadBusy = type.GetMethod("NativeQueueThreadBusy", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var unloaded = new JsonObject { ["id"] = sid, ["path"] = Path.Combine(profile, "missing-rollout.jsonl"),
+                ["status"] = new JsonObject { ["type"] = "notLoaded" } };
+            Check(!(bool)threadBusy.Invoke(agent, [unloaded])!, "unloaded thread without a writer is not a native queue owner");
+            runs["recent-session-queue"] = new JsonObject { ["native_queue"] = true, ["status"] = "queued", ["session_id"] = sid,
+                ["enqueued_at"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() };
+            stillOwned = await (Task<bool>)queueCheck.Invoke(agent, [sid])!;
+            Check(stillOwned && runs["recent-session-queue"]!["status"]!.ToString() == "queued",
+                "recent consumed submission retains its owner while turn notification may be pending");
+            runs.Remove("recent-session-queue");
+            active.Remove(sid);
+            runs.Remove("preparing-run");
+            owners.Remove(sid);
+            runs["unowned-stale-queue"] = new JsonObject { ["native_queue"] = true, ["status"] = "queued", ["session_id"] = sid,
+                ["enqueued_at"] = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeSeconds() };
+            stillOwned = await (Task<bool>)queueCheck.Invoke(agent, [sid])!;
+            Check(!stillOwned && runs["unowned-stale-queue"]!["status"]!.ToString() == "acceptance_unknown",
+                "idle session clears an orphaned receipt after its dedicated runtime is released");
             runs["stale-queued-test"] = new JsonObject { ["native_queue"] = true, ["status"] = "queued", ["session_id"] = sid };
             await Call("EnsureConnection");
             Check(Pid() != oldPid && (string)Rpc().GetType().GetProperty("Executable")!.GetValue(Rpc())! == next,

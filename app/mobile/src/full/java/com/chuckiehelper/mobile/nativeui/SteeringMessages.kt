@@ -9,7 +9,12 @@ data class SteeringMessage(
     val delivery: String = "正在发送",
     val timestamp: Long? = null,
     val attachments: List<org.json.JSONObject> = emptyList(),
+    val accountId: String? = null,
 )
+
+internal fun hasUnconfirmedSteering(rows: List<SteeringMessage>, session: String?, account: String?) =
+    rows.any { it.session == session && (it.accountId == null || it.accountId == account) &&
+        it.delivery in setOf("正在发送", "发送状态待核对") }
 
 const val BUSY_STEERING_DELIVERY = "会话忙，待会话空闲后可重发"
 
@@ -54,11 +59,8 @@ fun pendingSteeringMessages(history: List<HermesMessage>, steering: List<Steerin
 fun isAbandonedSteering(message: SteeringMessage, now: Long = System.currentTimeMillis()): Boolean {
     if (message.timestamp == null) return false
     val age = now - message.timestamp
-    // 发送失败 10 分钟、发送状态待核对 30 分钟即放弃：不再重放/挂着（失败重试应由用户主动
-    // 操作，而不是每次进会话重发旧文）。hermes 渠道没有 request-key，「待核对」永远等不到
-    // 确认；放弃后若消息实际已入库，原生历史行仍会正常显示。
-    return (message.delivery in setOf("发送失败", BUSY_STEERING_DELIVERY) && age > 10 * 60 * 1000L) ||
-        (message.delivery == "发送状态待核对" && age > 30 * 60 * 1000L)
+    // Only an explicit rejection can age out. Time passing never proves non-delivery.
+    return message.delivery in setOf("发送失败", BUSY_STEERING_DELIVERY) && age > 10 * 60 * 1000L
 }
 
 fun reconcileSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): Pair<List<SteeringMessage>, List<Pair<SteeringMessage, HermesMessage>>> {

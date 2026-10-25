@@ -15,7 +15,7 @@ def _handler(name):
                 return json.dumps({"error": "Phone tools are not enabled for this session"})
             payload = {"tool": name, "arguments": args, "request_id": "hermes-" + uuid.uuid4().hex}
             request = urllib.request.Request(binding["url"], data=json.dumps(payload).encode(), headers={
-                "Content-Type": "application/json", "Authorization": "Bearer " + binding["token"], "X-Phone-Session": session_id})
+                "Content-Type": "application/json; charset=utf-8", "Authorization": "Bearer " + binding["token"], "X-Phone-Session": session_id})
             with urllib.request.urlopen(request, timeout=45) as response:
                 result = json.load(response)
             images = [item for item in result.get("content", []) if item.get("type") == "image"]

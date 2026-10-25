@@ -28,7 +28,7 @@ internal fun queuedMessagesJson(rows: List<QueuedChatMessage>): String = JSONArr
 
 internal class DeferredChatQueue(
     private val prefs: SharedPreferences, private val scope: CoroutineScope, private val agent: String,
-    private val api: () -> NativeApi, private val session: () -> String?,
+    private val api: () -> com.chuckiehelper.mobile.phonecontrol.PhoneWebApi, private val session: () -> String?,
     private val ready: (String) -> Boolean, private val identity: () -> String?,
     private val dispatch: (QueuedChatMessage, JSONObject?) -> Unit,
 ) {
@@ -37,14 +37,12 @@ internal class DeferredChatQueue(
     var busy by mutableStateOf(false); private set
     var panelOpen by mutableStateOf(false)
     var paused by mutableStateOf(prefs.getBoolean("queue_paused",false)); private set
-    /** 「发送结果待核对」连续查无 run 的次数：≥3 视为发送失败（进程重启即清零，重试无害）。 */
-    private val lookupMisses = mutableMapOf<String,Int>()
     val visible get() = entries.filter { it.session == session() }
     private fun save() { prefs.edit().putString("message_queue",queuedMessagesJson(entries)).apply() }
     private fun update(key: String, change: (QueuedChatMessage)->QueuedChatMessage) { entries=entries.map { if(it.key==key)change(it) else it };save() }
     fun pause(value: Boolean) { paused=value;prefs.edit().putBoolean("queue_paused",value).apply() }
-    fun accepted(key: String) { entries=entries.filterNot { it.key==key };save(); lookupMisses.remove(key) }
-    fun failed(key: String, rejected: Boolean) { update(key) { it.copy(status=if(rejected) "发送失败，已暂停" else "发送结果待核对") }; lookupMisses.remove(key) }
+    fun accepted(key: String) { entries=entries.filterNot { it.key==key };save() }
+    fun failed(key: String, rejected: Boolean) { update(key) { it.copy(status=if(rejected) "发送失败，已暂停" else "发送结果待核对") } }
     fun enqueue(text: String, files: List<JSONObject>): Boolean {
         val id=session() ?: return false
         if (text.isBlank() && files.isEmpty())return false
@@ -171,14 +169,16 @@ internal class DeferredChatQueue(
                         catch(e: CancellationException){throw e} catch(e: Exception){ continue }
                     when {
                         result.optBoolean("found") && result.optString("session_id")==row.session &&
+                            result.optString("delivery")=="rejected" -> failed(row.key, true)
+                        result.optBoolean("found") && result.optString("session_id")==row.session &&
+                            result.optString("delivery")!="unknown" &&
                             result.optString("status") in setOf("completed","interrupted","failed","cancelled") -> accepted(row.key)
                         result.optBoolean("found") && result.optString("session_id")==row.session -> Unit // 仍在运行，等终态
-                        else -> { val misses = (lookupMisses[row.key] ?: 0) + 1; lookupMisses[row.key] = misses; if (misses >= 3) failed(row.key, true) }
+                        else -> Unit // Missing or unauthorized lookup is not proof of rejection.
                     }
                 }
-                // 队首若是卡死状态（待核对/失败）会永久阻塞后续消息：派发第一个「等待任务结束」的条目，
-                // 卡死条目由上面的核对循环与用户操作闭环。
-                val row=entries.firstOrNull { it.session == targetSession && it.accountId == identity() && it.status == "等待任务结束" } ?: return
+                // Preserve order while an earlier submission may still be executing.
+                val row=entries.firstOrNull { it.session == targetSession && it.accountId == identity() } ?: return
                 // Native queues drain automatically, including while the phone is offline.
                 if(row.mode=="native")return
                 if(row.status!="等待任务结束" || panelOpen || paused || !ready(targetSession))return

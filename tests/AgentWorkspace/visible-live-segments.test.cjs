@@ -7,6 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, '../../WebApplication/wwwroo
 let options;
 const root = { dataset: { agent: 'hermes' } };
 const sandbox = {
+    URLSearchParams, location: { search: '' }, localStorage: { getItem() { return null; } },
     document: { currentScript: null, getElementById: id => id === 'agent-app' ? root : null },
     window: { RemoteToolApi: {} },
     Vue: { createApp: value => { options = value; return { use() {}, mount() {} }; } },

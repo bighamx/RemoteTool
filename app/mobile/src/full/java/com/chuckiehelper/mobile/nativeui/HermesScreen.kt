@@ -1204,7 +1204,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
         confirmButton = {}, dismissButton = { TextButton(onClick = { questionPanel = false }) { Text("稍后回答") } },
     )
     if (pendingInfo) AlertDialog(onDismissRequest = { pendingInfo = false }, title = { Text("上次提交未确认") },
-        text = { Text("手机未收到某次提交的确认结果，此标记不代表电脑正在运行任务。可先核对会话历史；清除记录会恢复输入草稿，不会终止电脑任务。") },
+        text = { Text("手机未收到某次提交的确认结果。请先核对会话历史；清除本机记录会恢复草稿，不会终止电脑任务。若原消息实际已送达，再次发送会重复执行。") },
         confirmButton = { TextButton(onClick = { model.reconcilePending(); pendingInfo = false }) { Text("重新核对") } },
         dismissButton = { Row { TextButton(onClick = { model.clearPendingRecord(); pendingInfo = false }) { Text("清除记录") }; TextButton(onClick = { pendingInfo = false }) { Text("关闭") } } })
     if (createHermesWithPhone) PhoneNewSessionDialog(api, model, { createHermesWithPhone = false }) { list = false }

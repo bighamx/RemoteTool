@@ -44,6 +44,10 @@ class PhoneHttpServer(private val engine: PhoneEngine) : NanoHTTPD("0.0.0.0", en
         if (!session.headers["content-type"].orEmpty().startsWith("application/json")) fail("invalid_arguments", "Content-Type must be application/json")
         val length = session.headers["content-length"]?.toLongOrNull() ?: fail("invalid_arguments", "Content-Length required")
         if (length !in 1..3_000_000) fail("invalid_arguments", "Request body too large")
+        // JSON over HTTP defaults to UTF-8. NanoHTTPD otherwise chooses US-ASCII
+        // when charset is omitted, replacing Chinese text before JSONObject sees it.
+        if (!session.headers["content-type"].orEmpty().contains("charset=", ignoreCase = true))
+            session.headers["content-type"] = "application/json; charset=utf-8"
         val data = HashMap<String, String>(); session.parseBody(data)
         return JSONObject(data["postData"] ?: "")
     }
