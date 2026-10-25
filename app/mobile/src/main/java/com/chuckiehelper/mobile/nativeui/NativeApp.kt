@@ -37,7 +37,8 @@ import kotlinx.coroutines.*
 import org.json.JSONObject
 
 @Composable
-fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
+fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null,
+    companion: Boolean = com.chuckiehelper.mobile.BuildConfig.PHONE_COMPANION) {
     val cloud: CloudAccountModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val updates: AppUpdateModel = androidx.lifecycle.viewmodel.compose.viewModel()
     LaunchedEffect(cloud.configurationVersion) {
@@ -81,6 +82,10 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
             )
     MaterialTheme(colorScheme = colors) {
         val snackbar = remember { SnackbarHostState() }
+        var diagnostics by rememberSaveable { mutableStateOf(false) }
+        var phoneTools by rememberSaveable { mutableStateOf(false) }
+        var startup by remember { mutableStateOf(false) }
+        var settings by rememberSaveable { mutableStateOf(false) }
         val backDispatcher =
             androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current
                 ?.onBackPressedDispatcher
@@ -94,16 +99,38 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
         var exitDeadline by remember { mutableLongStateOf(0L) }
         DisposableEffect(exitToast) { onDispose { exitToast.cancel() } }
         val pages = rememberSaveableStateHolder()
-        var route by rememberSaveable { mutableStateOf("系统") }
+        var route by rememberSaveable { mutableStateOf(if (companion) "更多" else "系统") }
         val sharedDraft = shares?.ready?.takeIf { it.deviceId == session?.device?.id }
         val choosingShare = shares?.pending == true && sharedDraft == null
         LaunchedEffect(route) { if (route == "文件") route = "Codex" }
         var detail by remember { mutableStateOf<String?>(null) }
+        SideEffect { com.chuckiehelper.mobile.diagnostics.CrashReports.screen(if (session == null) "设备" else detail ?: route) }
         LaunchedEffect(sharedDraft?.id) {
             sharedDraft?.let { detail = null; route = if (it.agent == "codex") "Codex" else "Hermes" }
         }
         var composeTarget by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
+        if (phoneTools) {
+            PhoneToolsScreen(session?.api) { phoneTools = false }
+            return@MaterialTheme
+        }
+        if (diagnostics) {
+            CrashLogsScreen { diagnostics = false }
+            return@MaterialTheme
+        }
+        if (settings) {
+            AppSettingsScreen(
+                updateSubtitle = updates.subtitle,
+                onUpdate = { updates.open() },
+                onDiagnostics = { diagnostics = true },
+                onStartup = { startup = true },
+                onBack = { settings = false },
+                showUpdates = !companion,
+            )
+            if (!companion) AppUpdateHost(updates)
+            if (startup) StartupDialog { startup = false }
+            return@MaterialTheme
+        }
         val keyboardVisible = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
         LaunchedEffect(model.message) {
             model.message?.let {
@@ -164,8 +191,8 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
                             }
                     },
                     actions = {
-                        if (session == null) IconButton(onClick = { updates.open() }) {
-                            Icon(Icons.Outlined.SystemUpdate, "应用更新")
+                        if (session == null) IconButton(onClick = { settings = true }) {
+                            Icon(Icons.Outlined.Settings, "设置")
                         }
                         if (session != null)
                             IconButton(onClick = { model.openChannels(session.device) }) {
@@ -179,7 +206,7 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
                 )
             },
             bottomBar = {
-                if (!choosingShare && session != null && !model.loginNeeded && detail == null && !keyboardVisible)
+                if (!companion && !choosingShare && session != null && !model.loginNeeded && detail == null && !keyboardVisible)
                     NavigationBar(modifier = Modifier.selectableGroup()) {
                         listOf(
                                 "系统" to Icons.Outlined.Speed,
@@ -226,7 +253,7 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
                             Spacer(Modifier.height(16.dp))
                             Text("正在验证设备并检测通道…")
                         }
-                    session == null -> DeviceScreen(model, cloud)
+                    session == null -> DeviceScreen(model, cloud) { phoneTools = true }
                     model.loginNeeded -> key(session.device.id) {
                         LoginScreen(session.api, model.savedUsername(session.device.id),
                             onLogin = { username, password -> model.login(session, username, password) },
@@ -243,33 +270,35 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
                             }
                             pages.SaveableStateProvider("${session.device.id}:${detail ?: route}") {
                                 when (detail ?: route) {
-                                    "系统" ->
+                                    "系统" -> if (!companion)
                                         SystemScreen(
                                             api,
                                             onProcesses = { detail = "进程" },
                                             onTerminal = { detail = "终端" },
                                             onError = error,
                                         )
-                                    "进程" -> ProcessScreen(api, error)
-                                    "远程" -> RemoteScreen(api)
-                                    "文件" -> savedScreens.SaveableStateProvider("files-${session.device.id}") {
+                                    "进程" -> if (!companion) ProcessScreen(api, error)
+                                    "远程" -> if (!companion) RemoteScreen(api)
+                                    "文件" -> if (!companion) savedScreens.SaveableStateProvider("files-${session.device.id}") {
                                         FilesScreen(api, error, onClose = { detail = null }) { path ->
                                             composeTarget = path
                                             detail = "Compose 管理"
                                         }
                                     }
-                                    "Docker" -> DockerScreen(api, error)
-                                    "Compose 管理" -> ComposeScreen(api, error, composeTarget)
-                                    "终端" -> TerminalScreen(api, error)
-                                    "Hangfire" -> JobsScreen(api, error)
-                                    "Hermes" -> savedScreens.SaveableStateProvider("hermes-${session.device.id}") { HermesScreen(api, session.device.id, incoming = sharedDraft?.takeIf { it.agent == "hermes" }, onSharedHandled = { shares?.finishDelivery(it) }) }
-                                    "Codex" -> savedScreens.SaveableStateProvider("codex-${session.device.id}") { HermesScreen(api, session.device.id, "codex", incoming = sharedDraft?.takeIf { it.agent == "codex" }, onSharedHandled = { shares?.finishDelivery(it) }) }
+                                    "Docker" -> if (!companion) DockerScreen(api, error)
+                                    "Compose 管理" -> if (!companion) ComposeScreen(api, error, composeTarget)
+                                    "终端" -> if (!companion) TerminalScreen(api, error)
+                                    "端口转发" -> TunnelScreen(api, session.device.id, session.device.name)
+                                    "Hangfire" -> if (!companion) JobsScreen(api, error)
+                                    "Hermes" -> if (!companion) savedScreens.SaveableStateProvider("hermes-${session.device.id}") { HermesScreen(api, session.device.id, incoming = sharedDraft?.takeIf { it.agent == "hermes" }, onSharedHandled = { shares?.finishDelivery(it) }) }
+                                    "Codex" -> if (!companion) savedScreens.SaveableStateProvider("codex-${session.device.id}") { HermesScreen(api, session.device.id, "codex", incoming = sharedDraft?.takeIf { it.agent == "codex" }, onSharedHandled = { shares?.finishDelivery(it) }) }
                                     else ->
                                         Column(
                                             Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
                                             verticalArrangement = Arrangement.spacedBy(12.dp),
                                         ) {
                                             CloudAccountEntry(cloud)
+                                            if (!companion) {
                                             ToolRow("文件管理", "浏览 · 传输 · 图片与视频预览", Icons.Outlined.Folder) { detail = "文件" }
                                             ToolRow(
                                                 "Docker",
@@ -295,14 +324,10 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
                                             ToolRow("进程管理", "查看资源占用与结束进程", Icons.Outlined.Memory) {
                                                 detail = "进程"
                                             }
-                                            ToolRow(
-                                                "连接通道",
-                                                "当前：${session.api.base}\n检测所有地址并手动选择",
-                                                Icons.Outlined.Route,
-                                            ) {
-                                                model.openChannels(session.device)
                                             }
-                                            ToolRow("应用更新", updates.subtitle, Icons.Outlined.SystemUpdate) { updates.open() }
+                                            ToolRow("端口转发", "TCP / UDP · 双向局域网访问", Icons.Outlined.SwapHoriz) { detail = "端口转发" }
+                                            ToolRow("手机操控", "MCP · 无障碍 · Shizuku · Root", Icons.Outlined.PhoneAndroid) { phoneTools = true }
+                                            ToolRow("设置", if (companion) "日志 · 开机自启" else "更新 · 日志 · 开机自启", Icons.Outlined.Settings) { settings = true }
                                         }
                                 }
                             }
@@ -311,8 +336,9 @@ fun NativeApp(model: NativeModel, shares: ShareInboxModel? = null) {
             }
         }
         model.channelDevice?.let { ChannelDialog(model, it) }
-        AppUpdateHost(updates)
+        if (!companion) AppUpdateHost(updates)
         CloudAccountHost(cloud)
+        if (startup) StartupDialog { startup = false }
     }
 }
 
@@ -374,7 +400,7 @@ fun SelectionContainerCompat(value: String) {
 }
 
 @Composable
-private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel) {
+private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTools: () -> Unit) {
     var addTo by remember { mutableStateOf<Device?>(null) }
     var adding by remember { mutableStateOf(false) }
     var manage by remember { mutableStateOf<Device?>(null) }
@@ -386,6 +412,11 @@ private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item { CloudAccountEntry(cloud) }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onPhoneTools, modifier = Modifier.weight(1f).height(40.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) { Text("手机操控") }
+            }
+        }
         item { Text("优先连接上次通道，不可达时尝试其他地址；可在设备内手动切换。", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(model.devices, key = { it.id }) { device ->
             ElevatedCard(Modifier.fillMaxWidth()) {

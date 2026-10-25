@@ -1,5 +1,21 @@
 # RemoteTool Android
 
+## 独立手机操控 App
+
+`:phonecontrol` 构建单独的“手机操控”应用（`com.chuckiehelper.phonecontrol`），可与 RemoteTool 同时安装。精简版通过 `BuildConfig.PHONE_COMPANION` 选择相同的 `NativeApp` 页面：设备、云账户登录与配置上传/下载、手机操控、TCP/UDP 端口转发、日志和开机自启；不提供聊天、桌面远控、终端及 Docker 入口。界面、配置模型和依赖直接共享，功能修改同时生效。运行 `gradlew.bat :phonecontrol:assembleRelease`，安装包位于 `phonecontrol/build/outputs/apk/release/`。
+
+与主 App 一样添加设备登录，或通过云账户下载配置，再进入手机操控设置启用转发通道并启动服务；也可仅使用直连。默认直连端口为 `18792`，与主 App 的 `18791` 分开。独立 App 的系统授权、Root/Shizuku 授权、Keystore 和连接身份均独立；关闭主 App 不会主动停止独立操控服务。两版属于同一云应用，使用相同 PKCE 公共客户端；登录随机 state 增加版本前缀，将浏览器回调转发给同签名的正确 App，再由目标 App 校验完整 state、时效及自己的 PKCE verifier，避免同时安装时串号。
+
+手机操控提供顶部 Agent 连接／UI 操作提示，以及请求协助、用户回执工具。操作结束最后调用 `phone_disconnect`，立即撤下当前 Agent 的提示及待处理消息，服务继续待命；`phone_end_ui` 只结束 UI 操作声明。HyperOS 2 焦点通知与 HyperOS 3+ 超级岛除系统开关外，还需小米平台授权及应用鉴权通过，未通过时保留普通通知和悬浮窗。完整工具及权限说明见 [PhoneTools](../tools/PhoneTools/README.md)。
+
+手机操作工具：App 自带独立 HTTP/MCP 服务，支持无障碍、Shizuku UserService、Root 及原生 Android 能力。无需连接电脑即可在“我的设备 → 手机工具”开启；RemoteTool WebSocket 是可选接入层。提供分组系统授权、主动 Root 授权、高级操作开关，以及新建 Codex/Hermes 会话的手机能力选择。使用方法和工具目录见 [PhoneTools](../tools/PhoneTools/README.md)。
+
+0.3.82 修复手机工具重新进入时的状态恢复：直连、按服务器保存的 Web 转发选择、连接配置页和手填地址会保留；运行状态取自本进程的实际服务，不再把磁盘里的旧开关显示为“正在启动”。后台服务仍在时继续运行，进程结束后显示已停止，按已保存配置手动启动；启动时沿用当前连接的登录凭据，不额外持久化 Cookie。
+
+0.3.84 将手机工具设置（接入方式、按服务器保存的 Web 转发开关、地址、端口、配置页及高级操作/Root/Shizuku 偏好）和按设备保存的 TCP/UDP 转发规则加入云账户的上传/下载配置，兼容不包含这些字段的旧快照。实际系统授权、手机/隧道身份、MCP 及配对令牌、Web 绑定凭据、运行状态和日志不上传；恢复不自动启动服务，相关服务运行时需先停止再应用。导入前校验全部规则并备份，保存失败时回滚也覆盖新增配置存储。
+
+“更多 → 端口转发”支持 WS 承载的双向 TCP/UDP 规则，可访问手机或电脑各自网络中的目标；默认只监听本机，按需允许其他设备访问。开启后与手机工具、会话保持共用一条后台通知，支持分别停止。0.3.81 同时修正新建会话的高级操作对齐和网络断开时子协程异常逃逸问题。
+
 安卓项目位于本目录，应用包名为 `com.chuckiehelper.mobile`。Android 8.0（API 26）及以上。0.2.0 起管理页面使用 Kotlin / Jetpack Compose / Material 3，已移除 WebView 页面和 HTML 资源；原生远程模块继续复用。
 
 ## 使用

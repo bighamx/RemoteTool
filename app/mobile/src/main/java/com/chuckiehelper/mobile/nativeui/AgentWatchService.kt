@@ -1,19 +1,13 @@
 package com.chuckiehelper.mobile.nativeui
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
-import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
-import com.chuckiehelper.mobile.NativeActivity
+import com.chuckiehelper.mobile.background.BackgroundNotification
 
 /** Holds CPU/Wi-Fi only while an agent run or message queue needs the app alive. */
 class AgentWatchService : LifecycleService() {
@@ -23,6 +17,7 @@ class AgentWatchService : LifecycleService() {
     override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
 
     override fun onDestroy() {
+        BackgroundNotification.finish(this, "agent-watch")
         releaseLocks()
         synchronized(Companion) { owners.clear() }
         super.onDestroy()
@@ -31,12 +26,12 @@ class AgentWatchService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         try {
-            startForeground(NOTIFICATION_ID, notification())
+            BackgroundNotification.start(this, "agent-watch", "会话保持")
             acquireLocks()
         } catch (error: RuntimeException) {
             Log.w("AgentWatchService", "Unable to keep agent connection in foreground", error)
             releaseLocks()
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            BackgroundNotification.finish(this, "agent-watch")
             stopSelf(startId)
         }
         // Restoring this service alone cannot restore the model's run/queue observer.
@@ -66,31 +61,7 @@ class AgentWatchService : LifecycleService() {
         wifiLock = null
     }
 
-    private fun notification(): Notification {
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (manager.getNotificationChannel(CHANNEL_ID) == null) {
-            manager.createNotificationChannel(NotificationChannel(
-                CHANNEL_ID, "会话保持", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "有执行中的任务或待发送消息时保持连接"
-                setShowBadge(false)
-            })
-        }
-        val content = PendingIntent.getActivity(
-            this, 0, Intent(this, NativeActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("RemoteTool 会话保持")
-            .setContentText("正在保持与服务端的连接")
-            .setContentIntent(content)
-            .setOngoing(true)
-            .build()
-    }
-
     companion object {
-        private const val CHANNEL_ID = "agent-watch"
-        private const val NOTIFICATION_ID = 41
         private val owners = mutableSetOf<String>()
 
         @Synchronized

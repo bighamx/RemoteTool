@@ -1,0 +1,834 @@
+[
+  {
+    "name": "phone_disconnect",
+    "description": "End this agent's phone-control activity. Immediately remove its overlay, UI declaration and pending notices. Does not stop the phone service, revoke credentials or disconnect other agents. Call as your final phone tool when finished; a new initialize or real tool call reconnects. Discovery and ping do not reconnect.",
+    "inputSchema": {"type":"object","properties":{},"required":[],"additionalProperties":false},
+    "annotations": {"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}
+  },
+  {
+    "name": "phone_begin_ui",
+    "description": "Declare the start of a UI operation batch and show an on-screen indicator. Call before operating the phone; renew before expiry if needed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": ""
+        },
+        "duration_seconds": {
+          "type": "integer",
+          "description": ""
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_end_ui",
+    "description": "Declare the end of your UI operation batch. Optionally show a completion message.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_notify_user",
+    "description": "Show a message on the top overlay and in notifications. kind=help requests user assistance; the user can choose Done or Dismiss. Keep the returned notice_id to query their reply. Never infer that an assistance request has been completed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": ""
+        },
+        "kind": {
+          "type": "string",
+          "description": "",
+          "enum": [
+            "info",
+            "help"
+          ]
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "description": ""
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_get_user_reply",
+    "description": "Read the user's reply to one of your notices: pending\/done\/dismissed\/expired\/cancelled\/not_found. Poll rather than blocking the phone tool worker.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "notice_id": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [
+        "notice_id"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_list_devices",
+    "description": "List connected Android phones.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_get_capabilities",
+    "description": "Get Android backend availability and screen information.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_observe",
+    "description": "Read current UI nodes and optionally screenshot. Coordinates use original screen pixels; node IDs expire after 30 seconds.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "screenshot": {
+          "type": "boolean",
+          "description": ""
+        },
+        "limit": {
+          "type": "integer",
+          "description": ""
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_find_nodes",
+    "description": "Find UI nodes by text\/resource_id\/description; returns a fresh snapshot.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": ""
+        },
+        "resource_id": {
+          "type": "string",
+          "description": ""
+        },
+        "description": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_tap",
+    "description": "Tap a node with snapshot_id, or original screen x\/y. Observe again to verify outcome.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "description": ""
+        },
+        "snapshot_id": {
+          "type": "string",
+          "description": ""
+        },
+        "x": {
+          "type": "number",
+          "description": ""
+        },
+        "y": {
+          "type": "number",
+          "description": ""
+        },
+        "long_press": {
+          "type": "boolean",
+          "description": ""
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_swipe",
+    "description": "Swipe in original screen pixels.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x1": {
+          "type": "number",
+          "description": ""
+        },
+        "y1": {
+          "type": "number",
+          "description": ""
+        },
+        "x2": {
+          "type": "number",
+          "description": ""
+        },
+        "y2": {
+          "type": "number",
+          "description": ""
+        },
+        "duration_ms": {
+          "type": "integer",
+          "description": ""
+        }
+      },
+      "required": [
+        "x1",
+        "y1",
+        "x2",
+        "y2"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_input_text",
+    "description": "Set Unicode text on a node or current focused input. append defaults to false.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "description": ""
+        },
+        "snapshot_id": {
+          "type": "string",
+          "description": ""
+        },
+        "text": {
+          "type": "string",
+          "description": ""
+        },
+        "append": {
+          "type": "boolean",
+          "description": ""
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_key",
+    "description": "Accessibility globals: BACK\/HOME\/RECENTS\/NOTIFICATIONS\/QUICK_SETTINGS\/POWER_DIALOG\/SPLIT_SCREEN\/LOCK_SCREEN\/TAKE_SCREENSHOT. Privileged backend also accepts Android KEYCODE names or numeric strings (ENTER, POWER, VOLUME_UP, etc).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_launch_app",
+    "description": "Launch installed app by package_name.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "package_name": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [
+        "package_name"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_wait",
+    "description": "Wait up to timeout_ms (max 10000) for text or foreground package, then return fresh observation.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": ""
+        },
+        "package_name": {
+          "type": "string",
+          "description": ""
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "description": ""
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_list_apps",
+    "description": "List installed Android apps, optionally including system packages; actual OS visibility rules apply.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "include_system": {
+          "type": "boolean",
+          "description": ""
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_transfer_file",
+    "description": "Upload\/download\/list files in RemoteTool exchange directory. Max 2 MiB per chunk. Upload offset=0 replaces; subsequent exact offset appends. Download supports offset\/length and returns total size; supports large APKs via chunks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": ""
+        },
+        "name": {
+          "type": "string",
+          "description": ""
+        },
+        "data_base64": {
+          "type": "string",
+          "description": ""
+        },
+        "offset": {
+          "type": "integer",
+          "description": ""
+        },
+        "length": {
+          "type": "integer",
+          "description": ""
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_shell",
+    "description": "Run privileged shell with Shizuku or root. Requires advanced switch. Never automatically retry an unknown result.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": ""
+        },
+        "backend": {
+          "type": "string",
+          "description": ""
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "description": ""
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_manage_app",
+    "description": "Advanced app action: force_stop, clear, enable, disable, uninstall, install (path must be an uploaded exchange filename).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": ""
+        },
+        "package_name": {
+          "type": "string",
+          "description": ""
+        },
+        "name": {
+          "type": "string",
+          "description": ""
+        },
+        "backend": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_system_setting",
+    "description": "Advanced settings get\/put\/delete for system, secure or global namespace.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": ""
+        },
+        "namespace": {
+          "type": "string",
+          "description": ""
+        },
+        "key": {
+          "type": "string",
+          "description": ""
+        },
+        "value": {
+          "type": "string",
+          "description": ""
+        },
+        "backend": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [
+        "action",
+        "namespace",
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_android",
+    "description": "Native Android action: device, permissions, clipboard_get\/set, volume_get\/set (parameters stream\/value), ringer_set(value), brightness_set(value 0-255), flashlight(enabled), vibrate(duration_ms), location (cached), sensors, network, bluetooth, sms_send(number\/text), wake. Requires advanced and relevant Android permission.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": ""
+        },
+        "parameters": {
+          "type": "object",
+          "description": ""
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_intent",
+    "description": "Start Android activity\/service or send broadcast. Supports settings panels, dial\/call, camera, audio\/video capture, alarms, sharing, application components. Background launch and OS permission limits still apply.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": ""
+        },
+        "uri": {
+          "type": "string",
+          "description": ""
+        },
+        "mime_type": {
+          "type": "string",
+          "description": ""
+        },
+        "package_name": {
+          "type": "string",
+          "description": ""
+        },
+        "component": {
+          "type": "string",
+          "description": ""
+        },
+        "mode": {
+          "type": "string",
+          "description": ""
+        },
+        "extras": {
+          "type": "object",
+          "description": ""
+        },
+        "flags": {
+          "type": "integer",
+          "description": ""
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_content",
+    "description": "Query\/insert\/update\/delete Android content providers, e.g. content:\/\/contacts\/people, content:\/\/com.android.contacts\/data, content:\/\/com.android.calendar\/events, content:\/\/sms, content:\/\/call_log\/calls, content:\/\/media\/external\/images\/media. Uses granted system permissions. Query limit max 500; mutations require item URI or selection unless allow_all=true.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": ""
+        },
+        "uri": {
+          "type": "string",
+          "description": ""
+        },
+        "projection": {
+          "type": "array",
+          "description": "",
+          "items": {
+            "type": "string"
+          }
+        },
+        "selection": {
+          "type": "string",
+          "description": ""
+        },
+        "selection_args": {
+          "type": "array",
+          "description": "",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sort": {
+          "type": "string",
+          "description": ""
+        },
+        "limit": {
+          "type": "integer",
+          "description": ""
+        },
+        "values": {
+          "type": "object",
+          "description": ""
+        },
+        "allow_all": {
+          "type": "boolean",
+          "description": ""
+        }
+      },
+      "required": [
+        "action",
+        "uri"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_files",
+    "description": "Native files list\/stat\/read\/write\/mkdir\/delete\/move\/copy. Absolute Android path or granted content URI (read\/write). Binary via data_base64 max 2 MiB. More restricted paths can use privileged phone_shell.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": ""
+        },
+        "path": {
+          "type": "string",
+          "description": ""
+        },
+        "destination": {
+          "type": "string",
+          "description": ""
+        },
+        "data_base64": {
+          "type": "string",
+          "description": ""
+        },
+        "append": {
+          "type": "boolean",
+          "description": ""
+        },
+        "overwrite": {
+          "type": "boolean",
+          "description": ""
+        }
+      },
+      "required": [
+        "action",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_notifications",
+    "description": "Read notifications or dismiss\/open\/action\/reply using granted notification access. Replies require a RemoteInput action.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": ""
+        },
+        "key": {
+          "type": "string",
+          "description": ""
+        },
+        "index": {
+          "type": "integer",
+          "description": ""
+        },
+        "text": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_screenshot",
+    "description": "Capture screen using accessibility or authorized Shizuku\/root. Returns JPEG image. backend: auto\/accessibility\/shizuku\/root. Protected windows may be unavailable.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "backend": {
+          "type": "string",
+          "description": ""
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_ui_action",
+    "description": "Act on observed node: focus\/clear_focus\/select\/clear_selection\/scroll_forward\/scroll_backward\/expand\/collapse\/copy\/cut\/paste\/accessibility_focus\/dismiss\/set_selection(start,end). action also accepts a numeric Android AccessibilityNodeInfo action ID string.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "description": ""
+        },
+        "snapshot_id": {
+          "type": "string",
+          "description": ""
+        },
+        "action": {
+          "type": "string",
+          "description": ""
+        },
+        "start": {
+          "type": "integer",
+          "description": ""
+        },
+        "end": {
+          "type": "integer",
+          "description": ""
+        }
+      },
+      "required": [
+        "node_id",
+        "snapshot_id",
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_gesture",
+    "description": "Multi-touch\/path gesture. strokes: [{points:[[x,y],[x,y]],start_ms:0,duration_ms:400}]. Screen pixel coordinates, max 10 strokes.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "strokes": {
+          "type": "array",
+          "description": "",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "strokes"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  }
+]

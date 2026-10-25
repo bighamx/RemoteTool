@@ -32,6 +32,7 @@ fun ShareTargetScreen(inbox: ShareInboxModel, deviceApi: NativeApi, deviceId: St
     var target by remember(api.base, deviceId, agent) { mutableStateOf<JSONObject?>(null) }
     var creating by remember { mutableStateOf(false) }
     var newTitle by remember { mutableStateOf("") }
+    var phoneOptions by rememberSaveable { mutableStateOf("{\"mode\":\"off\"}") }
     var createError by remember { mutableStateOf<String?>(null) }
     var createBusy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -116,13 +117,14 @@ fun ShareTargetScreen(inbox: ShareInboxModel, deviceApi: NativeApi, deviceId: St
     if (creating) AlertDialog(onDismissRequest = { if (!createBusy) creating = false }, title = { Text("新建 ${if (agent == "codex") "Codex" else "Hermes"} 会话") },
         text = { Column {
             OutlinedTextField(newTitle, { newTitle = it }, label = { Text("会话名称（可选）") }, enabled = !createBusy)
+            PhoneSessionOptions(api, phoneOptions) { phoneOptions = it }
             createError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         } },
         confirmButton = { TextButton(enabled = !createBusy, onClick = {
             createBusy = true; createError = null
             scope.launch {
                 try {
-                    val result = api.json("/api/$agent/sessions", obj("title" to newTitle, "auto_title" to newTitle.isBlank()))
+                    val result = api.json("/api/$agent/sessions", obj("title" to newTitle, "auto_title" to newTitle.isBlank(), "phone_tools" to JSONObject(phoneOptions)))
                     target = result.getJSONObject("session"); creating = false; refresh++
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { createError = e.message ?: "新建会话失败" }

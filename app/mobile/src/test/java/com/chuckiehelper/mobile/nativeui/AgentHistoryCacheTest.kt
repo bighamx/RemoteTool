@@ -64,6 +64,39 @@ class AgentHistoryCacheTest {
         } finally { root.deleteRecursively() }
     }
 
+    @Test fun oversizedExpandedHistoryStillPersistsTheNewestMessageAcrossRestarts() {
+        val root = Files.createTempDirectory("history-cache-budget").toFile()
+        try {
+            val fresh = HermesMessage("assistant", "最新的完整回复", 2)
+            val cache = AgentHistoryCache(root, "scope")
+            cache.write("session", listOf(HermesMessage("user", "旧缓存", 1)))
+            cache.write("session", listOf(HermesMessage("assistant", "x".repeat(8 * 1024 * 1024), 3), fresh))
+            repeat(3) { assertEquals(listOf(fresh), AgentHistoryCache(root, "scope").read("session")) }
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test fun oversizedSingleMessageCannotLeaveAnOldSnapshotLookingCurrent() {
+        val root = Files.createTempDirectory("history-cache-single-budget").toFile()
+        try {
+            val cache = AgentHistoryCache(root, "scope")
+            cache.write("session", listOf(HermesMessage("user", "旧缓存", 1)))
+            assertThrows(java.io.IOException::class.java) {
+                cache.write("session", listOf(HermesMessage("assistant", "x".repeat(8 * 1024 * 1024), 2)))
+            }
+            assertNull(AgentHistoryCache(root, "scope").read("session"))
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test fun failedDiskWritesAreReportedToTheCaller() {
+        val root = Files.createTempDirectory("history-cache-write-failure").toFile()
+        try {
+            val blocked = java.io.File(root, "blocked").apply { writeText("not a directory") }
+            assertThrows(java.io.IOException::class.java) {
+                AgentHistoryCache(blocked, "scope").write("session", listOf(HermesMessage("assistant", "新消息", 2)))
+            }
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun activeNarrationSurvivesRefreshAndStopsAtTaskEndWithoutMovingNativeRows() {
         val history = listOf(HermesMessage("user", "继续", 90), HermesMessage("assistant", "历史回复", 2))
         val active = AssistantNarration("narration-current", "s", "实时旁白", 90, "继续", 100, run = "current")

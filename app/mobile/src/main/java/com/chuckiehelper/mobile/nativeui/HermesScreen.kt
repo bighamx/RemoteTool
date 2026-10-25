@@ -142,6 +142,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     var globalModels by remember { mutableStateOf(false) }
     var accountsPanel by remember { mutableStateOf(false) }
     var createCodex by remember { mutableStateOf(false) }
+    var createHermesWithPhone by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var stop by remember { mutableStateOf(false) }
     var takeover by remember { mutableStateOf(false) }
@@ -270,7 +271,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     }
     fun createChat() {
         if (agent == "codex") { createCodex = true; model.fetchProjects() }
-        else model.newSession(newHermesChatName(), { list = false })
+        else createHermesWithPhone = true
     }
     fun command(value: String) {
         when (value.trim().substringBefore(' ')) {
@@ -1206,6 +1207,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
         text = { Text("手机未收到某次提交的确认结果，此标记不代表电脑正在运行任务。可先核对会话历史；清除记录会恢复输入草稿，不会终止电脑任务。") },
         confirmButton = { TextButton(onClick = { model.reconcilePending(); pendingInfo = false }) { Text("重新核对") } },
         dismissButton = { Row { TextButton(onClick = { model.clearPendingRecord(); pendingInfo = false }) { Text("清除记录") }; TextButton(onClick = { pendingInfo = false }) { Text("关闭") } } })
+    if (createHermesWithPhone) PhoneNewSessionDialog(api, model, { createHermesWithPhone = false }) { list = false }
     if (createCodex) CodexNewSessionDialog(api, model, { createCodex = false }) { options ->
         model.newSession(newHermesChatName(), { createCodex = false; list = false }, options)
     }

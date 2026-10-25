@@ -629,6 +629,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     // 每会话最近一次成功加载的消息列表（内存级，进程内有效），用于 select() 时先回放再刷新。
     private val cachedHistory = mutableMapOf<String, List<HermesMessage>>()
+    private val historyVersions = mutableMapOf<String, Long>()
     private val confirmedMessageKeys = LinkedHashMap<String, String>().apply {
         runCatching { org.json.JSONArray(prefs.getString("confirmedMessageKeys", "[]")).objects() }.getOrDefault(emptyList())
             .forEach { row -> put(row.optString("session") + ":" + row.optLong("id"), row.optString("key")) }
@@ -1146,17 +1147,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         watching?.cancel()
         streamJob?.cancel()
         launch {
-            selectedId?.let { session ->
-                if (messages.isEmpty()) {
-                    val offline = (cachedHistory[session] ?: withContext(Dispatchers.IO) { historyCache.read(session) })?.let { withConfirmedKeys(session, it) }
-                    if (selectedId == session && offline != null) {
-                        cachedHistory[session] = offline; messages = offline
-                        historyCacheStatus = null
-                        sessions.firstOrNull { it.optString("id") == session }?.optString("title")?.takeIf { it.isNotBlank() }?.let { title = it }
-                    }
-                }
-            }
-            // Restore the offline view first; optional catalogs must not gate the online read.
+            // select() owns both cache replay and network refresh, including cold starts.
             selectedId?.let { id ->
                 val session = sessions.firstOrNull { it.optString("id") == id }
                     ?: JSONObject().put("id", id).put("title", title)
@@ -1186,19 +1177,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val originatingSession = selectedId
         val originatingConnection = if (this::api.isInitialized) api else null
         return viewModelScope.launch {
-            try {
-                block()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                currentCoroutineContext().ensureActive()
-                if (originatingConnection !== api) return@launch
-                if (canRecoverAgentRead(e) && recoverState(originatingSession)) return@launch
+            runAgentOperation(onFailure = failure@ { e ->
+                if (!this@HermesModel::api.isInitialized || originatingConnection !== api) return@failure
+                if (canRecoverAgentRead(e) && recoverState(originatingSession)) return@failure
                 if (e is ApiRequestFailure && e.code == "thread_missing" && selectedId == originatingSession) exitMissingSession(originatingSession)
                 setError(originatingSession, connectionFailureMessage(e))
                 if (selectedId == originatingSession && historyCacheStatus != null) historyCacheStatus = "缓存 · 同步失败"
                 if (e is ReadConnectionFailure && selectedId == originatingSession) readConnectionError = error
-            }
+            }, block = block)
         }
     }
 
@@ -1722,7 +1708,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             historyCacheStatus = null; historyLoading = false
             // 回放缓存后请求滚到底，否则打开会话停在缓存顶部等网络刷新
             scrollToLatestRequest++
-        } ?: run { messages = projectFinalSyncRows(emptyList(), finalSyncStates, id); historyCacheStatus = null; historyLoading = true }
+        } ?: run {
+            // A restored sync receipt is only an overlay, not a cached history window.
+            // Do not flash an old receipt before checking the latest disk snapshot.
+            messages = emptyList(); historyCacheStatus = null; historyLoading = true
+        }
         // 恢复该会话的后台 run 跟踪
         backgroundRuns.remove(id)?.let { resumed ->
             runId = resumed; runSession = id
@@ -1733,6 +1723,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         ensureExternalActivityPolling()
         historyJob = launch {
             val connection = api
+            val overviewHistoryVersion = historyVersions[id] ?: 0L
             // Start the network read before disk-cache replay; neither should block the other.
             val overviewRequest = async {
                 try { withTimeout(25_000) { connection.json("$root/sessions/${q(id)}/overview?limit=100") } }
@@ -1742,11 +1733,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             }
             try {
                 if (id !in cachedHistory) {
+                    val replayVersion = historyVersions[id] ?: 0L
                     val offline = withContext(Dispatchers.IO) { historyCache.read(id) }?.let { withConfirmedKeys(id, it) }
-                    if (selectedId != id || api !== connection) return@launch
-                    if (offline != null && messages.isEmpty()) {
-                        cachedHistory[id] = offline; messages = projectFinalSyncRows(offline, finalSyncStates, id)
-                        historyCacheStatus = null; historyLoading = false; scrollToLatestRequest++
+                    if (selectedId != id || api !== connection || openingGeneration != opening) return@launch
+                    // Live rows/receipts may have arrived while reading disk. Only a
+                    // newer canonical history commit can supersede this replay.
+                    if (replayVersion == (historyVersions[id] ?: 0L)) {
+                        if (offline != null) cachedHistory[id] = offline
+                        messages = projectFinalSyncRows(offline.orEmpty(), finalSyncStates, id)
+                        historyCacheStatus = null
+                        historyLoading = offline == null && messages.isEmpty()
+                        if (messages.isNotEmpty()) scrollToLatestRequest++
                     }
                 }
                 val overview = overviewRequest.await()?.let(SessionOverview::read)
@@ -1763,7 +1760,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         else pollExternalActivity(force = true)
                     }
                     this@HermesModel.launch { loadSelection(id, overview.detail, loadRelated = false) }
-                    loadHistory(id, overview.history, overview.files)
+                    loadHistory(id, overview.history, overview.files, overviewHistoryVersion)
                 } else {
                     pollContext()
                     this@HermesModel.launch { loadSelection(id) }
@@ -1821,12 +1818,18 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
-    private suspend fun loadHistory(id: String, prefetched: JSONObject? = null, prefetchedFiles: JSONObject? = null) {
+    private suspend fun loadHistory(id: String, prefetched: JSONObject? = null, prefetchedFiles: JSONObject? = null,
+        prefetchedVersion: Long? = null) {
         val connection = api
         val generation = openingGeneration
         historyReadMutex.withLock {
-            if (id == selectedId && api === connection && generation == openingGeneration)
-                loadHistoryNow(id, prefetched = prefetched, prefetchedFiles = prefetchedFiles)
+            if (id == selectedId && api === connection && generation == openingGeneration) {
+                // An overview starts before run/activity polling. If a newer read has
+                // committed meanwhile, its older bundled history must not roll it back.
+                val stillCurrent = prefetchedVersion == null || prefetchedVersion == (historyVersions[id] ?: 0L)
+                loadHistoryNow(id, prefetched = prefetched.takeIf { stillCurrent },
+                    prefetchedFiles = prefetchedFiles.takeIf { stillCurrent })
+            }
         }
     }
     private suspend fun loadHistoryNow(id: String, earlier: Boolean = false, prefetched: JSONObject? = null, prefetchedFiles: JSONObject? = null) {
@@ -1912,8 +1915,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         narrations = narrations.filter { it.session != id || it.run == activeRun && activeRun != null }
         saveNarrations()
         compactionNotices = compactionNotices.filterNot { it.session == id }; saveCompactionNotices()
+        // Commit the canonical snapshot before publishing it. Switching sessions or
+        // leaving the screen must not cancel a write after newer rows became visible.
+        val cacheFailure = withContext(NonCancellable + Dispatchers.IO) {
+            runCatching { historyCache.write(id, history) }.exceptionOrNull()
+        }
+        currentCoroutineContext().ensureActive()
+        if (selectedId != id || api !== connection || generation != openingGeneration) return
         cachedHistory[id] = history
-        historyCacheStatus = null
+        historyVersions[id] = (historyVersions[id] ?: 0L) + 1L
+        historyCacheStatus = if (cacheFailure == null) null else "最新消息未保存到离线缓存"
+        if (cacheFailure != null) android.util.Log.w("AgentHistoryCache", "Unable to save conversation snapshot", cacheFailure)
         val currentSteering = steering.filter { it.session == id && it.key in currentSubmissionKeys && it.key !in confirmedSteeringKeys && !rejectedSteering(it) }
         val pendingRows = steering.filter { it.session == id && it.key !in currentSubmissionKeys && it.key !in confirmedSteeringKeys && !rejectedSteering(it) && it.delivery != "已送达" }.map {
             HermesMessage("user", it.text, attachments = it.attachments, localKey = it.key,
@@ -1940,7 +1952,6 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 pendingItemId.takeIf { activeRun != null }, pendingText.takeIf { activeRun != null }.orEmpty()),
             finalSyncStates, id)
         historyLoading = false
-        withContext(Dispatchers.IO) { historyCache.write(id, history) }
         if (selectedId != id || api !== connection) return
         reconcileSteeringReceipts(id, connection)
         launch { bindOutgoingIfReady(id, connection) }
@@ -2050,6 +2061,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             val body = obj("title" to name.ifBlank { newHermesChatName() })
             body.put("auto_title", name.isBlank() || Regex("手机对话\\d{8}_\\d{6}").matches(name))
             if (agent == "codex") project?.keys()?.forEach { key -> body.put(key, project.get(key)) }
+            else project?.optJSONObject("phone_tools")?.let { body.put("phone_tools", it) }
             val result =
                 api.json(
                     "$root/sessions",
@@ -2656,7 +2668,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                 val kind = event.optString("type", event.optString("event"))
                                 if (kind == "stream.gap" || n >= 0 && missingSseEvents(seq, n)) {
                                     streamGap = true
-                                    runSession?.let { session -> launch { loadHistory(session) } }
+                                    runSession?.let { session -> this@HermesModel.launch { loadHistory(session) } }
                                     state = "正在同步遗漏的输出"
                                 }
                                 if (n >= 0) seq = n
@@ -2670,7 +2682,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                                         if (streamCompaction?.first == id) streamCompaction = null
                                         // Read the native item at its native position; never persist a synthetic notice.
                                         val session = runSession
-                                        if (session != null) launch { loadHistory(session); pollContext() }
+                                        if (session != null) this@HermesModel.launch { loadHistory(session); pollContext() }
                                     }
                                     return@withContext
                                 }

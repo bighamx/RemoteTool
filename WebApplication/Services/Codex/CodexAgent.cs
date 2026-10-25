@@ -330,6 +330,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             request["runtimeWorkspaceRoots"] = new JsonArray(project.A("roots").Select(root => (JsonNode)JsonValue.Create(root.S("path"))).ToArray());
         }
         if (applySelection && await SessionSelection(id) is { } selected) CodexModelSettings.ApplyResume(request, selected);
+        // This CLI restores dynamic tools from rollout metadata; resume has no dynamicTools field.
         return request;
     }
     private async Task NotifyDesktop(IEnumerable<string> ids, bool force = false) {
@@ -688,6 +689,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var session = p.S("threadId");
         var turnId = p.S("turnId", p["turn"].S("id", p["item"].S("turnId")));
         if (!AcceptNotification(origin, session, turnId, method, p)) return;
+        if (method == "item/tool/call" && message.ContainsKey("id") && p.S("tool").StartsWith("phone_", StringComparison.Ordinal)) {
+            // Do not block ordered lifecycle notifications while Android executes.
+            _ = HandlePhoneCall(message.DeepClone().AsObject(), origin, session);
+            return;
+        }
         if (method == "turn/started") await BindQueuedNativeTurn(p.S("threadId"), p["turn"].S("id"), origin);
         if (method == "thread/closed") {
             lock (gate) {
@@ -824,11 +830,15 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 Directory.CreateDirectory(cwd);
             } else throw new CodexError("请选择已有项目、新项目或无项目");
             var request = Obj(("cwd", cwd), ("projectId", project?.S("id")), ("ephemeral", false));
+            var phoneBinding = body["phone_binding"] as JsonObject;
+            if (phoneBinding?.S("mode") == "tools") request["dynamicTools"] = PhoneDynamicTools(phoneBinding);
+            if (body.S("phone_description").Length > 0) request["developerInstructions"] = body.S("phone_description");
             if (project != null) request["runtimeWorkspaceRoots"] = new JsonArray(project.A("roots").Select(root => (JsonNode)JsonValue.Create(root.S("path"))).ToArray());
             var owner = await CreateRuntime(); JsonObject result;
             try { await owner.Initialize(); result = await owner.Call("thread/start", request); }
             catch { await owner.DisposeAsync(); throw; }
             var thread = result["thread"]!;
+            if (phoneBinding != null) Atomic(Path.Combine(folder, "phone-tools", thread.S("id") + ".json"), phoneBinding);
             lock (gate) sessionRpcs[thread.S("id")] = owner;
             var title = body.S("title", "手机 Codex 对话");
             await owner.Call("thread/name/set", Obj(("threadId", thread.S("id")), ("name", title)));
@@ -1230,8 +1240,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private static long MessageId(string id) => CodexHistoryWindow.MessageId(id);
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
-        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", 25), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("native_session_search", true), ("model_settings_snapshot", true), ("state_version", 25));
+        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", RemoteToolPaths.CodexBridgeVersion), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("native_session_search", true), ("model_settings_snapshot", true), ("phone_tools", true), ("state_version", RemoteToolPaths.CodexBridgeVersion));
         if (path == "sessions/search" && method == "GET") {
             var query = context.Request.Query["query"].ToString().Trim();
             if (query.Length is < 1 or > 500) throw new CodexError("搜索关键词应为 1 至 500 字", 400);

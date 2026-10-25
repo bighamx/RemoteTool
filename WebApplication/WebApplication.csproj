@@ -62,4 +62,9 @@
     </ItemGroup>
     <Copy SourceFiles="@(_ViewsFiles)" DestinationFiles="@(_ViewsFiles->'$(PublishDir)%(Identity)')" SkipUnchangedFiles="true" />
   </Target>
+  <ItemGroup>
+    <Content Include="..\tools\PhoneTools\**\*.py" Link="phone-tools\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\tools\PhoneTools\hermes_plugin\*.json" Link="phone-tools\hermes_plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\tools\PhoneTools\hermes_plugin\*.yaml" Link="phone-tools\hermes_plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

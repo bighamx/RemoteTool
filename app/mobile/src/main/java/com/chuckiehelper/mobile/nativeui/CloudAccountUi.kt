@@ -65,7 +65,7 @@ internal fun CloudAccountHost(model: CloudAccountModel) {
         }
     }
     if (confirmUpload && model.loggedIn) AlertDialog(onDismissRequest = { confirmUpload = false },
-        title = { Text("上传配置") }, text = { Text("将设备和设置保存到云端，覆盖已有配置。密码和聊天记录不上传。") },
+        title = { Text("上传配置") }, text = { Text("将设备、手机操控设置和端口转发规则等配置保存到云端，覆盖已有配置。密码、工具令牌和聊天记录不上传。") },
         confirmButton = { TextButton(onClick = { confirmUpload = false; model.upload() }) { Text("确认上传") } },
         dismissButton = { TextButton(onClick = { confirmUpload = false }) { Text("取消") } })
     model.downloadPreview?.let { payload ->

@@ -26,6 +26,7 @@ internal class CloudConfiguration(private val context: Context) {
         }
         val updates = context.getSharedPreferences("app_updates", 0)
         val files = context.getSharedPreferences("file-view", 0)
+        val (phoneTools, portTunnels) = PhoneCloudConfiguration(context).export(devices)
         val agents = JSONObject()
         for (i in 0 until devices.length()) {
             val id = devices.getJSONObject(i).getString("id")
@@ -40,6 +41,7 @@ internal class CloudConfiguration(private val context: Context) {
         return validate(obj("schemaVersion" to 1, "appVersion" to BuildConfig.VERSION_NAME,
             "exportedAt" to Instant.now().toString(), "devices" to devices,
             "settings" to obj(
+                "phoneTools" to phoneTools, "portTunnels" to portTunnels,
                 "updates" to obj("automatic" to updates.getBoolean("automatic", true), "wifiOnly" to updates.getBoolean("wifi_only", true)),
                 "fileView" to obj("sort" to files.getString("sort", "NAME"), "secondarySort" to files.getString("secondarySort", null),
                     "descending" to files.getBoolean("descending", false), "secondaryDescending" to files.getBoolean("secondaryDescending", false),
@@ -95,14 +97,16 @@ internal class CloudConfiguration(private val context: Context) {
                 }
             }
         }
+        PhoneCloudConfiguration(context).validate(settings, devices)
         return payload
     }
 
     /** Keep a private local rollback snapshot; merge devices by identity and apply only known settings. */
     fun apply(payload: JSONObject) {
         validate(payload)
+        PhoneCloudConfiguration(context).requireStopped(payload.getJSONObject("settings"))
         context.openFileOutput("cloud-before-import.json", Context.MODE_PRIVATE).use { it.write(export().toString().toByteArray(Charsets.UTF_8)) }
-        val names = mutableSetOf("MainActivity", "app_updates", "file-view", "RemoteActivity")
+        val names = mutableSetOf("MainActivity", "app_updates", "file-view", "RemoteActivity", "phone-tools", "port-tunnels")
         for (device in payload.getJSONArray("devices").objects()) for (agent in listOf("codex", "hermes")) names.add("$agent-${device.getString("id")}")
         val previous = names.associateWith { name -> context.getSharedPreferences(name, 0).all.mapValues { (_, value) ->
             if (value is Set<*>) value.toSet() else value
@@ -160,5 +164,6 @@ internal class CloudConfiguration(private val context: Context) {
                     .putStringSet("codex_collapsed_groups", (0 until groups.length()).map { groups.getString(it) }.toSet()).commit()) { "会话显示设置保存失败" }
             }
         } }
+        PhoneCloudConfiguration(context).apply(settings)
     }
 }

@@ -73,13 +73,13 @@ fun displayTime(value: String, zone: java.time.ZoneId = java.time.ZoneId.systemD
 class LoginRequired : IOException("登录已过期，请重新登录")
 
 class NativeApi(
-    val base: String,
+    override val base: String,
     private val probing: Boolean = false,
     private val noRetry: Boolean = false,
     private val onReadSuccess: (() -> Unit)? = null,
     private val authentication: DeviceAuthSession? = null,
     val hermesProfile: String = "default",
-) {
+) : com.chuckiehelper.mobile.phonecontrol.PhoneWebApi {
     /** Called once when a request comes back 401: return a fresh token (or null).
      *  Set by the model on the session's API instance; copied by [withReadPolicy]. */
     var onUnauthorized: (suspend (failedToken: String?) -> String?)? = null
@@ -95,7 +95,7 @@ class NativeApi(
                 .build()
     }
 
-    fun cookie(): String = if (authentication != null) authentication.token?.takeIf { it.isNotBlank() }?.let { "access_token=$it" }.orEmpty()
+    override fun cookie(): String = if (authentication != null) authentication.token?.takeIf { it.isNotBlank() }?.let { "access_token=$it" }.orEmpty()
         else CookieManager.getInstance().getCookie(base) ?: ""
 
     fun withReadPolicy(noRetry: Boolean, onReadSuccess: (() -> Unit)? = null) =
@@ -110,7 +110,7 @@ class NativeApi(
         if (hermesProfile != "default" && path.startsWith("/api/hermes/") && !path.startsWith("/api/hermes/profiles"))
             "/api/hermes/profiles/${android.net.Uri.encode(hermesProfile)}/" + path.removePrefix("/api/hermes/") else path
 
-    fun request(path: String, body: JSONObject? = null): Request =
+    override fun request(path: String, body: JSONObject?): Request =
         Request.Builder()
             .url(base + scopedPath(path))
             .apply {
@@ -164,11 +164,11 @@ class NativeApi(
         }
     }
 
-    suspend fun json(path: String, body: JSONObject? = null): JSONObject {
+    override suspend fun json(path: String, body: JSONObject?): JSONObject {
         return json(request(path, body))
     }
 
-    suspend fun json(request: Request): JSONObject {
+    override suspend fun json(request: Request): JSONObject {
         var attempt = 0
         var current = request
         var healed = false
@@ -361,6 +361,18 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         val last = devices.find { it.id == lastId }
             ?: devices.singleOrNull()?.takeIf { !prefs.getBoolean("cloud_requires_connection_selection", false) && prefs.contains("channel_${it.id}") }
         if (last != null) connect(last)
+        else if (com.chuckiehelper.mobile.BuildConfig.PHONE_COMPANION && devices.isEmpty()) {
+            // Preserve the first standalone version's saved address when moving to
+            // the shared device UI. Probe anonymously before creating any login session.
+            val legacy = application.getSharedPreferences("connection", 0).getString("address", "").orEmpty()
+            if (legacy.isNotBlank()) viewModelScope.launch {
+                try {
+                    add("电脑", legacy, null)
+                    devices.firstOrNull { legacy.trimEnd('/') in it.endpoints }?.let(::connect)
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { message = "原连接暂不可用，请在设备页面重试" }
+            }
+        }
     }
 
     private fun readDevices() =
@@ -595,7 +607,13 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
             }
     }
 
-    fun savedUsername(deviceId: String): String = credentials.read(deviceId)?.username.orEmpty()
+    fun savedUsername(deviceId: String): String = credentials.read(deviceId)?.username
+        ?: if (com.chuckiehelper.mobile.BuildConfig.PHONE_COMPANION) {
+            val legacy = getApplication<Application>().getSharedPreferences("connection", 0)
+            legacy.getString("username", "").orEmpty().takeIf {
+                legacy.getString("address", "").orEmpty().trimEnd('/') in devices.firstOrNull { row -> row.id == deviceId }?.endpoints.orEmpty()
+            }.orEmpty()
+        } else ""
 
     suspend fun login(target: Session, username: String, password: String) {
         val (identity, _) = probe(target.api.base)

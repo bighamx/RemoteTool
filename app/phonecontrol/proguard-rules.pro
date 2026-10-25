@@ -1,0 +1,4 @@
+-keepattributes SourceFile,LineNumberTable
+-keep class com.chuckiehelper.mobile.phonecontrol.PhoneShellService { *; }
+-keep class com.chuckiehelper.mobile.phonecontrol.IPhoneShell$Stub { *; }
+-keep class com.chuckiehelper.mobile.phonecontrol.IPhoneShell$Stub$Proxy { *; }

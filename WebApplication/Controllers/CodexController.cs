@@ -26,13 +26,28 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpGet("default-model")] public Task Default(CancellationToken ct) => Forward(HttpMethod.Get, "default-model", null, ct);
     [HttpPost("default-model")] public Task SetDefault([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "default-model", body, ct);
     [HttpGet("sessions")] public Task Sessions([FromQuery] string cursor, CancellationToken ct) => Forward(HttpMethod.Get, "sessions" + (cursor == null ? "" : "?cursor=" + Uri.EscapeDataString(cursor)), null, ct);
-    [HttpPost("sessions")] public Task Create([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "sessions", body, ct);
+    [HttpPost("sessions")] public async Task<IActionResult> Create([FromBody] JsonElement body, [FromServices] Services.PhoneControl.PhoneSessionIntegration phone, CancellationToken ct) {
+        var native = JsonNode.Parse(body.GetRawText())!.AsObject(); JsonObject? binding = null;
+        try {
+            binding = await phone.Prepare(native, "codex", Request, ct);
+            using var upstream = await bridge.SendAsync(HttpMethod.Post, "sessions", JsonSerializer.SerializeToElement(native), ct);
+            var payload = await upstream.Content.ReadAsStringAsync(ct);
+            if (upstream.IsSuccessStatusCode && JsonNode.Parse(payload)?["session"]?["id"]?.ToString() is string id) phone.Complete(binding, id, "codex");
+            else if (!upstream.IsSuccessStatusCode) phone.Abort(binding);
+            return new ContentResult { StatusCode = (int)upstream.StatusCode, ContentType = "application/json", Content = payload };
+        } catch (Exception error) when (error is ArgumentException or InvalidOperationException) {
+            phone.Abort(binding); return BadRequest(new { message = error.Message, code = "phone_tools_unavailable", delivery = "rejected" });
+        }
+    }
     [HttpGet("sessions/{id}")] public Task SessionInfo(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"sessions/{Id(id)}", null, ct);
     [HttpGet("sessions/{id}/context")] public Task Context(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"sessions/{Id(id)}/context", null, ct);
     [HttpPost("sessions/{id}/takeover")] public Task Takeover(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/takeover", body, ct);
     [HttpPost("sessions/{id}/compact")] public Task Compact(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/compact", JsonSerializer.SerializeToElement(new { }), ct, Request.Headers["Idempotency-Key"].ToString());
     [HttpPatch("sessions/{id}")] public Task Rename(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Patch, $"sessions/{Id(id)}", body, ct);
-    [HttpPost("sessions/{id}/delete")] public Task Delete(string id, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/delete", JsonSerializer.SerializeToElement(new { }), ct);
+    [HttpPost("sessions/{id}/delete")] public async Task Delete(string id, [FromServices] Services.PhoneControl.PhoneGateway phone, CancellationToken ct) {
+        await Forward(HttpMethod.Post, $"sessions/{Id(id)}/delete", JsonSerializer.SerializeToElement(new { }), ct);
+        if (Response.StatusCode < 300) phone.RevokeSession("codex", "default", id);
+    }
     [HttpPost("sessions/{id}/pin")] public Task Pin(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/pin", body, ct);
     [HttpPost("sessions/{id}/archive")] public Task Archive(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/archive", body, ct);
     [HttpPost("sessions/{id}/move")] public Task Move(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/move", body, ct);

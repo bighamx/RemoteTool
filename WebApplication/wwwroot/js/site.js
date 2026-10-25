@@ -8,6 +8,7 @@
                 { key: 'processes', href: '/#/processes', icon: '/icons/memory.svg', label: '进程' },
                 { key: 'screenshot', href: '/#/desktop', icon: '/icons/desktop_windows.svg', label: '远程桌面' },
                 { key: 'terminal', href: '/#/terminal', icon: '/icons/terminal.svg', label: '终端' },
+                { key: 'tunnels', href: '/Tunnels', icon: '/icons/terminal.svg', label: '端口转发' },
                 { key: 'docker', href: '/#/docker', icon: '/icons/layers.svg', label: 'Docker' },
                 { key: 'files', href: '/#/files', icon: '/icons/folder.svg', label: '文件' }
             ] },
@@ -29,6 +30,7 @@
             data: () => ({ currentTitle: titleNode.dataset.default || 'RemoteTool' }),
             methods: {
                 sync() {
+                    if (location.pathname.toLowerCase() === '/tunnels') { this.currentTitle = '端口转发'; return; }
                     const route = location.hash.match(/^#\/([^?]*)/)?.[1] || 'home';
                     this.currentTitle = ({ home:'总览', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes', identity:'身份验证' })[route] || 'RemoteTool';
                 }

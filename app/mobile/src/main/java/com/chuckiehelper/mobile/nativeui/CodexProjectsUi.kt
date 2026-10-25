@@ -19,6 +19,7 @@ import org.json.JSONObject
 @Composable
 fun CodexNewSessionDialog(api: NativeApi, model: HermesModel, close: () -> Unit, create: (JSONObject) -> Unit) {
     var mode by rememberSaveable { mutableStateOf("existing") }
+    var phoneOptions by rememberSaveable { mutableStateOf("{\"mode\":\"off\"}") }
     var selected by rememberSaveable { mutableStateOf("") }
     var directory by rememberSaveable { mutableStateOf("") }
     var newRoots by rememberSaveable { mutableStateOf(listOf<String>()) }
@@ -92,6 +93,7 @@ fun CodexNewSessionDialog(api: NativeApi, model: HermesModel, close: () -> Unit,
                     }
                     else -> Text("独立会话，不归入项目。使用独立工作目录保存本次会话的文件。", style = MaterialTheme.typography.bodyMedium)
                 }
+                PhoneSessionOptions(api, phoneOptions) { phoneOptions = it }
                 model.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 if (model.submitting) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
@@ -101,7 +103,7 @@ fun CodexNewSessionDialog(api: NativeApi, model: HermesModel, close: () -> Unit,
                 "existing" -> obj("project_mode" to mode, "project_id" to selected, "cwd" to selectedRoot)
                 "new" -> obj("project_mode" to mode, "project_name" to name.trim(), "cwd" to directory, "roots" to org.json.JSONArray(newRoots.map { obj("path" to it) }))
                 else -> obj("project_mode" to "none")
-            })
+            }.put("phone_tools", JSONObject(phoneOptions)))
         }) { Text(if (model.submitting) "正在创建…" else "新建会话") } },
         dismissButton = { TextButton(onClick = close, enabled = !model.submitting) { Text("取消") } },
     )

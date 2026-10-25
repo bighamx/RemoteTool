@@ -1,5 +1,11 @@
 # Codex 原生模块
 
+## 主 App 与手机操控精简版
+
+`mobile` 与 `phonecontrol` 共享 `mobile/src/main/java`、`phone-shared/src/main/java` 和 `shared-dependencies.gradle`。精简版只用 `BuildConfig.PHONE_COMPANION` 筛选入口；已有的设备、云账户、配置、手机操控、端口转发、日志及自启动页面必须直接复用，不另写同功能页面，后续 UI 与协议修改要同时适用两版。云登录共用应用与公共 PKCE 客户端，以随机 state 前缀和安装签名匹配路由回正确 App，再由各自私有状态完成校验。
+
+手机工具 schema 2 提供 `phone_begin_ui`、`phone_end_ui`、`phone_disconnect`、`phone_notify_user`、`phone_get_user_reply`。所有手机操作与核验完成后，最后调用 `phone_disconnect`，立即撤下本 Agent 的连接／操作提示及待处理消息；服务和授权保留，其他 Agent 不受影响。`phone_end_ui` 仅结束 UI 声明，不等于断开；`ping` 和工具发现不能重新点亮提示，新工具调用或 `initialize` 才恢复。每个 Web 绑定单独维护声明和回执；回执未完成、过期或丢失都不能当作用户已完成。顶部提示与 HyperOS 通知使用同一状态；普通前台服务继续共用一条后台通知，协助消息独立显示。超级岛使用官方接口，除系统协议和 `canShowFocus` 开关外仍需小米平台 App ID、证书及鉴权通过；不能把开关开启当成上岛成功，不伪装媒体或改系统白名单。完整调用约定在 `tools/PhoneTools/README.md`。
+
 入口：更多 → Codex。底部导航为系统、远程、文件、Hermes、更多；Docker 位于更多。
 
 ## 接入方式
@@ -9,6 +15,21 @@
 本机已验证 Codex CLI 0.160.0。初始化启用实际协议的 experimentalApi；能力以安装版本为准。模型目录是可选目录，不能作为账号已获得全部模型权限的证明。
 
 ## 会话与任务
+
+### 双向端口转发
+
+- 我的设备/更多 → 开机自启，用户可开启解锁后自动恢复手机工具、手机工具 Web 转发通道及 TCP/UDP 端口转发；默认总开关关闭。BOOT_COMPLETED/MY_PACKAGE_REPLACED 启动独立 specialUse 恢复服务，不弹出 Activity、不自动授权无障碍/Root/Shizuku。网络未就绪时退避等待；先验证保存电脑的设备身份，再使用 Android Keystore 中现有凭据验证/续签，不另存明文密码或令牌。手机工具转发恢复时不会重启已开启的本地监听。手动停止会暂停本轮该功能的恢复，关闭自启只取消待恢复任务，不停止已经运行的业务服务。部分厂商还需手动放行系统自启动/后台运行权限。
+
+- App 更多 → 端口转发，为当前电脑配置 TCP/UDP 规则。手机 → 电脑：手机监听本地端口，电脑连接目标 IP/主机名；电脑 → 手机：电脑监听端口，手机连接目标。目标可为拨号端可达的局域网设备，不限于自身；主机名也在拨号端解析。不使用 VPN，不自动扫描网段或修改系统路由。
+- 手机主动连接已登录设备的 `/ws/tunnel`，复用网站入口、登录凭据及通道地址，独立于终端、键鼠与手机控制 WS。默认监听 `127.0.0.1`；明确勾选“允许其他设备访问（所有网卡）”后绑定 `0.0.0.0`，局域网其他设备可用监听端的 LAN IP 访问。监听端口 1024–65535，目标端口 1–65535，需由设备防火墙允许相应入站访问。
+- 规则按设备保存在手机；一次仅运行一个设备的隧道，每连接最多 32 条规则、64 个业务连接/UDP 会话。规则在停止后编辑。后台由独立 specialUse 前台服务保持，切换页面不停止。网络切换及断线采用 1–30 秒退避重连，20 秒 WS Ping；重连后重建监听，原 TCP 连接不跨 WS 代际续传。被强制停止/杀进程后需重新开启。认证过期尝试沿用当前设备的自动续签回调，失败则停止。
+- 二进制协议 v1：12 字节大端头 `[version:u8,type:u8,reserved:u16,channel:i32,aux:i32]` 后接 payload；type=1 OPEN(aux=ruleId)、2 OPENED、3 DATA、4 FIN、5 CLOSE、6 WINDOW(aux=consumedBytes)、7 DATAGRAM、8 ERROR。手机创建奇数 channel，电脑创建偶数 channel，编号单调递增。先 JSON configure(version/client_id/run_id/name/rules)，电脑绑定完成回复 ready；每个 OPEN 等 OPENED 后才发业务数据，目标只能来自已确认的配置规则。run_id 在每次手动开启时生成，网络重连沿用；电脑停止后拒绝该 run_id 重连，防止停止通知丢失导致自动重开。
+- TCP 分块最多 16 KiB，双向初始窗口各 64 KiB，使用按字节计量的环形接收缓存，落入目标 socket 后回报 WINDOW；FIN 排在数据后处理并关闭对应写半部。限流包含逐流接收窗口、有界消息队列及手机 1 MiB WS 发送队列水位。UDP 保留数据报边界，最大 65507 字节，每源端点独立会话，60 秒空闲回收；UDP 进出队列各最多 16 包/64 KiB，手机/电脑监听端的待发包超过 2 秒则丢弃。UDP over WS 仍受 TCP 重传和队头阻塞影响。
+- 电脑网站“端口转发”(`/Tunnels`) 可查看连接/规则/流量并停止手机隧道；`GET /api/tunnels` 与 `POST /api/tunnels/{id}/stop` 沿用网站认证。电脑停止会向手机发 stopped，手机停服务、不自动重开。没有第三方公网中继，转发数据不落盘；监听结束会释放两端 socket。
+
+### 会话与任务行为
+
+- App 在 Application 初始化时安装全局未捕获异常处理器，主线程和后台线程崩溃同步落盘后交回系统退出；不吞掉致命错误、不自动重启。日志在手机私有目录 `files/crash-reports`，最多 20 份、每份最多约 1 MiB，包含版本、线程堆栈、内存信息及最近页面/Activity 生命周期。Android 11+ 下次启动补收系统可提供的崩溃、原生崩溃、ANR 和内存不足等退出记录；系统 trace 不一定可用。我的设备/更多 → 诊断日志，可查看、导出 ZIP 和清空，不自动上传；Release 混淆映射按版本保存在 `app/mobile/build/outputs/crash-mappings`，分析堆栈时使用对应版本。
 
 - 列出现有 CLI、IDE 和 app-server 会话，分页、读取历史、新建、改名、删除。
 - 服务端及手机按会话 ID 合并重复记录，避免同一会话的多个日志记录导致原生列表崩溃。读取当前模型允许桌面进程同时写入日志，忽略尚未写完的最后一行；辅助信息缺失不阻止打开会话。

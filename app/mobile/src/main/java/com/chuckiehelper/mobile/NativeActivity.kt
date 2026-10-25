@@ -18,13 +18,16 @@ class NativeActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        if (savedInstanceState == null && !cloud.receiveCallback(intent.data)) shares.receive(intent)
-        setContent { ImeEditingCompat { NativeApp(viewModel(), shares) } }
+        if (savedInstanceState == null && !receiveCloud(intent) && !BuildConfig.PHONE_COMPANION) shares.receive(intent)
+        setContent { ImeEditingCompat { NativeApp(viewModel(), if (BuildConfig.PHONE_COMPANION) null else shares) } }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (!cloud.receiveCallback(intent.data)) shares.receive(intent)
+        if (!receiveCloud(intent) && !BuildConfig.PHONE_COMPANION) shares.receive(intent)
     }
+
+    private fun receiveCloud(intent: Intent): Boolean =
+        com.chuckiehelper.mobile.nativeui.CloudCallbackRouter.forwardIfNeeded(this, intent.data) || cloud.receiveCallback(intent.data)
 }

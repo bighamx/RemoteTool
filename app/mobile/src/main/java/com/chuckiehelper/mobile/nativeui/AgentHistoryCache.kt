@@ -1,6 +1,9 @@
 package com.chuckiehelper.mobile.nativeui
 
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.nio.file.AtomicMoveNotSupportedException
 import java.security.MessageDigest
 import org.json.JSONArray
 
@@ -18,18 +21,30 @@ internal class AgentHistoryCache(private val root: File, private val scope: Stri
     }.getOrNull()
 
     @Synchronized fun write(session: String, messages: List<HermesMessage>) {
-        runCatching {
-            val content = encodeHistorySnapshot(messages).toString().toByteArray(Charsets.UTF_8)
-            if (content.size > 8 * 1024 * 1024) { remove(session); return }
+            // Keep the newest suffix when an expanded history exceeds the disk budget.
+            // Never silently retain a previous snapshot after a successful online read.
+            var window = messages
+            var content = encodeHistorySnapshot(window).toString().toByteArray(Charsets.UTF_8)
+            while (content.size > 8 * 1024 * 1024 && window.size > 1) {
+                window = window.drop((window.size / 2).coerceAtLeast(1))
+                content = encodeHistorySnapshot(window).toString().toByteArray(Charsets.UTF_8)
+            }
+            if (content.size > 8 * 1024 * 1024) {
+                remove(session)
+                throw IOException("最新消息超出离线缓存容量")
+            }
             val path = file(session)
             path.parentFile!!.mkdirs()
             val temporary = File(path.parentFile, path.name + ".tmp")
-            temporary.writeBytes(content)
-            java.nio.file.Files.move(temporary.toPath(), path.toPath(),
-                java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+            FileOutputStream(temporary).use { output -> output.write(content); output.fd.sync() }
+            try {
+                java.nio.file.Files.move(temporary.toPath(), path.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: AtomicMoveNotSupportedException) {
+                java.nio.file.Files.move(temporary.toPath(), path.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }
             directory.listFiles { f -> f.extension == "json" }?.sortedByDescending { it.lastModified() }
                 ?.drop(50)?.forEach { it.delete() }
-        }
     }
 
     @Synchronized fun remove(session: String) { file(session).delete() }

@@ -53,13 +53,14 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             if (!response.IsSuccessStatusCode) return false;
             using var status = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
             return status.RootElement.TryGetProperty("implementation", out var implementation) && implementation.GetString() == "dotnet-v2" &&
-                status.RootElement.TryGetProperty("state_version", out var version) && version.GetInt32() >= 25;
+                status.RootElement.TryGetProperty("state_version", out var version) && version.GetInt32() >= RemoteToolPaths.CodexBridgeVersion;
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
         catch (HttpRequestException) { return false; }
         catch (JsonException) { return false; }
     }
     private async Task<JsonObject> CaptureHandoff(string statusPath, CancellationToken ct) {
         if (port <= 0 || token == null || !File.Exists(statusPath)) return null;
+        var legacyOwner = false;
         try {
             async Task<JsonObject> Get(string path) {
                 using var request = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}/{path}");
@@ -70,11 +71,12 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
                 return JsonNode.Parse(await response.Content.ReadAsStringAsync(timeout.Token))!.AsObject();
             }
             var health = await Get("health");
-            if (health.S("implementation") != "dotnet-v2" || health.L("state_version") >= 25) return null;
+            if (health.S("implementation") != "dotnet-v2" || health.L("state_version") >= RemoteToolPaths.CodexBridgeVersion) return null;
+            legacyOwner = true;
             var saved = Read(statusPath);
             using var worker = Process.GetProcessById((int)saved.L("pid"));
             using var cli = Process.GetProcessById((int)health.L("cli_pid"));
-            if (worker.ProcessName != "dotnet" || cli.ProcessName != "codex") return null;
+            if (worker.ProcessName != "dotnet" || cli.ProcessName != "codex") throw new InvalidOperationException("旧桥接进程身份无法核对");
             var active = new JsonObject();
             var prior = Read(Path.Combine(folder, "connection.json"));
             var journal = Read(Path.Combine(prior.S("state_folder", folder), "runs.json"));
@@ -89,7 +91,10 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             }
             return Obj(("port", port), ("pid", worker.Id), ("process_started_ticks", worker.StartTime.ToUniversalTime().Ticks),
                 ("cli_pid", cli.Id), ("cli_started_ticks", cli.StartTime.ToUniversalTime().Ticks), ("runs", active));
-        } catch (Exception error) when (!ct.IsCancellationRequested && error is IOException or HttpRequestException or OperationCanceledException or JsonException or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return null; }
+        } catch (Exception error) when (!ct.IsCancellationRequested && error is IOException or HttpRequestException or OperationCanceledException or JsonException or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) {
+            if (legacyOwner) throw new InvalidOperationException("Codex 旧任务交接未核对完成，请稍后重试；原任务未中断", error);
+            return null;
+        }
     }
     private async Task Ensure(CancellationToken ct) {
         if (await Ready(ct)) return;
@@ -118,7 +123,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             }
             var handoff = await CaptureHandoff(statusPath, ct);
             var priorState = Read(configPath).S("state_folder", folder);
-            var stateFolder = Path.Combine(folder, "state-v10");
+            var stateFolder = RemoteToolPaths.CodexState;
             if (!Directory.Exists(stateFolder)) {
                 Directory.CreateDirectory(stateFolder);
                 foreach (var name in new[] { "runs.json", "providers.json", "model-selections.json" })

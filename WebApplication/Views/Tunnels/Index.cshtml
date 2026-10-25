@@ -1,0 +1,18 @@
+@{ ViewData["Title"] = "端口转发"; Layout = "_Layout"; }
+@section Styles { <link href="~/css/workspace-pages.css" rel="stylesheet" asp-append-version="true" /> }
+@section Scripts {
+    <script src="~/js/web-api.js" asp-append-version="true"></script>
+    <script src="~/js/tunnels.js" asp-append-version="true"></script>
+}
+<div id="tunnels-app" class="workspace-page" v-cloak>
+    <div class="workspace-heading"><div><h1>端口转发</h1><p>在手机“更多 → 端口转发”配置并开启。目标可填写双方各自的局域网地址。</p></div><i-button @@click="refresh" :loading="loading">刷新</i-button></div>
+    <p v-if="error" class="workspace-alert">{{error}}</p>
+    <p v-if="!sessions.length && !loading">暂无在线隧道</p>
+    <section v-for="session in sessions" :key="session.id" style="padding:16px;margin:12px 0;border:1px solid var(--border-color,#8885);border-radius:12px;overflow-x:auto">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><h2>{{session.name}}</h2><i-button type="error" ghost :loading="stopping===session.id" @@click="stop(session)">停止转发</i-button></div>
+        <p>{{session.state}} · 连接 {{session.active}} · 电脑发送 {{size(session.sent)}} · 电脑接收 {{size(session.received)}} · 丢弃 {{session.dropped}}</p>
+        <table style="width:100%;text-align:left;border-spacing:8px"><thead><tr><th>规则</th><th>方向</th><th>监听</th><th>目标</th></tr></thead>
+            <tbody><tr v-for="rule in session.rules" :key="rule.id"><td>{{rule.name || '规则 '+rule.id}} · {{rule.protocol.toUpperCase()}}</td><td>{{rule.direction==='phone_to_pc'?'手机 → 电脑网络':'电脑 → 手机网络'}}</td><td>{{rule.listenHost}}:{{rule.listenPort}}</td><td>{{rule.targetHost}}:{{rule.targetPort}}</td></tr></tbody>
+        </table>
+    </section>
+</div>

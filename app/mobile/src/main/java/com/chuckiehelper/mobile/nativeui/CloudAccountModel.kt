@@ -71,7 +71,7 @@ internal class CloudAccountModel(app: Application) : AndroidViewModel(app) {
         error = null; notice = null
         try {
             val verifier = random()
-            val state = random()
+            val state = CloudCallbackRouter.statePrefix(com.chuckiehelper.mobile.BuildConfig.PHONE_COMPANION) + random()
             val challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)))
             store.save("pending", obj("verifier" to verifier, "state" to state, "createdAt" to System.currentTimeMillis()))
             val url = Uri.parse("$BASE/connect/authorize").buildUpon()

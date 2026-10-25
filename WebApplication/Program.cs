@@ -74,6 +74,8 @@ namespace RemoteTool.WebApi
             }
 
             var builder = WebApplication.CreateBuilder(args);
+            builder.Services.AddSingleton<Services.PhoneControl.PhoneGateway>();
+            builder.Services.AddSingleton<Services.PhoneControl.PhoneSessionIntegration>();
 
             // 上传文件大小限制（默认 500MB，可在 appsettings 中通过 FileUpload:MaxSizeMB 覆盖）
             var maxUploadMb = builder.Configuration.GetValue("FileUpload:MaxSizeMB", 500);
@@ -108,6 +110,7 @@ namespace RemoteTool.WebApi
             // Remote Control Services
             builder.Services.AddRemoteControlServices();
             builder.Services.AddSingleton<DeviceIdentity>();
+            builder.Services.AddSingleton<Services.Tunnels.TunnelGateway>();
             builder.Services.AddSingleton<HermesProfiles>();
             builder.Services.AddSingleton<HermesAdminFiles>();
             builder.Services.AddSingleton<HermesGatewayAdmin>();
@@ -320,6 +323,24 @@ builder.Services.AddSingleton<HermesCompaction>();
                 await InputWebSocketHandler.RunAsync(webSocket, systemService, context.RequestAborted);
             });
 
+            app.Map("/ws/tunnel", async context => {
+                if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 400; return; }
+                var token = context.Request.Cookies["access_token"] ?? context.Request.Headers.Authorization.ToString().Replace("Bearer ", "", StringComparison.Ordinal);
+                var auth = context.RequestServices.GetRequiredService<AuthService>();
+                if (!auth.ValidateToken(token)) { context.Response.StatusCode = 401; return; }
+                var origin = context.Request.Headers.Origin.ToString();
+                if (origin.Length > 0 && (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) ||
+                    !string.Equals(uri.Authority, context.Request.Host.Value, StringComparison.OrdinalIgnoreCase))) { context.Response.StatusCode = 403; return; }
+                using var socket = await context.WebSockets.AcceptWebSocketAsync();
+                await context.RequestServices.GetRequiredService<Services.Tunnels.TunnelGateway>().Attach(socket, context.RequestAborted, () => auth.ValidateToken(token));
+            });
+            app.Map("/ws/phone-agent", async context => {
+                if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 400; return; }
+                var token = context.Request.Cookies["access_token"] ?? context.Request.Headers.Authorization.ToString().Replace("Bearer ", "", StringComparison.Ordinal);
+                if (!context.RequestServices.GetRequiredService<AuthService>().ValidateToken(token)) { context.Response.StatusCode = 401; return; }
+                using var socket = await context.WebSockets.AcceptWebSocketAsync();
+                await context.RequestServices.GetRequiredService<Services.PhoneControl.PhoneGateway>().Attach(socket, context.RequestAborted);
+            });
             app.Run();
         }
     }

@@ -140,7 +140,11 @@ node_modules/
 **/node_modules/
 # codex: end local build artifacts
 .tmp-mobile-build/
+/.history-backups/
+__pycache__/
+*.py[cod]
 /artifacts/app-updates/
+/artifacts/phone-validation/
 /docs/
 screenshots/android-*.png
 screenshots/web-performance-*.png

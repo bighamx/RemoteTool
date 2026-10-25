@@ -52,7 +52,7 @@ internal fun CodexTitleModelDialog(model: HermesModel, onClose: () -> Unit) {
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (!initialized) Text("正在读取配置…")
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("自动生成标题"); Switch(enabled, { enabled = it }, enabled = initialized && !model.titleModelBusy)
+                        Text("自动生成标题"); Switch(enabled, { enabled = it }, enabled = initialized && !model.titleModelBusy, colors = settingSwitchColors())
                     }
                     OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("API URL") }, placeholder = { Text("https://example.com/v1") }, singleLine = true, enabled = initialized && !model.titleModelBusy)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

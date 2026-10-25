@@ -216,14 +216,23 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             return StatusCode(503, new { message = error is InvalidOperationException ? error.Message : "无法访问本机 Hermes，请检查 API Server 和服务端密钥文件权限" });
         }
     }
-    [HttpPost("sessions")] public async Task CreateSession([FromBody] JsonElement body, CancellationToken ct) {
+    [HttpPost("sessions")] public async Task CreateSession([FromBody] JsonElement body, [FromServices] Services.PhoneControl.PhoneSessionIntegration phone, CancellationToken ct) {
         var nativeBody = JsonNode.Parse(body.GetRawText())!.AsObject(); nativeBody.Remove("auto_title");
+        JsonObject? phoneBinding;
+        try { phoneBinding = await phone.Prepare(nativeBody, "hermes", Request, ct); }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException) {
+            Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = error.Message, code = "phone_tools_unavailable", delivery = "rejected" }, ct); return;
+        }
         using var response = await bridge.SendAsync(HttpMethod.Post, "api/sessions", JsonSerializer.SerializeToElement(nativeBody), null, ct);
         var payload = await response.Content.ReadAsStringAsync(ct);
         if (response.IsSuccessStatusCode) {
             var value = JsonNode.Parse(payload); var session = value?["session"] ?? value;
-            if (session?["id"] != null) titles.Register(session["id"]!.ToString(), session["title"]?.ToString() ?? "", body.TryGetProperty("auto_title", out var automatic) && automatic.ValueKind == JsonValueKind.True);
+            if (session?["id"] != null) {
+                phone.Complete(phoneBinding, session["id"]!.ToString(), "hermes");
+                titles.Register(session["id"]!.ToString(), session["title"]?.ToString() ?? "", body.TryGetProperty("auto_title", out var automatic) && automatic.ValueKind == JsonValueKind.True);
+            }
         }
+        else phone.Abort(phoneBinding);
         Response.StatusCode = (int)response.StatusCode; Response.ContentType = "application/json"; await Response.WriteAsync(payload, ct);
     }
     [HttpGet("sessions/{id}")] public async Task SessionInfo(string id, CancellationToken ct)
@@ -302,7 +311,10 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         Response.StatusCode = (int)response.StatusCode; Response.ContentType = "application/json";
         await Response.WriteAsync(await response.Content.ReadAsStringAsync(ct), ct);
     }
-    [HttpDelete("sessions/{id}"), HttpPost("sessions/{id}/delete")] public Task DeleteSession(string id, CancellationToken ct) => Forward(HttpMethod.Delete, $"api/sessions/{Id(id)}", null, null, ct);
+    [HttpDelete("sessions/{id}"), HttpPost("sessions/{id}/delete")] public async Task DeleteSession(string id, [FromServices] Services.PhoneControl.PhoneGateway phone, CancellationToken ct) {
+        await Forward(HttpMethod.Delete, $"api/sessions/{Id(id)}", null, null, ct);
+        if (Response.StatusCode < 300) phone.RevokeSession("hermes", HermesProfileScope.Name, id);
+    }
     [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 100, [FromQuery] string from_id = null, [FromQuery] string older_before = null, CancellationToken ct = default)
     {
         try { return Ok(await HistoryAsync(Id(id), limit, from_id, older_before, ct)); }
