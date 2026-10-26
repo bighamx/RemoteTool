@@ -80,7 +80,14 @@ Check(JsonNode.Parse(await listResponse.Content.ReadAsStringAsync())!["result"]!
 async Task McpProbe(string method, string parameters = "{}") {
     var response = await mcpClient.PostAsync(mcpUrl, new StringContent("{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"" + method + "\",\"params\":" + parameters + "}", Encoding.UTF8, "application/json"));
     response.EnsureSuccessStatusCode();
-    Check(JsonNode.Parse(await response.Content.ReadAsStringAsync())?["error"] == null, "MCP probe " + method);
+    if (response.Headers.TryGetValues("Mcp-Session-Id", out var sessionHeaders)) {
+        mcpClient.DefaultRequestHeaders.Remove("Mcp-Session-Id");
+        mcpClient.DefaultRequestHeaders.Add("Mcp-Session-Id", sessionHeaders.Single());
+    }
+    var envelope = JsonNode.Parse(await response.Content.ReadAsStringAsync());
+    Check(envelope?["error"] == null, "MCP probe " + method);
+    if (method == "initialize") Check(envelope?["result"]?["instructions"]?.ToString() == PhoneMcpProtocol.Instructions,
+        "relay initialize exposes session reuse and recovery instructions");
 }
 await McpProbe("ping");
 // A tool reply is a websocket ordering barrier: all earlier presence frames have been consumed.
@@ -88,7 +95,7 @@ await McpProbe("tools/call", "{\"name\":\"phone_observe\",\"arguments\":{}}");
 Check(!presenceEvents.Reader.TryRead(out _), "discovery and ping do not reactivate a disconnected agent");
 await McpProbe("initialize", "{\"clientInfo\":{\"name\":\"Codex\"}}");
 await McpProbe("tools/call", "{\"name\":\"phone_observe\",\"arguments\":{}}");
-Check(presenceEvents.Reader.TryRead(out var connectedAgent) && connectedAgent == external["id"]!.ToString(), "initialize explicitly reactivates the same agent");
+Check(presenceEvents.Reader.TryRead(out var connectedAgent) && connectedAgent == external["id"] + ":" + mcpClient.DefaultRequestHeaders.GetValues("Mcp-Session-Id").Single(), "initialize creates an isolated client identity");
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 const string clientName = "编码验证：中文正常";
 const string initializeChinese = """{"jsonrpc":"2.0","id":11,"method":"initialize","params":{"clientInfo":{"name":"编码验证：中文正常"}}}""";
@@ -101,7 +108,8 @@ foreach (var encodingCase in new[] {
     using var content = new ByteArrayContent(encodingCase.Item2);
     content.Headers.ContentType = new("application/json");
     using var response = await mcpClient.PostAsync(mcpUrl, content);
-    Check(response.IsSuccessStatusCode && gateway.AgentName(external["id"]!.ToString()) == clientName, "MCP raw request encoding: " + encodingCase.Item1);
+    var sessionId = response.Headers.GetValues("Mcp-Session-Id").Single();
+    Check(response.IsSuccessStatusCode && gateway.AgentName(external["id"] + ":" + sessionId) == clientName, "MCP raw request encoding: " + encodingCase.Item1);
 }
 foreach (var malformed in new[] { "{", "[]", "null", "\"text\"" }) {
     using var response = await mcpClient.PostAsync(mcpUrl, new StringContent(malformed, Encoding.UTF8, "application/json"));
@@ -119,7 +127,43 @@ if (Environment.GetEnvironmentVariable("REMOTETOOL_MCP_TEST_PYTHON") is { Length
     try { await reference.WaitForExitAsync(deadline.Token); } catch { reference.Kill(true); throw; }
     Check(reference.ExitCode == 0, "reference MCP client: " + await errors); Console.WriteLine(await output);
 }
+foreach (var requested in new[] { "2025-11-25", "2025-06-18", "2025-03-26", "unsupported" }) {
+    using var versionResponse = await mcpClient.PostAsync(mcpUrl, new StringContent(new JsonObject {
+        ["jsonrpc"]="2.0", ["id"]=20, ["method"]="initialize", ["params"]=new JsonObject { ["protocolVersion"]=requested }
+    }.ToJsonString(), Encoding.UTF8, "application/json"));
+    Check(JsonNode.Parse(await versionResponse.Content.ReadAsStringAsync())!["result"]!["protocolVersion"]!.ToString() ==
+        (requested == "unsupported" ? "2025-11-25" : requested), "relay negotiates version " + requested);
+}
+foreach (var bad in new[] { "{}", "{\"tool\":7}", "{\"tool\":\"phone_observe\",\"arguments\":[]}",
+    "{\"tool\":\"phone_observe\",\"request_id\":{}}", "{\"tool\":\"phone_observe\",\"allow_advanced\":\"yes\"}" }) {
+    using var invalid = await mcpClient.PostAsync(mcpUrl[..^4], new StringContent(bad, Encoding.UTF8, "application/json"));
+    Check((int)invalid.StatusCode == 400 && JsonNode.Parse(await invalid.Content.ReadAsStringAsync())!["code"]!.ToString() == "invalid_arguments", "legacy bound parameters validated");
+    var adminBody = JsonNode.Parse(bad)!.AsObject(); adminBody["phone_id"]="phone-test";
+    using var invalidAdmin = await http.PostAsync(webRoot + "/api/phone/v1/invocations", new StringContent(adminBody.ToJsonString(), Encoding.UTF8, "application/json"));
+    Check((int)invalidAdmin.StatusCode == 400, "admin invocation parameters validated");
+}
+foreach (var badRequest in new[] {
+    """{"jsonrpc":"2.0","id":21,"method":7}""",
+    """{"jsonrpc":"2.0","id":21,"method":"initialize","params":{"protocolVersion":7}}""",
+    """{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"phone_observe","_meta":[]}}"""
+}) {
+    using var invalidMcp = await mcpClient.PostAsync(mcpUrl, new StringContent(badRequest, Encoding.UTF8, "application/json"));
+    Check(JsonNode.Parse(await invalidMcp.Content.ReadAsStringAsync())!["error"]!["code"]!.GetValue<int>() is -32600 or -32602, "MCP invalid envelopes and metadata validated");
+}
+var concurrentCalls = Enumerable.Range(0, 20).Select(async index => {
+    using var response = await mcpClient.PostAsync(mcpUrl, new StringContent(new JsonObject {
+        ["jsonrpc"]="2.0", ["id"]=100+index, ["method"]="tools/call", ["params"]=new JsonObject {
+            ["name"]="phone_observe", ["arguments"]=new JsonObject(), ["_meta"]=new JsonObject { ["remotetool/request_id"]="parallel-"+index }
+        }
+    }.ToJsonString(), Encoding.UTF8, "application/json"));
+    var reply = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+    Check(reply["id"]!.GetValue<int>() == 100+index && reply["result"]!["isError"]!.GetValue<bool>() == false, "20 concurrent MCP calls keep response identity");
+});
+await Task.WhenAll(concurrentCalls);
+var otherHost = new PhoneGateway(folder);
+Check(otherHost.AuthorizeBinding(external["id"]!.ToString(), external["token"]!.ToString()) != null, "second host loads binding cache");
 var revoked = await http.DeleteAsync(webRoot + "/api/phone/v1/bindings/" + external["id"]); revoked.EnsureSuccessStatusCode();
+Check(otherHost.AuthorizeBinding(external["id"]!.ToString(), external["token"]!.ToString()) == null, "cached authorization notices cross-host revocation");
 var afterRevoke = await mcpClient.PostAsync(mcpUrl, new StringContent("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}", Encoding.UTF8, "application/json"));
 Check(afterRevoke.StatusCode == System.Net.HttpStatusCode.Unauthorized, "external MCP revoked");
 var offlineBinding = gateway.CreateBinding("phone-test", false, "external", "default");

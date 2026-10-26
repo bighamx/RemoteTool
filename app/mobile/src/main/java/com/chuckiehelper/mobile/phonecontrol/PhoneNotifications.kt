@@ -3,6 +3,8 @@ package com.chuckiehelper.mobile.phonecontrol
 import android.app.Notification
 import android.app.RemoteInput
 import android.content.Intent
+import android.content.Context
+import android.content.ComponentName
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import org.json.JSONArray
@@ -10,7 +12,7 @@ import org.json.JSONObject
 
 class PhoneNotifications : NotificationListenerService() {
     override fun onListenerConnected() { current = this }
-    override fun onListenerDisconnected() { if (current === this) current = null }
+    override fun onListenerDisconnected() { if (current === this) current = null; requestConnection(this) }
     override fun onDestroy() { if (current === this) current = null; super.onDestroy() }
     fun execute(a: JSONObject): JSONObject = when (a.getString("action")) {
         "list" -> JSONObject().put("notifications", JSONArray(activeNotifications.take(150).map {
@@ -35,5 +37,15 @@ class PhoneNotifications : NotificationListenerService() {
         }
         else -> fail("invalid_arguments", "action: list/dismiss/open/action/reply")
     }
-    companion object { @Volatile var current: PhoneNotifications? = null; private set }
+    companion object {
+        @Volatile var current: PhoneNotifications? = null; private set
+        private var lastRebind = 0L
+        @Synchronized internal fun requestConnection(context: Context) {
+            if (current != null || PhonePermissionStatus.notificationGranted(context) != true) return
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (lastRebind != 0L && now - lastRebind < 60_000) return
+            lastRebind = now
+            runCatching { requestRebind(ComponentName(context, PhoneNotifications::class.java)) }
+        }
+    }
 }

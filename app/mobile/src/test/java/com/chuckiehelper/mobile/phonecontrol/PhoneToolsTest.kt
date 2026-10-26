@@ -21,6 +21,7 @@ class PhoneToolsTest {
         context = ApplicationProvider.getApplicationContext()
         context.getSharedPreferences("phone-tools", 0).edit().clear().commit()
         context.deleteDatabase("phone-tools.db")
+        context.deleteDatabase("phone-connections.db")
         engine = PhoneEngine(context); engine.settings.enabled = true
     }
     @Test fun advancedDeniedBeforeShellRuns() {
@@ -88,10 +89,40 @@ class PhoneToolsTest {
         val protocol = PhoneMcp({ PhoneToolCatalog.tools(it) }, { _, _, id, _ -> keys.add(id); JSONObject().put("content", org.json.JSONArray()) })
         val initialize = protocol.handle(JSONObject("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}"""))!!
         assertEquals("2025-11-25", initialize.getJSONObject("result").getString("protocolVersion"))
+        assertEquals(PhoneMcp.instructions, initialize.getJSONObject("result").getString("instructions"))
         val call = JSONObject("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"phone_get_capabilities","arguments":{}}}""")
         protocol.handle(call); protocol.handle(call)
         assertNotEquals(keys[0], keys[1])
         assertNull(protocol.handle(JSONObject("""{"jsonrpc":"2.0","method":"notifications/initialized"}""")))
+    }
+    @Test fun mcpSeparatesInvalidParametersFromInternalFailures() {
+        val protocol = PhoneMcp({ org.json.JSONArray() }, { _, _, _, _ -> throw IllegalStateException("private internal detail") })
+        val invalid = listOf(
+            """{"jsonrpc":"2.0","id":1,"method":7}""" to -32600,
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":[]}""" to -32602,
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":7}}""" to -32602,
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"phone_observe","_meta":[]}}""" to -32602,
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":7}}""" to -32602)
+        invalid.forEach { (request, code) -> assertEquals(code, protocol.handle(JSONObject(request))!!.getJSONObject("error").getInt("code")) }
+        val failure = protocol.handle(JSONObject("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"phone_observe"}}"""))!!
+        assertEquals(-32603, failure.getJSONObject("error").getInt("code"))
+        assertFalse(failure.toString().contains("private internal detail"))
+        val failedList = PhoneMcp({ throw IllegalStateException("list failure") }, { _, _, _, _ -> JSONObject() })
+        assertEquals(-32603, failedList.handle(JSONObject("""{"jsonrpc":"2.0","id":3,"method":"tools/list"}"""))!!.getJSONObject("error").getInt("code"))
+    }
+    @Test fun mcpVersionNegotiationAndCachedSchemaAreStable() {
+        val protocol = PhoneMcp({ org.json.JSONArray() }, { _, _, _, _ -> JSONObject() })
+        for (version in listOf("2025-11-25", "2025-06-18", "2025-03-26", "unsupported")) {
+            val request = JSONObject().put("jsonrpc", "2.0").put("id", 1).put("method", "initialize")
+                .put("params", JSONObject().put("protocolVersion", version))
+            assertEquals(if (version == "unsupported") "2025-11-25" else version,
+                protocol.handle(request)!!.getJSONObject("result").getString("protocolVersion"))
+        }
+        val mutableCopy = PhoneToolCatalog.tools(true)
+        mutableCopy.getJSONObject(0).put("name", "changed").getJSONObject("inputSchema").getJSONObject("properties").remove("explanation")
+        assertEquals("phone_disconnect", PhoneToolCatalog.tools(true).getJSONObject(0).getString("name"))
+        PhoneToolCatalog.validate("phone_disconnect", JSONObject().put("explanation", "still valid"))
+        assertTrue(PhoneToolCatalog.tools(false).length() < PhoneToolCatalog.tools(true).length())
     }
     @Test fun standaloneHttpAuthenticatesAndExecutesWithoutWebConnection() {
         engine.settings.port = java.net.ServerSocket(0).use { it.localPort }
@@ -128,6 +159,60 @@ class PhoneToolsTest {
         val shipped = java.io.File("../../tools/PhoneTools/hermes_plugin/tools.json")
         if (shipped.isFile) assertEquals("Regenerate shipped Hermes schemas from build/phone-tools-catalog.json", catalog.toString(), org.json.JSONArray(shipped.readText()).toString())
     }
+    @Test fun independentHttpSessionsOwnNoticesAndUiSeparately() {
+        engine.settings.port = java.net.ServerSocket(0).use { it.localPort }
+        val server = PhoneHttpServer(engine); server.start(3000, true)
+        fun rpc(method: String, params: JSONObject = JSONObject(), session: String? = null): Pair<String?, JSONObject> {
+            val conn = URL("http://127.0.0.1:${engine.settings.port}/mcp").openConnection() as HttpURLConnection
+            conn.connectTimeout = 3000; conn.readTimeout = 5000; conn.requestMethod = "POST"; conn.doOutput = true
+            conn.setRequestProperty("Authorization", "Bearer ${engine.settings.token}")
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.setRequestProperty("Accept", "application/json, text/event-stream")
+            session?.let { conn.setRequestProperty("Mcp-Session-Id", it) }
+            conn.outputStream.use { it.write(JSONObject().put("jsonrpc", "2.0").put("id", 1).put("method", method).put("params", params).toString().toByteArray()) }
+            return try { assertEquals(200, conn.responseCode); conn.getHeaderField("Mcp-Session-Id") to JSONObject(conn.inputStream.bufferedReader().use { it.readText() }) } finally { conn.disconnect() }
+        }
+        fun call(session: String, name: String, args: JSONObject = JSONObject()) = rpc("tools/call", JSONObject().put("name", name).put("arguments", args), session).second.getJSONObject("result").getJSONObject("structuredContent")
+        try {
+            val a = rpc("initialize", JSONObject().put("clientInfo", JSONObject().put("name", "Codex"))).first!!
+            val b = rpc("initialize", JSONObject().put("clientInfo", JSONObject().put("name", "Hermes"))).first!!
+            assertNotEquals(a, b)
+            val help = call(a, "phone_notify_user", JSONObject().put("message", "中文协助").put("kind", "help"))
+            assertEquals("Codex", help.getString("agent"))
+            val id = help.getString("notice_id")
+            assertEquals("not_found", call(b, "phone_get_user_reply", JSONObject().put("notice_id", id)).getString("status"))
+            assertTrue(call(a, "phone_begin_ui").getBoolean("declared"))
+            assertEquals("ui_busy", call(b, "phone_begin_ui").getString("code"))
+            assertTrue(call(b, "phone_transfer_file", JSONObject().put("action", "list")).has("files"))
+            call(b, "phone_disconnect")
+            assertEquals("pending", call(a, "phone_get_user_reply", JSONObject().put("notice_id", id)).getString("status"))
+            call(a, "phone_end_ui")
+            assertTrue(call(b, "phone_begin_ui").getBoolean("declared"))
+            engine.disconnect("direct:$a", byUser = true)
+            val denied = call(a, "phone_get_capabilities")
+            assertEquals("connection_closed_by_user", denied.getString("code"))
+            assertFalse(denied.getBoolean("retryable"))
+            assertEquals("connection_closed_by_user", rpc("ping", session = a).second.getJSONObject("error").getJSONObject("data").getString("code"))
+            val fresh = rpc("initialize", JSONObject().put("clientInfo", JSONObject().put("name", "Codex"))).first!!
+            assertNotEquals(a, fresh)
+            assertTrue(call(fresh, "phone_get_capabilities").has("tool_count"))
+        } finally { server.stop() }
+    }
+    @Test fun concurrentJournalClaimNeverAdmitsTwoExecutions() {
+        val journal = PhoneJournal(context)
+        val workers = java.util.concurrent.Executors.newFixedThreadPool(20)
+        try {
+            val admitted = java.util.concurrent.atomic.AtomicInteger()
+            val tasks = (1..20).map { workers.submit {
+                try { journal.claim("concurrent", "same"); admitted.incrementAndGet() }
+                catch (error: PhoneToolError) { assertEquals("delivery_unknown", error.code) }
+            } }
+            tasks.forEach { it.get(5, java.util.concurrent.TimeUnit.SECONDS) }
+            assertEquals(1, admitted.get())
+        } finally { workers.shutdownNow(); journal.close() }
+        assertEquals(120_000L, PhoneToolPolicy.timeoutMs("phone_manage_app", JSONObject().put("action", "install")))
+        assertEquals(35_000L, PhoneToolPolicy.timeoutMs("phone_shell", JSONObject()))
+    }
     @Test fun assistanceRequestsDoNotLeakAcrossAgentBindingsOrRequestReceipts() {
         val args = JSONObject().put("message", "请重开主 App").put("kind", "help")
         val created = engine.invoke("phone_notify_user", args, "help-owner", agentId = "web:a")
@@ -155,7 +240,9 @@ class PhoneToolsTest {
             val reply = engine.invoke("phone_get_user_reply", JSONObject().put("notice_id", id), "responsive-reply")
             assertEquals("pending", reply.getJSONObject("structuredContent").getString("status"))
             val blocked = engine.invoke("phone_transfer_file", JSONObject().put("action", "list"), "busy-device")
-            assertEquals("device_busy", blocked.getJSONObject("structuredContent").getString("code"))
+            assertFalse(blocked.getBoolean("isError"))
+            val blockedUi = engine.invoke("phone_screenshot", JSONObject(), "busy-ui")
+            assertEquals("device_busy", blockedUi.getJSONObject("structuredContent").getString("code"))
         } finally { release.countDown(); executor.shutdownNow() }
     }
 }

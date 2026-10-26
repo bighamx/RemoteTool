@@ -7,9 +7,22 @@ import android.util.Base64
 import org.json.JSONObject
 
 class PhoneSettings(context: Context) {
+    private val appContext = context.applicationContext
     private val prefs = context.getSharedPreferences("phone-tools", Context.MODE_PRIVATE)
     // Admission is process-local. A saved preference cannot prove that a service survived.
     @Volatile var enabled: Boolean = false
+    var accessibilityWanted: Boolean
+        get() {
+            if (!prefs.contains("accessibility-wanted")) prefs.edit().putBoolean("accessibility-wanted", PhonePermissionStatus.accessibilityGranted(appContext) == true).commit()
+            return prefs.getBoolean("accessibility-wanted", false)
+        }
+        set(value) { prefs.edit().putBoolean("accessibility-wanted", value).commit() }
+    var autoRestore: Boolean get() = prefs.getBoolean("auto-restore", false)
+        set(value) { prefs.edit().putBoolean("auto-restore", value).commit() }
+    var desiredRunning: Boolean get() = prefs.getBoolean("desired-running", false)
+        set(value) { prefs.edit().putBoolean("desired-running", value).commit() }
+    var restoreRelay: String? get() = prefs.getString("restore-relay", null)
+        set(value) { prefs.edit().putString("restore-relay", value).commit() }
     var direct: Boolean get() = prefs.getBoolean("direct", true)
         set(value) { prefs.edit().putBoolean("direct", value).apply() }
     var advanced: Boolean get() = prefs.getBoolean("advanced", false)
@@ -58,5 +71,5 @@ class PhoneSettings(context: Context) {
     }
 }
 
-class PhoneToolError(val code: String, message: String) : Exception(message)
+class PhoneToolError(val code: String, message: String, val details: JSONObject? = null) : Exception(message)
 internal fun fail(code: String, message: String): Nothing = throw PhoneToolError(code, message)

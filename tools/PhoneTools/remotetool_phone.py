@@ -29,19 +29,30 @@ class PhoneClient:
         if not self.token:
             raise ValueError("Set REMOTETOOL_PHONE_TOKEN from the phone App")
         self.opener = urllib.request.build_opener(NoRedirect())
+        self.session_id = None
+        self.protocol_version = "2025-11-25"
 
     def request(self, path, payload=None):
         data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(self.url + path, data=data, headers={
             "Authorization": "Bearer " + self.token, "Content-Type": "application/json; charset=utf-8",
-            "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25"})
+            "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": self.protocol_version})
+        if self.session_id:
+            request.add_header("Mcp-Session-Id", self.session_id)
+        params = (payload or {}).get("params", {})
+        install = params.get("name") == "phone_manage_app" and params.get("arguments", {}).get("action") == "install"
         # Never retry a write: a lost response may follow a successful action.
         try:
-            with self.opener.open(request, timeout=45) as response:
+            with self.opener.open(request, timeout=130 if install else 45) as response:
+                if response.headers.get("Mcp-Session-Id"):
+                    self.session_id = response.headers["Mcp-Session-Id"]
                 body = response.read(12 * 1024 * 1024 + 1)
                 if len(body) > 12 * 1024 * 1024:
                     raise ValueError("Phone response exceeds size limit")
-                return json.loads(body) if body else None
+                result = json.loads(body) if body else None
+                if (payload or {}).get("method") == "initialize" and result and "result" in result:
+                    self.protocol_version = result["result"]["protocolVersion"]
+                return result
         except urllib.error.HTTPError as error:
             error.close()
             raise
@@ -69,7 +80,7 @@ def serve_stdio(client, source=None, target=None):
 
     def handle(message):
         if "id" not in message:
-            # Stateless server needs no initialized/cancellation connection state.
+            # HTTP session identity is retained by this long-lived client; no response is needed for notifications.
             return
         try:
             response = client.mcp(message)

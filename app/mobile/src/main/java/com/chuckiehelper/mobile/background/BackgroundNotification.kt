@@ -13,14 +13,14 @@ import androidx.core.app.NotificationCompat
 object BackgroundNotification {
     private const val ID = 41
     private const val CHANNEL = "remotetool-background"
-    private data class Feature(val service: Service, val text: String, val action: String?, val stop: PendingIntent?, val focus: android.os.Bundle? = null)
+    private data class Feature(val service: Service, val text: String, val action: String?, val stop: PendingIntent?, val focus: android.os.Bundle? = null, val liveUpdate: Boolean = false)
     private val features = linkedMapOf<String, Feature>()
     private var lastFocus: android.os.Bundle? = null
 
     @Synchronized
-    fun update(context: Context, owner: String, text: String, focus: android.os.Bundle? = null) {
+    fun update(context: Context, owner: String, text: String, focus: android.os.Bundle? = null, liveUpdate: Boolean = false) {
         val current = features[owner] ?: return
-        features[owner] = current.copy(text = text, focus = focus)
+        features[owner] = current.copy(text = text, focus = focus, liveUpdate = liveUpdate)
         runCatching { refresh(context) }
     }
 
@@ -57,7 +57,7 @@ object BackgroundNotification {
         val open = PendingIntent.getActivity(context, 300, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val summary = features.values.joinToString(" · ") { it.text }
         val builder = NotificationCompat.Builder(context, CHANNEL).setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("${context.applicationInfo.loadLabel(context.packageManager)} 后台服务").setContentText(summary)
+            .setContentTitle(if (features.values.any { it.liveUpdate }) "正在操控手机" else "${context.applicationInfo.loadLabel(context.packageManager)} 后台服务").setContentText(summary)
             .setStyle(NotificationCompat.BigTextStyle().bigText(summary)).setContentIntent(open)
             .setCategory(NotificationCompat.CATEGORY_SERVICE).setOngoing(true).setOnlyAlertOnce(true).setSilent(true).setShowWhen(false)
         features.values.filter { it.action != null && it.stop != null }.forEach { builder.addAction(0, it.action, it.stop) }
@@ -75,6 +75,6 @@ object BackgroundNotification {
             }
         }
         lastFocus = focus?.let { android.os.Bundle(it) }
-        return builder.build()
+        return LiveUpdateNotification.apply(context, builder.build(), features.values.any { it.liveUpdate })
     }
 }

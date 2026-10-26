@@ -38,6 +38,8 @@ private fun phoneQuery(value: String) = java.net.URLEncoder.encode(value, "UTF-8
 
 @Composable
 fun PhoneToolsScreen(api: PhoneWebApi?, close: () -> Unit) {
+    var connectionsOpen by rememberSaveable { mutableStateOf(false) }
+    if (connectionsOpen) { PhoneConnectionsScreen { connectionsOpen = false }; return }
     BackHandler(onBack = close)
     val context = LocalContext.current
     val engine = remember { PhoneEngine.get(context) }
@@ -58,7 +60,14 @@ fun PhoneToolsScreen(api: PhoneWebApi?, close: () -> Unit) {
     var relayStatus by remember { mutableStateOf(PhoneRelay.state) }
     var running by remember { mutableStateOf(PhoneControlService.running) }
     var serviceError by remember { mutableStateOf(PhoneControlService.error) }
+    var autoRestore by remember { mutableStateOf(settings.autoRestore) }
+    var autoStatus by remember { mutableStateOf(com.chuckiehelper.mobile.startup.PhoneAutoRestore.status) }
+    var connectionCount by remember { mutableIntStateOf(engine.connectionStates().size) }
     var permissionEpoch by remember { mutableIntStateOf(0) }
+    var permissionState by remember { mutableStateOf(PhonePermissionState()) }
+    var accessibilityWanted by remember { mutableStateOf(settings.accessibilityWanted) }
+    var accessibilityBusy by remember { mutableStateOf(false) }
+    var accessibilityStatus by remember { mutableStateOf("") }
     var rootBusy by remember { mutableStateOf(false) }
     var webBusy by remember { mutableStateOf(false) }
     var address by remember { mutableStateOf(settings.address) }
@@ -69,6 +78,13 @@ fun PhoneToolsScreen(api: PhoneWebApi?, close: () -> Unit) {
     var webConnection by remember(api?.base) { mutableStateOf(api?.base?.let { settings.webConnection(it) }) }
     val owner = LocalLifecycleOwner.current
     LaunchedEffect(permissionEpoch) { islandStatus = withContext(Dispatchers.IO) { HyperIslandSupport.query(context) }; engine.agentUi.refresh(true) }
+    LaunchedEffect(permissionEpoch) {
+        permissionState = withContext(Dispatchers.IO) { PhonePermissionStatus.read(context) }
+        if (permissionState.notificationGranted == true && !permissionState.notificationRunning) PhoneNotifications.requestConnection(context)
+        accessibilityWanted = settings.accessibilityWanted
+        accessibilityBusy = PhoneAccessibilityControl.busy
+        accessibilityStatus = PhoneAccessibilityControl.status
+    }
     DisposableEffect(owner) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) permissionEpoch++ }
         owner.lifecycle.addObserver(observer)
@@ -96,6 +112,8 @@ fun PhoneToolsScreen(api: PhoneWebApi?, close: () -> Unit) {
         while (isActive) {
             running = PhoneControlService.running; enabled = running || PhoneControlService.starting
             serviceError = PhoneControlService.error; relayStatus = PhoneRelay.state
+            connectionCount = engine.connectionStates().size
+            autoStatus = com.chuckiehelper.mobile.startup.PhoneAutoRestore.status
             if (running) { direct = settings.direct; relay = PhoneControlService.relayBase != null }
             delay(1000)
         }
@@ -111,7 +129,7 @@ fun PhoneToolsScreen(api: PhoneWebApi?, close: () -> Unit) {
         if (Build.VERSION.SDK_INT >= 31) add("蓝牙与附近设备" to (listOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_ADVERTISE) + if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.NEARBY_WIFI_DEVICES) else emptyList()))
         add("传感器与活动识别" to (listOf(Manifest.permission.BODY_SENSORS) + if (Build.VERSION.SDK_INT >= 29) listOf(Manifest.permission.ACTIVITY_RECOGNITION) else emptyList()))
     }
-    val grantedCount = remember(permissionEpoch) { runtimeGroups.sumOf { (_, group) -> group.count { context.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED } } }
+    val grantedCount = remember(permissionEpoch, permissionState.granted) { runtimeGroups.sumOf { (_, group) -> group.count { it in permissionState.granted } } }
     Scaffold(
         topBar = { TopAppBar(title = { Text("手机操控") }, navigationIcon = { IconButton(onClick = close) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") } }) },
         snackbarHost = { SnackbarHost(snackbar) },
@@ -143,6 +161,22 @@ fun PhoneToolsScreen(api: PhoneWebApi?, close: () -> Unit) {
                 PhoneSettingRow("直连手机", "本应用直接提供 HTTP/MCP 服务") { Switch(direct, { direct = it; settings.direct = it }, enabled = !enabled, colors = settingSwitchColors()) }
                 HorizontalDivider()
                 PhoneSettingRow("转发通道", "通过 RemoteTool 服务端转发请求") { Switch(relay, { relay = it; api?.base?.let { base -> settings.setRelayEnabled(base, it) }; if (it && !direct) { connectionTab = "web"; settings.connectionTab = "web" } }, enabled = !enabled && api != null, colors = settingSwitchColors()) }
+            } }
+            item { PhoneSettingsCard("连接管理") {
+                PhoneActionRow("连接与日志", "$connectionCount 个当前连接") { connectionsOpen = true }
+            } }
+            item { PhoneSettingsCard("运行恢复") {
+                PhoneSettingRow("自动恢复", "App 再次运行时，恢复此前开启的服务；手动停止后不恢复，与开机自启独立") {
+                    Switch(autoRestore, { value ->
+                        autoRestore = value; settings.autoRestore = value
+                        if (value) {
+                            if (enabled) { settings.desiredRunning = true; settings.restoreRelay = PhoneControlService.relayBase }
+                            com.chuckiehelper.mobile.startup.PhoneAutoRestore.request(context)
+                        } else com.chuckiehelper.mobile.startup.PhoneAutoRestore.cancel()
+                    }, colors = settingSwitchColors())
+                }
+                if (autoRestore && autoStatus.isNotBlank()) Text(autoStatus, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
             } }
             item { PhoneSettingsCard("连接配置") {
                 Row(Modifier.padding(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -203,7 +237,20 @@ fun PhoneToolsScreen(api: PhoneWebApi?, close: () -> Unit) {
                 }
             } }
             item { PhoneSettingsCard("操作权限") {
-                PhoneSettingRow("无障碍", if (PhoneAccessibility.current != null) "已开启" else "未开启") { TextButton(onClick = { systemPage(Settings.ACTION_ACCESSIBILITY_SETTINGS) }) { Text("设置") } }
+                PhoneSettingRow("无障碍", if (accessibilityBusy) "正在调整无障碍服务" else permissionState.accessibilityLabel) {
+                    TextButton(onClick = { systemPage(Settings.ACTION_ACCESSIBILITY_SETTINGS) }) { Text("设置") }
+                    Switch(accessibilityWanted, { value ->
+                        accessibilityWanted = value; accessibilityBusy = true
+                        PhoneAccessibilityControl.setWanted(context, value) { permissionEpoch++ }
+                    }, colors = settingSwitchColors())
+                }
+                if (accessibilityWanted && !permissionState.accessibilityRunning && accessibilityStatus.isNotBlank()) {
+                    Text(accessibilityStatus, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
+                    if (!accessibilityBusy) TextButton(onClick = {
+                        accessibilityBusy = true; PhoneAccessibilityControl.request(context, force = true) { permissionEpoch++ }
+                    }, modifier = Modifier.padding(horizontal = 6.dp)) { Text("重试恢复") }
+                }
                 HorizontalDivider()
                 PhoneSettingRow("Shizuku", if (backendStatus.optBoolean("shizuku")) "已授权 · UID ${backendStatus.optInt("shizuku_uid")}" else "未就绪") {
                     TextButton(onClick = { runCatching { check(Shizuku.pingBinder()) { "请先启动 Shizuku" }; Shizuku.requestPermission(731) }.onFailure { notice(it.message ?: "授权失败") } }) { Text("授权") }
@@ -228,21 +275,21 @@ fun PhoneToolsScreen(api: PhoneWebApi?, close: () -> Unit) {
             item { PhoneSettingsCard("系统授权") {
                 PhoneExpandRow("常用权限", "已授权 $grantedCount / ${runtimeGroups.sumOf { it.second.size }} 项", permissionsOpen) { permissionsOpen = !permissionsOpen }
                 if (permissionsOpen) runtimeGroups.forEach { (title, permissions) ->
-                    val count = permissions.count { context.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+                    val count = permissions.count { it in permissionState.granted }
                     PhoneActionRow(title, "$count / ${permissions.size}") { permissionRequest.launch(permissions.toTypedArray()) }
                 }
                 HorizontalDivider()
                 PhoneExpandRow("特殊权限", "通知读取、文件访问及系统设置", specialOpen) { specialOpen = !specialOpen }
                 if (specialOpen) {
-                    if (Build.VERSION.SDK_INT >= 29) PhoneActionRow("后台定位") { if (Build.VERSION.SDK_INT == 29) permissionRequest.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) else systemPage(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true) }
-                    PhoneActionRow("通知读取", if (PhoneNotifications.current != null) "已开启" else "未开启") { systemPage(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS) }
-                    if (Build.VERSION.SDK_INT >= 30) PhoneActionRow("所有文件访问", if (android.os.Environment.isExternalStorageManager()) "已开启" else "未开启") { systemPage(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, true) }
-                    PhoneActionRow("悬浮窗", if (Settings.canDrawOverlays(context)) "已开启" else "未开启") { systemPage(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, true) }
-                    PhoneActionRow("修改系统设置", if (Settings.System.canWrite(context)) "已开启" else "未开启") { systemPage(Settings.ACTION_MANAGE_WRITE_SETTINGS, true) }
-                    PhoneActionRow("勿扰控制") { systemPage(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS) }
-                    PhoneActionRow("使用情况访问") { systemPage(Settings.ACTION_USAGE_ACCESS_SETTINGS) }
-                    PhoneActionRow("安装应用") { systemPage(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, true) }
-                    PhoneActionRow("全部应用权限") { systemPage(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true) }
+                    if (Build.VERSION.SDK_INT >= 29) PhoneActionRow("后台定位", PhonePermissionState.label(permissionState.backgroundLocation)) { if (Build.VERSION.SDK_INT == 29) permissionRequest.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) else systemPage(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true) }
+                    PhoneActionRow("通知读取", permissionState.notificationLabel) { systemPage(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS) }
+                    if (Build.VERSION.SDK_INT >= 30) PhoneActionRow("所有文件访问", PhonePermissionState.label(permissionState.files)) { systemPage(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, true) }
+                    PhoneActionRow("悬浮窗", PhonePermissionState.label(permissionState.overlay)) { systemPage(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, true) }
+                    PhoneActionRow("修改系统设置", PhonePermissionState.label(permissionState.writeSettings)) { systemPage(Settings.ACTION_MANAGE_WRITE_SETTINGS, true) }
+                    PhoneActionRow("勿扰控制", PhonePermissionState.label(permissionState.policy)) { systemPage(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS) }
+                    PhoneActionRow("使用情况访问", PhonePermissionState.label(permissionState.usage)) { systemPage(Settings.ACTION_USAGE_ACCESS_SETTINGS) }
+                    PhoneActionRow("安装应用", PhonePermissionState.label(permissionState.install)) { systemPage(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, true) }
+                    PhoneActionRow("转到应用设置界面", icon = Icons.Outlined.SettingsApplications) { systemPage(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true) }
                 }
             } }
         }
@@ -269,9 +316,10 @@ private fun PhoneSettingRow(title: String, subtitle: String, actions: @Composabl
 }
 
 @Composable
-private fun PhoneActionRow(title: String, status: String? = null, click: () -> Unit) {
+private fun PhoneActionRow(title: String, status: String? = null, icon: androidx.compose.ui.graphics.vector.ImageVector? = null, click: () -> Unit) {
     Surface(onClick = click, color = androidx.compose.ui.graphics.Color.Transparent) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+            icon?.let { Icon(it, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(10.dp)) }
             Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
             status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp)) }
             Icon(Icons.Outlined.ChevronRight, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)

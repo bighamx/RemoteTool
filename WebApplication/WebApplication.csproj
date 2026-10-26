@@ -66,5 +66,6 @@
     <Content Include="..\tools\PhoneTools\**\*.py" Link="phone-tools\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\PhoneTools\hermes_plugin\*.json" Link="phone-tools\hermes_plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\PhoneTools\hermes_plugin\*.yaml" Link="phone-tools\hermes_plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\tools\PhoneTools\*.md" Link="phone-tools\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

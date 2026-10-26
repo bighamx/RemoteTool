@@ -83,4 +83,25 @@ class PhoneServiceStateTest {
             assertFalse(PhoneEngine.get(context).settings.enabled)
         } finally { controller.destroy() }
     }
+    @Test fun autoRestoreNeedsOptInAndPreviousRunningIntentAndHonorsManualStop() {
+        val settings = PhoneSettings(context)
+        val attempts = java.util.concurrent.atomic.AtomicInteger()
+        val blocked = object : ContextWrapper(context) {
+            override fun startForegroundService(service: Intent): ComponentName? { attempts.incrementAndGet(); throw IllegalStateException("background start blocked") }
+        }
+        settings.desiredRunning = true
+        com.chuckiehelper.mobile.startup.PhoneAutoRestore.request(blocked)
+        assertEquals(0, attempts.get())
+        settings.autoRestore = true; settings.desiredRunning = false
+        com.chuckiehelper.mobile.startup.PhoneAutoRestore.request(blocked)
+        assertEquals(0, attempts.get())
+        settings.desiredRunning = true
+        com.chuckiehelper.mobile.startup.PhoneAutoRestore.request(blocked)
+        assertEquals(1, attempts.get())
+        assertTrue(settings.desiredRunning)
+        PhoneControlService.stop(context)
+        assertFalse(PhoneSettings(context).desiredRunning)
+        com.chuckiehelper.mobile.startup.PhoneAutoRestore.request(blocked)
+        assertEquals(1, attempts.get())
+    }
 }

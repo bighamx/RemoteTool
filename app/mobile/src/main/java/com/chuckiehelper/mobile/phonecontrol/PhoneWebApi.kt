@@ -17,4 +17,5 @@ object PhoneControlHost {
     var bootRestorePaused: () -> Boolean = { false }
     var rememberForBoot: (android.content.Context, String?) -> Unit = { _, _ -> }
     var pauseBootRestore: () -> Unit = {}
+    var resumeBootRestore: () -> Unit = {}
 }

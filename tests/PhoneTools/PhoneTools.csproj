@@ -3,6 +3,9 @@
   <ItemGroup>
     <Compile Include="../../WebApplication/Services/TextEncodingRepair.cs" Link="TextEncodingRepair.cs"/>
     <Compile Include="../../WebApplication/Services/PhoneControl/PhoneGateway.cs" Link="PhoneGateway.cs"/>
+    <Compile Include="../../WebApplication/Services/PhoneControl/PhoneMcpProtocol.cs" Link="PhoneMcpProtocol.cs"/>
+    <Compile Include="../../WebApplication/Services/PhoneControl/PhoneMcpSessions.cs" Link="PhoneMcpSessions.cs"/>
+    <Compile Include="../../WebApplication/Services/PhoneControl/PhoneToolPolicy.cs" Link="PhoneToolPolicy.cs"/>
     <Compile Include="../../WebApplication/Controllers/PhoneToolsController.cs" Link="PhoneToolsController.cs"/>
     <Compile Include="../../WebApplication/Services/RemoteToolPaths.cs" Link="RemoteToolPaths.cs"/>
     <Compile Include="../../WebApplication/Services/RemoteControl/WebSocketTextReader.cs" Link="WebSocketTextReader.cs"/>

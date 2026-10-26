@@ -68,16 +68,18 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
             : "本会话绑定未开放高级工具。请使用上面列出的工具范围；手机端具备 Root 或 Shizuku 并不代表本会话已获准执行高级操作。");
         if (enabled) {
             text.AppendLine("使用流程：");
+            text.AppendLine("连接复用：在整个持续任务中复用本会话已有的 phone_* 工具身份，包括观察、多轮 UI、文件操作、等待协助及核验。不要为每一步另写脚本、新建 MCP 客户端或重新 initialize；本集成已处理身份与认证，不需要手动建连。同一名字不代表同一连接。若用户另行配置 HTTP MCP，则只 initialize 一次，保存响应头 Mcp-Session-Id，后续所有请求携带同一个头和协商的 MCP-Protocol-Version；短命脚本须跨进程复用受保护且按端点、凭据身份、逻辑 Agent 隔离的缓存，并串行首次初始化，做不到时使用常驻 MCP 客户端或 stdio 适配器。独立 Agent 不共享会话。不要在有会话后改用无头旧接口。");
+            text.AppendLine("UI 占用、节点快照和 notice_id 都归属当前连接。phone_end_ui 只释放 UI，不断开连接；后续批次仍用同一连接重新 phone_begin_ui。遇到 ui_busy/device_busy 时等待或说明冲突，不能新建连接绕过，也不能释放其他 Agent 的占用。只有 HTTP 404 session_not_found 才丢弃过期会话并重新 initialize 一次，重新检查能力、获取 UI 并观察后继续，不盲目重放原操作。收到 connection_closed_by_user 必须停止并说明用户已断开，用户明确允许继续后才能新建连接，不能自动重连。");
             if (tools.Any(tool => tool["inputSchema"]?["properties"]?["explanation"] != null)) text.AppendLine("工具支持可选 explanation 参数：每次调用可直接用用户的语言简短说明正在做什么、为什么做（最多 240 字符），会随本次操作显示在手机悬浮提示中，无需为普通操作说明额外调用 phone_notify_user。只写面向用户的目的或动作摘要，不写敏感输入、凭据或内部推理。需要用户回应的协助请求仍使用 phone_notify_user(kind=help)。未提供该参数的工具不要传入；phone_disconnect 仍会立即撤下提示。");
             text.AppendLine("1. 首次操作先调用 phone_get_capabilities 核对实际能力；以本次返回的设备、权限和可用后端为准，不把连接成功当成操作成功。");
-            if (names.Contains("phone_begin_ui") && names.Contains("phone_end_ui")) text.AppendLine("开始查看或操作界面前，先调用 phone_begin_ui，用简短 message 告知用户正在做什么；长操作在声明过期前续期。再调用 phone_observe 或 phone_screenshot 查看当前界面，按实际页面操作，避免使用过时坐标。");
+            if (names.Contains("phone_begin_ui") && names.Contains("phone_end_ui")) text.AppendLine("开始查看或操作界面前，先调用 phone_begin_ui，用简短 message 告知用户正在做什么；占用由当前连接独享，无需续期，连续十分钟没有 UI 操作会自动释放；其他连接仍可执行非 UI 任务。使用 phone_shell 操作 UI 时必须设置 ui_operation=true。再调用 phone_observe 或 phone_screenshot 查看当前界面，按实际页面操作，避免使用过时坐标。");
             text.AppendLine("2. 以各工具的参数 Schema 为准。界面坐标使用原始屏幕像素；按节点操作时使用最新观察结果中的 snapshot_id 和节点标识，节点标识在 30 秒后失效。界面变化后重新观察，不要沿用旧节点或猜测控件位置。");
             text.AppendLine("3. 操作后重新观察或读取相关状态，核验实际结果；需要等待页面变化时使用 phone_wait。返回的截图可用于视觉判断，文字和结构化结果可用于状态判断。");
-            if (names.Contains("phone_notify_user") && names.Contains("phone_get_user_reply")) text.AppendLine("需要用户解锁、重开应用或其他协助时，用 phone_notify_user(kind=help) 明确请求，保存 notice_id，再用 phone_get_user_reply 核对回执；pending、过期、取消或超时都不代表用户完成。在收到回复前不要继续依赖该操作的步骤。普通提示使用 kind=info。");
-            text.AppendLine("4. 遇到 phone_offline、权限不足或后端不可用时，根据返回原因说明当前阻碍。delivery_unknown 表示操作可能已经执行，禁止自动重发同一操作；先重新观察或查询状态核对结果。");
+            if (names.Contains("phone_notify_user") && names.Contains("phone_get_user_reply")) text.AppendLine("需要用户解锁、重开应用或其他协助时，用 phone_notify_user(kind=help) 明确请求，保存 notice_id，再用 phone_get_user_reply 核对回执；pending、过期、取消或超时都不代表用户完成。等待用户手动处理时先释放 UI，保留当前连接并以合理间隔查询同一 notice_id，恢复操作前重新获取 UI 并观察。在收到回复前不要继续依赖该操作的步骤。普通提示使用 kind=info。");
+            text.AppendLine("4. 遇到 phone_offline、权限不足或后端不可用时，根据返回原因说明当前阻碍。delivery_unknown、超时或响应丢失表示操作可能已经执行，禁止自动重发写操作或换 request_id 绕过去重；先重新观察或查询回执核对结果。request_id 标识一次逻辑操作，不是连接 ID 或 JSON-RPC 消息 ID。");
             text.AppendLine("5. 工具调用已由 RemoteTool 处理连接与认证。不要向用户索要内部令牌，也不要将执行结果不明或失败的操作描述为已完成。");
             if (names.Contains("phone_end_ui")) text.AppendLine("6. 界面操作完成先调用 phone_end_ui，结束 UI 声明；它不会断开连接。后续若仍需文件、命令或结果核验，可继续使用已开放工具。");
-            if (names.Contains("phone_disconnect")) text.AppendLine("7. 所有手机操作、截图核验及可选完成提示都结束后，必须最后调用 phone_disconnect，立即撤下本 Agent 的连接／操作提示并取消其待处理消息。即使任务受阻、失败或提前结束也需清理。之后不要再调用手机工具、发完成通知或重新 initialize，否则会重新连接；ping 和工具发现不会重新连接。不要为了验证断开再调用手机截图工具。");
+            if (names.Contains("phone_disconnect")) text.AppendLine("7. 所有手机操作、截图核验及可选完成提示都结束后，必须最后调用 phone_disconnect，立即撤下本 Agent 的连接／操作提示并取消其待处理消息。即使任务受阻、失败或提前结束也需清理；不要在每条工具或每个 UI 批次后断开。HTTP MCP 客户端可随后携带自己的 Mcp-Session-Id 对同一 MCP URL 执行 DELETE 以销毁传输会话；只结束脚本或 TCP 连接不会清理身份，不要撤销整台设备绑定或断开其他 Agent。之后不要再调用手机工具、发完成通知或重新 initialize，否则会重新连接；ping 和工具发现不会重新连接。不要为了验证断开再调用手机截图工具。");
         }
         return text.ToString().TrimEnd();
     }

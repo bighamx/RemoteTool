@@ -5,8 +5,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class PhoneHttpServer(private val engine: PhoneEngine) : NanoHTTPD("0.0.0.0", engine.settings.port) {
-    @Volatile private var clientName = "Agent"
-    private val mcp = PhoneMcp({ PhoneToolCatalog.tools(it && engine.settings.advanced) }, { name, args, id, advanced -> engine.invoke(name, args, id, advanced, agentName = clientName) })
+    private val sessions = PhoneMcpSessions()
     override fun serve(session: IHTTPSession): Response {
         if (!engine.settings.enabled) return json(Response.Status.SERVICE_UNAVAILABLE, JSONObject().put("error", "disabled"))
         // Native MCP clients need no Origin. Browser origins are deliberately not accepted.
@@ -16,25 +15,54 @@ class PhoneHttpServer(private val engine: PhoneEngine) : NanoHTTPD("0.0.0.0", en
         try {
             val path = session.uri
             if (path == "/mcp") {
+                val sessionId = session.headers["mcp-session-id"].orEmpty()
+                if (session.method == Method.DELETE) {
+                    val client = sessions.remove(sessionId) ?: return json(Response.Status.NOT_FOUND, JSONObject().put("code", "session_not_found"))
+                    engine.disconnect(client.owner)
+                    return newFixedLengthResponse(Response.Status.NO_CONTENT, "application/json", "")
+                }
                 if (session.method != Method.POST) return json(Response.Status.METHOD_NOT_ALLOWED, JSONObject().put("error", "POST required")).apply { addHeader("Allow", "POST") }
                 val version = session.headers["mcp-protocol-version"]
                 if (version != null && version !in PhoneMcp.versions) return json(Response.Status.BAD_REQUEST, JSONObject().put("error", "unsupported_protocol_version"))
                 val accept = session.headers["accept"].orEmpty()
                 if (!accept.contains("application/json") || !accept.contains("text/event-stream")) return json(Response.Status.NOT_ACCEPTABLE, JSONObject().put("error", "Accept must include application/json and text/event-stream"))
                 val message = body(session)
-                if (message.optString("method") == "initialize") {
-                    clientName = message.optJSONObject("params")?.optJSONObject("clientInfo")?.optString("name")?.take(40)?.ifBlank { "Agent" } ?: "Agent"
-                    engine.agentUi.seen("direct", clientName)
+                val initializing = message.optString("method") == "initialize"
+                if (!initializing && sessionId.isNotBlank() && engine.connectionLog.blocked("direct:$sessionId")) {
+                    val detail = PhoneEngine.errorResult(PhoneToolError("connection_closed_by_user", "用户已在手机端断开此连接；请重新建立会话，不要自动重发操作。",
+                        JSONObject().put("requires_reinitialize", true).put("execution", "not_started")))
+                    return json(Response.Status.OK, JSONObject().put("jsonrpc", "2.0").put("id", message.opt("id")).apply {
+                        if (message.optString("method") == "tools/call") put("result", detail)
+                        else put("error", JSONObject().put("code", -32000).put("message", detail.getJSONObject("structuredContent").getString("message")).put("data", detail.getJSONObject("structuredContent")))
+                    })
                 }
+                val client = if (!initializing && sessionId.isNotBlank()) sessions.get(sessionId)
+                    ?: return json(Response.Status.NOT_FOUND, JSONObject().put("code", "session_not_found")) else null
+                if (client != null && engine.connectionLog.blocked(client.owner) && message.optString("method") != "tools/call")
+                    return json(Response.Status.OK, JSONObject().put("jsonrpc", "2.0").put("id", message.opt("id"))
+                        .put("error", JSONObject().put("code", -32000).put("message", "用户已在手机端断开此连接，请重新建立会话，不要自动重发操作")
+                            .put("data", JSONObject().put("code", "connection_closed_by_user").put("retryable", false).put("requires_reinitialize", true))))
+                val mcp = PhoneMcp({ PhoneToolCatalog.tools(it && engine.settings.advanced) }, { name, args, id, advanced ->
+                    engine.invoke(name, args, id, advanced, agentId = client?.owner ?: "direct", agentName = client?.name ?: "Agent") })
                 val result = mcp.handle(message)
-                return if (result == null) newFixedLengthResponse(Response.Status.ACCEPTED, "application/json", "") else json(Response.Status.OK, result)
+                client?.let { engine.agentUi.touchConnection(it.owner) }
+                client?.let { engine.connectionLog.touch(it.owner) }
+                var created: PhoneMcpSessions.Client? = null
+                if (initializing && result != null && !result.has("error")) {
+                    created = sessions.create(message.optJSONObject("params")?.optJSONObject("clientInfo")?.optString("name") ?: "Agent")
+                    engine.connectionSeen(created.owner, created.name, JSONObject().put("client_info", message.optJSONObject("params")?.optJSONObject("clientInfo"))
+                        .put("remote_address", session.remoteIpAddress).put("protocol_version", result.optJSONObject("result")?.optString("protocolVersion")))
+                }
+                return (if (result == null) newFixedLengthResponse(Response.Status.ACCEPTED, "application/json", "") else json(Response.Status.OK, result))
+                    .apply { created?.let { addHeader("Mcp-Session-Id", it.id) } }
             }
             if (session.method == Method.GET && path == "/api/phone/v1/devices") return json(Response.Status.OK, JSONObject().put("devices", JSONArray().put(engine.settings.description())))
             if (session.method == Method.GET && path == "/api/phone/v1/devices/${engine.settings.id}/capabilities") return json(Response.Status.OK, engine.capabilities())
             if (session.method == Method.GET && path == "/api/phone/v1/tools") return json(Response.Status.OK, JSONObject().put("tools", PhoneToolCatalog.tools(engine.settings.advanced)))
             if (session.method == Method.POST && path == "/api/phone/v1/invocations") {
                 val b = body(session)
-                return json(Response.Status.OK, engine.invoke(b.getString("tool"), b.optJSONObject("arguments") ?: JSONObject(), b.getString("request_id"), deadline = b.optLong("deadline", System.currentTimeMillis() + 35_000)))
+                val args = b.optJSONObject("arguments") ?: JSONObject()
+                return json(Response.Status.OK, engine.invoke(b.getString("tool"), args, b.getString("request_id"), deadline = b.optLong("deadline", System.currentTimeMillis() + PhoneToolPolicy.timeoutMs(b.getString("tool"), args))))
             }
             if (session.method == Method.GET && path.startsWith("/api/phone/v1/invocations/")) return json(Response.Status.OK, engine.status(path.substringAfterLast('/')))
             return json(Response.Status.NOT_FOUND, JSONObject().put("error", "not_found"))

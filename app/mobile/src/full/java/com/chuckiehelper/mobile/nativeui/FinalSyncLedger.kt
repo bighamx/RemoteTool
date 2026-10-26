@@ -54,12 +54,16 @@ internal fun terminalSyncText(stream: String, phase: String, gap: Boolean, outpu
     return if (gap || stream.isBlank() || phase != "final_answer" || tail.length >= stream.length) tail else stream
 }
 
-// Older bridge versions exposed every commentary item plus the final answer as
-// one run.output. The native history already has those items separately.
+// A native run receipt concatenates message deltas without inserting separators;
+// desktop/older receipts may insert blank lines. Native history owns the actual
+// message boundaries, including failed turns with commentary and no final answer.
 internal fun cumulativeRunOutputAlreadyInHistory(sync: FinalSyncState, history: List<HermesMessage>): Boolean {
     if (sync.item != null || sync.turn == null || sync.text.isBlank()) return false
     val items = history.filter { it.role == "assistant" && it.nativeTurnId == sync.turn }
-    return items.size > 1 && items.joinToString("\n\n") { it.text }.trim() == sync.text.trim()
+    if (items.size < 2) return false
+    val output = sync.text.trim()
+    return items.joinToString("") { it.text }.trim() == output ||
+        items.joinToString("\n\n") { it.text }.trim() == output
 }
 
 internal fun finalSyncAcknowledged(sync: FinalSyncState, history: List<HermesMessage>): Boolean =

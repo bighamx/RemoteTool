@@ -11,6 +11,7 @@ internal abstract class AppEdition {
     open fun openUpdates() = Unit
     open fun normalizeRoute(route: String): String = route
     open fun ownsToolbar(route: String): Boolean = false
+    open fun pageTitle(route: String): String = route
     open fun shareId(deviceId: String?): String? = null
     open fun shareRoute(deviceId: String?): String? = null
     open fun choosingShare(deviceId: String?): Boolean = false

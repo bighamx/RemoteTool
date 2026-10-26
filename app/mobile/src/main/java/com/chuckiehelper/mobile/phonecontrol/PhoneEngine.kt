@@ -15,20 +15,52 @@ class PhoneEngine(val context: Context) {
     val privilege = PhonePrivilege(context, settings)
     val agentUi = PhoneAgentUi(context.applicationContext)
     private val journal = PhoneJournal(context)
+    val connectionLog = PhoneConnectionLog(context)
     private val control = ReentrantLock()
-    private val assistance = ReentrantLock()
+    private val files = ReentrantLock()
+    private val connectionGate = Any()
     @Volatile var generation = 0L; private set
-    fun stop() { generation++; settings.enabled = false; privilege.close() }
+    fun stop() { generation++; settings.enabled = false; connectionLog.disconnectAll("service_stopped"); agentUi.close(); PhoneAccessibility.current?.clearSnapshots(); privilege.close() }
+    fun connectionSeen(owner: String, name: String, details: JSONObject = JSONObject()) {
+        synchronized(connectionGate) { connectionLog.seen(owner, name, details = details); agentUi.seen(owner, name) }
+    }
+    fun disconnect(owner: String, byUser: Boolean = false) {
+        synchronized(connectionGate) {
+        connectionLog.disconnect(owner, if (byUser) "user_disconnected" else "agent_disconnected", byUser)
+        agentUi.disconnected(owner); PhoneAccessibility.current?.clearSnapshots(owner)
+        }
+    }
+    fun webDisconnected() { connectionLog.disconnectAll("relay_disconnected", "web:"); agentUi.webDisconnected() }
+    internal fun connectionStates() = agentUi.connectionStates()
     fun capabilities(): JSONObject = settings.description().put("schema_version", PhoneToolCatalog.VERSION)
         .put("advanced", settings.advanced).put("accessibility", PhoneAccessibility.current != null)
         .put("notification_access", PhoneNotifications.current != null).put("tool_count", PhoneToolCatalog.tools(settings.advanced).length())
+        .put("notification_authorized", PhonePermissionStatus.notificationGranted(context) ?: JSONObject.NULL)
+        .put("accessibility_authorized", PhonePermissionStatus.accessibilityGranted(context) ?: JSONObject.NULL)
         .put("privilege", privilege.status()).put("android_api", android.os.Build.VERSION.SDK_INT)
         .put("agent_display", agentUi.capabilities())
         .put("screen_width", context.resources.displayMetrics.widthPixels).put("screen_height", context.resources.displayMetrics.heightPixels)
     fun status(id: String) = journal.status(id)
     fun invoke(name: String, arguments: JSONObject, requestId: String, allowAdvanced: Boolean = true,
-        deadline: Long = System.currentTimeMillis() + 35_000, agentId: String = "direct", agentName: String = "Agent"): JSONObject {
+        deadline: Long = System.currentTimeMillis() + PhoneToolPolicy.timeoutMs(name, arguments), agentId: String = "direct", agentName: String = "Agent", auditId: String? = null): JSONObject {
+        val log = try { auditId ?: connectionLog.begin(agentId, agentName, requestId, name, arguments) }
+            catch (error: PhoneToolError) { return errorResult(error) }
+        var started = false
+        val result = invokeCore(name, arguments, requestId, allowAdvanced, deadline, agentId, agentName) { started = true; connectionLog.markRunning(log) }
+        if (connectionLog.blocked(agentId)) result.optJSONObject("structuredContent")?.apply {
+            put("connection_closed_by_user", true); put("retryable", false)
+            put("connection_message", "用户已在手机端断开此连接。该调用若已开始，请核对本次执行回执；后续操作需重新建立会话。")
+            put("execution", if (!started) "not_started" else if (optString("code") == "delivery_unknown") "result_unknown" else "receipt_available")
+            optJSONObject("details")?.put("execution", optString("execution"))
+            result.optJSONArray("content")?.optJSONObject(0)?.takeIf { it.optString("type") == "text" }?.put("text", toString())
+        }
+        connectionLog.finish(log, result)
+        return result
+    }
+    private fun invokeCore(name: String, arguments: JSONObject, requestId: String, allowAdvanced: Boolean,
+        deadline: Long, agentId: String, agentName: String, onStarted: () -> Unit): JSONObject {
         try {
+            connectionLog.requireOpen(agentId)
             if (!settings.enabled) fail("disabled", "手机操控未开启")
             if (!Regex("[a-zA-Z0-9_.:-]{1,160}").matches(requestId)) fail("invalid_arguments", "Invalid request_id")
             PhoneToolCatalog.validate(name, arguments)
@@ -39,16 +71,23 @@ class PhoneEngine(val context: Context) {
             journal.existing(requestId, digest)?.let { return it }
             // Assistance and metadata must stay available even while an Android UI
             // binder call is slow. They never execute arbitrary device mutations.
-            val operationLock = if (name in PhoneToolCatalog.responsive) assistance else control
-            if (!operationLock.tryLock()) fail("device_busy", "手机正在执行其他操作，请稍后重试")
+            val ui = PhoneToolPolicy.requiresUi(name, operationArguments)
+            val operationLock = when {
+                name in setOf("phone_begin_ui", "phone_end_ui") -> control
+                ui && name != "phone_wait" -> control
+                name in setOf("phone_files", "phone_transfer_file", "phone_manage_app") -> files
+                else -> null
+            }
+            if (operationLock != null && !operationLock.tryLock()) fail("device_busy", "手机正在执行其他操作，请稍后重试")
             try {
                 if (!settings.enabled || deadline < System.currentTimeMillis()) fail("timeout", "请求已过期或控制已停止")
-                journal.existing(requestId, digest)?.let { return it }
-                journal.begin(requestId, digest)
-                agentUi.seen(agentId, agentName)
+                journal.claim(requestId, digest)?.let { return it }
+                connectionSeen(agentId, agentName)
                 val epoch = generation
                 val hasIndicator = agentUi.toolStarted(agentId, name, explanation)
                 val result = try {
+                    synchronized(connectionGate) { connectionLog.requireOpen(agentId); onStarted() }
+                    if (ui && name != "phone_wait") agentUi.requireUi(agentId)
                     val data = execute(name, operationArguments, epoch, deadline, agentId)
                     val failed = data.has("exit_code") && data.optInt("exit_code", -1) != 0 || data.optBoolean("timed_out") || data.has("accepted") && !data.optBoolean("accepted")
                     if (failed) data.put("code", if (data.optBoolean("timed_out")) "delivery_unknown" else "operation_failed")
@@ -68,7 +107,7 @@ class PhoneEngine(val context: Context) {
                 }
                 journal.finish(requestId, result)
                 return result
-            } finally { operationLock.unlock() }
+            } finally { operationLock?.unlock() }
         } catch (error: Exception) { return errorResult(error) }
     }
     private fun execute(name: String, a: JSONObject, epoch: Long, deadline: Long, agentId: String): JSONObject {
@@ -76,20 +115,22 @@ class PhoneEngine(val context: Context) {
         fun service() = PhoneAccessibility.requireService()
         return when (name) {
             "phone_disconnect" -> {
-                agentUi.disconnected(agentId)
+                disconnect(agentId)
                 JSONObject().put("disconnected", true).put("service_stopped", false)
             }
-            "phone_begin_ui" -> {
-                val duration = a.optInt("duration_seconds", 300).coerceIn(15, 600)
-                agentUi.beginUi(agentId, a.optString("message", "正在操作屏幕"), duration)
-                agentUi.capabilities().put("declared", true).put("expires_in", duration)
+            "phone_begin_ui" -> synchronized(connectionGate) {
+                connectionLog.requireOpen(agentId)
+                agentUi.beginUi(agentId, a.optString("message", "正在操作屏幕"), 600)
+                agentUi.capabilities().put("declared", true).put("idle_timeout_seconds", 600)
             }
-            "phone_end_ui" -> {
+            "phone_end_ui" -> synchronized(connectionGate) {
+                connectionLog.requireOpen(agentId)
                 agentUi.endUi(agentId)
                 a.optString("message").takeIf { it.isNotBlank() }?.let { agentUi.notify(agentId, it, false, 10) }
                 JSONObject().put("declared", false)
             }
-            "phone_notify_user" -> {
+            "phone_notify_user" -> synchronized(connectionGate) {
+                connectionLog.requireOpen(agentId)
                 val kind = a.optString("kind", "info")
                 if (kind !in setOf("info", "help") || a.getString("message").isBlank() || a.getString("message").length > 1000)
                     fail("invalid_arguments", "kind 必须为 info/help，message 长度为 1–1000")
@@ -99,7 +140,7 @@ class PhoneEngine(val context: Context) {
             "phone_list_devices" -> JSONObject().put("devices", JSONArray().put(settings.description()))
             "phone_get_capabilities" -> capabilities()
             "phone_observe", "phone_find_nodes" -> {
-                val data = if (PhoneAccessibility.current != null) service().observe(a.optInt("limit", 400).coerceIn(1, 600)) else privilegedObserve(a.optInt("limit", 400).coerceIn(1, 600))
+                val data = if (PhoneAccessibility.current != null) service().observe(a.optInt("limit", 400).coerceIn(1, 600), agentId) else privilegedObserve(a.optInt("limit", 400).coerceIn(1, 600))
                 if (name == "phone_find_nodes") {
                     val fields = listOf("text", "resource_id", "description").filter { a.has(it) }
                     if (fields.isEmpty()) fail("invalid_arguments", "至少提供一个查询条件")
@@ -114,17 +155,17 @@ class PhoneEngine(val context: Context) {
                 }
                 data
             }
-            "phone_tap" -> if (PhoneAccessibility.current != null) accepted(service().tap(a)) else {
+            "phone_tap" -> if (PhoneAccessibility.current != null) accepted(service().tap(a, agentId)) else {
                 if (a.has("node_id") || a.optBoolean("long_press")) fail("permission_required", "节点/长按操作需要无障碍服务")
                 privilege.execute(listOf("input", "tap", a.getInt("x").toString(), a.getInt("y").toString()))
             }
             "phone_swipe" -> if (PhoneAccessibility.current != null) accepted(service().gesture(a.getDouble("x1").toFloat(), a.getDouble("y1").toFloat(), a.getDouble("x2").toFloat(), a.getDouble("y2").toFloat(), a.optLong("duration_ms", 400)))
                 else privilege.execute(listOf("input", "swipe") + listOf("x1", "y1", "x2", "y2").map { a.getInt(it).toString() } + a.optInt("duration_ms", 400).coerceIn(1, 3000).toString())
-            "phone_input_text" -> if (PhoneAccessibility.current != null) accepted(service().input(a)) else {
+            "phone_input_text" -> if (PhoneAccessibility.current != null) accepted(service().input(a, agentId)) else {
                 if (a.has("node_id") || a.getString("text").any { it.code !in 32..126 }) fail("permission_required", "Unicode/节点输入需要无障碍服务；也可通过特权 Shell 配合设备输入法")
                 privilege.execute(listOf("input", "text", a.getString("text").replace(" ", "%s")))
             }
-            "phone_ui_action" -> accepted(service().uiAction(a))
+            "phone_ui_action" -> accepted(service().uiAction(a, agentId))
             "phone_gesture" -> accepted(service().multiGesture(a))
             "phone_screenshot" -> {
                 val backend = a.optString("backend", "auto")
@@ -156,8 +197,13 @@ class PhoneEngine(val context: Context) {
                 val end = minOf(deadline, System.currentTimeMillis() + a.optLong("timeout_ms", 5000).coerceIn(1, 10000))
                 var data: JSONObject
                 while (true) {
+                    connectionLog.requireOpen(agentId)
                     if (generation != epoch || !settings.enabled) fail("cancelled", "控制已停止")
-                    data = if (PhoneAccessibility.current != null) service().observe() else privilegedObserve(400)
+                    if (!control.tryLock()) { if (System.currentTimeMillis() >= end) fail("device_busy", "界面正在执行其他操作"); Thread.sleep(50); continue }
+                    try {
+                        agentUi.requireUi(agentId)
+                        data = if (PhoneAccessibility.current != null) service().observe(owner = agentId) else privilegedObserve(400)
+                    } finally { control.unlock() }
                     val matched = (!a.has("package_name") || data.optString("package") == a.getString("package_name")) &&
                         (!a.has("text") || data.getJSONArray("nodes").toString().contains(a.getString("text")))
                     if (matched) { data.put("matched", true); break }
@@ -177,17 +223,7 @@ class PhoneEngine(val context: Context) {
                 val cmd = when (action) {
                     "install" -> {
                         val file = exchange(a.getString("name")); if (!file.isFile) fail("not_found", "请先上传安装包")
-                        val temp = "/data/local/tmp/remotetool-${java.util.UUID.randomUUID()}.apk"
-                        try {
-                            file.inputStream().use { input -> val buffer = ByteArray(24 * 1024); while (true) {
-                                if (generation != epoch || !settings.enabled || System.currentTimeMillis() > deadline) fail("cancelled", "安装包传输已停止")
-                                val n = input.read(buffer); if (n < 0) break
-                                val encoded = Base64.encodeToString(buffer, 0, n, Base64.NO_WRAP)
-                                val chunk = privilege.execute(listOf("sh", "-c", "printf '%s' '$encoded' | base64 -d >> '$temp'"), a.optString("backend", "auto"))
-                                if (chunk.optInt("exit_code", -1) != 0) fail("execution_failed", "安装包暂存失败")
-                            } }
-                        } catch (e: Exception) { runCatching { privilege.execute(listOf("rm", "-f", temp), a.optString("backend", "auto")) }; throw e }
-                        listOf("sh", "-c", "pm install -r '$temp'; code=\u0024?; rm -f '$temp'; exit \u0024code")
+                        return privilege.install(file, a.optString("backend", "auto"), (deadline - System.currentTimeMillis()).coerceIn(100, 120_000).toInt())
                     }
                     "force_stop" -> listOf("am", "force-stop", packageName(a))
                     "clear", "enable", "uninstall" -> listOf("pm", action, packageName(a))
@@ -263,6 +299,8 @@ class PhoneEngine(val context: Context) {
                 else -> "execution_failed"
             }
             val data = JSONObject().put("code", code).put("message", error.message ?: "执行失败")
+            (error as? PhoneToolError)?.details?.let { data.put("details", it) }
+            if (code in setOf("delivery_unknown", "connection_closed_by_user")) data.put("retryable", false)
             return JSONObject().put("isError", true).put("structuredContent", data).put("content", JSONArray().put(JSONObject().put("type", "text").put("text", data.toString())))
         }
         private fun canonical(value: Any?): String = when (value) {

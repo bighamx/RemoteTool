@@ -4,11 +4,13 @@ Android App 内置独立 HTTP / MCP 服务，不需要 RemoteTool Web、电脑�
 
 ## 手机端
 
+无障碍提供独立开关：用户开启但服务未运行时，使用已授权的 Shizuku 或 Root 恢复本 App 的无障碍服务；关闭时只停用本 App，保留其他服务列表。无特权可用时显示系统设置入口和恢复结果。通知读取及特殊权限显示实际授权状态；进入页面、从系统设置返回、App 内开关操作完成时刷新。“转到应用设置界面”带应用设置图标，是系统设置跳转入口。
+
 1. 覆盖安装 APK，打开“我的设备 → 手机工具”，或已连接设备的“更多 → 手机工具”。0.3.80 起为独立页面，顶部启停服务，卡片区分接入方式、连接配置、操作权限和系统授权；授权项目按组折叠。
 2. 开启需要的无障碍、Shizuku 或 Root 后端。Shizuku 需先在其管理器启动并授权 RemoteTool；“请求 Root 授权”会调用 `su -c id` 并检查 UID 0。
 3. 系统权限按组申请；通知读取、所有文件访问、悬浮窗、修改设置等打开对应系统授权页。Manifest 声明相关能力所需权限，实际能力仍取决于系统授予状态。
 4. “独立 MCP 服务”开启后点击“启动”，默认端口 18791。使用手机可达的 LAN/VPN 地址；可编辑地址并复制连接配置。仅本机/USB 调试可使用 `adb forward tcp:18791 tcp:18791`。
-5. 高级操作由一个开关控制，默认关闭。通知栏或手机工具页可停止控制。服务按用户主动启动运行，不在后台静默自动恢复。
+5. 高级操作由一个开关控制，默认关闭。通知栏或手机工具页可停止控制。可选“自动恢复”只在 App 被唤醒且此前未手动停止时恢复，不主动唤醒 App，与开机自启分别设置。
 
 HTTP 接入使用 `Authorization: Bearer <手机工具令牌>`，令牌可在 App 重置。直接访问不需要 Web 的登录令牌。手机没有公网入站地址时，可使用 VPN、端口转发或可选的 RemoteTool 通道。
 
@@ -46,7 +48,21 @@ HTTP 接入使用 `Authorization: Bearer <手机工具令牌>`，令牌可在 Ap
 
 替换地址、令牌和脚本绝对路径。独立 Hermes 通过其 MCP 设置配置同一 HTTP/stdio 服务即可，无须安装下面的 RemoteTool 会话适配器。
 
-明确支持 MCP 协议版本 2025-11-25、2025-06-18、2025-03-26。实现 stateless POST/JSON Streamable HTTP；GET 返回 405，不提供旧版 `/sse`。有 Origin 的浏览器请求拒绝，面向原生 Agent 客户端。没有声称实现 2026 规范的全部新语义。
+明确支持 MCP 协议版本 2025-11-25、2025-06-18、2025-03-26。实现带客户端身份的 POST/JSON Streamable HTTP；GET 返回 405，不提供旧版 `/sse`。initialize 返回 Mcp-Session-Id，后续请求须携带该头；同一绑定 URL 下的各客户端独立显示名称、协助通知和 UI 占用。DELETE /mcp 仅断开当前客户端。旧版无会话头的调用保留为单个匿名 Agent。有 Origin 的浏览器请求拒绝，面向原生 Agent 客户端。
+
+## Agent 必须遵循的连接使用方式
+
+**同一 Agent 的一个持续任务复用一个 MCP 会话。不要每次调用都 initialize，也不要每一批 UI 操作都重建连接。** 优先使用已配置的 MCP 工具或 RemoteTool 注入的 `phone_*` 工具；它们已有身份，不要另写临时 HTTP 脚本再建一个客户端。可将 [Agent 使用指南](AGENT_GUIDE.md) 提供给使用自定义脚本的 Agent。
+
+- HTTP/TCP 可以短连接；需要持续复用的是 MCP 逻辑会话。第一次 `initialize` 保存**响应头** `Mcp-Session-Id` 和结果里的 `protocolVersion`。后续 `tools/list`、`tools/call`、`ping`、`DELETE` 都传同一个 `Mcp-Session-Id` 及 `MCP-Protocol-Version`。同名 `clientInfo.name` 只是展示名称，不会合并会话。
+- 自定义脚本若每次启动新进程，必须跨进程保存会话。缓存按“完整 MCP 端点 + 凭据身份 + 逻辑 Agent”隔离，并对首次初始化和缓存更新加锁，避免并发创建多个会话；不要把令牌拼进文件名或打印出来。不同 Agent 不共享一个会话。无法正确管理缓存时，使用常驻 MCP 客户端或本项目长驻 stdio 模式。
+- 顺序执行 `phone_get_capabilities → phone_begin_ui → observe → 操作 → 核验 → phone_end_ui`，后续 UI 批次仍用同一会话。文件及其他非 UI 工作可继续；等待用户手动操作时释放 UI，保留连接和 `notice_id`，恢复后重新获取 UI 并观察。
+- UI 占用、节点快照和协助回执都属于会话。在会话 A 开始 UI 后，不能从新建的 B 操作或结束 A。`ui_busy/device_busy` 应等待或说明冲突；不得用新连接绕过。只释放自己持有的 UI。
+- 整个任务结束、受阻或放弃时，在清理流程中释放 UI，最后调用 `phone_disconnect`；不要每步断开。自定义 HTTP 客户端可再 `DELETE <原 MCP URL>`，携带自己的会话头，销毁传输会话。`phone_disconnect` 结束手机活动，`DELETE` 结束 MCP 会话；关闭脚本或 TCP 连接不等同于这两者。清理后不要再截图“检查断开”。
+
+错误处理必须区分：只有 HTTP 404 `session_not_found` 才丢弃本地过期会话、重新初始化一次；重新检查能力、获取 UI 并观察，再决定后续动作，不能盲目重放失败操作。`connection_closed_by_user` 表示用户主动断开，必须停止并告知用户，得到继续授权后再建新会话。`delivery_unknown`、超时、响应丢失可能发生在操作已执行之后，禁止自动重发写操作或换 `request_id` 绕过去重；先检查真实状态或回执。`request_id` 是逻辑操作的去重标识，与会话 ID、JSON-RPC `id` 不同。
+
+当前兼容边界：无会话头仍走旧匿名身份，不代表推荐用法；不要与已初始化会话混用。服务端空闲回收目前只移除 MCP 会话，手机提示和历史连接按手机自身空闲规则清理，并非即时同步。相同名称不自动顶替旧连接，以支持多个同名真实 Agent。手机端手动断开和 Agent 的 `phone_disconnect` 语义不同，前者禁止旧身份继续使用。历史日志不会因断开自动删除；已结束记录按保留策略清理，仍活跃的旧身份需在连接页单独断开。
 
 ## CLI
 
@@ -63,6 +79,8 @@ python remotetool_phone.py download application.apk ./application.apk
 
 `call` 可传 `--request-id`，同 ID/参数用于去重，不能将同一个 ID 用于新的操作。结果中包含请求 ID；网络失败不会自动重发。上传和下载按 512 KiB 分块，适合较大 APK。
 
+这些单次 CLI 子命令目前不跨进程保存 MCP 会话，属于旧匿名兼容调用，不适合多 Agent 或连续 UI 流程。不要把多次 `python ... call` 当成支持 MCP 会话管理的客户端；持续操作请使用 `python remotetool_phone.py mcp` 常驻适配器、标准 HTTP MCP 客户端，或按上述规则实现会话缓存。Python 集成可持有一个 `PhoneClient`，显式 `initialize` 一次后重复使用该对象；单次 `call()` 不会自动初始化。
+
 ## 能力范围
 
 28 个工具入口（schema version 2）：
@@ -77,11 +95,21 @@ python remotetool_phone.py download application.apk ./application.apk
 
 ## Agent 状态与用户协助
 
-执行一组 UI 操作前调用 `phone_begin_ui`（可带 `message`、`duration_seconds`），结束后调用 `phone_end_ui`。所有操作与核验完成后，最后调用 `phone_disconnect`，立即撤下本 Agent 的连接／操作提示并取消其待处理协助消息；其他 Agent、手机操控服务和授权凭据保持有效。之后的新工具调用或 `initialize` 会重新连接，`ping`、工具发现和回执查询 REST 接口不会续期。UI 观察、截图、点击、输入、按键及页面操作会自动显示当前操作提示。先开启系统悬浮窗权限，即可在屏幕顶部看到小提示；未开启时仍更新后台通知。
+手机操控页的“连接与日志”提供当前连接、历史连接、连接详情和调用时间线。调用详情显示参数、结果、耗时及错误。记录存放在当前 App 的本地数据库，保留 30 天、最多 2 万条调用；敏感字段会隐藏，图片和文件的 Base64 正文不记录，长内容明确标注截断。清空展示日志不会删除幂等去重记录。记录从安装本功能的版本开始积累，旧版没有保存的详细日志无法补录。
+
+用户在手机端断开某个连接后，该连接释放 UI 占用；尚未开始的调用取消，旧会话收到 `connection_closed_by_user`、`retryable:false` 和重新建连说明，不能自动重发。已经开始的操作以真实执行回执为准，回执会附带用户断开标记。Agent 的主动 `phone_disconnect` 仍仅结束自己的当前活动。
+
+“自动恢复”是独立开关：App 被重新唤醒时，若此前服务开启且没有被用户手动停止，则恢复原有接入方式；手动停止会持久取消恢复意图。它不主动唤醒 App，也不替代开机自启。转发恢复复用已保存电脑身份和登录验证；Android 暂不允许后台启动时，会在再次进入 App 时重试。
+
+执行一组 UI 操作前调用 `phone_begin_ui`（可带 `message`、`duration_seconds`），结束后调用 `phone_end_ui`，下一批仍复用同一个连接。整个任务的操作与核验完成后，最后调用 `phone_disconnect`，立即撤下本 Agent 的连接／操作提示并取消其待处理协助消息；其他 Agent、手机操控服务和授权凭据保持有效。Agent 主动结束活动后，新的工具调用可重新激活同一身份，重新 `initialize` 则创建新身份，因此清理后不要再调用工具核验断开；用户在手机端主动断开则会禁止旧身份继续使用。`ping`、工具发现和回执查询 REST 接口不会重新激活已结束的手机活动。UI 观察、截图、点击、输入、按键及页面操作会自动显示当前操作提示。先开启系统悬浮窗权限，即可在屏幕顶部看到小提示；未开启时仍更新后台通知。
 
 `phone_notify_user` 接收 `message`（最多 1000 字）、`kind`（`info` 或 `help`）、`timeout_seconds`，返回 `notice_id`。帮助请求显示“已完成／暂不处理”，Agent 用 `phone_get_user_reply(notice_id)` 读取 `pending/done/dismissed/expired/cancelled/not_found`；不能将等待、超时或断线当作已完成。回执按 Agent 绑定隔离，仅存在本次操控进程，重新启动进程后需核对，不会自动重发消息。
 
-HTTP MCP 为无状态接入，连接提示使用最近活动的 120 秒租约；UI 批次声明最长 600 秒，Agent 应在到期前续期。撤销绑定或 WebSocket 断开会移除对应连接提示。协助请求默认等待 600 秒，普通提示默认显示 15 秒。
+UI 占用由当前连接独享，无需续期；调用 phone_end_ui、断开或停止服务时释放，连续 10 分钟没有 UI 操作也会自动释放。其他连接可并行执行非 UI 任务。duration_seconds 为兼容旧客户端保留，但不再决定占用期限。客户端身份在 30 分钟无请求后失效，需重新 initialize；不会自动重放未知结果。撤销绑定或 WebSocket 断开会移除对应连接提示。协助请求默认等待 600 秒，普通提示默认显示 15 秒。
+
+悬浮窗按连接分组展示各自信息，使用半透明背景；整个区域可拖动并记住位置，点击标题或“收起”立即以约 180ms 动画最小化，点击“展开”恢复。长内容自动缓慢滚动，无需手动滚动。操作状态显示“正在操控手机”。连接调用时间线采用紧凑列表，查看调用详情后返回保留滚动位置，并短暂高亮刚查看的条目 0.5 秒。
+
+通过 phone_shell 读写屏幕或 UI 状态时须传 ui_operation=true，并先获得 UI 占用。APK 经 exchange 分块上传后，安装通过一次进程标准输入流传输，预算 120 秒；普通工具仍为 35 秒、Shell 最长 30 秒。节点快照按客户端隔离，30 秒有效，每客户端最多保留 4 份、总计 32 份。悬浮窗列出各连接，宽度通过 400ms 动画适应内容，收窄延迟 1.2 秒；超过屏幕宽度的文字换行，长说明可滚动查看。
 
 HyperOS 使用小米官方 `miui.focus.param` 客户端接口、系统 `notification_focus_protocol` 版本查询与 `canShowFocus` 开关查询：OS2 对应焦点通知，协议 3 及以上对应超级岛。`canShowFocus=true` 仅表示系统开关开启，不证明应用鉴权或上岛成功；系统日志 `FocusPlugin: onAuthFailed` 表示焦点通知鉴权失败。两个包必须分别在小米平台开通服务、配置 App ID 与签名指纹，并完成场景审核，或使用官方设备白名单联调。是否上岛仍取决于平台授权、用户通知设置及系统实际渲染；未通过时保留普通通知和悬浮窗。参考[官方接入流程](https://dev.mi.com/xiaomihyperos/documentation/detail?pId=2132)及[开发指南](https://dev.mi.com/xiaomihyperos/documentation/detail?pId=2131)。
 

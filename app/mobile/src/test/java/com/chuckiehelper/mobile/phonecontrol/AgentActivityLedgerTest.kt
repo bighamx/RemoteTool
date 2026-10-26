@@ -47,15 +47,17 @@ class AgentActivityLedgerTest {
         now = 121_000
         assertTrue(state.snapshot().connected)
         assertTrue(state.snapshot().operating)
-        now = 301_000
-        assertFalse(state.snapshot().connected)
+        now = 600_000
+        assertTrue(state.snapshot().connected)
         assertFalse(state.snapshot().operating)
+        now = 1_800_000
+        assertFalse(state.snapshot().connected)
     }
     @Test fun endingOneAgentCannotEndAnotherAgentsDeclaration() {
         val state = AgentActivityLedger { 0 }
         state.seen("a", "Codex"); state.seen("b", "Hermes")
         state.beginUi("a", "正在操作", 300)
-        state.endUi("b")
+        try { state.endUi("b"); fail("foreign UI ownership should be rejected") } catch (error: PhoneToolError) { assertEquals("ui_busy", error.code) }
         assertTrue(state.snapshot().operating)
         assertEquals("Codex", state.snapshot().agent)
         state.endUi("a")
@@ -94,6 +96,10 @@ class AgentActivityLedgerTest {
         state.beginUi("a", "操作", 300); state.toolStarted("a", "截图")
         val own = state.notify("a", "协助", true, 300)
         val other = state.notify("b", "其他协助", true, 300)
+        val grouped = state.snapshot().connections.associateBy { it.id }
+        assertEquals("操作", grouped.getValue("a").goal)
+        assertEquals(listOf(own.id), grouped.getValue("a").notices.map { it.id })
+        assertEquals(listOf(other.id), grouped.getValue("b").notices.map { it.id })
         state.disconnect("a")
         assertTrue(state.snapshot().connected)
         assertFalse(state.snapshot().operating)
@@ -114,5 +120,26 @@ class AgentActivityLedgerTest {
         state.clear()
         assertEquals("cancelled", state.result("a", notice.id)?.status)
         assertFalse(state.snapshot().connected)
+    }
+    @Test fun uiOwnershipIsExclusiveAndOnlyRealUiCallsExtendIdleTime() {
+        var now = 0L
+        val state = AgentActivityLedger { now }
+        state.seen("a", "Codex"); state.seen("b", "Hermes")
+        state.beginUi("a", "操作", 15)
+        assertEquals(2, state.snapshot().connections.size)
+        assertEquals("a", state.snapshot().connections.single { it.ownsUi }.id)
+        try { state.beginUi("b", "操作", 600); fail("exclusive") } catch (error: PhoneToolError) { assertEquals("ui_busy", error.code) }
+        now = 599_999
+        state.beginUi("a", "仍在等待", 600)
+        now = 600_000
+        assertFalse(state.snapshot().connections.any { it.ownsUi })
+        state.beginUi("b", "操作", 15)
+        now += 599_999
+        state.requireUi("b")
+        now += 2
+        assertTrue(state.snapshot().connections.single { it.id == "b" }.ownsUi)
+        state.disconnect("b")
+        state.beginUi("a", "接管", 600)
+        assertEquals("a", state.snapshot().connections.single { it.ownsUi }.id)
     }
 }

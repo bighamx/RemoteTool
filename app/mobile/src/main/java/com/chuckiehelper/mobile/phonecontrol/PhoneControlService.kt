@@ -6,10 +6,16 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import com.chuckiehelper.mobile.background.BackgroundNotification
+import kotlinx.coroutines.*
 
 class PhoneControlService : Service() {
     private var listener: PhoneHttpServer? = null
     private var relay: PhoneRelay? = null
+    private val permissionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    override fun onCreate() {
+        super.onCreate()
+        permissionScope.launch { while (isActive) { PhoneAccessibilityControl.request(this@PhoneControlService); delay(15_000) } }
+    }
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "stop") { stop(this); return START_NOT_STICKY }
@@ -34,24 +40,28 @@ class PhoneControlService : Service() {
                 relay = PhoneRelay(engine, url, intent.getStringExtra("relay_cookie").orEmpty())
             }
             running = true; starting = false; error = null
+            engine.settings.desiredRunning = true
+            if (intent?.getBooleanExtra("preserve_restore_relay", false) != true) engine.settings.restoreRelay = relayBase
         } catch (e: Exception) { error = e.message ?: "启动失败"; starting = false; running = false; engine.stop(); stopSelf() }
         return START_NOT_STICKY
     }
-    override fun onDestroy() { PhoneEngine.get(this).agentUi.close(); BackgroundNotification.finish(this, "phone-tools"); PhoneEngine.get(this).stop(); listener?.stop(); relay?.close(); relayBase = null; running = false; starting = false; super.onDestroy() }
+    override fun onDestroy() { permissionScope.cancel(); PhoneEngine.get(this).agentUi.close(); BackgroundNotification.finish(this, "phone-tools"); PhoneEngine.get(this).stop(); listener?.stop(); relay?.close(); relayBase = null; running = false; starting = false; super.onDestroy() }
     companion object {
         @Volatile var running = false; private set
         @Volatile var starting = false; private set
         @Volatile var error: String? = null; private set
         @Volatile var relayBase: String? = null; private set
-        fun start(context: Context, relayUrl: String? = null, cookie: String? = null, rememberForBoot: Boolean = true) {
+        fun start(context: Context, relayUrl: String? = null, cookie: String? = null, rememberForBoot: Boolean = true, restoring: Boolean = false) {
             if (running || starting) return
             val settings = PhoneEngine.get(context).settings
             require(settings.direct || !relayUrl.isNullOrBlank()) { "请先选择接入方式" }
             if (rememberForBoot) runCatching { PhoneControlHost.rememberForBoot(context, relayUrl) }
+            if (rememberForBoot || restoring) PhoneControlHost.resumeBootRestore()
             starting = true; error = null; settings.enabled = true
             try {
                 context.startForegroundService(Intent(context, PhoneControlService::class.java).apply {
                     putExtra("relay_url", relayUrl); putExtra("relay_cookie", cookie); putExtra("boot_restore", !rememberForBoot)
+                    putExtra("preserve_restore_relay", restoring)
                 })
             } catch (e: Exception) {
                 starting = false; settings.enabled = false; error = e.message ?: "启动失败"
@@ -66,6 +76,8 @@ class PhoneControlService : Service() {
             })
         }
         fun stop(context: Context) {
+            PhoneSettings(context).desiredRunning = false
+            com.chuckiehelper.mobile.startup.PhoneAutoRestore.cancel()
             PhoneControlHost.pauseBootRestore()
             starting = false; running = false; PhoneEngine.get(context).stop(); context.stopService(Intent(context, PhoneControlService::class.java))
         }

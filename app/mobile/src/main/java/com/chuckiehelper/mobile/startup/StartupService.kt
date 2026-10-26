@@ -100,6 +100,7 @@ class StartupService : Service() {
         @Volatile var running = false; private set
         val phonePaused get() = pausedPhone
         fun pausePhone() { pausedPhone = true }
+        fun resumePhone() { pausedPhone = false }
         fun pauseTunnel() { pausedTunnel = true }
         fun request(context: Context) {
             pausedPhone = false; pausedTunnel = false

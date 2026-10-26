@@ -1,7 +1,7 @@
 [
   {
     "name": "phone_disconnect",
-    "description": "End this agent's phone-control activity. Immediately remove its overlay, UI declaration and pending notices. Does not stop the phone service, revoke credentials or disconnect other agents. Call as your final phone tool when finished; a new initialize or real tool call reconnects. Discovery and ping do not reconnect.",
+    "description": "Finish this agent's entire phone task: remove its activity indicator, UI ownership and pending notices. Call once as the final phone tool, including failure cleanup; never between individual calls or UI batches. Does not revoke credentials or affect other agents. For another batch in the same task use phone_end_ui instead. HTTP clients may then DELETE their own MCP session; do not make another tool call just to verify cleanup.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -22,7 +22,7 @@
   },
   {
     "name": "phone_begin_ui",
-    "description": "Declare the start of a UI operation batch and show an on-screen indicator. Call before operating the phone; renew before expiry if needed.",
+    "description": "Acquire exclusive UI ownership on your EXISTING connection before reading or operating the screen. Reuse this same session for all UI calls; do not initialize a new session for each batch. On ui_busy wait or report the conflict, never create another identity to bypass it. Other connections may continue non-UI work. Ends on phone_end_ui, disconnect, stop or 10 minutes without UI activity. No renewal needed; duration_seconds is ignored.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -51,7 +51,7 @@
   },
   {
     "name": "phone_end_ui",
-    "description": "Declare the end of your UI operation batch. Optionally show a completion message.",
+    "description": "Release only your CURRENT session's UI ownership after a batch or before waiting for manual user interaction. Keep this same connection for subsequent batches, assistance replies and non-UI work; call phone_begin_ui again before resuming UI. Does not disconnect the agent. Optionally show a completion message.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -115,7 +115,7 @@
   },
   {
     "name": "phone_get_user_reply",
-    "description": "Read the user's reply to one of your notices: pending/done/dismissed/expired/cancelled/not_found. Poll rather than blocking the phone tool worker.",
+    "description": "Read the user's reply on the SAME session that created notice_id: pending/done/dismissed/expired/cancelled/not_found. Keep the connection while awaiting assistance, release UI during manual interaction, and poll at reasonable intervals rather than blocking or repeatedly reconnecting. A timeout is not completion.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -184,7 +184,7 @@
   },
   {
     "name": "phone_observe",
-    "description": "Read current UI nodes and optionally screenshot. Coordinates use original screen pixels; node IDs expire after 30 seconds.",
+    "description": "Read current UI nodes and optionally screenshot using the SAME session that acquired phone_begin_ui. Coordinates use original screen pixels; snapshot_id/node_id belong to this session and expire after 30 seconds. Observe again after changes; do not reuse another connection's nodes.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -527,7 +527,7 @@
   },
   {
     "name": "phone_shell",
-    "description": "Run privileged shell with Shizuku or root. Requires advanced switch. Never automatically retry an unknown result.",
+    "description": "Run privileged shell with Shizuku or root. Requires advanced switch. Set ui_operation=true for commands reading or changing screen/UI state; these require phone_begin_ui ownership. Never automatically retry an unknown result.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -541,6 +541,10 @@
         },
         "timeout_ms": {
           "type": "integer",
+          "description": ""
+        },
+        "ui_operation": {
+          "type": "boolean",
           "description": ""
         },
         "explanation": {

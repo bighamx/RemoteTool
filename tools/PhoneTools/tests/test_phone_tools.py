@@ -41,8 +41,13 @@ class PhoneClientTests(unittest.TestCase):
                     response = {"structuredContent": {"ok": True}, "content": [{"type": "image", "mimeType": "image/jpeg", "data": "YWJj"}]}
                 else:
                     response = {"jsonrpc": "2.0", "id": body["id"], "result": {"isError": False, "content": [], "structuredContent": {"ok": True}}}
+                    if body.get("method") == "initialize":
+                        response["result"] = {"protocolVersion": "2025-06-18"}
                 data = json.dumps(response).encode()
-                self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+                self.send_response(200)
+                if body.get("method") == "initialize":
+                    self.send_header("Mcp-Session-Id", "client-session")
+                self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
             def log_message(self, *args):
                 pass
@@ -66,6 +71,20 @@ class PhoneClientTests(unittest.TestCase):
         with self.assertRaises(Exception):
             cli.PhoneClient(self.url, "wrong").call("phone_observe", {})
         self.assertEqual(1, len(self.calls))
+
+    def test_initialized_client_preserves_session_and_negotiated_version(self):
+        client = cli.PhoneClient(self.url, "test-token")
+        client.mcp({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"clientInfo": {"name": "Codex"}}})
+        # Multiple UI batches, notices and non-UI work must retain the same identity.
+        for name in ["phone_get_capabilities", "phone_begin_ui", "phone_observe", "phone_end_ui",
+                     "phone_transfer_file", "phone_begin_ui", "phone_observe", "phone_end_ui",
+                     "phone_notify_user", "phone_get_user_reply", "phone_disconnect"]:
+            client.call(name, {})
+        self.assertEqual(1, sum(body.get("method") == "initialize" for _, _, body in self.calls))
+        for _, request_headers, _ in self.calls[1:]:
+            headers = {key.lower(): value for key, value in request_headers.items()}
+            self.assertEqual("client-session", headers["mcp-session-id"])
+            self.assertEqual("2025-06-18", headers["mcp-protocol-version"])
 
     def test_redirect_never_leaks_token_to_another_endpoint(self):
         with self.assertRaises(Exception):

@@ -21,10 +21,15 @@ class RemoteToolApplication : Application() {
             bootRestorePaused = { com.chuckiehelper.mobile.startup.StartupService.phonePaused }
             rememberForBoot = { context, base -> com.chuckiehelper.mobile.startup.StartupSettings(context).rememberPhone(base) }
             pauseBootRestore = { com.chuckiehelper.mobile.startup.StartupService.pausePhone() }
+            resumeBootRestore = { com.chuckiehelper.mobile.startup.StartupService.resumePhone() }
         }
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, state: Bundle?) = CrashReports.breadcrumb("${activity.javaClass.simpleName}: created")
-            override fun onActivityResumed(activity: Activity) = CrashReports.breadcrumb("${activity.javaClass.simpleName}: resumed")
+            override fun onActivityResumed(activity: Activity) {
+                CrashReports.breadcrumb("${activity.javaClass.simpleName}: resumed")
+                com.chuckiehelper.mobile.startup.PhoneAutoRestore.request(activity)
+                com.chuckiehelper.mobile.phonecontrol.PhoneAccessibilityControl.request(activity)
+            }
             override fun onActivityPaused(activity: Activity) = CrashReports.breadcrumb("${activity.javaClass.simpleName}: paused")
             override fun onActivityDestroyed(activity: Activity) = CrashReports.breadcrumb("${activity.javaClass.simpleName}: destroyed")
             override fun onActivityStarted(activity: Activity) = Unit
@@ -32,5 +37,7 @@ class RemoteToolApplication : Application() {
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
         })
         CrashReports.collectSystemExits(this)
+        com.chuckiehelper.mobile.startup.PhoneAutoRestore.request(this)
+        com.chuckiehelper.mobile.phonecontrol.PhoneAccessibilityControl.request(this)
     }
 }

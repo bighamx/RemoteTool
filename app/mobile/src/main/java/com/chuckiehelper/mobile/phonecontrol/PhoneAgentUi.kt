@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
@@ -18,12 +19,15 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
+import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.chuckiehelper.mobile.background.BackgroundNotification
+import com.chuckiehelper.mobile.background.LiveUpdateNotification
 import kotlinx.coroutines.*
 import org.json.JSONObject
 
@@ -34,6 +38,32 @@ class PhoneAgentUi(private val context: Context) {
     private val windows = context.getSystemService(WindowManager::class.java)
     private val notifications = context.getSystemService(NotificationManager::class.java)
     private var overlay: LinearLayout? = null
+    private var widthAnimation: ValueAnimator? = null
+    private var pendingWidth: Runnable? = null
+    private var targetWidth = 0
+    private val windowPrefs = context.getSharedPreferences("phone-agent-window", Context.MODE_PRIVATE)
+    private var minimized = windowPrefs.getBoolean("minimized", false)
+    private var horizontalPosition = windowPrefs.getFloat("horizontal", .5f)
+    private var verticalPosition = windowPrefs.getFloat("vertical", 0f)
+    private var contentScroll: ScrollView? = null
+    private var contentOffset = 0
+    private var scrollDirection = 1
+    private var scrollPauseUntil = 0L
+    private val scrollTick = object : Runnable {
+        override fun run() {
+            val view = contentScroll ?: return
+            if (!running || minimized || overlay == null) return
+            val maximum = ((view.getChildAt(0)?.height ?: 0) - view.height).coerceAtLeast(0)
+            if (maximum > 0 && SystemClock.elapsedRealtime() >= scrollPauseUntil) {
+                contentOffset = (contentOffset + dp(1) * scrollDirection).coerceIn(0, maximum)
+                view.scrollTo(0, contentOffset)
+                if (contentOffset == 0 || contentOffset == maximum) {
+                    scrollDirection = -scrollDirection; scrollPauseUntil = SystemClock.elapsedRealtime() + 2000
+                }
+            }
+            handler.postDelayed(this, if (maximum > 0) 80 else 1000)
+        }
+    }
     private var rendered: AgentDisplayState? = null
     private var renderedNotice: String? = null
     private var scope: CoroutineScope? = null
@@ -63,6 +93,9 @@ class PhoneAgentUi(private val context: Context) {
     fun webDisconnected() { ledger.disconnectWeb(); refresh() }
     fun beginUi(id: String, message: String, seconds: Int) { ledger.beginUi(id, message, seconds); refresh() }
     fun endUi(id: String) { ledger.endUi(id); refresh() }
+    fun requireUi(id: String) { ledger.requireUi(id); refresh() }
+    fun touchConnection(id: String) { ledger.touchConnection(id) }
+    internal fun connectionStates() = ledger.snapshot().connections
     fun toolStarted(id: String, tool: String, explanation: String = ""): Boolean {
         val label = label(tool)
         if (label == null && explanation.isBlank()) return false
@@ -80,8 +113,9 @@ class PhoneAgentUi(private val context: Context) {
     fun reply(id: String, answer: String) { ledger.reply(id, answer); refresh() }
     fun capabilities(): JSONObject = JSONObject().put("overlay_allowed", Settings.canDrawOverlays(context))
         .put("overlay_enabled", settings.agentOverlay).put("hyperos", island.json())
+        .put("live_updates_supported", LiveUpdateNotification.supported).put("live_updates_allowed", LiveUpdateNotification.canPost(context))
     private fun noticeJson(row: AgentUserNotice) = JSONObject().put("notice_id", row.id).put("status", row.status)
-        .put("kind", if (row.help) "help" else "info").put("message", row.message)
+        .put("kind", if (row.help) "help" else "info").put("message", row.message).put("agent", row.agent)
 
     private fun label(tool: String) = when (tool) {
         "phone_observe", "phone_find_nodes" -> "正在读取界面"
@@ -101,54 +135,192 @@ class PhoneAgentUi(private val context: Context) {
 
     private fun render() {
         if (!running) return
-        // Keep a visible assistance card stable while unrelated observation/tap
-        // tools run, so its buttons and accessibility nodes are not recreated.
-        val state = ledger.snapshot().let { value ->
-            if (value.notice != null) value.copy(agent = value.notice.agent, operating = false, operation = "", explanation = "") else value
-        }
+        val state = ledger.snapshot()
         val show = settings.agentOverlay && Settings.canDrawOverlays(context) && (state.connected || state.notice != null)
         if (state == rendered && (overlay != null) == show) return
         rendered = state
-        val title = when { state.notice?.help == true -> "等待协助"; state.operating -> "Agent 操作"; else -> "Agent 连接" }
+        val title = when { state.notice?.help == true -> "等待协助"; state.operating -> "正在操控手机"; else -> "Agent 连接" }
         val detail = state.notice?.message ?: listOf(state.operation, state.explanation).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "${state.agent} 已连接" }
-        val focus = if (settings.agentIsland && state.connected && state.notice == null)
+        val focus = if (!LiveUpdateNotification.supported && settings.agentIsland && state.connected && state.notice == null)
             HyperIslandSupport.extras(context, island, title, detail, false) else null
-        BackgroundNotification.update(context, "phone-tools", if (state.connected) "$title · $detail" else "手机操控", focus)
+        BackgroundNotification.update(context, "phone-tools", if (state.connected) "$title · $detail" else "手机操控", focus,
+            liveUpdate = settings.agentIsland && state.connected && state.operating)
         renderNotice(state.notice)
-        removeOverlay()
-        if (!show) return
-        val panel = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(6), dp(12), dp(6))
-            background = GradientDrawable().apply { setColor(Color.rgb(25, 40, 38)); cornerRadius = dp(14).toFloat() }
-            elevation = dp(5).toFloat()
-            addView(text("● $title  ·  ${state.agent}", 11f, Color.rgb(136, 234, 206), true))
-            if (state.notice != null) {
-                addView(ScrollView(context).apply {
-                    addView(text(state.notice.message, 12f, Color.WHITE))
-                }, LinearLayout.LayoutParams(-1, -2).apply { height = if (state.notice.message.length > 140) dp(110) else -2 })
+        if (!show) { removeOverlay(); return }
+        val maximumContentHeight = minOf(dp(280), (context.resources.displayMetrics.heightPixels * .4f).toInt())
+        val groups = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            state.connections.forEachIndexed { index, client ->
                 addView(LinearLayout(context).apply {
-                    gravity = Gravity.END
-                    if (state.notice.help) addView(button("已完成") { reply(state.notice.id, "done") })
-                    addView(button(if (state.notice.help) "暂不处理" else "知道了") { reply(state.notice.id, "dismissed") })
-                })
-            } else {
-                if (state.operation.isNotBlank()) addView(text(state.operation, 11f, Color.WHITE))
-                if (state.explanation.isNotBlank()) addView(text(state.explanation, 11f, Color.WHITE).apply {
-                    maxWidth = minOf(dp(320), (context.resources.displayMetrics.widthPixels - dp(48)).coerceAtLeast(dp(120)))
-                    maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END
-                })
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(0, if (index == 0) 0 else dp(7), 0, dp(3))
+                    addView(text("${client.name} · ${if (client.ownsUi) "占用界面" else "已连接"}", 11f,
+                        if (client.ownsUi) Color.rgb(136, 234, 206) else Color.WHITE, true))
+                    fun information(value: String) {
+                        if (value.isNotBlank()) addView(text(value, 11f, Color.rgb(223, 232, 229)).apply { setPadding(dp(10), dp(2), 0, dp(2)) })
+                    }
+                    listOf(client.goal, client.operation, client.explanation).filter { it.isNotBlank() }.distinct().forEach(::information)
+                    client.notices.forEach { notice ->
+                        information("${if (notice.help) "请求协助" else "消息"}：${notice.message}")
+                        addView(LinearLayout(context).apply {
+                            gravity = Gravity.END
+                            if (notice.help) addView(button("已完成") { reply(notice.id, "done") })
+                            addView(button(if (notice.help) "暂不处理" else "知道了") { reply(notice.id, "dismissed") })
+                        })
+                    }
+                }, LinearLayout.LayoutParams(-1, -2))
+                if (index < state.connections.lastIndex) addView(android.view.View(context).apply {
+                    setBackgroundColor(Color.argb(35, 255, 255, 255))
+                }, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(3) })
             }
         }
+        val panel = object : LinearLayout(context) {
+            var dragTouch: android.view.View.OnTouchListener? = null
+            private var downX = 0f; private var downY = 0f
+            override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = event.rawX; downY = event.rawY
+                        dragTouch?.onTouch(this, event)
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val moved = kotlin.math.abs(event.rawX - downX) > ViewConfiguration.get(context).scaledTouchSlop ||
+                            kotlin.math.abs(event.rawY - downY) > ViewConfiguration.get(context).scaledTouchSlop
+                        if (moved) return true
+                    }
+                }
+                return super.onInterceptTouchEvent(event)
+            }
+        }.apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(6), dp(12), dp(6))
+            background = GradientDrawable().apply { setColor(Color.argb(208, 25, 40, 38)); cornerRadius = dp(14).toFloat() }
+            elevation = dp(5).toFloat()
+            addView(LinearLayout(context).apply {
+                gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(30)
+                contentDescription = "按住拖动悬浮窗，点击${if (minimized) "展开" else "最小化"}"
+                addView(text("● ${if (minimized && !state.operating) if (state.notice?.help == true) "待协助" else "Agent" else title} · ${state.connections.size}", 11f, Color.rgb(136, 234, 206), true), LinearLayout.LayoutParams(0, -2, 1f))
+                addView(button(if (minimized) "展开" else "收起") { toggleMinimized() })
+                enableDragging(this)
+            }, LinearLayout.LayoutParams(-1, -2))
+            if (!minimized) addView(object : ScrollView(context) {
+                override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                    super.onMeasure(widthMeasureSpec, android.view.View.MeasureSpec.makeMeasureSpec(maximumContentHeight, android.view.View.MeasureSpec.AT_MOST))
+                }
+            }.apply {
+                addView(groups); contentScroll = this
+                post { contentOffset = contentOffset.coerceAtMost(((groups.height - height).coerceAtLeast(0))); scrollTo(0, contentOffset) }
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
+        panel.dragTouch = enableDragging(panel)
         val layout = WindowManager.LayoutParams(
-            if (state.notice != null) (context.resources.displayMetrics.widthPixels - dp(24)).coerceAtLeast(dp(160)) else -2,
+            (context.resources.displayMetrics.widthPixels - dp(24)).coerceAtLeast(dp(160)),
             -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                (if (state.notice == null) WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE else 0) or
                 (if (state.operating) WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON else 0),
             PixelFormat.TRANSLUCENT).apply {
-                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = dp(4)
+                gravity = Gravity.TOP or Gravity.LEFT
             }
-        runCatching { windows.addView(panel, layout); overlay = panel }
+        val maximum = (context.resources.displayMetrics.widthPixels - dp(24)).coerceAtLeast(1)
+        val paint = android.text.TextPaint().apply { textSize = 11f * context.resources.displayMetrics.scaledDensity }
+        val strings = listOf("● $title  ·  ${state.connections.size} 个连接") + state.connections.flatMap { client ->
+            listOf("${client.name} · ${if (client.ownsUi) "占用界面" else "已连接"}", client.goal, client.operation, client.explanation) +
+                client.notices.map { "${if (it.help) "请求协助" else "消息"}：${it.message}" }
+        }
+        val desired = if (minimized) minOf(dp(175), maximum) else ((strings.flatMap { it.lines() }.maxOfOrNull { paint.measureText(it) } ?: 0f).toInt() + dp(80))
+            .coerceIn(minOf(dp(240), maximum), maximum)
+        panel.measure(android.view.View.MeasureSpec.makeMeasureSpec(desired, android.view.View.MeasureSpec.EXACTLY),
+            android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED))
+        val existing = overlay
+        if (existing == null) {
+            val host = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; addView(panel, LinearLayout.LayoutParams(-1, -2)) }
+            layout.width = desired; targetWidth = desired
+            placeWindow(layout, panel.measuredHeight)
+            runCatching { windows.addView(host, layout); overlay = host }
+        } else {
+            existing.removeAllViews(); existing.addView(panel, LinearLayout.LayoutParams(-1, -2))
+            val current = existing.layoutParams as WindowManager.LayoutParams
+            current.flags = layout.flags
+            placeWindow(current, panel.measuredHeight)
+            runCatching { windows.updateViewLayout(existing, current) }
+            animateWidth(existing, desired)
+        }
+        handler.removeCallbacks(scrollTick)
+        if (!minimized) handler.postDelayed(scrollTick, 1000)
+    }
+
+    private fun animateWidth(host: LinearLayout, desired: Int) {
+        if (targetWidth == desired) return
+        targetWidth = desired
+        pendingWidth?.let(handler::removeCallbacks)
+        widthAnimation?.cancel()
+        val current = host.layoutParams as WindowManager.LayoutParams
+        val change = Runnable {
+            if (overlay !== host) return@Runnable
+            val start = (host.layoutParams as WindowManager.LayoutParams).width
+            widthAnimation = ValueAnimator.ofInt(start, desired).apply {
+                duration = if (minimized) 180 else 400
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+                addUpdateListener { value ->
+                    if (overlay === host) {
+                        val params = host.layoutParams as WindowManager.LayoutParams
+                        params.width = value.animatedValue as Int
+                        placeWindow(params, host.height)
+                        runCatching { windows.updateViewLayout(host, params) }
+                    }
+                }
+                start()
+            }
+        }
+        pendingWidth = change
+        handler.postDelayed(change, if (minimized) 0 else if (desired < current.width) 1200 else 150)
+    }
+
+    private fun toggleMinimized() {
+        minimized = !minimized
+        windowPrefs.edit().putBoolean("minimized", minimized).apply()
+        rendered = null; render()
+    }
+    private fun placeWindow(params: WindowManager.LayoutParams, height: Int) {
+        val metrics = context.resources.displayMetrics
+        params.x = ((metrics.widthPixels - params.width).coerceAtLeast(0) * horizontalPosition).toInt()
+        val availableHeight = (metrics.heightPixels - height - dp(48)).coerceAtLeast(0)
+        params.y = maxOf(dp(4), (availableHeight * verticalPosition).toInt()).coerceAtMost(availableHeight)
+    }
+    private fun enableDragging(header: LinearLayout): android.view.View.OnTouchListener {
+        var downX = 0f; var downY = 0f; var initialX = 0; var initialY = 0; var dragged = false
+        val slop = ViewConfiguration.get(context).scaledTouchSlop
+        val listener = android.view.View.OnTouchListener touch@{ _, event ->
+            val host = overlay ?: return@touch false
+            val params = host.layoutParams as WindowManager.LayoutParams
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    widthAnimation?.cancel(); pendingWidth?.let(handler::removeCallbacks)
+                    scrollPauseUntil = SystemClock.elapsedRealtime() + 1000
+                    downX = event.rawX; downY = event.rawY; initialX = params.x; initialY = params.y; dragged = false; true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downX; val dy = event.rawY - downY
+                    if (kotlin.math.abs(dx) > slop || kotlin.math.abs(dy) > slop) dragged = true
+                    if (dragged) {
+                        val width = (context.resources.displayMetrics.widthPixels - host.width).coerceAtLeast(0)
+                        val height = (context.resources.displayMetrics.heightPixels - host.height - dp(48)).coerceAtLeast(0)
+                        params.x = (initialX + dx.toInt()).coerceIn(0, width)
+                        params.y = (initialY + dy.toInt()).coerceIn(0, height)
+                        horizontalPosition = if (width == 0) .5f else params.x.toFloat() / width
+                        verticalPosition = if (height == 0) 0f else params.y.toFloat() / height
+                        runCatching { windows.updateViewLayout(host, params) }
+                    }; true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (dragged) windowPrefs.edit().putFloat("horizontal", horizontalPosition).putFloat("vertical", verticalPosition).apply()
+                    else if (event.actionMasked == MotionEvent.ACTION_UP) toggleMinimized()
+                    true
+                }
+                else -> false
+            }
+        }
+        header.setOnTouchListener(listener)
+        return listener
     }
 
     private fun renderNotice(notice: AgentUserNotice?) {
@@ -188,5 +360,9 @@ class PhoneAgentUi(private val context: Context) {
         setPadding(dp(12), dp(6), dp(4), dp(4)); setOnClickListener { action() }
     }
     private fun dp(value: Int) = (context.resources.displayMetrics.density * value).toInt()
-    private fun removeOverlay() { overlay?.let { runCatching { windows.removeViewImmediate(it) } }; overlay = null }
+    private fun removeOverlay() {
+        handler.removeCallbacks(scrollTick); contentScroll = null
+        pendingWidth?.let(handler::removeCallbacks); pendingWidth = null; widthAnimation?.cancel(); widthAnimation = null; targetWidth = 0
+        overlay?.let { runCatching { windows.removeViewImmediate(it) } }; overlay = null
+    }
 }

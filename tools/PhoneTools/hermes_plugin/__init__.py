@@ -16,7 +16,7 @@ def _handler(name):
             payload = {"tool": name, "arguments": args, "request_id": "hermes-" + uuid.uuid4().hex}
             request = urllib.request.Request(binding["url"], data=json.dumps(payload).encode(), headers={
                 "Content-Type": "application/json; charset=utf-8", "Authorization": "Bearer " + binding["token"], "X-Phone-Session": session_id})
-            with urllib.request.urlopen(request, timeout=45) as response:
+            with urllib.request.urlopen(request, timeout=130 if name == "phone_manage_app" and args.get("action") == "install" else 45) as response:
                 result = json.load(response)
             images = [item for item in result.get("content", []) if item.get("type") == "image"]
             if images:

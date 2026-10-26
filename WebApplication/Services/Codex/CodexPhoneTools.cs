@@ -14,11 +14,11 @@ internal sealed partial class CodexAgent {
             var binding = ReadPhoneBinding(session);
             var p = message["params"]!; var name = p.S("tool", p.S("name"));
             if (binding.S("mode") != "tools" || !binding.A("tools").Any(t => t.S("name") == name)) throw new InvalidOperationException("Phone tool not enabled for this session");
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(45) };
+            var args = p["arguments"] is JsonValue value && value.TryGetValue<string>(out var text) ? JsonNode.Parse(text) : p["arguments"];
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(name == "phone_manage_app" && args?.S("action") == "install" ? 130 : 45) };
             using var request = new HttpRequestMessage(HttpMethod.Post, binding.S("url"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", binding.S("token"));
             request.Headers.Add("X-Phone-Session", session);
-            var args = p["arguments"] is JsonValue value && value.TryGetValue<string>(out var text) ? JsonNode.Parse(text) : p["arguments"];
             var key = "codex-" + Hash(session + ":" + p.S("turnId") + ":" + p.S("callId", p.S("itemId", message.S("id"))));
             request.Content = new StringContent(Obj(("tool", name), ("arguments", args ?? new JsonObject()), ("request_id", key)).ToJsonString(), System.Text.Encoding.UTF8, "application/json");
             using var result = await client.SendAsync(request); result.EnsureSuccessStatusCode();

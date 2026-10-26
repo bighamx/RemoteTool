@@ -149,7 +149,7 @@ fun NativeApp(model: NativeModel) {
                     title = {
                         Column {
                             Text(
-                                if (session == null) "我的设备" else detail ?: route,
+                                if (session == null) "我的设备" else edition.pageTitle(detail ?: route),
                                 style = MaterialTheme.typography.titleLarge,
                             )
                             if (session != null)

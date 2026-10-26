@@ -20,15 +20,23 @@ import java.util.concurrent.TimeUnit
 
 class PhoneAccessibility : AccessibilityService() {
     override fun onServiceConnected() { current = this }
-    override fun onDestroy() { if (current === this) current = null; super.onDestroy() }
+    override fun onDestroy() { if (current === this) current = null; clearSnapshots(); PhoneAccessibilityControl.request(this); super.onDestroy() }
     override fun onInterrupt() = Unit
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
-    private val nodes = linkedMapOf<String, AccessibilityNodeInfo>()
-    private var snapshot = ""
-    private var observedAt = 0L
-    @Synchronized fun observe(limit: Int = 400): JSONObject {
-        nodes.values.forEach { @Suppress("DEPRECATION") it.recycle() }; nodes.clear()
-        snapshot = UUID.randomUUID().toString(); observedAt = android.os.SystemClock.elapsedRealtime()
+    private data class Snapshot(val owner: String, val created: Long, val nodes: Map<String, AccessibilityNodeInfo>)
+    private val snapshots = linkedMapOf<String, Snapshot>()
+    @Synchronized fun clearSnapshots(owner: String? = null) {
+        snapshots.entries.removeAll { entry ->
+            (owner == null || entry.value.owner == owner).also { remove -> if (remove) entry.value.nodes.values.forEach { @Suppress("DEPRECATION") it.recycle() } }
+        }
+    }
+    @Synchronized fun observe(limit: Int = 400, owner: String = "direct"): JSONObject {
+        val now = android.os.SystemClock.elapsedRealtime()
+        snapshots.entries.filter { now - it.value.created > 30_000 }.map { it.key }.forEach(::removeSnapshot)
+        while (snapshots.values.count { it.owner == owner } >= 4) removeSnapshot(snapshots.entries.first { it.value.owner == owner }.key)
+        while (snapshots.size >= 32) removeSnapshot(snapshots.keys.first())
+        val nodes = linkedMapOf<String, AccessibilityNodeInfo>()
+        val snapshot = UUID.randomUUID().toString()
         val rows = JSONArray()
         fun visit(node: AccessibilityNodeInfo, depth: Int) {
             if (rows.length() >= limit || depth > 35) return
@@ -50,29 +58,32 @@ class PhoneAccessibility : AccessibilityService() {
         val dm = android.util.DisplayMetrics()
         @Suppress("DEPRECATION") val display = (getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay
         @Suppress("DEPRECATION") display.getRealMetrics(dm)
+        snapshots[snapshot] = Snapshot(owner, now, nodes)
         return JSONObject().put("snapshot_id", snapshot).put("package", pkg).put("nodes", rows)
             .put("screen_width", dm.widthPixels).put("screen_height", dm.heightPixels).put("rotation", display.rotation * 90).put("coordinate_space", "screen_pixels")
     }
-    @Synchronized fun node(id: String, snapshotId: String): AccessibilityNodeInfo {
-        if (snapshotId != snapshot || android.os.SystemClock.elapsedRealtime() - observedAt > 30_000)
+    private fun removeSnapshot(id: String) { snapshots.remove(id)?.nodes?.values?.forEach { @Suppress("DEPRECATION") it.recycle() } }
+    @Synchronized fun node(id: String, snapshotId: String, owner: String = "direct"): AccessibilityNodeInfo {
+        val snapshot = snapshots[snapshotId]
+        if (snapshot == null || snapshot.owner != owner || android.os.SystemClock.elapsedRealtime() - snapshot.created > 30_000)
             fail("stale_snapshot", "请重新 phone_observe 获取节点")
-        val node = nodes[id] ?: fail("node_not_found", "节点不存在")
+        val node = snapshot.nodes[id] ?: fail("node_not_found", "节点不存在")
         if (!node.refresh()) fail("stale_snapshot", "节点已失效")
         return node
     }
-    fun tap(args: JSONObject): Boolean {
-        if (args.has("node_id")) return node(args.getString("node_id"), args.getString("snapshot_id"))
+    @Synchronized fun tap(args: JSONObject, owner: String = "direct"): Boolean {
+        if (args.has("node_id")) return node(args.getString("node_id"), args.getString("snapshot_id"), owner)
             .performAction(if (args.optBoolean("long_press")) AccessibilityNodeInfo.ACTION_LONG_CLICK else AccessibilityNodeInfo.ACTION_CLICK)
         return gesture(args.getDouble("x").toFloat(), args.getDouble("y").toFloat(), args.getDouble("x").toFloat(), args.getDouble("y").toFloat(), if (args.optBoolean("long_press")) 700 else 80)
     }
-    fun input(args: JSONObject): Boolean {
-        val target = if (args.has("node_id")) node(args.getString("node_id"), args.getString("snapshot_id"))
+    @Synchronized fun input(args: JSONObject, owner: String = "direct"): Boolean {
+        val target = if (args.has("node_id")) node(args.getString("node_id"), args.getString("snapshot_id"), owner)
             else rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: fail("node_not_found", "没有可输入的焦点节点")
         val text = args.getString("text")
         val value = if (args.optBoolean("append")) target.text?.toString().orEmpty() + text else text
         return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) })
     }
-    fun uiAction(args: JSONObject): Boolean {
+    @Synchronized fun uiAction(args: JSONObject, owner: String = "direct"): Boolean {
         val actions = mapOf("focus" to AccessibilityNodeInfo.ACTION_FOCUS, "clear_focus" to AccessibilityNodeInfo.ACTION_CLEAR_FOCUS,
             "select" to AccessibilityNodeInfo.ACTION_SELECT, "clear_selection" to AccessibilityNodeInfo.ACTION_CLEAR_SELECTION,
             "scroll_forward" to AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, "scroll_backward" to AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
@@ -82,7 +93,7 @@ class PhoneAccessibility : AccessibilityService() {
             "set_selection" to AccessibilityNodeInfo.ACTION_SET_SELECTION)
         val action = actions[args.getString("action")] ?: args.getString("action").toIntOrNull() ?: fail("invalid_arguments", "Unsupported node action")
         val bundle = Bundle().apply { putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, args.optInt("start")); putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, args.optInt("end")) }
-        return node(args.getString("node_id"), args.getString("snapshot_id")).performAction(action, bundle)
+        return node(args.getString("node_id"), args.getString("snapshot_id"), owner).performAction(action, bundle)
     }
     fun multiGesture(args: JSONObject): Boolean {
         val strokes = args.getJSONArray("strokes"); if (strokes.length() !in 1..10) fail("invalid_arguments", "1-10 gesture strokes required")

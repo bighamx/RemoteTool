@@ -56,6 +56,36 @@ class FinalSyncLedgerTest {
         assertEquals("最终回答", terminalSyncText("", "commentary", false, "正在检查最终回答", "正在检查"))
     }
 
+    @Test fun failedTurnReceiptDoesNotJoinSeparateProgressMessagesIntoOneBubble() {
+        val notes = listOf("我会检查 MCP 的说明。", "已核对：重复 `initialize` 会产生多个身份。\n\n同名连接不合并。",
+            "说明已补到手机与 Web。\n\n相关测试均已通过。")
+        val rows = listOf(HermesMessage("user", "完善 MCP 说明", 1, timestamp = 1_000L)) +
+            notes.mapIndexed { index, text -> HermesMessage("assistant", text, (index + 2).toLong(),
+                nativeTurnId = "failed-turn", narration = true, timestamp = 1_100L + index) } +
+            HermesMessage("user", "继续", 5, timestamp = 2_000L)
+        val receipt = FinalSyncState("session", "failed-run", null, "failed-turn", notes.joinToString(""),
+            1_500L, 1_000L, canConfirm = false)
+        val restored = restoreFinalSyncStates(JSONArray(listOf(receipt.json())).toString())
+        val polluted = rows + HermesMessage("assistant", receipt.text, localKey = "final-sync-failed-run")
+        assertTrue(finalSyncAcknowledged(receipt, rows))
+        assertEquals(rows, projectFinalSyncRows(polluted, restored, "session"))
+        assertEquals(emptyList<FinalSyncState>(), reconcileFinalSync(restored, "session", rows))
+        assertEquals(notes, projectFinalSyncRows(rows, restored, "session").filter { it.role == "assistant" }.map { it.text })
+    }
+
+    @Test fun concatenationMatchRequiresCompleteOrderedItemsFromTheSameTurn() {
+        val rows = listOf(
+            HermesMessage("assistant", "第一条\n\n原有段落", 1, nativeTurnId = "turn-a", narration = true),
+            HermesMessage("assistant", "第二条 `code`", 2, nativeTurnId = "turn-a", narration = true))
+        val receipt = FinalSyncState("session", "run", null, "turn-a", rows.joinToString("") { it.text }, 2_000L, 1_000L)
+        assertTrue(finalSyncAcknowledged(receipt, rows))
+        assertFalse(finalSyncAcknowledged(receipt, rows.dropLast(1)))
+        assertFalse(finalSyncAcknowledged(receipt, rows.asReversed()))
+        assertFalse(finalSyncAcknowledged(receipt.copy(turn = "other-turn"), rows))
+        assertFalse(finalSyncAcknowledged(receipt.copy(text = receipt.text + "尚未同步的结果"), rows))
+        assertFalse(finalSyncAcknowledged(receipt.copy(item = "separate-final-item", canConfirm = false), rows))
+    }
+
     @Test fun gapRebuildsFullTextAndDoesNotConfirmAStoredPrefix() {
         val complete = terminalSyncText("开头", "final_answer", true, "开头中间结尾", "")
         assertEquals("开头中间结尾", complete)

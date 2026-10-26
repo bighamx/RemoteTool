@@ -22,6 +22,10 @@ class PhoneJournal(context: Context) : SQLiteOpenHelper(context, "phone-tools.db
     @Synchronized fun begin(id: String, digest: String) {
         writableDatabase.insertOrThrow("calls", null, ContentValues().apply { put("id", id); put("digest", digest); put("state", "executing"); put("created", System.currentTimeMillis()) })
     }
+    @Synchronized fun claim(id: String, digest: String): JSONObject? {
+        existing(id, digest)?.let { return it }
+        begin(id, digest); return null
+    }
     @Synchronized fun finish(id: String, result: JSONObject) {
         writableDatabase.update("calls", ContentValues().apply { put("state", "completed"); put("result", result.toString()) }, "id=?", arrayOf(id))
         // Keep a bounded result cache; retain digests as tombstones to prevent replay.
