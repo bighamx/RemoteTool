@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using RemoteTool.WebApi.Services.Codex;
 
 await HermesHistoryPagesChecks.Run();
+await ScheduledMessageChecks.Run();
 TextEncodingChecks.Run();
 await CodexHandoffQueueChecks.Run();
 

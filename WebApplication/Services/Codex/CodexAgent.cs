@@ -167,6 +167,27 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         [SQLite.Column("updated_at_ms")] public long UpdatedAtMs { get; set; }
     }
 
+    private sealed class ArchivedFlagRow
+    {
+        [SQLite.Column("archived")] public int Archived { get; set; }
+    }
+
+    /** 定时消息投递前的归档检查：直读 state db，失败时按未归档处理（避免误取消）。 */
+    private JsonObject ArchivedState(string session) {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(session, "^[a-zA-Z0-9_-]{1,160}$")) throw new CodexError("无效会话标识");
+        try {
+            var dbPath = Path.Combine(home, "state_5.sqlite");
+            if (!File.Exists(dbPath)) return Obj(("archived", false), ("known", false));
+            SQLitePCL.Batteries_V2.Init();
+            using var db = new SQLiteConnection(dbPath, SQLiteOpenFlags.ReadOnly | SQLiteOpenFlags.FullMutex);
+            db.BusyTimeout = TimeSpan.FromMilliseconds(250);
+            var row = db.Query<ArchivedFlagRow>("SELECT archived FROM threads WHERE id=?", session).FirstOrDefault();
+            return Obj(("archived", row?.Archived == 1), ("known", row != null));
+        } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException or DllNotFoundException or TypeInitializationException) {
+            return Obj(("archived", false), ("known", false));
+        }
+    }
+
     /** 已存档会话：官方 {"archived": true} 列表查询对刚存档的会话有物化滞后，
         直读同一 state db（只读）即时且与桌面端同源。 */
     private JsonArray ArchivedSessionRows(JsonArray projects) {
@@ -1348,6 +1369,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     ("desktop_sync", desktopSync),
                     ("desktop_running", CodexDesktopProjects.DesktopRunning()));
             }
+            if (p.Length == 3 && p[2] == "archived-state" && method == "GET") return ArchivedState(p[1]);
             if (p.Length == 3 && p[2] == "queue") return await Queue(p[1], method, body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "takeover" && method == "POST") return await TakeoverSession(p[1], body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "handover" && method == "POST") return await HandoverSession(p[1], body, context.RequestAborted);

@@ -5,6 +5,8 @@
     <PackageReference Include="sqlite-net-pcl" Version="1.8.116" />
     <Compile Include="../../WebApplication/Services/TextEncodingRepair.cs" Link="Services/TextEncodingRepair.cs" />
     <Compile Include="../../WebApplication/Services/RemoteToolPaths.cs" Link="RemoteToolPaths.cs" />
+    <Compile Include="../../WebApplication/Services/IdentityDataDirectory.cs" Link="IdentityDataDirectory.cs" Condition="Exists('../../WebApplication/Services/IdentityDataDirectory.cs')" />
+    <Compile Include="../../WebApplication/Services/Scheduled/ScheduledMessageStore.cs" Link="ScheduledMessageStore.cs" />
     <Using Include="Microsoft.Extensions.Configuration" />
     <Compile Include="../../WebApplication/Services/HermesBridge.cs" Link="HermesBridge.cs" />
     <Compile Include="../../WebApplication/Services/HermesProfiles.cs" Link="HermesProfiles.cs" />

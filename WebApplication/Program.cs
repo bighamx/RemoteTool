@@ -129,6 +129,8 @@ builder.Services.AddSingleton<HermesCompaction>();
             builder.Services.AddHttpClient("codex", client => client.Timeout = Timeout.InfiniteTimeSpan)
                 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
             builder.Services.AddHostedService<HermesAttachmentCleanup>();
+            builder.Services.AddSingleton<Services.Scheduled.ScheduledMessageStore>();
+            builder.Services.AddHostedService<Services.Scheduled.ScheduledMessageDispatcher>();
             builder.Services.AddHttpClient("hermes", client => client.Timeout = Timeout.InfiniteTimeSpan)
                 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
             builder.Services.AddSingleton<PerformanceMonitor>();
