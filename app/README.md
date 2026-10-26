@@ -76,6 +76,12 @@ Windows 桌面代理在专用线程上绑定当前输入桌面，并保留服务
 
 ## 构建与安装
 
+云账户支持浏览器登录、扫描网页二维码登录，以及显示二维码供已登录 App 授权；已登录账户可使用“扫一扫授权登录”。扫码和二维码绘制使用本地 ZXing，ID Token 通过 Nimbus 校验签名、issuer、audience、有效期和 nonce。授权前展示当前账户、目标、权限和核对码，须用户明确确认。旧登录没有 `qrlogin.approve` 时通过“启用扫码授权”重新授权。
+
+两款 App 共用扫码实现，固定连接 `https://api.xbyham.com`，不打开任意二维码 URL。扫码凭据仅保存在内存，取消、重新生成或退出时结束轮询并尽力取消服务端请求。扫码入口默认启用；可用 `-PcloudQrLoginEnabled=false`、`-PcloudQrApprovalEnabled=false` 分别关闭。站点须为客户端启用对应 grant/scope；接口不可用时保留浏览器登录。
+
+扫码领取使用默认20秒的串行长轮询，创建后立即等待，正常等待结束后立即续接；短轮询、快速返回和限流仍遵守间隔及 Retry-After。取消会中断 HTTP 等待，二维码总有效期保持180秒。“账户与同步”中的外观可选浅色、深色或跟随系统，立即应用并随配置同步；旧配置缺少外观字段时保留本机选择。
+
 需要 JDK 17+ 和 Android SDK 34。设置 `ANDROID_HOME`，或在不提交的 `local.properties` 中配置 `sdk.dir`。
 
 发行包使用 Release 构建，启用 R8 代码优化、未使用代码移除和资源裁剪：
@@ -104,6 +110,8 @@ App 原生绘制性能面板，Web 使用网页组件，两端共享性能 API�
 工具栏与码率信息同步隐藏；点击画面外空白切换工具栏，点击画面隐藏工具栏并正常执行鼠标点击。远程窗口使用完整横屏区域，不为挖孔预留固定黑边。触控板整帧发送 WebSocket 并启用 TCP_NODELAY；相对位移合并累计且最多一条等待服务端执行确认，避免停手后回放事件队列。旧服务通过已确认的 HTTP 移动接口保持单条在途。
 
 ## 服务端
+
+对话图片：Codex 以原生 `localImage` 输入发送，附件 ID 随普通任务、插话及原生队列记录保存。Hermes 的附件卡片直接解析对应 Profile 的 `state.db` 会话消息，支持消息内嵌 Base64、原生 `@image:` / `Image attached at` 引用及本机文件链接；图片字节在消息中时可直接下载，不要求原图仍在。Hermes 插话接口只接受文字，因此插话保留原生图片引用及必要的文件读取提示。Hermes 不读取或写入 RemoteTool 消息附件绑定文件；分叉沿用复制后的原生会话内容。附件原文件仍保存在现有上传位置，不迁移目录。
 
 - `tools/RemoteTool.SensorHost` 使用 LibreHardwareMonitor 0.9.6，独立部署到 Web 运行目录的 `sensors` 子目录。只读取温度和转速，不调用风扇控制 API。当前 MSI PRO Z790-P II 已有 PawnIO 驱动，服务复用既有 LocalSystem 身份采集。运行时优先加载 `RemoteTool.SensorHost.dll`，兼容尚未更新的旧名称采集程序。
 - 已读到 CPU P/E 核、封装、脚座、MOS、PCH、内存、显卡核心/热点及磁盘温度，CPU/水泵/机箱/显卡风扇 RPM。报警阈值、距 TjMax 余量及分辨率不作为当前温度展示。未标定的传感器保留原始名称，内存 DIMM 编号不猜测为 A2/B2。

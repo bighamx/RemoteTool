@@ -1,5 +1,19 @@
 # RemoteTool 手机工具
 
+## 高效操作与恢复（工具 Schema v3）
+
+新增 phone_execute 和 phone_get_operation，总目录为 30 个工具；以连接设备实际公布的工具为准。观察默认读取应用窗口的精简节点，可切换 text/raw、服务端过滤、字段投影及快照差量。屏幕与截图使用统一物理坐标，非法矩形不可点击，目标歧义或被完全遮挡时返回明确错误。
+
+普通动作可携带 selector、guard、wait_for、return_state，一次完成定位、操作、条件等待及回读。phone_execute 最多串行执行 20 步、预算最多 30 秒，先校验全部参数，任一步失败或条件超时即停止；不支持任意脚本和递归批次。回执按操作者隔离，并保留已执行步骤；查询或核验后决定下一步，不把部分批次换新 ID 重发。
+
+MCP 传输会话可通过服务端签发的私密恢复凭据恢复同一操作者，旧传输被拒绝；正在执行的调用阻止接管，删除会话撤销凭据。标准客户端照常使用；项目自带 CLI 会自动初始化，并可用 --agent 指定隔离的稳定聊天标识，实现跨进程复用。用户手动断开不会被恢复机制绕过。
+
+参数、数据契约、恢复限制及端到端示例统一见 [Agent 使用指南](AGENT_GUIDE.md)。
+
+手机端、服务端及配套脚本统一按工具 Schema v3 使用，不保留旧服务执行分支。Hermes 的高层操作脚本和说明维护在 [hermes_skill](hermes_skill/SKILL.md)，可安装到当前 Profile 的 skills/automation/android-phone-ui-automation；不需要修改 Hermes 核心或重启网关。优先使用当前聊天已配置的工具，仅在需要 Python 编排时使用这些脚本。
+
+安装时复制 hermes_skill 内的 SKILL.md、scripts 和 references 到目标技能目录，保留 Profile 现有的 MCP 端点、令牌与绑定配置。设置 HERMES_HOME 指向当前 Profile，以及独立且稳定的 PHONE_MCP_AGENT（或实际 HERMES_SESSION_ID）。Python 回归执行 python -m unittest discover -s tools/PhoneTools/tests -v；可用 REMOTETOOL_HERMES_SKILL 指向已安装目录验证，测试只访问本机模拟 HTTP 服务，不会操控手机或发送消息。
+
 Android App 内置独立 HTTP / MCP 服务，不需要 RemoteTool Web、电脑登录或云账户。WebSocket 是可单独启用的另一条接入通道，两条路径共用手机执行引擎。
 
 ## 手机端
@@ -60,13 +74,13 @@ HTTP 接入使用 `Authorization: Bearer <手机工具令牌>`，令牌可在 Ap
 - UI 占用、节点快照和协助回执都属于会话。在会话 A 开始 UI 后，不能从新建的 B 操作或结束 A。`ui_busy/device_busy` 应等待或说明冲突；不得用新连接绕过。只释放自己持有的 UI。
 - 整个任务结束、受阻或放弃时，在清理流程中释放 UI，最后调用 `phone_disconnect`；不要每步断开。自定义 HTTP 客户端可再 `DELETE <原 MCP URL>`，携带自己的会话头，销毁传输会话。`phone_disconnect` 结束手机活动，`DELETE` 结束 MCP 会话；关闭脚本或 TCP 连接不等同于这两者。清理后不要再截图“检查断开”。
 
-错误处理必须区分：只有 HTTP 404 `session_not_found` 才丢弃本地过期会话、重新初始化一次；重新检查能力、获取 UI 并观察，再决定后续动作，不能盲目重放失败操作。`connection_closed_by_user` 表示用户主动断开，必须停止并告知用户，得到继续授权后再建新会话。`delivery_unknown`、超时、响应丢失可能发生在操作已执行之后，禁止自动重发写操作或换 `request_id` 绕过去重；先检查真实状态或回执。`request_id` 是逻辑操作的去重标识，与会话 ID、JSON-RPC `id` 不同。
+错误处理必须区分：只有 HTTP 404 `session_not_found` 才保留原恢复凭据、串行恢复同一操作者；恢复后核对回执和当前状态，再决定后续动作。不要丢弃密钥静默创建另一身份。`connection_closed_by_user` 表示用户主动断开，必须停止并告知用户，得到继续授权后再建新会话。`delivery_unknown`、超时、响应丢失可能发生在操作已执行之后，禁止自动重发写操作或换 `request_id` 绕过去重；先检查真实状态或回执。`request_id` 是逻辑操作的去重标识，与会话 ID、JSON-RPC `id` 不同。
 
 当前兼容边界：无会话头仍走旧匿名身份，不代表推荐用法；不要与已初始化会话混用。服务端空闲回收目前只移除 MCP 会话，手机提示和历史连接按手机自身空闲规则清理，并非即时同步。相同名称不自动顶替旧连接，以支持多个同名真实 Agent。手机端手动断开和 Agent 的 `phone_disconnect` 语义不同，前者禁止旧身份继续使用。历史日志不会因断开自动删除；已结束记录按保留策略清理，仍活跃的旧身份需在连接页单独断开。
 
 ## CLI
 
-在环境变量设置 `REMOTETOOL_PHONE_URL` 和 `REMOTETOOL_PHONE_TOKEN` 后：
+在环境变量设置 REMOTETOOL_PHONE_URL、REMOTETOOL_PHONE_TOKEN 和独立的 REMOTETOOL_PHONE_AGENT（稳定任务/聊天标识）后：
 
 ```text
 python remotetool_phone.py tools
@@ -79,7 +93,7 @@ python remotetool_phone.py download application.apk ./application.apk
 
 `call` 可传 `--request-id`，同 ID/参数用于去重，不能将同一个 ID 用于新的操作。结果中包含请求 ID；网络失败不会自动重发。上传和下载按 512 KiB 分块，适合较大 APK。
 
-这些单次 CLI 子命令目前不跨进程保存 MCP 会话，属于旧匿名兼容调用，不适合多 Agent 或连续 UI 流程。不要把多次 `python ... call` 当成支持 MCP 会话管理的客户端；持续操作请使用 `python remotetool_phone.py mcp` 常驻适配器、标准 HTTP MCP 客户端，或按上述规则实现会话缓存。Python 集成可持有一个 `PhoneClient`，显式 `initialize` 一次后重复使用该对象；单次 `call()` 不会自动初始化。
+CLI 会自动初始化，并使用按端点、凭据身份和逻辑 Agent 隔离的受保护缓存跨进程复用会话。--agent 可覆盖 REMOTETOOL_PHONE_AGENT；首次初始化有进程锁，只有明确的 session_not_found 才尝试恢复，其他错误不自动重试。Python 集成可持有一个 PhoneClient，call() 自动完成首次连接；常驻 stdio 仍可使用 mcp 子命令。不要让不同 Agent 使用同一逻辑标识，结束任务时清理自己的 UI 并断开，不能仅退出 Python 进程。
 
 ## 能力范围
 

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("phone_installer", ROOT / "install_hermes.py")
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
-TOOLS = [tool["name"] for tool in json.loads((ROOT / "hermes_plugin" / "tools.json").read_text())]
+TOOLS = [tool["name"] for tool in json.loads((ROOT / "hermes_plugin" / "tools.json").read_text(encoding="utf-8"))]
 
 
 class InstallerTests(unittest.TestCase):

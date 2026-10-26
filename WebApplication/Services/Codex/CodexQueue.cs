@@ -52,17 +52,28 @@ internal sealed partial class CodexAgent
                         var old = runs.FirstOrDefault(entry=>entry.Value.S("key")==key);
                         if(old.Value!=null)throw new CodexError("此队列消息已提交，请刷新队列核对",409);
                         runs[queuedRun]=Obj(("run_id",queuedRun),("session_id",session),("key",key),("status","queued"),("delivery","unknown"),
-                            ("native_queue",true),("output",""),("enqueued_at",DateTimeOffset.UtcNow.ToUnixTimeSeconds()));Persist();
+                            ("native_queue",true),("output",""),("attachment_ids",body.A("attachment_ids")),
+                            ("enqueued_at",DateTimeOffset.UtcNow.ToUnixTimeSeconds()));Persist();
                     }
                 }
                 else request["queuedSubmissionId"] = body.S("id");
                 try {
                     var result = await queueRpc.Call("thread/queue/" + action, request, ct);
                     if(queuedRun!=null)lock(gate){runs[queuedRun]!["native_queue_id"]=result["queuedSubmission"].S("id");runs[queuedRun]!["delivery"]="accepted";Persist();}
+                    if(action=="update") lock(gate) {
+                        foreach(var queued in runs.Select(entry=>entry.Value).Where(row=>row.S("session_id")==session &&
+                            row.S("native_queue_id")==body.S("id") && row.S("status")=="queued"))
+                            queued["attachment_ids"]=body.A("attachment_ids").DeepClone();
+                        Persist();
+                    }
                     if (action == "add") _ = StartQueuedIfIdle(session);
                     return result;
                 } catch(CodexError error) {
                     if(queuedRun!=null)lock(gate){runs[queuedRun]!["status"]=error.Delivery=="rejected"?"failed":"acceptance_unknown";runs[queuedRun]!["delivery"]=error.Delivery=="rejected"?"rejected":"unknown";Persist();}
+                    if(action=="update" && error.Delivery!="rejected") InvalidateQueuedAttachments(session,body.S("id"));
+                    throw;
+                } catch {
+                    if(action=="update") InvalidateQueuedAttachments(session,body.S("id"));
                     throw;
                 }
             }
@@ -77,6 +88,14 @@ internal sealed partial class CodexAgent
         } finally { settingsLock.Release(); }
     }
 
+    private void InvalidateQueuedAttachments(string session, string submission) {
+        if (string.IsNullOrWhiteSpace(submission)) return;
+        lock(gate) {
+            foreach(var queued in runs.Select(entry=>entry.Value).Where(row=>row.B("native_queue") && row.S("session_id")==session && row.S("native_queue_id")==submission))
+                queued.AsObject().Remove("attachment_ids");
+            Persist();
+        }
+    }
     private async Task StartQueuedIfIdle(string session, bool completedTurn = false) {
         await settingsLock.WaitAsync();
         try {

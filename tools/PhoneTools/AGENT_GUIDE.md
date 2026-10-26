@@ -1,8 +1,67 @@
 # Android 手机操控 Agent 使用指南
 
+## v3 高效操作接口
+
+本项目统一使用 schema_version=3 的手机端、服务端和配套脚本，不保留旧服务执行分支。首次读取能力确认版本，版本不符时明确提示更新，不回退到旧接口。标准 MCP 协议仍协商 2025-11-25/06-18/03-26；协议版本协商与手机工具 Schema 是不同维度，扩展使用普通工具和 _meta。
+
+- phone_observe 默认 mode=compact，优先目标应用窗口，只输出有语义且可见的节点。mode=text 同时返回可读文本，mode=raw 用于诊断，include_system=true 显式包含系统及悬浮窗口。package_name 选择窗口，filter 做服务端过滤，fields 投影字段。truncated=true 表示达到输出或遍历上限，不能把“未返回”当作不存在。
+- 屏幕、截图和节点统一使用物理屏幕坐标。截图缩放后通过 image_to_screen.scale_x/scale_y 转换。raw_bounds 保留原始几何，bounds 是有效屏幕交集；bounds_valid=false 不可点击。occluded、tap_point 表示遮挡情况及未遮挡位置。不要把非法矩形强行钳制成点击点。
+- phone_tap、phone_input_text 支持 selector，由手机重新定位。选择器支持精确 text/description/resource_id/class/package_name、text_contains（文字或描述）、text_regex（文字或描述）、clickable/editable/visible。动作目标必须唯一，unique=false 不受支持；找不到、多个匹配、非法或遮挡目标均应重新观察，不自动猜坐标。
+- 点击、输入、滑动、按键、启动应用及节点动作支持 guard、wait_for、return_state。guard 是执行前条件，支持 package_name、selector；wait_for 是执行后条件，支持文字、正则、前台包名、选择器出现/消失及 stable_ms。return_state 为 none/compact/text/raw。
+
+一次点击、条件等待和回读的参数示例（替换为真实界面的选择器）：
+
+    {
+      "selector": {"text": "搜索", "unique": true},
+      "guard": {"package_name": "com.jingdong.app.mall"},
+      "wait_for": {"text_regex": "小米18\\s*Pro", "timeout_ms": 6000},
+      "return_state": "compact",
+      "explanation": "提交搜索并读取结果"
+    }
+
+phone_wait 可单独使用相同条件；selector 配合 absent=true 等待消失，stable_ms 范围 0–2000，timeout_ms 范围 1–10000。只判断目标窗口的快照签名，本应用面板刷新不影响它。稳定不等于业务成功，优先指定业务后置条件。返回 matched、新快照、wait_ms，选择器等待另带 matched_nodes。matched=false 表示超时，不代表前一个动作未执行。等待已返回新状态，不要再 sleep 后无条件重复 observe。
+
+changed_since 接受本操作者的旧 snapshot_id。窗口和查询范围一致时返回 delta=true、变化的 nodes 和 removed_nodes；旧快照失效、窗口或范围变化时返回完整状态及 reset=true。后续动作使用新 snapshot_id，节点引用仍是 30 秒有效的临时引用。
+
+## 短流程与回执
+
+先取得 UI 占用，再调用 phone_execute：
+
+    {
+      "steps": [
+        {"tool": "phone_input_text", "arguments": {"selector": {"editable": true}, "text": "小米18 Pro"}},
+        {"tool": "phone_tap", "arguments": {"selector": {"text": "搜索"}, "wait_for": {"text": "小米18 Pro", "timeout_ms": 6000}}}
+      ],
+      "max_ms": 15000,
+      "return_state": "compact"
+    }
+
+开始前校验所有步骤；手机端串行执行、逐步重新定位，首个动作失败、等待超时或用户断开即停止。最多 20 步、执行预算最多 30000ms；已开始的底层动作可能在超时后才完成，因此超时不表示未执行。支持界面动作、观察、等待及能力查询，不允许嵌套批次、Shell、文件或生命周期工具。只执行显式步骤，不额外获取/释放 UI 或发送消息。
+
+返回 completed_steps、每步 operation_id/isError/execution/code/metrics，以及可选最终 state。部分执行后不能换 ID 重跑整个批次。步骤操作 ID 由父请求及序号确定；重复同一父请求返回原回执，不重做步骤。phone_get_operation 使用 operation_id 查询原始 state/result，限当前逻辑操作者；旧数据库无 owner 的记录不通过 MCP 暴露。
+
+execution 区分 not_started、receipt_available、unknown，不等于业务成功。accepted 表示底层接受动作，业务结果应看后置条件。失败回包含 code/retryable/hint 和 operation_id。metrics.device_ms 是手机端执行耗时，queue_ms 是转发队列等待；重放保留原指标，不代表本次网络耗时。
+
+## 身份恢复与现成客户端
+
+初始化可返回 _meta.remotetool.resume_token/agent_id/generation。恢复凭据必须保密，不能展示给模型或打印进日志。明确收到 HTTP 404 session_not_found 后，在新初始化的 params._meta["remotetool/resume_token"] 提交凭据；传输 ID 更新，操作者及 UI/快照/消息/回执归属不变，旧传输被拒绝。旧调用仍运行时返回 device_busy，凭据无效或撤销时返回 session_recovery_failed，不自动建立替代身份。
+
+恢复只在同一服务实例内有效；服务重启后需重新建立授权连接，不盲目重放操作。用户手动断开后恢复不能清除禁止状态，必须停止。HTTP DELETE 撤销恢复凭据。传输闲置 30 分钟回收；恢复凭据最多保留 24 小时且有数量上限。显示名称不是恢复凭据。
+
+本项目 remotetool_phone.py 会自动初始化、发送通知并记录协商版本。短命 CLI 应指定独立、稳定的逻辑 Agent/聊天标识，例如：
+
+    python remotetool_phone.py --agent hermes:<chat-id> call phone_get_capabilities
+    python remotetool_phone.py --agent hermes:<chat-id> call phone_execute --args-file steps.json --request-id <logical-operation-id>
+
+CLI 必须提供 --agent 或 REMOTETOOL_PHONE_AGENT，避免每个短命进程误建新身份。缓存按完整端点、凭据身份及逻辑 Agent 隔离，首次初始化使用操作系统文件锁，进程退出后自动释放锁；缓存原子替换。只有明确的 session_not_found 会触发恢复，并保留原操作 ID。401、其他 404、超时、连接重置和用户断开均不自动重试。恢复缓存可能含敏感凭据，不要放公共目录、上传云端或打印。
+
+正常 MCP JSON 响应提供 X-RemoteTool-Serialize-Ms、X-RemoteTool-Response-Bytes 两个诊断头，分别表示该端序列化耗时和实际 UTF-8 JSON 字节数。项目 CLI 返回 transport.http_ms/response_bytes/serialize_ms，代表最后一次工具 HTTP 请求，不含首次初始化或模型决策；不要与手机端 device_ms 混为同一个时间指标。
+
+原生 Hermes 返回 phone_binding_missing 表示当前聊天没有原生绑定。选择用户显式配置的 MCP 入口或重新附加本会话；不要搜索凭据、读取其他会话配置或选“最后一条绑定”继续任务。
+
 ## 连接原则
 
-一个 Agent 在一个持续任务中只使用一个逻辑 MCP 会话，持续复用至任务完成。HTTP 连接可短开短关，MCP 会话不可每次重建。优先调用已经配置的 MCP 或 RemoteTool 注入的 `phone_*` 工具，不要另外生成脚本、重复初始化。`clientInfo.name` 只决定显示名称；同名重复 `initialize` 仍会产生不同身份。
+一个 Agent 的持续任务保持同一逻辑操作者。平时复用 MCP 传输会话；必要时通过恢复凭据更换传输并保留操作者。HTTP 连接可以短开短关。优先使用已配置的 MCP 或 RemoteTool 注入工具，不为每个动作创建客户端。同名初始化不代表同一身份，只有正确的服务端恢复凭据可以接管自身状态。
 
 如果实现自定义 HTTP 客户端：
 
@@ -25,7 +84,7 @@ initialize 一次 → 记住响应头和版本 → tools/list
   自定义 HTTP 客户端：DELETE 原 MCP URL，携带自己的会话头
 ```
 
-UI、节点快照、协助通知均按会话隔离。不能在 A 上 `begin_ui` 后改用 B 点击、读 A 的通知或释放 A 的占用。观察和截图也是 UI 操作。Shell 读取或改变屏幕时设 `ui_operation=true`。节点使用本会话最新 `snapshot_id/node_id`，30 秒后失效，页面变化后重新观察。
+UI、节点快照、协助通知按逻辑操作者隔离。经恢复凭据接管的新传输继承同一操作者，独立操作者之间不能混用。观察和截图也是 UI 操作；Shell 操作 UI 时设 ui_operation=true。节点使用当前操作者最新 snapshot_id/node_id，30 秒失效，页面变化后重新观察。
 
 `phone_end_ui` 仅结束一批 UI 操作，不断开连接。下一批再次 `begin_ui`，不再 `initialize`。UI 无须续期，10 分钟无 UI 操作自动释放；其他连接可并行处理非 UI 任务。同一批中的观察、操作、核验按顺序执行，不并发点击和读取变化中的页面。
 
@@ -34,7 +93,7 @@ UI、节点快照、协助通知均按会话隔离。不能在 A 上 `begin_ui` 
 ## 遇到问题
 
 - `ui_busy/device_busy`：等待或说明冲突，不新建身份绕过，不尝试释放其他连接。自己失去旧会话时，无法从新身份替旧身份 `end_ui`；可请用户在连接管理中断开明确属于自己的旧连接，或等待空闲释放。
-- HTTP 404 `session_not_found`：旧会话已失效，删除对应缓存，串行重新初始化一次；检查能力、重新取得 UI 并观察。不要把任意 404、401、超时都当作会话过期，不盲目重放原操作。
+- HTTP 404 session_not_found：旧传输已失效，保留恢复凭据，按前述恢复流程串行重新初始化；检查回执与当前 UI 后再继续。缺少恢复凭据时明确失败，不自动创建替代身份。不要把其他 404、401、超时当作传输过期，也不要盲目重放原操作。
 - `connection_closed_by_user`：用户主动断开，停止并明确告知；不得自动初始化绕过。只有用户明确要求继续后，才新建会话。
 - `delivery_unknown`、超时、丢失响应：操作可能已发生，不能自动重发写操作或换 ID 绕过去重。先查回执或实际状态。`request_id` 用于同一逻辑操作的去重，同 ID 不可用于不同操作；它不等于 MCP 会话 ID 或 JSON-RPC 消息 `id`。
 - `phone_offline`、权限/后端不可用：说明具体阻碍，必要时请求用户协助。不要把连接成功、命令已提交、点击成功当成最终业务成功。

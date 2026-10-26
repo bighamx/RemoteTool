@@ -1081,7 +1081,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             if (!rpc.ToolsAvailable) throw new CodexError("Codex 已更新，正在等待现有任务结束以刷新工具；本次消息未写入。", 409, "codex_update_pending", "rejected");
             if (active.ContainsKey(session)) throw new CodexError("此会话已有手机任务在运行", 409);
             runs[run] = Obj(("run_id", run), ("session_id", session), ("key", key), ("fingerprint", fingerprint), ("status", "submitting"), ("phase", "preparing"),
-                ("output", ""), ("created_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()), ("account_id", accounts.List().S("current")));
+                ("output", ""), ("created_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()), ("account_id", accounts.List().S("current")),
+                ("attachment_ids", body.A("attachment_ids")));
             messageSnapshots.Remove(session);
             active[session] = run; Persist();
         }
@@ -1600,8 +1601,12 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     var text=role=="user"?string.Join('\n',item.A("content").Where(c=>c.S("type")=="text").Select(c=>c.S("text"))):item.S("text");
                     object timestamp=source.Resolve(item.S("id"),role,text,ref position,out var nativeTime)?nativeTime:
                         times.TryGetValue(item.S("id"),out var exact)?exact:null;
+                    JsonArray attachedIds = null;
+                    if (role == "user" && !string.IsNullOrEmpty(requestKey)) lock (gate) {
+                        attachedIds = CodexRunAttachments.Read(runs,session,requestKey);
+                    }
                     rows.Add(Obj(("id",MessageId(item.S("id"))),("native_item_id",item.S("id")),("role",role),("timestamp",timestamp),("content",text),("phase",role=="assistant"?item.S("phase"):null),
-                        ("turn_id", turn.S("id")), ("client_request_id", requestKey), ("editable", firstUser)));
+                        ("turn_id", turn.S("id")), ("client_request_id", requestKey), ("attachment_ids", attachedIds), ("editable", firstUser)));
                 }
                 var toolCount = turn.A("items").Count(item => item.S("type") is
                     "commandExecution" or "fileChange" or "mcpToolCall" or "dynamicToolCall" or "webSearch" or "imageView" or "imageGeneration" or "collabAgentToolCall");
@@ -1733,7 +1738,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                             if (requests[key].S("status") != "accepted") throw new CodexError("上次插话结果未确认，请核对历史；不会再次发送", 409);
                             return Obj(("accepted", true), ("replayed", true));
                         }
-                        requests[key] = record = Obj(("fingerprint", fingerprint), ("status", "dispatching")); Persist();
+                        requests[key] = record = Obj(("fingerprint", fingerprint), ("status", "dispatching"), ("attachment_ids", body.A("attachment_ids"))); Persist();
                         messageSnapshots.Remove(state.S("session_id"));
                     }
                     try {

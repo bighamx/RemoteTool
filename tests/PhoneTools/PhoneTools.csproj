@@ -3,6 +3,10 @@
   <ItemGroup>
     <Compile Include="../../WebApplication/Services/TextEncodingRepair.cs" Link="TextEncodingRepair.cs"/>
     <Compile Include="../../WebApplication/Services/PhoneControl/PhoneGateway.cs" Link="PhoneGateway.cs"/>
+    <Compile Include="../../WebApplication/Services/PhoneControl/PhoneSessionIntegration.cs" Link="PhoneSessionIntegration.cs"/>
+    <Compile Include="../../WebApplication/Services/HermesProfiles.cs" Link="HermesProfiles.cs"/>
+    <Compile Include="../../WebApplication/Services/RemoteControl/InteractiveProcessLauncher.cs" Link="InteractiveProcessLauncher.cs"/>
+    <Compile Include="../../WebApplication/Services/RemoteControl/AgentStartupLogger.cs" Link="AgentStartupLogger.cs"/>
     <Compile Include="../../WebApplication/Services/PhoneControl/PhoneMcpProtocol.cs" Link="PhoneMcpProtocol.cs"/>
     <Compile Include="../../WebApplication/Services/PhoneControl/PhoneMcpSessions.cs" Link="PhoneMcpSessions.cs"/>
     <Compile Include="../../WebApplication/Services/PhoneControl/PhoneToolPolicy.cs" Link="PhoneToolPolicy.cs"/>

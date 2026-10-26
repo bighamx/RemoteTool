@@ -50,6 +50,7 @@ class PhoneRelay(private val engine: PhoneEngine, url: String, private val cooki
                     return
                 }
                 if (message.optString("type") != "invoke" || closed) return
+                val receivedAt = android.os.SystemClock.elapsedRealtime()
                 val tool = message.optString("tool")
                 val owner = "web:" + message.optString("agent_id", "server").take(160)
                 val auditId = try { engine.connectionLog.begin(owner, message.optString("agent_name", "Agent"), message.optString("request_id"), tool, message.optJSONObject("arguments") ?: JSONObject(), queued = true) }
@@ -68,7 +69,7 @@ class PhoneRelay(private val engine: PhoneEngine, url: String, private val cooki
                     val id = message.optString("request_id")
                     val result = engine.invoke(message.optString("tool"), message.optJSONObject("arguments") ?: JSONObject(), id,
                         message.optBoolean("allow_advanced", false), message.optLong("deadline", 0),
-                        owner, message.optString("agent_name", "Agent"), auditId)
+                        owner, message.optString("agent_name", "Agent"), auditId, android.os.SystemClock.elapsedRealtime() - receivedAt)
                     ws.send(JSONObject().put("type", "result").put("request_id", id).put("result", result).toString())
                 } } catch (_: java.util.concurrent.RejectedExecutionException) {
                     engine.connectionLog.finish(auditId, PhoneEngine.errorResult(PhoneToolError("device_busy", "手机操作队列已满，此调用未执行")))

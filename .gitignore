@@ -145,6 +145,7 @@ __pycache__/
 *.py[cod]
 /artifacts/app-updates/
 /artifacts/phone-validation/
+/artifacts/release-*/
 /docs/
 screenshots/android-*.png
 screenshots/web-performance-*.png

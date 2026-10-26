@@ -51,12 +51,13 @@ public sealed class PhoneToolsController(PhoneGateway gateway, ILogger<PhoneTool
         catch (PhoneOfflineException) {
             return McpError(body, -32000, "Phone is offline", "phone_offline");
         }
+        catch (PhoneMcpSessionException error) { return McpError(body, -32000, error.Message, error.Code); }
         catch (Exception error) {
             logger.LogError(error, "Phone MCP request failed");
             return McpError(body, -32603, "Internal error", "internal_error");
         }
     }
-    private IActionResult McpError(JsonObject body, int code, string message, string detail) => Ok(new JsonObject {
+    private IActionResult McpError(JsonObject body, int code, string message, string detail) => Measured(new JsonObject {
         ["jsonrpc"] = "2.0", ["id"] = body["id"]?.DeepClone(),
         ["error"] = new JsonObject { ["code"] = code, ["message"] = message, ["data"] = new JsonObject { ["code"] = detail } }
     });
@@ -76,7 +77,9 @@ public sealed class PhoneToolsController(PhoneGateway gateway, ILogger<PhoneTool
             return McpError(body, -32602, "Invalid initialize params", "invalid_params");
         PhoneMcpSessions.Client? client = null;
         if (method == "initialize") {
-            client = gateway.McpSessions.Create(id, (p["clientInfo"] as JsonObject)?["name"]?.ToString() ?? "Agent");
+            if (p["_meta"] != null && p["_meta"] is not JsonObject || p["_meta"] is JsonObject initializeMeta && initializeMeta["remotetool/resume_token"] != null && !TryText(initializeMeta, "remotetool/resume_token", out _))
+                return McpError(body, -32602, "Invalid recovery metadata", "invalid_params");
+            client = gateway.McpSessions.Create(id, (p["clientInfo"] as JsonObject)?["name"]?.ToString() ?? "Agent", p["_meta"]?["remotetool/resume_token"]?.GetValue<string>());
             Response.Headers["Mcp-Session-Id"] = client.Id;
             await gateway.AgentSeen(row["phone_id"]!.ToString(), client.AgentId, client.Name, ct);
         } else if (Request.Headers["Mcp-Session-Id"].FirstOrDefault() is { Length: > 0 } sessionId) {
@@ -84,8 +87,9 @@ public sealed class PhoneToolsController(PhoneGateway gateway, ILogger<PhoneTool
             if (client == null) return NotFound(new { code="session_not_found", message="Initialize a new MCP session; do not replay uncertain actions" });
         }
         switch (method) {
-            case "initialize": result = new JsonObject { ["protocolVersion"] = PhoneMcpProtocol.SelectVersion(p["protocolVersion"]?.GetValue<string>()), ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() }, ["serverInfo"] = new JsonObject { ["name"] = "remotetool-phone-relay", ["version"] = "1.1.0" },
-                ["instructions"] = PhoneMcpProtocol.Instructions }; break;
+            case "initialize": result = new JsonObject { ["protocolVersion"] = PhoneMcpProtocol.SelectVersion(p["protocolVersion"]?.GetValue<string>()), ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() }, ["serverInfo"] = new JsonObject { ["name"] = "remotetool-phone-relay", ["version"] = "1.2.0" },
+                ["instructions"] = PhoneMcpProtocol.Instructions,
+                ["_meta"] = new JsonObject { ["remotetool"] = new JsonObject { ["resume_token"] = client!.ResumeToken, ["agent_id"] = client.LogicalId, ["generation"] = client.Generation } } }; break;
             case "ping": result = new JsonObject(); break;
             case "tools/list": result = new JsonObject { ["tools"] = gateway.Tools(row["phone_id"]!.ToString(), row["advanced"]?.GetValue<bool>() == true) }; break;
             case "tools/call":
@@ -94,10 +98,19 @@ public sealed class PhoneToolsController(PhoneGateway gateway, ILogger<PhoneTool
                 if (p["_meta"] != null && p["_meta"] is not JsonObject ||
                     p["_meta"] is JsonObject meta && meta["remotetool/request_id"] != null && !TryText(meta, "remotetool/request_id", out _))
                     return McpError(body, -32602, "Invalid request metadata", "invalid_params");
-                result = await gateway.Invoke(row["phone_id"]!.ToString(), toolName, p["arguments"] as JsonObject ?? new(), p["_meta"]?["remotetool/request_id"]?.ToString() ?? "mcp-" + Guid.NewGuid().ToString("N"), row["advanced"]?.GetValue<bool>() == true, ct, client?.AgentId ?? id, client?.Name ?? "Agent"); break;
+                using (client == null ? null : gateway.McpSessions.BeginCall(client))
+                    result = await gateway.Invoke(row["phone_id"]!.ToString(), toolName, p["arguments"] as JsonObject ?? new(), p["_meta"]?["remotetool/request_id"]?.ToString() ?? "mcp-" + Guid.NewGuid().ToString("N"), row["advanced"]?.GetValue<bool>() == true, ct, client?.AgentId ?? id, client?.Name ?? "Agent"); break;
             default: return Ok(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = body["id"]?.DeepClone(), ["error"] = new JsonObject { ["code"] = -32601, ["message"] = "Method not found" } });
         }
-        return Ok(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = body["id"]?.DeepClone(), ["result"] = result });
+        return Measured(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = body["id"]?.DeepClone(), ["result"] = result });
+    }
+    private IActionResult Measured(JsonObject data) {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var body = data.ToJsonString(new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        Response.Headers["X-RemoteTool-Serialize-Ms"] = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        Response.Headers.CacheControl = "no-store";
+        Response.Headers["X-RemoteTool-Response-Bytes"] = System.Text.Encoding.UTF8.GetByteCount(body).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return Content(body, "application/json; charset=utf-8");
     }
     private static bool TryText(JsonObject body, string key, out string? value) {
         value = null;

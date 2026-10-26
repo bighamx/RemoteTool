@@ -3,7 +3,7 @@ package com.chuckiehelper.mobile.phonecontrol
 import org.json.JSONObject
 
 internal object PhoneToolPolicy {
-    val uiTools = setOf("phone_observe", "phone_find_nodes", "phone_screenshot", "phone_tap", "phone_swipe", "phone_input_text",
+    val uiTools = setOf("phone_execute", "phone_observe", "phone_find_nodes", "phone_screenshot", "phone_tap", "phone_swipe", "phone_input_text",
         "phone_key", "phone_launch_app", "phone_wait", "phone_ui_action", "phone_gesture")
     fun requiresUi(name: String, args: JSONObject): Boolean = name in uiTools ||
         name == "phone_shell" && args.optBoolean("ui_operation") ||

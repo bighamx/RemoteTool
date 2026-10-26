@@ -10,7 +10,15 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
         if (body["phone_tools"] is not JsonObject options || options["mode"]?.ToString() is null or "off") { body.Remove("phone_tools"); return null; }
         var mode = options["mode"]!.ToString(); if (mode is not ("tools" or "description")) throw new ArgumentException("无效手机能力模式");
         var phone = options["phone_id"]?.ToString() ?? ""; var profile = agent == "hermes" ? HermesProfileScope.Name : "default";
-        var binding = gateway.CreateBinding(phone, options["allow_advanced"]?.GetValue<bool>() == true, agent, profile); binding["mode"] = mode;
+        JsonObject binding;
+        try { binding = gateway.CreateBinding(phone, options["allow_advanced"]?.GetValue<bool>() == true, agent, profile); }
+        catch (PhoneOfflineException) when (mode == "description") {
+            // Capability text is optional. Offline phones must not reject session creation.
+            body.Remove("phone_tools");
+            logger.LogInformation("Skipping optional phone description for {Agent}: phone is offline", agent);
+            return null;
+        }
+        binding["mode"] = mode;
         var root = configuration["PhoneTools:CallbackBaseUrl"] ?? $"{request.Scheme}://{request.Host}{request.PathBase}";
         binding["url"] = root.TrimEnd('/') + "/api/phone/v1/bound/" + binding["id"];
         try {
@@ -56,6 +64,7 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
         Capability("查看当前屏幕截图、读取界面控件树、按文字或资源标识查找控件", "phone_observe", "phone_screenshot", "phone_find_nodes");
         Capability("点击、滑动、输入文字、返回/Home 等按键、控件操作及多指路径手势", "phone_tap", "phone_swipe", "phone_input_text", "phone_key", "phone_ui_action", "phone_gesture");
         Capability("启动手机应用，并等待指定界面文字或前台应用出现", "phone_launch_app", "phone_wait");
+        Capability("在手机端串行执行带前置校验的短流程，一次返回操作及等待后的界面；查询不确定操作的原始回执", "phone_execute", "phone_get_operation");
         Capability("声明 UI 操作开始/结束、断开本 Agent 操控、在屏幕顶部提示用户、请求用户协助并读取回执", "phone_begin_ui", "phone_end_ui", "phone_disconnect", "phone_notify_user", "phone_get_user_reply");
         Capability("在 RemoteTool 文件交换目录上传、下载和列出文件，支持大文件分块传输", "phone_transfer_file");
         Capability("通过已授权的 Shizuku 或 Root 执行手机 Shell 命令", "phone_shell");
@@ -68,6 +77,7 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
             : "本会话绑定未开放高级工具。请使用上面列出的工具范围；手机端具备 Root 或 Shizuku 并不代表本会话已获准执行高级操作。");
         if (enabled) {
             text.AppendLine("使用流程：");
+            if (names.Contains("phone_execute")) text.AppendLine("效率与准确性：优先 phone_observe(mode=compact/text) 或 phone_find_nodes；可用 selector 唯一定位目标、guard 校验前台应用，并在动作中带 wait_for 与 return_state，一次完成操作、条件等待和回读。确定的短流程用 phone_execute（最多20步/30秒）；失败立即停止，按每步回执核对，不把部分执行的批次换新ID重发。phone_wait 已返回匹配结果和新快照，不要等待后无条件再次 observe；不用固定 sleep 或 shell dump 作为常规读屏。");
             text.AppendLine("连接复用：在整个持续任务中复用本会话已有的 phone_* 工具身份，包括观察、多轮 UI、文件操作、等待协助及核验。不要为每一步另写脚本、新建 MCP 客户端或重新 initialize；本集成已处理身份与认证，不需要手动建连。同一名字不代表同一连接。若用户另行配置 HTTP MCP，则只 initialize 一次，保存响应头 Mcp-Session-Id，后续所有请求携带同一个头和协商的 MCP-Protocol-Version；短命脚本须跨进程复用受保护且按端点、凭据身份、逻辑 Agent 隔离的缓存，并串行首次初始化，做不到时使用常驻 MCP 客户端或 stdio 适配器。独立 Agent 不共享会话。不要在有会话后改用无头旧接口。");
             text.AppendLine("UI 占用、节点快照和 notice_id 都归属当前连接。phone_end_ui 只释放 UI，不断开连接；后续批次仍用同一连接重新 phone_begin_ui。遇到 ui_busy/device_busy 时等待或说明冲突，不能新建连接绕过，也不能释放其他 Agent 的占用。只有 HTTP 404 session_not_found 才丢弃过期会话并重新 initialize 一次，重新检查能力、获取 UI 并观察后继续，不盲目重放原操作。收到 connection_closed_by_user 必须停止并说明用户已断开，用户明确允许继续后才能新建连接，不能自动重连。");
             if (tools.Any(tool => tool["inputSchema"]?["properties"]?["explanation"] != null)) text.AppendLine("工具支持可选 explanation 参数：每次调用可直接用用户的语言简短说明正在做什么、为什么做（最多 240 字符），会随本次操作显示在手机悬浮提示中，无需为普通操作说明额外调用 phone_notify_user。只写面向用户的目的或动作摘要，不写敏感输入、凭据或内部推理。需要用户回应的协助请求仍使用 phone_notify_user(kind=help)。未提供该参数的工具不要传入；phone_disconnect 仍会立即撤下提示。");

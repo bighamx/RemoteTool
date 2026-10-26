@@ -9,7 +9,7 @@ using RemoteTool.WebApi.Services.Codex;
 namespace RemoteTool.WebApi.Controllers;
 
 [ApiController, Authorize, Route("api/hermes"), Route("api/hermes/profiles/{profile}"), ServiceFilter(typeof(HermesProfileFilter))]
-public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, HermesSessionActivity activity, HermesTitleService titles) : ControllerBase
+public sealed class HermesController(HermesBridge bridge, HermesManagement management, HermesAttachments attachments, HermesCompaction compaction, RunRegistry runs, HermesSessionActivity activity, HermesTitleService titles, HermesNativeAttachments nativeAttachments) : ControllerBase
 {
     [HttpGet("profiles")] public IActionResult Profiles([FromServices] HermesProfiles profiles) => Ok(profiles.List());
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效的会话或任务标识");
@@ -282,10 +282,6 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         try {
             var result = JsonNode.Parse((await management.Invoke("message_action", JsonSerializer.SerializeToElement(request), ct)).GetRawText())!.AsObject();
             if (result["error"]?.ToString() is string failure) return Conflict(new { message = failure });
-            if (operation == "fork" && result["message_id_map"] is JsonObject mapping && result["session"]?["id"]?.ToString() is string forkId) {
-                try { attachments.Inherit(Id(id), Id(forkId), mapping); }
-                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { result["warning"] = "分叉已创建，附件预览索引暂未复制；原附件仍保留。"; }
-            }
             result.Remove("message_id_map");
             return Ok(result);
         } catch (InvalidOperationException error) { return Conflict(new { message = error.Message }); }
@@ -334,10 +330,10 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             state["started_at"]?.GetValue<long>() ?? 0, id, state["revision"]?.ToString() ?? "");
         json = AgentHistoryWindow.Select(json, limit, from_id, older_before);
         json = AgentInteractiveMessages.Present(json);
-        return attachments.AddMessageAttachments(id, json?.ToJsonString() ?? "{}");
+        return nativeAttachments.Present(id, json?.ToJsonString() ?? "{}");
     }
     [HttpPost("sessions/{id}/messages/{messageId}/attachments")] public IActionResult BindAttachments(string id, string messageId, [FromBody] JsonElement body)
-    { attachments.Bind(Id(id), messageId, body.GetProperty("ids").EnumerateArray().Select(value => value.GetString()!).ToArray()); return Ok(new { success = true }); }
+    { Id(id); if(!long.TryParse(messageId,out var mid) || mid<=0) return BadRequest(new {message="无效消息标识"}); return Ok(new { success = true }); }
     [HttpGet("runs/lookup")] public async Task<IActionResult> LookupRun(string key, string session_id, CancellationToken ct) {
         if (!Regex.IsMatch(key ?? "", "^[a-zA-Z0-9_-]{16,120}$")) return BadRequest(new { message = "无效的请求标识" });
         if (!Regex.IsMatch(session_id ?? "", "^[a-zA-Z0-9_-]{1,160}$")) return BadRequest(new { message = "无效的会话标识" });
@@ -384,7 +380,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 }
             }
             catch (System.Text.Json.JsonException) { }
-            using var upstream = await bridge.SendAsync(HttpMethod.Post, "v1/runs", attachments.PrepareRun(body, key), key, ct, Request.Headers["Last-Event-ID"].ToString());
+            using var upstream = await bridge.SendAsync(HttpMethod.Post, "v1/runs", nativeAttachments.PrepareRun(body, key), key, ct, Request.Headers["Last-Event-ID"].ToString());
             Response.Headers.CacheControl = "no-store";
             var payload = await upstream.Content.ReadAsStringAsync(ct);
             if (!upstream.IsSuccessStatusCode)
@@ -494,7 +490,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         await Task.WhenAll(detailTask, historyTask, runTask, contextTask);
         var run = runTask.Result;
         JsonNode? files = null;
-        try { files = JsonSerializer.SerializeToNode(new { data = attachments.List(sessionId) }); }
+        try { files = JsonSerializer.SerializeToNode(new { data = nativeAttachments.List(sessionId) }); }
         catch (Exception) { /* The app can use the existing files endpoint. */ }
         return Ok(new JsonObject {
             ["detail"] = detailTask.Result,
@@ -506,7 +502,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             ["files"] = files,
         });
     }
-    [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = attachments.List(Id(id)) });
+    [HttpGet("sessions/{id}/files")] public IActionResult Files(string id) => Ok(new { data = nativeAttachments.List(Id(id)) });
     [HttpGet("sessions/{id}/tools/{summaryId}")] public async Task<IActionResult> ToolDetails(string id, string summaryId, [FromQuery] int offset = 0, CancellationToken ct = default) {
         var session = Id(id); var key = Id(summaryId); var state = activity.Read(session);
         var revision = state["revision"]?.ToString() ?? "";
@@ -529,7 +525,10 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     }
     [HttpGet("sessions/{id}/files/{fileId}")] public IActionResult DownloadFile(string id, string fileId)
     {
-        try { var path = attachments.Resolve(Id(id), Id(fileId)); return PhysicalFile(path, HermesAttachments.Mime(path), enableRangeProcessing: true); }
+        try {
+            var source=nativeAttachments.Resolve(Id(id),Id(fileId));
+            return source.Bytes!=null?File(source.Bytes,source.Mime):PhysicalFile(source.Path,source.Mime,enableRangeProcessing:true);
+        }
         catch (FileNotFoundException) { return NotFound(new { message = "附件不存在" }); }
     }
     [HttpGet("runs/{id}/events")] public Task Events(string id, CancellationToken ct) => Id(id).StartsWith("hcompact_") ? compaction.Events(id, Response, ct) : Forward(HttpMethod.Get, $"v1/runs/{id}/events", null, null, ct);
@@ -551,7 +550,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                     Response.StatusCode = 409; await Response.WriteAsJsonAsync(new { message = "当前任务未返回会话标识，无法核对附件归属" }, ct); return;
                 }
                 var session = field.GetString()!;
-                body = attachments.PrepareHermesSteer(body, session, key);
+                body = nativeAttachments.PrepareSteer(body, session, key);
             } catch (Exception error) when (error is ArgumentException or FileNotFoundException) {
                 Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = error.Message }, ct); return;
             }

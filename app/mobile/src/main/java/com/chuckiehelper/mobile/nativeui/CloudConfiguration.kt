@@ -45,6 +45,7 @@ internal class CloudConfiguration(private val context: Context,
         return validate(obj("schemaVersion" to 1, "appVersion" to BuildConfig.VERSION_NAME,
             "exportedAt" to Instant.now().toString(), "devices" to devices,
             "settings" to obj(
+                "appearance" to AppAppearance.from(main.getString(AppAppearance.KEY, null)).value,
                 "phoneTools" to phoneTools, "portTunnels" to portTunnels,
                 "updates" to obj("automatic" to updates.getBoolean("automatic", true), "wifiOnly" to updates.getBoolean("wifi_only", true)),
                 "fileView" to obj("sort" to files.getString("sort", "NAME"), "secondarySort" to files.getString("secondarySort", null),
@@ -85,6 +86,7 @@ internal class CloudConfiguration(private val context: Context,
             }
         }
         val settings = payload.getJSONObject("settings")
+        if (settings.has("appearance")) require(settings.get("appearance") is String && settings.getString("appearance") in AppAppearance.entries.map { it.value }) { "外观设置无效" }
         settings.optJSONObject("updates")?.let { p -> for (key in listOf("automatic", "wifiOnly")) require(p.get(key) is Boolean) { "更新设置无效" } }
         settings.optJSONObject("fileView")?.let { p ->
             require(p.getString("sort") in FileSort.entries.map { it.name }) { "文件排序无效" }
@@ -158,6 +160,8 @@ internal class CloudConfiguration(private val context: Context,
         require(existing.size <= 200) { "合并后设备超过 200 台" }
         if (!main.contains("last_device") && payload.getJSONArray("devices").length() > 0)
             editor.putBoolean("cloud_requires_connection_selection", true)
+        payload.getJSONObject("settings").optString("appearance").takeIf { it.isNotEmpty() }
+            ?.let { editor.putString(AppAppearance.KEY, it) }
         check(editor.putString("devices", JSONArray(existing.values.toList()).toString()).commit()) { "设备配置保存失败" }
         for (device in payload.getJSONArray("devices").objects()) {
             val login = device.optJSONObject("credentials") ?: continue

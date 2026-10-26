@@ -43,13 +43,29 @@ class PhoneHttpServer(private val engine: PhoneEngine) : NanoHTTPD("0.0.0.0", en
                         .put("error", JSONObject().put("code", -32000).put("message", "用户已在手机端断开此连接，请重新建立会话，不要自动重发操作")
                             .put("data", JSONObject().put("code", "connection_closed_by_user").put("retryable", false).put("requires_reinitialize", true))))
                 val mcp = PhoneMcp({ PhoneToolCatalog.tools(it && engine.settings.advanced) }, { name, args, id, advanced ->
-                    engine.invoke(name, args, id, advanced, agentId = client?.owner ?: "direct", agentName = client?.name ?: "Agent") })
+                    if (client == null) engine.invoke(name, args, id, advanced)
+                    else try { sessions.withClient(client) { engine.invoke(name, args, id, advanced, agentId = client.owner, agentName = client.name) } }
+                    catch (error: Exception) { PhoneEngine.errorResult(error) }
+                })
                 val result = mcp.handle(message)
                 client?.let { engine.agentUi.touchConnection(it.owner) }
                 client?.let { engine.connectionLog.touch(it.owner) }
                 var created: PhoneMcpSessions.Client? = null
                 if (initializing && result != null && !result.has("error")) {
-                    created = sessions.create(message.optJSONObject("params")?.optJSONObject("clientInfo")?.optString("name") ?: "Agent")
+                    val params = message.optJSONObject("params")
+                    val meta = params?.optJSONObject("_meta")
+                    if (params?.has("_meta") == true && meta == null || meta?.has("remotetool/resume_token") == true &&
+                        (meta.opt("remotetool/resume_token") !is String || meta.optString("remotetool/resume_token").isBlank()))
+                        return json(Response.Status.OK, PhoneMcp.error(message.opt("id") ?: JSONObject.NULL, -32602, "Invalid recovery metadata"))
+                    created = try {
+                        sessions.create(params?.optJSONObject("clientInfo")?.optString("name") ?: "Agent",
+                            meta?.optString("remotetool/resume_token")) { owner -> !engine.connectionLog.blocked(owner) }
+                    } catch (error: PhoneToolError) {
+                        return json(Response.Status.OK, PhoneMcp.error(message.opt("id") ?: JSONObject.NULL, -32000, error.message ?: "Recovery failed")
+                            .apply { getJSONObject("error").put("data", JSONObject().put("code", error.code)) })
+                    }
+                    result.getJSONObject("result").put("_meta", JSONObject().put("remotetool", JSONObject().put("agent_id", created.logicalId)
+                        .put("resume_token", created.resumeToken).put("generation", created.generation)))
                     engine.connectionSeen(created.owner, created.name, JSONObject().put("client_info", message.optJSONObject("params")?.optJSONObject("clientInfo"))
                         .put("remote_address", session.remoteIpAddress).put("protocol_version", result.optJSONObject("result")?.optString("protocolVersion")))
                 }
@@ -79,5 +95,14 @@ class PhoneHttpServer(private val engine: PhoneEngine) : NanoHTTPD("0.0.0.0", en
         val data = HashMap<String, String>(); session.parseBody(data)
         return JSONObject(data["postData"] ?: "")
     }
-    private fun json(status: Response.Status, data: JSONObject) = newFixedLengthResponse(status, "application/json; charset=utf-8", data.toString()).apply { addHeader("Cache-Control", "no-store") }
+    private fun json(status: Response.Status, data: JSONObject): Response {
+        val start = System.nanoTime()
+        val body = data.toString()
+        val serialized = (System.nanoTime() - start) / 1_000_000.0
+        return newFixedLengthResponse(status, "application/json; charset=utf-8", body).apply {
+            addHeader("Cache-Control", "no-store")
+            addHeader("X-RemoteTool-Serialize-Ms", serialized.toString())
+            addHeader("X-RemoteTool-Response-Bytes", body.toByteArray(Charsets.UTF_8).size.toString())
+        }
+    }
 }

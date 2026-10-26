@@ -115,7 +115,7 @@
   },
   {
     "name": "phone_get_user_reply",
-    "description": "Read the user's reply on the SAME session that created notice_id: pending/done/dismissed/expired/cancelled/not_found. Keep the connection while awaiting assistance, release UI during manual interaction, and poll at reasonable intervals rather than blocking or repeatedly reconnecting. A timeout is not completion.",
+    "description": "Read the user's reply on the SAME session that created notice_id: pending\/done\/dismissed\/expired\/cancelled\/not_found. Keep the connection while awaiting assistance, release UI during manual interaction, and poll at reasonable intervals rather than blocking or repeatedly reconnecting. A timeout is not completion.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -183,8 +183,77 @@
     }
   },
   {
+    "name": "phone_get_operation",
+    "description": "Read the receipt of a previous operation on THIS logical agent. Use operation_id\/request_id after an unknown response; never replay an uncertain action.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "description": ""
+        },
+        "explanation": {
+          "type": "string",
+          "description": "Optional brief user-facing explanation of what this call is doing and why, in the user's language (max 240 characters). Shown with the operation on the phone; do not include credentials, sensitive input or hidden reasoning. No separate notification call is needed.",
+          "maxLength": 240
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "phone_execute",
+    "description": "Execute 1–20 bounded UI steps serially on your existing UI ownership (max 30 seconds). Each step {tool,arguments}; selectors are resolved afresh. Stops on first failed action\/wait; returns receipts and final compact state. No shell, lifecycle, nested batches or arbitrary scripts. Reuse the same request_id for delivery recovery, not a new one.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "steps": {
+          "type": "array",
+          "description": "",
+          "items": {
+            "type": "object"
+          }
+        },
+        "max_ms": {
+          "type": "integer",
+          "description": ""
+        },
+        "explanation": {
+          "type": "string",
+          "description": "Optional brief user-facing explanation of what this call is doing and why, in the user's language (max 240 characters). Shown with the operation on the phone; do not include credentials, sensitive input or hidden reasoning. No separate notification call is needed.",
+          "maxLength": 240
+        },
+        "guard": {
+          "type": "object",
+          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+        },
+        "return_state": {
+          "type": "string",
+          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
     "name": "phone_observe",
-    "description": "Read current UI nodes and optionally screenshot using the SAME session that acquired phone_begin_ui. Coordinates use original screen pixels; snapshot_id/node_id belong to this session and expire after 30 seconds. Observe again after changes; do not reuse another connection's nodes.",
+    "description": "Read target application UI on your current UI ownership. Default compact excludes empty\/invisible nodes and system\/agent overlays. mode=raw for diagnostic nodes, include_system=true for all windows, mode=text adds a concise text dump. filter selects text\/text_contains\/text_regex\/description\/resource_id\/class\/package_name\/clickable\/editable\/visible. changed_since uses a previous snapshot_id and returns delta only when scope matches. Coordinates are physical screen pixels; snapshot\/node IDs expire in 30 seconds.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -195,6 +264,33 @@
         "limit": {
           "type": "integer",
           "description": ""
+        },
+        "mode": {
+          "type": "string",
+          "description": ""
+        },
+        "package_name": {
+          "type": "string",
+          "description": ""
+        },
+        "include_system": {
+          "type": "boolean",
+          "description": ""
+        },
+        "filter": {
+          "type": "object",
+          "description": ""
+        },
+        "changed_since": {
+          "type": "string",
+          "description": ""
+        },
+        "fields": {
+          "type": "array",
+          "description": "",
+          "items": {
+            "type": "string"
+          }
         },
         "explanation": {
           "type": "string",
@@ -213,7 +309,7 @@
   },
   {
     "name": "phone_find_nodes",
-    "description": "Find UI nodes by text/resource_id/description; returns a fresh snapshot.",
+    "description": "Find UI nodes by text\/resource_id\/description; returns a fresh snapshot.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -246,7 +342,7 @@
   },
   {
     "name": "phone_tap",
-    "description": "Tap a node with snapshot_id, or original screen x/y. Observe again to verify outcome.",
+    "description": "Tap a unique fresh selector, node+snapshot, or physical screen x\/y. Invalid\/invisible bounds are rejected. Non-clickable labels may use their nearest valid clickable ancestor; no blind coordinate fallback. Use wait_for and return_state to combine action, conditional waiting and observation.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -256,6 +352,10 @@
         },
         "snapshot_id": {
           "type": "string",
+          "description": ""
+        },
+        "selector": {
+          "type": "object",
           "description": ""
         },
         "x": {
@@ -274,6 +374,18 @@
           "type": "string",
           "description": "Optional brief user-facing explanation of what this call is doing and why, in the user's language (max 240 characters). Shown with the operation on the phone; do not include credentials, sensitive input or hidden reasoning. No separate notification call is needed.",
           "maxLength": 240
+        },
+        "guard": {
+          "type": "object",
+          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+        },
+        "return_state": {
+          "type": "string",
+          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+        },
+        "wait_for": {
+          "type": "object",
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
         }
       },
       "required": [],
@@ -315,6 +427,18 @@
           "type": "string",
           "description": "Optional brief user-facing explanation of what this call is doing and why, in the user's language (max 240 characters). Shown with the operation on the phone; do not include credentials, sensitive input or hidden reasoning. No separate notification call is needed.",
           "maxLength": 240
+        },
+        "guard": {
+          "type": "object",
+          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+        },
+        "return_state": {
+          "type": "string",
+          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+        },
+        "wait_for": {
+          "type": "object",
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
         }
       },
       "required": [
@@ -333,7 +457,7 @@
   },
   {
     "name": "phone_input_text",
-    "description": "Set Unicode text on a node or current focused input. append defaults to false.",
+    "description": "Set Unicode text using a unique selector, fresh node or focused input. append defaults to false. Use wait_for\/return_state for readback without a separate call.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -343,6 +467,10 @@
         },
         "snapshot_id": {
           "type": "string",
+          "description": ""
+        },
+        "selector": {
+          "type": "object",
           "description": ""
         },
         "text": {
@@ -357,6 +485,18 @@
           "type": "string",
           "description": "Optional brief user-facing explanation of what this call is doing and why, in the user's language (max 240 characters). Shown with the operation on the phone; do not include credentials, sensitive input or hidden reasoning. No separate notification call is needed.",
           "maxLength": 240
+        },
+        "guard": {
+          "type": "object",
+          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+        },
+        "return_state": {
+          "type": "string",
+          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+        },
+        "wait_for": {
+          "type": "object",
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
         }
       },
       "required": [
@@ -372,7 +512,7 @@
   },
   {
     "name": "phone_key",
-    "description": "Accessibility globals: BACK/HOME/RECENTS/NOTIFICATIONS/QUICK_SETTINGS/POWER_DIALOG/SPLIT_SCREEN/LOCK_SCREEN/TAKE_SCREENSHOT. Privileged backend also accepts Android KEYCODE names or numeric strings (ENTER, POWER, VOLUME_UP, etc).",
+    "description": "Accessibility globals: BACK\/HOME\/RECENTS\/NOTIFICATIONS\/QUICK_SETTINGS\/POWER_DIALOG\/SPLIT_SCREEN\/LOCK_SCREEN\/TAKE_SCREENSHOT. Privileged backend also accepts Android KEYCODE names or numeric strings (ENTER, POWER, VOLUME_UP, etc).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -384,6 +524,18 @@
           "type": "string",
           "description": "Optional brief user-facing explanation of what this call is doing and why, in the user's language (max 240 characters). Shown with the operation on the phone; do not include credentials, sensitive input or hidden reasoning. No separate notification call is needed.",
           "maxLength": 240
+        },
+        "guard": {
+          "type": "object",
+          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+        },
+        "return_state": {
+          "type": "string",
+          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+        },
+        "wait_for": {
+          "type": "object",
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
         }
       },
       "required": [
@@ -411,6 +563,18 @@
           "type": "string",
           "description": "Optional brief user-facing explanation of what this call is doing and why, in the user's language (max 240 characters). Shown with the operation on the phone; do not include credentials, sensitive input or hidden reasoning. No separate notification call is needed.",
           "maxLength": 240
+        },
+        "guard": {
+          "type": "object",
+          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+        },
+        "return_state": {
+          "type": "string",
+          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+        },
+        "wait_for": {
+          "type": "object",
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
         }
       },
       "required": [
@@ -426,7 +590,7 @@
   },
   {
     "name": "phone_wait",
-    "description": "Wait up to timeout_ms (max 10000) for text or foreground package, then return fresh observation.",
+    "description": "Wait for text\/regex, target foreground package, selector presence\/absence, and\/or stable UI signature. Checks only the application window; returns matched, matched_nodes and fresh state. Prefer this to fixed sleeps. Timeout never means success.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -434,8 +598,24 @@
           "type": "string",
           "description": ""
         },
+        "text_regex": {
+          "type": "string",
+          "description": ""
+        },
         "package_name": {
           "type": "string",
+          "description": ""
+        },
+        "selector": {
+          "type": "object",
+          "description": ""
+        },
+        "absent": {
+          "type": "boolean",
+          "description": ""
+        },
+        "stable_ms": {
+          "type": "integer",
           "description": ""
         },
         "timeout_ms": {
@@ -484,7 +664,7 @@
   },
   {
     "name": "phone_transfer_file",
-    "description": "Upload/download/list files in RemoteTool exchange directory. Max 2 MiB per chunk. Upload offset=0 replaces; subsequent exact offset appends. Download supports offset/length and returns total size; supports large APKs via chunks.",
+    "description": "Upload\/download\/list files in RemoteTool exchange directory. Max 2 MiB per chunk. Upload offset=0 replaces; subsequent exact offset appends. Download supports offset\/length and returns total size; supports large APKs via chunks.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -527,7 +707,7 @@
   },
   {
     "name": "phone_shell",
-    "description": "Run privileged shell with Shizuku or root. Requires advanced switch. Set ui_operation=true for commands reading or changing screen/UI state; these require phone_begin_ui ownership. Never automatically retry an unknown result.",
+    "description": "Run privileged shell with Shizuku or root. Requires advanced switch. Set ui_operation=true for commands reading or changing screen\/UI state; these require phone_begin_ui ownership. Never automatically retry an unknown result.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -605,7 +785,7 @@
   },
   {
     "name": "phone_system_setting",
-    "description": "Advanced settings get/put/delete for system, secure or global namespace.",
+    "description": "Advanced settings get\/put\/delete for system, secure or global namespace.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -650,7 +830,7 @@
   },
   {
     "name": "phone_android",
-    "description": "Native Android action: device, permissions, clipboard_get/set, volume_get/set (parameters stream/value), ringer_set(value), brightness_set(value 0-255), flashlight(enabled), vibrate(duration_ms), location (cached), sensors, network, bluetooth, sms_send(number/text), wake. Requires advanced and relevant Android permission.",
+    "description": "Native Android action: device, permissions, clipboard_get\/set, volume_get\/set (parameters stream\/value), ringer_set(value), brightness_set(value 0-255), flashlight(enabled), vibrate(duration_ms), location (cached), sensors, network, bluetooth, sms_send(number\/text), wake. Requires advanced and relevant Android permission.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -681,7 +861,7 @@
   },
   {
     "name": "phone_intent",
-    "description": "Start Android activity/service or send broadcast. Supports settings panels, dial/call, camera, audio/video capture, alarms, sharing, application components. Background launch and OS permission limits still apply.",
+    "description": "Start Android activity\/service or send broadcast. Supports settings panels, dial\/call, camera, audio\/video capture, alarms, sharing, application components. Background launch and OS permission limits still apply.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -736,7 +916,7 @@
   },
   {
     "name": "phone_content",
-    "description": "Query/insert/update/delete Android content providers, e.g. content://contacts/people, content://com.android.contacts/data, content://com.android.calendar/events, content://sms, content://call_log/calls, content://media/external/images/media. Uses granted system permissions. Query limit max 500; mutations require item URI or selection unless allow_all=true.",
+    "description": "Query\/insert\/update\/delete Android content providers, e.g. content:\/\/contacts\/people, content:\/\/com.android.contacts\/data, content:\/\/com.android.calendar\/events, content:\/\/sms, content:\/\/call_log\/calls, content:\/\/media\/external\/images\/media. Uses granted system permissions. Query limit max 500; mutations require item URI or selection unless allow_all=true.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -802,7 +982,7 @@
   },
   {
     "name": "phone_files",
-    "description": "Native files list/stat/read/write/mkdir/delete/move/copy. Absolute Android path or granted content URI (read/write). Binary via data_base64 max 2 MiB. More restricted paths can use privileged phone_shell.",
+    "description": "Native files list\/stat\/read\/write\/mkdir\/delete\/move\/copy. Absolute Android path or granted content URI (read\/write). Binary via data_base64 max 2 MiB. More restricted paths can use privileged phone_shell.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -850,7 +1030,7 @@
   },
   {
     "name": "phone_notifications",
-    "description": "Read notifications or dismiss/open/action/reply using granted notification access. Replies require a RemoteInput action.",
+    "description": "Read notifications or dismiss\/open\/action\/reply using granted notification access. Replies require a RemoteInput action.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -889,7 +1069,7 @@
   },
   {
     "name": "phone_screenshot",
-    "description": "Capture screen using accessibility or authorized Shizuku/root. Returns JPEG image. backend: auto/accessibility/shizuku/root. Protected windows may be unavailable.",
+    "description": "Capture screen using accessibility or authorized Shizuku\/root. Returns JPEG image. backend: auto\/accessibility\/shizuku\/root. Protected windows may be unavailable.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -914,7 +1094,7 @@
   },
   {
     "name": "phone_ui_action",
-    "description": "Act on observed node: focus/clear_focus/select/clear_selection/scroll_forward/scroll_backward/expand/collapse/copy/cut/paste/accessibility_focus/dismiss/set_selection(start,end). action also accepts a numeric Android AccessibilityNodeInfo action ID string.",
+    "description": "Act on observed node: focus\/clear_focus\/select\/clear_selection\/scroll_forward\/scroll_backward\/expand\/collapse\/copy\/cut\/paste\/accessibility_focus\/dismiss\/set_selection(start,end). action also accepts a numeric Android AccessibilityNodeInfo action ID string.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -942,6 +1122,18 @@
           "type": "string",
           "description": "Optional brief user-facing explanation of what this call is doing and why, in the user's language (max 240 characters). Shown with the operation on the phone; do not include credentials, sensitive input or hidden reasoning. No separate notification call is needed.",
           "maxLength": 240
+        },
+        "guard": {
+          "type": "object",
+          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+        },
+        "return_state": {
+          "type": "string",
+          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+        },
+        "wait_for": {
+          "type": "object",
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
         }
       },
       "required": [
@@ -959,7 +1151,7 @@
   },
   {
     "name": "phone_gesture",
-    "description": "Multi-touch/path gesture. strokes: [{points:[[x,y],[x,y]],start_ms:0,duration_ms:400}]. Screen pixel coordinates, max 10 strokes.",
+    "description": "Multi-touch\/path gesture. strokes: [{points:[[x,y],[x,y]],start_ms:0,duration_ms:400}]. Screen pixel coordinates, max 10 strokes.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -974,6 +1166,18 @@
           "type": "string",
           "description": "Optional brief user-facing explanation of what this call is doing and why, in the user's language (max 240 characters). Shown with the operation on the phone; do not include credentials, sensitive input or hidden reasoning. No separate notification call is needed.",
           "maxLength": 240
+        },
+        "guard": {
+          "type": "object",
+          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+        },
+        "return_state": {
+          "type": "string",
+          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+        },
+        "wait_for": {
+          "type": "object",
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
         }
       },
       "required": [

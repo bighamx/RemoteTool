@@ -2,6 +2,10 @@ using RemoteTool.WebApi.Services;
 using Microsoft.AspNetCore.Http;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Security.AccessControl;
+using System.Security.Principal;
+
+await HermesNativeChecks.Run();
 
 var fixture = Path.Combine(Path.GetTempPath(), "chuckie-attachment-check-" + Guid.NewGuid().ToString("N"));
 var count = 0;
@@ -27,6 +31,25 @@ try {
     ToolHistoryCache.Keep("hermes", "cache-check", new());
     Check(ToolHistoryCache.Read("hermes", "cache-check", "1", 0, true, "v1") == null, "removed turns are purged after rewind");
     Directory.CreateDirectory(fixture);
+    if (OperatingSystem.IsWindows()) {
+        var permissionRoot = Path.Combine(fixture, "upload-permissions");
+        Directory.CreateDirectory(permissionRoot);
+        var user = WindowsIdentity.GetCurrent().User!;
+        var original = new DirectoryInfo(permissionRoot).GetAccessControl();
+        var limited = new DirectorySecurity();
+        limited.SetAccessRuleProtection(true, false);
+        limited.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.ReadAndExecute | FileSystemRights.ReadPermissions,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        try {
+            new DirectoryInfo(permissionRoot).SetAccessControl(limited);
+            RemoteTool.WebApi.Services.Codex.CodexAttachmentAccess.Ensure(permissionRoot, user.Value);
+            File.WriteAllText(Path.Combine(permissionRoot, "upload.txt"), "readable upload");
+            Check(File.ReadAllText(Path.Combine(permissionRoot, "upload.txt")) == "readable upload", "interactive worker can read and write after ACL repair");
+            var repaired = new DirectoryInfo(permissionRoot).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+            RemoteTool.WebApi.Services.Codex.CodexAttachmentAccess.Ensure(permissionRoot, user.Value);
+            Check(repaired == new DirectoryInfo(permissionRoot).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Access), "valid attachment ACL is not rewritten");
+        } finally { new DirectoryInfo(permissionRoot).SetAccessControl(original); }
+    }
     var sourceVersion = Path.Combine(fixture, "source-version.txt"); File.WriteAllText(sourceVersion, "old");
     ToolHistoryCache.Save("codex", "cache-check", "1", many, false, path: sourceVersion);
     Check(ToolHistoryCache.Read("codex", "cache-check", "1", 0, true) != null, "unchanged source returns cached data");
@@ -112,19 +135,22 @@ try {
         if (agent == "codex") {
             var uploadedPath = store.Resolve(session, id);
             string NativeHistory(string sid, string role, string text) => store.AddMessageAttachments(sid,
-                new JsonObject { ["data"] = new JsonArray(new JsonObject { ["id"] = 2, ["role"] = role, ["content"] = text }) }.ToJsonString()).ToJsonString();
-            var nativeText = "请查看附件\n\n附件文件：\n\"" + uploadedPath + "\"";
+                new JsonObject { ["data"] = new JsonArray(new JsonObject { ["id"] = role == "user" ? 2 : 3, ["role"] = role, ["content"] = text,
+                    ["attachment_ids"] = new JsonArray(id), ["client_request_id"] = key }) }.ToJsonString()).ToJsonString();
+            var nativeText = "请查看附件";
             var recovered = JsonNode.Parse(NativeHistory(session, "user", nativeText));
             Check(recovered["data"][0]["attachments"][0]["url"].GetValue<string>() == beforeUrl,
-                "native queued history recovers attachments without a message binding");
+                "native queued history uses structured attachments without a phone message binding");
+            var rebound = store.AddMessageAttachments(session,"{\"data\":[{\"id\":2,\"role\":\"user\",\"content\":\"请查看附件\"}]}");
+            Check(rebound["data"][0]["attachments"][0]["id"].ToString() == id, "native request attachment mapping persists after journal metadata is gone");
             Check(JsonNode.Parse(NativeHistory(session, "user", nativeText.Replace("\n", "\r\n")))["data"][0]["attachments"][0]["id"].GetValue<string>() == id,
-                "native history recovery preserves attachment IDs across CRLF formatting");
-            Check(JsonNode.Parse(NativeHistory("other-session", "user", nativeText))["data"][0]["attachments"] == null,
-                "quoted paths from another session never become downloadable attachments");
+                "structured attachment IDs do not depend on text formatting");
+            Check(JsonNode.Parse(NativeHistory("other-session", "user", nativeText))["data"][0]["attachments"].AsArray().Count == 0,
+                "structured IDs cannot access files from another session");
             Check(JsonNode.Parse(NativeHistory(session, "assistant", nativeText))["data"][0]["attachments"] == null,
                 "assistant quotes are not treated as uploaded user attachments");
-            Check(JsonNode.Parse(NativeHistory(session, "user", "quoted path: \"" + uploadedPath + "\""))["data"][0]["attachments"] == null,
-                "ordinary quoted paths do not create attachment associations");
+            Check(JsonNode.Parse(NativeHistory(session, "user", "quoted path: \"" + uploadedPath + "\""))["data"][0]["attachments"].AsArray().Count == 1,
+                "attachment association uses IDs, not matching user text");
             store.Bind(session, "2", []);
             Check(JsonNode.Parse(NativeHistory(session, "user", nativeText))["data"][0]["attachments"].AsArray().Count == 0,
                 "an explicit empty binding remains authoritative over native inference");
@@ -137,21 +163,38 @@ try {
             var text = prepared["input"] is JsonValue ? prepared["input"].ToString() : prepared["input"][0]["content"][0]["text"].ToString();
             JsonNode Recover(string sid, string content) => store.AddMessageAttachments(sid, new JsonObject {
                 ["data"] = new JsonArray(new JsonObject { ["id"] = 99, ["role"] = "user", ["content"] = content }) }.ToJsonString())["data"][0];
-            Check(Recover(session, text)["attachments"][0]["id"].ToString() == id, "Hermes restores native persistent attachments without phone binding");
-            Check(Recover(session, text.Replace("\n", "\r\n"))["attachments"][0]["id"].ToString() == id, "Hermes attachment recovery tolerates CRLF");
+            Check(text.StartsWith("测试") && text.Split('\n').Select(HermesNativeAttachments.ReferencePath).Contains(uploadedPath) && prepared["instructions"].ToString().Contains(uploadedPath), "Hermes persists ordinary file references in its conversation");
+            store.Bind(session,"99",[id]);
+            Check(Recover(session, text)["attachments"][0]["id"].ToString() == id, "Hermes resolves attachments through confirmed message binding");
             var steer = store.PrepareHermesSteer(uploadInput, session, key).GetProperty("input").GetString();
-            Check(Recover(session, steer)["attachments"][0]["id"].ToString() == id, "Hermes quoted steering attachments recover after reconnect");
+            Check(steer.Split('\n').Select(HermesNativeAttachments.ReferencePath).Contains(uploadedPath) && steer.Contains("vision_analyze") && !steer.Contains("[ChuckieHelper"), "text-only Hermes steering retains native file references and reading guidance");
             Check(Recover("other-hermes", text)["attachments"] == null, "Hermes cannot recover another session's uploaded files");
         }
         store.PrepareCodexRun(Body(session, [id]), key);
         store.PrepareHermesSteer(Body(session, [id]), session, key);
+        var bridged = store.PrepareCodexRun(Body(session,[id]),key);
+        Check(bridged.GetProperty("attachment_ids")[0].GetString() == id, "Codex bridge retains structured IDs for durable run history");
+        using (var imageStream = new MemoryStream(Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="))) {
+            var imageUpload = new FormFile(imageStream,0,imageStream.Length,"file","pixel.png");
+            var image = JsonSerializer.SerializeToNode(await store.Upload(session,imageUpload,default));
+            var native = JsonNode.Parse(store.PrepareRun(Body(session,[image["id"].ToString()]),key).GetRawText());
+            Check(native["input"][0]["content"][0]["text"].ToString() == "测试", "Hermes image input keeps original user text");
+            Check(native["input"][0]["content"][1]["type"].ToString() == "image_url", "Hermes uses native multimodal image input");
+            Check(native["attachment_ids"] == null, "Hermes API does not receive bridge attachment IDs");
+            var imageId=image["id"].ToString();
+            store.Bind(session,"100",[imageId]);
+            var reloaded=new HermesAttachments(agent,root).AddMessageAttachments(session,
+                "{\"data\":[{\"id\":100,\"role\":\"user\",\"content\":\"插话图片\"}]}");
+            Check(reloaded["data"][0]["attachments"][0]["id"].ToString()==imageId,
+                agent+" interjection image card survives server metadata reload without any text marker");
+        }
         Check(!Directory.Exists(Path.Combine(folder, "outbox")), agent + " using uploads still creates no speculative output folders");
 
         var output = Path.Combine(folder, "outbox", key, "generated.txt");
         Directory.CreateDirectory(Path.GetDirectoryName(output)); File.WriteAllText(output, "generated content");
         var outputMeta = JsonSerializer.SerializeToNode(store.Metadata(session, output));
         Check(outputMeta["outgoing"].GetValue<bool>() && outputMeta["messageKey"].GetValue<string>() == key, agent + " lazily generated output metadata retained");
-        Check(store.List(session).Length == 2 && store.Resolve(session, outputMeta["id"].GetValue<string>()) == output, agent + " generated files discoverable and downloadable");
+        Check(store.List(session).Length == 3 && store.Resolve(session, outputMeta["id"].GetValue<string>()) == output, agent + " generated files discoverable and downloadable");
         using var failing = new FailingStream();
         try { await store.Upload("failed-upload", new FormFile(failing, 0, 10, "file", "fail.txt"), default); throw new Exception("failed upload accepted"); }
         catch (IOException) { Check(!Directory.Exists(store.Folder("failed-upload")), agent + " aborted upload leaves no file or empty session folder"); }

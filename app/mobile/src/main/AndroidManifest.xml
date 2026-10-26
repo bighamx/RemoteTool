@@ -71,6 +71,7 @@
     <application android:name="com.chuckiehelper.mobile.RemoteToolApplication" android:label="${appLabel}" android:icon="${appIcon}" android:theme="@android:style/Theme.Material.NoActionBar" android:usesCleartextTraffic="true" android:allowBackup="false">
         <meta-data android:name="com.xiaomi.xms.APP_ID" android:value="${xiaomiAppId}" />
         <meta-data android:name="com.xiaomi.xms.BUILD_TYPE_DEBUG" android:value="${xiaomiDebug}" />
+        <activity android:name="com.chuckiehelper.mobile.nativeui.CloudQrCaptureActivity" android:exported="false" android:theme="@style/zxing_CaptureTheme" android:screenOrientation="portrait" android:configChanges="orientation|screenSize|keyboardHidden" />
         <activity android:name="com.chuckiehelper.mobile.NativeActivity" android:exported="true" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|smallestScreenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

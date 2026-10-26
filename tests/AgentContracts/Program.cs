@@ -1,6 +1,11 @@
 using System.Text.Json.Nodes;
 using RemoteTool.WebApi.Services.Codex;
 
+if (args.Length == 1 && args[0] == "--attachment-input-only") {
+    CodexAttachmentInputChecks.Run();
+    return;
+}
+
 await HermesHistoryPagesChecks.Run();
 await ScheduledMessageChecks.Run();
 TextEncodingChecks.Run();

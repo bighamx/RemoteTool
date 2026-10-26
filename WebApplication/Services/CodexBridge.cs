@@ -38,6 +38,15 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
         return value;
     }
     private readonly SemaphoreSlim startup = new(1, 1);
+    private readonly Lazy<bool> attachmentAccess = new(() => {
+        if (OperatingSystem.IsWindows()) {
+            try { Codex.CodexAttachmentAccess.Ensure(RemoteToolPaths.CodexAttachments, InteractiveProcessLauncher.GetInteractiveUserSid()); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                Trace.TraceWarning("Codex attachment permissions could not be refreshed: {0}", error.GetType().Name);
+            }
+        }
+        return true;
+    });
     private readonly string folder = RemoteToolPaths.CodexBridge;
     private string token;
     private int port;
@@ -97,6 +106,8 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
         }
     }
     private async Task Ensure(CancellationToken ct) {
+        // A healthy surviving worker does not prove the upload directory ACL is still valid.
+        _ = attachmentAccess.Value;
         if (await Ready(ct)) return;
         await startup.WaitAsync(ct);
         try {

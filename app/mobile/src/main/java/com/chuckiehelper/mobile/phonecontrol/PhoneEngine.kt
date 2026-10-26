@@ -39,31 +39,55 @@ class PhoneEngine(val context: Context) {
         .put("accessibility_authorized", PhonePermissionStatus.accessibilityGranted(context) ?: JSONObject.NULL)
         .put("privilege", privilege.status()).put("android_api", android.os.Build.VERSION.SDK_INT)
         .put("agent_display", agentUi.capabilities())
-        .put("screen_width", context.resources.displayMetrics.widthPixels).put("screen_height", context.resources.displayMetrics.heightPixels)
+        .apply { val screen = PhoneScreen.info(context); screen.keys().forEach { put(it, screen.get(it)) } }
     fun status(id: String) = journal.status(id)
     fun invoke(name: String, arguments: JSONObject, requestId: String, allowAdvanced: Boolean = true,
-        deadline: Long = System.currentTimeMillis() + PhoneToolPolicy.timeoutMs(name, arguments), agentId: String = "direct", agentName: String = "Agent", auditId: String? = null): JSONObject {
+        deadline: Long = System.currentTimeMillis() + PhoneToolPolicy.timeoutMs(name, arguments), agentId: String = "direct", agentName: String = "Agent", auditId: String? = null, queueMs: Long = 0): JSONObject {
         val log = try { auditId ?: connectionLog.begin(agentId, agentName, requestId, name, arguments) }
             catch (error: PhoneToolError) { return errorResult(error) }
         var started = false
-        val result = invokeCore(name, arguments, requestId, allowAdvanced, deadline, agentId, agentName) { started = true; connectionLog.markRunning(log) }
+        val result = invokeCore(name, arguments, requestId, allowAdvanced, deadline, agentId, agentName, queueMs) { started = true; connectionLog.markRunning(log) }
+        annotate(result, requestId, if (started) "receipt_available" else "not_started")
         if (connectionLog.blocked(agentId)) result.optJSONObject("structuredContent")?.apply {
             put("connection_closed_by_user", true); put("retryable", false)
             put("connection_message", "用户已在手机端断开此连接。该调用若已开始，请核对本次执行回执；后续操作需重新建立会话。")
-            put("execution", if (!started) "not_started" else if (optString("code") == "delivery_unknown") "result_unknown" else "receipt_available")
+            put("execution", if (optString("code") == "delivery_unknown") "unknown" else if (!started) "not_started" else "receipt_available")
             optJSONObject("details")?.put("execution", optString("execution"))
             result.optJSONArray("content")?.optJSONObject(0)?.takeIf { it.optString("type") == "text" }?.put("text", toString())
         }
         connectionLog.finish(log, result)
         return result
     }
+    private fun annotate(result: JSONObject, requestId: String, fallback: String) {
+        result.optJSONObject("structuredContent")?.let { data ->
+            if (!data.has("operation_id")) data.put("operation_id", requestId)
+            if (!data.has("execution")) data.put("execution", if (data.optString("code") == "delivery_unknown") "unknown" else fallback)
+            if (result.optBoolean("isError") && !data.has("retryable")) data.put("retryable", data.optString("code") in setOf("device_busy", "ui_busy") && data.optString("execution") == "not_started")
+            if (result.optBoolean("isError") && !data.has("hint")) data.put("hint", when (data.optString("code")) {
+                "stale_snapshot", "node_not_found", "ambiguous_target", "target_not_visible", "node_not_actionable", "precondition_failed" -> "重新观察目标应用，选择唯一且可见的控件；不要猜坐标或盲目重发。"
+                "postcondition_timeout", "delivery_unknown" -> "动作可能已发生，请使用 operation_id 查询回执并核对界面，不要换新 ID 重发。"
+                "connection_closed_by_user" -> "用户已断开，请停止；仅在用户明确要求继续后开始新任务。"
+                else -> "核对返回的 code、权限及当前状态后再决定下一步。"
+            })
+            result.optJSONArray("content")?.optJSONObject(0)?.takeIf { it.optString("type") == "text" }?.put("text", data.toString())
+        }
+    }
     private fun invokeCore(name: String, arguments: JSONObject, requestId: String, allowAdvanced: Boolean,
-        deadline: Long, agentId: String, agentName: String, onStarted: () -> Unit): JSONObject {
+        deadline: Long, agentId: String, agentName: String, queueMs: Long, onStarted: () -> Unit): JSONObject {
         try {
             connectionLog.requireOpen(agentId)
             if (!settings.enabled) fail("disabled", "手机操控未开启")
             if (!Regex("[a-zA-Z0-9_.:-]{1,160}").matches(requestId)) fail("invalid_arguments", "Invalid request_id")
             PhoneToolCatalog.validate(name, arguments)
+            PhoneExecution.validateOptions(arguments)
+            if (name in setOf("phone_execute", "phone_tap", "phone_swipe", "phone_gesture")) {
+                val screen = PhoneScreen.info(context)
+                if (name == "phone_execute") PhoneExecution.validateBatch(arguments).forEach { (tool, args) ->
+                    PhoneExecution.validateCoordinates(tool, args, screen.getInt("screen_width"), screen.getInt("screen_height"))
+                }
+                PhoneExecution.validateCoordinates(name, arguments, screen.getInt("screen_width"), screen.getInt("screen_height"))
+            }
+            if (name == "phone_wait") PhoneExecution.validateWait(arguments)
             val explanation = arguments.optString("explanation").trim()
             val operationArguments = JSONObject(arguments.toString()).apply { remove("explanation") }
             if (name in PhoneToolCatalog.advanced && (!settings.advanced || !allowAdvanced)) fail("advanced_disabled", "高级操作未开启")
@@ -81,20 +105,40 @@ class PhoneEngine(val context: Context) {
             if (operationLock != null && !operationLock.tryLock()) fail("device_busy", "手机正在执行其他操作，请稍后重试")
             try {
                 if (!settings.enabled || deadline < System.currentTimeMillis()) fail("timeout", "请求已过期或控制已停止")
-                journal.claim(requestId, digest)?.let { return it }
+                journal.claim(requestId, digest, agentId)?.let { return it }
                 connectionSeen(agentId, agentName)
                 val epoch = generation
                 val hasIndicator = agentUi.toolStarted(agentId, name, explanation)
+                val startedAt = android.os.SystemClock.elapsedRealtime()
+                var attempted = false
                 val result = try {
-                    synchronized(connectionGate) { connectionLog.requireOpen(agentId); onStarted() }
+                    synchronized(connectionGate) { connectionLog.requireOpen(agentId) }
                     if (ui && name != "phone_wait") agentUi.requireUi(agentId)
-                    val data = execute(name, operationArguments, epoch, deadline, agentId)
-                    val failed = data.has("exit_code") && data.optInt("exit_code", -1) != 0 || data.optBoolean("timed_out") || data.has("accepted") && !data.optBoolean("accepted")
-                    if (failed) data.put("code", if (data.optBoolean("timed_out")) "delivery_unknown" else "operation_failed")
+                    checkGuard(operationArguments, agentId)
+                    val resolved = if (name in setOf("phone_tap", "phone_input_text")) resolveSelector(operationArguments, agentId) else operationArguments
+                    synchronized(connectionGate) { connectionLog.requireOpen(agentId); onStarted(); attempted = true }
+                    val data = if (name == "phone_execute") batch(resolved, requestId, allowAdvanced, epoch, deadline, agentId, agentName)
+                        else execute(name, resolved, epoch, deadline, agentId)
+                    val failed = data.has("exit_code") && data.optInt("exit_code", -1) != 0 || data.optBoolean("timed_out") || data.has("accepted") && !data.optBoolean("accepted") || data.has("code") && name == "phone_execute"
+                    if (failed && !data.has("code")) data.put("code", if (data.optBoolean("timed_out")) "delivery_unknown" else "operation_failed")
+                    if (!failed && name in PhoneExecution.actions) {
+                        resolved.optJSONObject("wait_for")?.let { condition ->
+                            val state = waitFor(condition, agentId, epoch, deadline)
+                            data.put("matched", state.getBoolean("matched")).put("state", state)
+                            if (!state.getBoolean("matched")) data.put("code", "postcondition_timeout")
+                        }
+                        val mode = resolved.optString("return_state", "none")
+                        if (mode != "none" && !data.has("state")) data.put("state", observe(agentId, JSONObject().put("mode", mode)))
+                    }
                     JSONObject().put("isError", failed).put("content", JSONArray().put(JSONObject().put("type", "text").put("text", data.toString())))
                         .put("structuredContent", data)
                 } catch (error: Exception) { errorResult(error) }
                 finally { if (hasIndicator) agentUi.toolFinished(agentId) }
+                val receipt = result.getJSONObject("structuredContent")
+                receipt.put("operation_id", requestId).put("execution", if (receipt.optString("code") == "delivery_unknown") "unknown" else if (!attempted) "not_started" else "receipt_available")
+                    .put("metrics", JSONObject().put("device_ms", android.os.SystemClock.elapsedRealtime() - startedAt).put("queue_ms", queueMs.coerceAtLeast(0)))
+                if (receipt.optString("code") == "postcondition_timeout") result.put("isError", true)
+                result.getJSONArray("content").getJSONObject(0).put("text", receipt.toString())
                 // Large image data is carried separately from structured metadata.
                 result.optJSONObject("structuredContent")?.optString("image_base64")?.takeIf { it.isNotBlank() }?.let { image ->
                     val data = result.getJSONObject("structuredContent"); val mime = data.optString("image_mime", "image/jpeg")
@@ -102,9 +146,13 @@ class PhoneEngine(val context: Context) {
                     val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, bounds)
                     data.put("image_width", bounds.outWidth).put("image_height", bounds.outHeight)
+                    if (bounds.outWidth > 0 && bounds.outHeight > 0) data.put("image_to_screen", JSONObject()
+                        .put("scale_x", data.optInt("screen_width", PhoneScreen.info(context).getInt("screen_width")).toDouble() / bounds.outWidth)
+                        .put("scale_y", data.optInt("screen_height", PhoneScreen.info(context).getInt("screen_height")).toDouble() / bounds.outHeight))
                     data.remove("image_base64"); result.getJSONArray("content").getJSONObject(0).put("text", data.toString())
                     result.getJSONArray("content").put(JSONObject().put("type", "image").put("mimeType", mime).put("data", image))
                 }
+                annotate(result, requestId, if (attempted) "receipt_available" else "not_started")
                 journal.finish(requestId, result)
                 return result
             } finally { operationLock?.unlock() }
@@ -139,8 +187,19 @@ class PhoneEngine(val context: Context) {
             "phone_get_user_reply" -> agentUi.result(agentId, a.getString("notice_id"))
             "phone_list_devices" -> JSONObject().put("devices", JSONArray().put(settings.description()))
             "phone_get_capabilities" -> capabilities()
+            "phone_get_operation" -> {
+                val id = a.getString("operation_id")
+                val previous = journal.status(id, agentId)
+                previous
+            }
             "phone_observe", "phone_find_nodes" -> {
-                val data = if (PhoneAccessibility.current != null) service().observe(a.optInt("limit", 400).coerceIn(1, 600), agentId) else privilegedObserve(a.optInt("limit", 400).coerceIn(1, 600))
+                val query = JSONObject(a.toString())
+                if (name == "phone_find_nodes") {
+                    val fields = listOf("text", "resource_id", "description").filter { a.has(it) }
+                    if (fields.isEmpty()) fail("invalid_arguments", "至少提供一个查询条件")
+                    query.put("_find", JSONObject().apply { fields.forEach { put(it, a.getString(it)) } })
+                }
+                val data = observe(agentId, query)
                 if (name == "phone_find_nodes") {
                     val fields = listOf("text", "resource_id", "description").filter { a.has(it) }
                     if (fields.isEmpty()) fail("invalid_arguments", "至少提供一个查询条件")
@@ -173,7 +232,7 @@ class PhoneEngine(val context: Context) {
                 val accessibility = backend == "accessibility" || backend == "auto" && PhoneAccessibility.current != null && android.os.Build.VERSION.SDK_INT >= 30
                 val bytes = if (accessibility) service().screenshot() else privilege.screenshot(backend)
                 JSONObject().put("image_base64", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("image_mime", "image/jpeg").put("coordinate_space", "original_screen_pixels")
-                    .put("screen_width", context.resources.displayMetrics.widthPixels).put("screen_height", context.resources.displayMetrics.heightPixels)
+                    .apply { val screen = PhoneScreen.info(context); screen.keys().forEach { put(it, screen.get(it)) } }
             }
             "phone_key" -> {
                 val key = a.getString("key").uppercase()
@@ -193,23 +252,7 @@ class PhoneEngine(val context: Context) {
                 JSONObject().put("accepted", true).put("verified", false).put("package", pkg)
             }
             "phone_wait" -> {
-                if (!a.has("text") && !a.has("package_name")) fail("invalid_arguments", "需要 text 或 package_name")
-                val end = minOf(deadline, System.currentTimeMillis() + a.optLong("timeout_ms", 5000).coerceIn(1, 10000))
-                var data: JSONObject
-                while (true) {
-                    connectionLog.requireOpen(agentId)
-                    if (generation != epoch || !settings.enabled) fail("cancelled", "控制已停止")
-                    if (!control.tryLock()) { if (System.currentTimeMillis() >= end) fail("device_busy", "界面正在执行其他操作"); Thread.sleep(50); continue }
-                    try {
-                        agentUi.requireUi(agentId)
-                        data = if (PhoneAccessibility.current != null) service().observe(owner = agentId) else privilegedObserve(400)
-                    } finally { control.unlock() }
-                    val matched = (!a.has("package_name") || data.optString("package") == a.getString("package_name")) &&
-                        (!a.has("text") || data.getJSONArray("nodes").toString().contains(a.getString("text")))
-                    if (matched) { data.put("matched", true); break }
-                    if (System.currentTimeMillis() >= end) { data.put("matched", false); break }
-                    Thread.sleep(250)
-                }; data
+                waitFor(a, agentId, epoch, deadline)
             }
             "phone_list_apps" -> {
                 val apps = context.packageManager.getInstalledApplications(0).filter { a.optBoolean("include_system") || it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM == 0 }.map {
@@ -240,8 +283,85 @@ class PhoneEngine(val context: Context) {
             else -> PhoneAndroidActions(context).execute(name, a)
         }
     }
+    private fun observe(owner: String, options: JSONObject = JSONObject()): JSONObject {
+        val limit = options.optInt("limit", 400).coerceIn(1, 600)
+        return PhoneAccessibility.current?.observe(limit, owner, options) ?: privilegedObserve(limit, options)
+    }
+    private fun checkGuard(args: JSONObject, owner: String) {
+        val guard = args.optJSONObject("guard") ?: return
+        val data = observe(owner)
+        if (guard.has("package_name") && data.optString("foreground_package", data.optString("package")) != guard.getString("package_name"))
+            fail("precondition_failed", "前台应用与 guard 不符，本次动作未执行")
+        guard.optJSONObject("selector")?.let { selector ->
+            if (PhoneSelectors.rows(data).none { PhoneSelectors.matches(it, selector) }) fail("precondition_failed", "界面不满足 guard，本次动作未执行")
+        }
+    }
+    private fun resolveSelector(args: JSONObject, owner: String): JSONObject {
+        val selector = args.optJSONObject("selector") ?: return args
+        if (PhoneAccessibility.current == null) fail("permission_required", "selector 操作需要无障碍服务")
+        val state = observe(owner, JSONObject().put("mode", "compact"))
+        val row = PhoneSelectors.unique(state, selector)
+        return JSONObject(args.toString()).put("node_id", row.getString("node_id")).put("snapshot_id", state.getString("snapshot_id"))
+    }
+    private fun waitFor(condition: JSONObject, owner: String, epoch: Long, deadline: Long): JSONObject {
+        PhoneExecution.validateWait(condition)
+        val end = minOf(deadline, System.currentTimeMillis() + condition.optLong("timeout_ms", 5000))
+        var lastSignature = ""; var stableSince = android.os.SystemClock.elapsedRealtime()
+        val begin = stableSince
+        while (true) {
+            connectionLog.requireOpen(owner)
+            if (generation != epoch || !settings.enabled) fail("cancelled", "控制已停止")
+            if (!control.tryLock()) {
+                if (System.currentTimeMillis() >= end) fail("device_busy", "界面正在执行其他操作")
+                Thread.sleep(25); continue
+            }
+            val data = try { agentUi.requireUi(owner); observe(owner) } finally { control.unlock() }
+            val now = android.os.SystemClock.elapsedRealtime()
+            val signature = data.optString("signature", data.getJSONArray("nodes").toString())
+            if (signature != lastSignature) { stableSince = now; lastSignature = signature }
+            val matched = PhoneExecution.matched(data, condition) && now - stableSince >= condition.optLong("stable_ms", 0)
+            if (matched || System.currentTimeMillis() >= end) {
+                condition.optJSONObject("selector")?.let { selector -> data.put("matched_nodes", JSONArray(PhoneSelectors.rows(data).filter { PhoneSelectors.matches(it, selector) })) }
+                return data.put("matched", matched).put("wait_ms", now - begin)
+            }
+            val stableRemaining = (condition.optLong("stable_ms", 0) - (now - stableSince)).takeIf { it > 0 } ?: 1000L
+            val pause = minOf(stableRemaining, 1000, (end - System.currentTimeMillis()).coerceAtLeast(1))
+            PhoneAccessibility.current?.awaitChange(data.optInt("window_id", -1), data.optLong("revision"), pause)
+                ?: Thread.sleep(minOf(250, pause))
+        }
+    }
+    private fun batch(args: JSONObject, request: String, advanced: Boolean, epoch: Long, deadline: Long, owner: String, agent: String): JSONObject {
+        val steps = PhoneExecution.validateBatch(args)
+        val end = minOf(deadline, System.currentTimeMillis() + args.optLong("max_ms", 30000))
+        val receipts = JSONArray(); var failure: String? = null; var completed = 0
+        for ((index, step) in steps.withIndex()) {
+            connectionLog.requireOpen(owner)
+            if (generation != epoch || !settings.enabled) fail("cancelled", "控制已停止")
+            if (System.currentTimeMillis() >= end) { failure = "batch_timeout"; break }
+            val key = "step-" + MessageDigest.getInstance("SHA-256").digest("$request:$index".toByteArray()).joinToString("") { "%02x".format(it) }
+            val response = invoke(step.first, step.second, key, advanced, end, owner, agent)
+            val data = response.getJSONObject("structuredContent")
+            val stepFailed = response.optBoolean("isError") || data.has("matched") && !data.optBoolean("matched")
+            if (!response.optBoolean("isError") && stepFailed) data.put("code", "postcondition_timeout")
+            val row = JSONObject().put("index", index).put("tool", step.first).put("operation_id", key).put("isError", stepFailed)
+            for (field in listOf("code", "message", "accepted", "matched", "execution", "metrics")) if (data.has(field)) row.put(field, data.get(field))
+            receipts.put(row)
+            if (stepFailed) { failure = data.optString("code", "operation_failed"); break }
+            completed++
+        }
+        val result = JSONObject().put("steps", receipts).put("completed_steps", completed).put("accepted", failure == null)
+        if (failure != null) result.put("code", failure).put("resume_policy", "Inspect receipts and current state; do not replay a partial batch under a new ID")
+        val mode = args.optString("return_state", "compact")
+        if (mode != "none" && generation == epoch && settings.enabled && !connectionLog.blocked(owner)) {
+            try { agentUi.requireUi(owner); result.put("state", observe(owner, JSONObject().put("mode", mode))) }
+            catch (error: Exception) { result.put("state_error", error.message) }
+        }
+        return result
+    }
     private fun packageName(a: JSONObject): String = a.getString("package_name").also { if (!Regex("[a-zA-Z0-9_]+(\\.[a-zA-Z0-9_]+)+").matches(it)) fail("invalid_arguments", "无效包名") }
-    private fun privilegedObserve(limit: Int): JSONObject {
+    private fun privilegedObserve(limit: Int, options: JSONObject = JSONObject()): JSONObject {
+        val screen = PhoneScreen.info(context)
+        val viewport = android.graphics.Rect(0, 0, screen.getInt("screen_width"), screen.getInt("screen_height"))
         val path = "/data/local/tmp/remotetool-ui-${java.util.UUID.randomUUID()}.xml"
         val result = privilege.execute(listOf("sh", "-c", "uiautomator dump --compressed '$path' >/dev/null && cat '$path'; code=\u0024?; rm -f '$path'; exit \u0024code"), timeoutMs = 10000)
         if (result.optInt("exit_code", -1) != 0) fail("backend_unavailable", "特权 UI 树读取失败，可启用无障碍服务")
@@ -252,13 +372,24 @@ class PhoneEngine(val context: Context) {
                 fun attr(key: String) = parser.getAttributeValue(null, key).orEmpty()
                 if (pkg.isEmpty()) pkg = attr("package")
                 val bounds = Regex("-?\\d+").findAll(attr("bounds")).map { it.value.toInt() }.toList()
-                nodes.put(JSONObject().put("node_id", "p${nodes.length() + 1}").put("text", attr("text")).put("description", attr("content-desc"))
-                    .put("resource_id", attr("resource-id")).put("bounds", JSONArray(bounds)).put("clickable", attr("clickable") == "true").put("depth", parser.depth))
+                val raw = if (bounds.size == 4) android.graphics.Rect(bounds[0], bounds[1], bounds[2], bounds[3]) else android.graphics.Rect()
+                val visible = PhoneScreen.visible(raw, viewport)
+                val row = JSONObject().put("node_id", "p${nodes.length() + 1}").put("text", attr("text")).put("description", attr("content-desc"))
+                    .put("resource_id", attr("resource-id")).put("bounds", PhoneScreen.json(visible ?: android.graphics.Rect())).put("raw_bounds", JSONArray(bounds))
+                    .put("bounds_valid", visible != null).put("visible", visible != null).put("clickable", attr("clickable") == "true").put("depth", parser.depth)
+                    .put("package_name", attr("package")).put("class", attr("class")).put("enabled", attr("enabled") == "true").put("focused", attr("focused") == "true")
+                if (visible != null) row.put("tap_point", JSONObject().put("x", visible.centerX()).put("y", visible.centerY()))
+                val filter = options.optJSONObject("filter")
+                val contains = options.optJSONObject("_find")
+                if ((options.optString("mode", "compact") == "raw" || visible != null && (row.optString("text").isNotBlank() || row.optString("description").isNotBlank() || row.optBoolean("clickable"))) &&
+                    (filter == null || PhoneSelectors.matches(row, filter)) && (contains == null || contains.keys().asSequence().all { row.optString(it).contains(contains.getString(it), true) }))
+                    nodes.put(row)
             }; parser.next()
         }
         return JSONObject().put("snapshot_id", java.util.UUID.randomUUID().toString()).put("package", pkg).put("nodes", nodes)
+            .put("foreground_source", "uiautomator_root").put("mode", options.optString("mode", "compact")).put("reset", options.has("changed_since"))
             .put("backend", result.optString("backend")).put("node_actions", false).put("instruction", "Use bounds and coordinate taps for privileged UI snapshots; node IDs require accessibility.")
-            .put("screen_width", context.resources.displayMetrics.widthPixels).put("screen_height", context.resources.displayMetrics.heightPixels)
+            .apply { val screen = PhoneScreen.info(context); screen.keys().forEach { put(it, screen.get(it)) } }
     }
     private fun exchange(name: String): File {
         if (name.isBlank() || name.length > 160 || name.contains('/') || name.contains('\\') || name == "." || name == "..") fail("invalid_arguments", "无效文件名")

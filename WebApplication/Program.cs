@@ -123,6 +123,7 @@ builder.Services.AddSingleton<HermesSessionActivity>();
 builder.Services.AddSingleton<CodexSessionActivity>();
 builder.Services.AddSingleton<HermesCompaction>();
             builder.Services.AddSingleton<HermesAttachments>();
+            builder.Services.AddSingleton<HermesNativeAttachments>();
             builder.Services.AddSingleton<CodexBridge>();
             builder.Services.AddSingleton<ITitleModelGateway>(services => services.GetRequiredService<CodexBridge>());
             builder.Services.AddKeyedSingleton("codex", new HermesAttachments("codex"));
@@ -169,6 +170,14 @@ builder.Services.AddSingleton<HermesCompaction>();
             });
 
             var app = builder.Build();
+            if (OperatingSystem.IsWindows()) {
+                try {
+                    Services.Codex.CodexAttachmentAccess.Ensure(Services.RemoteToolPaths.CodexAttachments,
+                        Services.RemoteControl.InteractiveProcessLauncher.GetInteractiveUserSid());
+                } catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                    app.Logger.LogWarning(error, "Unable to refresh interactive Codex attachment access");
+                }
+            }
             app.Services.GetRequiredService<OidcSchemeRegistry>().Sync();
             // The native task page no longer mounts Hangfire Dashboard. Existing
             // recurring-job registrations and API actions still use the static

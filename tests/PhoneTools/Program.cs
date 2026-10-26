@@ -7,6 +7,22 @@ using RemoteTool.WebApi.Services.PhoneControl;
 
 var folder = Path.Combine(Path.GetTempPath(), "remotetool-phone-tests-" + Guid.NewGuid().ToString("N"));
 var gateway = new PhoneGateway(folder);
+var integration = new PhoneSessionIntegration(gateway, new ConfigurationBuilder().Build(),
+    Microsoft.Extensions.Logging.Abstractions.NullLogger<PhoneSessionIntegration>.Instance);
+foreach (var agent in new[] { "codex", "hermes" }) {
+    var native = new JsonObject { ["system_prompt"] = "existing prompt", ["phone_binding"] = new JsonObject(),
+        ["phone_description"] = "untrusted", ["phone_tools"] = new JsonObject { ["mode"] = "description", ["phone_id"] = "phone-offline" } };
+    Check(await integration.Prepare(native, agent, new DefaultHttpContext().Request, default) == null,
+        agent + " offline description must permit ordinary session creation");
+    Check(!native.ContainsKey("phone_tools") && !native.ContainsKey("phone_binding") && !native.ContainsKey("phone_description") &&
+        native["system_prompt"]!.ToString() == "existing prompt", agent + " offline fallback must strip injection fields and preserve original instructions");
+    Check(!File.Exists(Path.Combine(folder,"bindings.json")), "offline description must not persist a fake binding");
+    var toolsRequest = new JsonObject { ["phone_tools"] = new JsonObject { ["mode"] = "tools", ["phone_id"] = "phone-offline" } };
+    var rejected = false;
+    try { await integration.Prepare(toolsRequest, agent, new DefaultHttpContext().Request, default); }
+    catch (PhoneOfflineException) { rejected = true; }
+    Check(rejected, agent + " explicit tool mode must not silently lose requested tools");
+}
 var builder = WebApplication.CreateBuilder(); builder.WebHost.UseUrls("http://127.0.0.1:0"); builder.Logging.ClearProviders();
 builder.Services.AddSingleton(gateway);
 builder.Services.AddControllers();
@@ -18,6 +34,22 @@ app.Map("/phone", async context => { using var ws = await context.WebSockets.Acc
 await app.StartAsync();
 var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single().Replace("http://", "ws://") + "/phone";
 static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
+var recovery = new PhoneMcpSessions();
+var oldTransport = recovery.Create("binding-a", "Agent");
+using (recovery.BeginCall(oldTransport)) {
+    try { recovery.Create("binding-a", "Agent", oldTransport.ResumeToken); throw new Exception("Active request was taken over"); }
+    catch (PhoneMcpSessionException error) { Check(error.Code == "device_busy", "active recovery error"); }
+}
+try { recovery.Create("binding-b", "Agent", oldTransport.ResumeToken); throw new Exception("Cross-binding recovery accepted"); }
+catch (PhoneMcpSessionException error) { Check(error.Code == "session_recovery_failed", "recovery must enforce binding realm"); }
+var recovered = recovery.Create("binding-a", "New display name", oldTransport.ResumeToken);
+Check(recovered.Id != oldTransport.Id && recovered.AgentId == oldTransport.AgentId && recovered.Generation == 2, "stable identity across transport recovery");
+Check(recovery.Get("binding-a", oldTransport.Id) == null, "old transport fenced");
+try { using var stale = recovery.BeginCall(oldTransport); throw new Exception("Stale transport executed"); }
+catch (PhoneMcpSessionException error) { Check(error.Code == "session_replaced", "old cached client object fenced"); }
+recovery.Remove("binding-a", recovered.Id);
+try { recovery.Create("binding-a", "Agent", recovered.ResumeToken); throw new Exception("Revoked recovery accepted"); }
+catch (PhoneMcpSessionException error) { Check(error.Code == "session_recovery_failed", "delete revokes recovery credential"); }
 static async Task<JsonObject> Receive(ClientWebSocket socket) {
     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
     var data = new byte[64 * 1024]; var result = await socket.ReceiveAsync(data, timeout.Token);
@@ -31,6 +63,15 @@ await client.SendAsync(Encoding.UTF8.GetBytes(hello.ToJsonString()), WebSocketMe
 Check((await Receive(client))["type"]!.ToString() == "ready", "handshake");
 Check(gateway.Devices().Count == 1, "device registration");
 Check(gateway.Tools("phone-test", false).Count == 1, "advanced filtering");
+foreach (var agent in new[] { "codex", "hermes" }) {
+    var native = new JsonObject { ["system_prompt"] = "existing prompt",
+        ["phone_tools"] = new JsonObject { ["mode"] = "description", ["phone_id"] = "phone-test" } };
+    var descriptionBinding = await integration.Prepare(native,agent,new DefaultHttpContext().Request,default);
+    Check(descriptionBinding != null && !native.ContainsKey("phone_tools"), agent + " online description stays available");
+    var text = agent == "codex" ? native["phone_description"]!.ToString() : native["system_prompt"]!.ToString();
+    Check(text.Contains("当前仅注入手机能力说明"), agent + " description must not claim callable phone tools");
+    integration.Abort(descriptionBinding);
+}
 var binding = gateway.CreateBinding("phone-test", false, "hermes", "work");
 var id = binding["id"]!.ToString(); var token = binding["token"]!.ToString();
 Check(gateway.AuthorizeBinding(id, token) == null, "unbound token rejected");
@@ -77,25 +118,41 @@ mcpClient.DefaultRequestHeaders.Authorization = new("Bearer", external["token"]!
 var mcpUrl = external["mcp_url"]!.ToString();
 var listResponse = await mcpClient.PostAsync(mcpUrl, new StringContent("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}", Encoding.UTF8, "application/json"));
 Check(JsonNode.Parse(await listResponse.Content.ReadAsStringAsync())!["result"]!["tools"]!.AsArray().Count == 1, "external MCP tool filtering");
-async Task McpProbe(string method, string parameters = "{}") {
+async Task<JsonNode> McpProbe(string method, string parameters = "{}") {
     var response = await mcpClient.PostAsync(mcpUrl, new StringContent("{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"" + method + "\",\"params\":" + parameters + "}", Encoding.UTF8, "application/json"));
     response.EnsureSuccessStatusCode();
     if (response.Headers.TryGetValues("Mcp-Session-Id", out var sessionHeaders)) {
         mcpClient.DefaultRequestHeaders.Remove("Mcp-Session-Id");
         mcpClient.DefaultRequestHeaders.Add("Mcp-Session-Id", sessionHeaders.Single());
     }
-    var envelope = JsonNode.Parse(await response.Content.ReadAsStringAsync());
+    var responseText = await response.Content.ReadAsStringAsync();
+    var envelope = JsonNode.Parse(responseText);
+    Check(response.Headers.GetValues("X-RemoteTool-Response-Bytes").Single() == Encoding.UTF8.GetByteCount(responseText).ToString(), "response size metric matches exact JSON bytes");
     Check(envelope?["error"] == null, "MCP probe " + method);
     if (method == "initialize") Check(envelope?["result"]?["instructions"]?.ToString() == PhoneMcpProtocol.Instructions,
         "relay initialize exposes session reuse and recovery instructions");
+    return envelope!;
 }
 await McpProbe("ping");
 // A tool reply is a websocket ordering barrier: all earlier presence frames have been consumed.
 await McpProbe("tools/call", "{\"name\":\"phone_observe\",\"arguments\":{}}");
 Check(!presenceEvents.Reader.TryRead(out _), "discovery and ping do not reactivate a disconnected agent");
-await McpProbe("initialize", "{\"clientInfo\":{\"name\":\"Codex\"}}");
+var initializedEnvelope = await McpProbe("initialize", "{\"clientInfo\":{\"name\":\"Codex\"}}");
 await McpProbe("tools/call", "{\"name\":\"phone_observe\",\"arguments\":{}}");
 Check(presenceEvents.Reader.TryRead(out var connectedAgent) && connectedAgent == external["id"] + ":" + mcpClient.DefaultRequestHeaders.GetValues("Mcp-Session-Id").Single(), "initialize creates an isolated client identity");
+var originalTransportId = mcpClient.DefaultRequestHeaders.GetValues("Mcp-Session-Id").Single();
+var resumeEnvelope = await McpProbe("initialize", new JsonObject { ["clientInfo"] = new JsonObject { ["name"] = "Resumed" },
+    ["_meta"] = new JsonObject { ["remotetool/resume_token"] = initializedEnvelope["result"]!["_meta"]!["remotetool"]!["resume_token"]!.ToString() } }.ToJsonString());
+Check(mcpClient.DefaultRequestHeaders.GetValues("Mcp-Session-Id").Single() != originalTransportId, "HTTP resume replaces transport");
+Check(resumeEnvelope["result"]!["_meta"]!["remotetool"]!["agent_id"]!.ToString() == originalTransportId, "HTTP resume preserves logical identity");
+await McpProbe("tools/call", "{\"name\":\"phone_observe\",\"arguments\":{}}");
+Check(presenceEvents.Reader.TryRead(out var resumedAgent) && resumedAgent == connectedAgent, "same phone owner after HTTP resume");
+using (var staleRequest = new HttpRequestMessage(HttpMethod.Post, mcpUrl)) {
+    staleRequest.Headers.Add("Mcp-Session-Id", originalTransportId);
+    staleRequest.Content = new StringContent("{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"ping\"}", Encoding.UTF8, "application/json");
+    using var staleResponse = await mcpClient.SendAsync(staleRequest);
+    Check(staleResponse.StatusCode == System.Net.HttpStatusCode.NotFound, "old HTTP session is fenced");
+}
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 const string clientName = "编码验证：中文正常";
 const string initializeChinese = """{"jsonrpc":"2.0","id":11,"method":"initialize","params":{"clientInfo":{"name":"编码验证：中文正常"}}}""";

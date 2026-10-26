@@ -15,7 +15,10 @@ fun PhoneSessionOptions(api: NativeApi, value: String, changed: (String) -> Unit
     var error by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(api.base, mode) {
         if (mode != "off") try {
-            phones = api.json("/api/phone/v1/devices").array("devices").objects(); error = if (phones.isEmpty()) "请先在手机操控中连接当前通道" else null
+            phones = api.json("/api/phone/v1/devices").array("devices").objects()
+            error = if (phones.isEmpty()) {
+                if (mode == "description") "手机未连接，创建时将跳过手机说明" else "请先在手机操控中连接当前通道"
+            } else null
             if (phones.isNotEmpty() && phones.none { it.optString("id") == options.optString("phone_id") }) changed(JSONObject(value).put("phone_id", phones.first().optString("id")).toString())
         } catch (e: Exception) { error = e.message }
     }
@@ -35,7 +38,8 @@ fun PhoneSessionOptions(api: NativeApi, value: String, changed: (String) -> Unit
                 Text("允许高级操作", Modifier.weight(1f))
                 Switch(options.optBoolean("allow_advanced"), { changed(JSONObject(value).put("allow_advanced", it).toString()) })
             }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            error?.let { Text(it, color = if (mode == "description") MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall) }
         }
     }
 }

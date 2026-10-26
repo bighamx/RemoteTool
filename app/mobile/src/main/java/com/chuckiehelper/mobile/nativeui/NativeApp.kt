@@ -4,9 +4,13 @@ package com.chuckiehelper.mobile.nativeui
 
 import android.app.Activity
 import android.content.ContextWrapper
+import android.content.SharedPreferences
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -37,7 +41,33 @@ fun NativeApp(model: NativeModel) {
             edition.reloadSettings()
         }
     }
-    val dark = isSystemInDarkTheme()
+    val appearanceContext = LocalContext.current
+    val appearancePrefs = remember(appearanceContext) { appearanceContext.getSharedPreferences("MainActivity", 0) }
+    var appearance by remember(appearancePrefs) { mutableStateOf(AppAppearance.from(appearancePrefs.getString(AppAppearance.KEY, null))) }
+    DisposableEffect(appearancePrefs) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key == null || key == AppAppearance.KEY) appearance = AppAppearance.from(prefs.getString(AppAppearance.KEY, null))
+        }
+        appearancePrefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { appearancePrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    val systemDark = isSystemInDarkTheme()
+    val dark = when (appearance) {
+        AppAppearance.LIGHT -> false
+        AppAppearance.DARK -> true
+        AppAppearance.SYSTEM -> systemDark
+    }
+    val appearanceActivity = remember(appearanceContext) {
+        generateSequence(appearanceContext) { (it as? ContextWrapper)?.baseContext }
+            .filterIsInstance<ComponentActivity>().firstOrNull()
+    }
+    DisposableEffect(appearanceActivity, dark) {
+        appearanceActivity?.enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT) { dark },
+            navigationBarStyle = SystemBarStyle.auto(0xe6ffffff.toInt(), 0x801b1b1b.toInt()) { dark },
+        )
+        onDispose { }
+    }
     val colors =
         if (dark)
             darkColorScheme(
@@ -247,7 +277,10 @@ fun NativeApp(model: NativeModel) {
         }
         model.channelDevice?.let { ChannelDialog(model, it) }
         edition.UpdateHost()
-        CloudAccountHost(cloud)
+        CloudAccountHost(cloud, appearance) {
+            appearance = it
+            appearancePrefs.edit().putString(AppAppearance.KEY, it.value).apply()
+        }
         if (startup) StartupDialog { startup = false }
     }
 }

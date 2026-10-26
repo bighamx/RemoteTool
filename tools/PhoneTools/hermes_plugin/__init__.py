@@ -1,19 +1,24 @@
 """Phone adapter: use runtime session identity, never a model-supplied session ID."""
 import json
 import uuid
+import hashlib
 import urllib.request
 from pathlib import Path
 
 
 def _handler(name):
-    def call(args, session_id=None, **kwargs):
+    def call(args, session_id=None, tool_call_id=None, **kwargs):
         from hermes_constants import get_hermes_home
         try:
             path = Path(get_hermes_home()) / "remotetool-phone-bindings.json"
             binding = json.loads(path.read_text(encoding="utf-8")).get(session_id or "") if path.exists() else None
             if not binding:
-                return json.dumps({"error": "Phone tools are not enabled for this session"})
-            payload = {"tool": name, "arguments": args, "request_id": "hermes-" + uuid.uuid4().hex}
+                return json.dumps({"error": "Phone tools are not enabled for this session", "code": "phone_binding_missing", "execution": "not_started",
+                    "hint": "Attach a phone when creating this session, or use the user's configured HTTP MCP through the shipped persistent/stdio client. Do not search plugin source, credentials or configuration directories to repair this task.",
+                    "adapter": "remotetool_phone.py", "logical_agent": session_id})
+            call_id = tool_call_id or kwargs.get("call_id")
+            request_id = hashlib.sha256((session_id + ":" + str(call_id)).encode()).hexdigest() if call_id else uuid.uuid4().hex
+            payload = {"tool": name, "arguments": args, "request_id": "hermes-" + request_id}
             request = urllib.request.Request(binding["url"], data=json.dumps(payload).encode(), headers={
                 "Content-Type": "application/json; charset=utf-8", "Authorization": "Bearer " + binding["token"], "X-Phone-Session": session_id})
             with urllib.request.urlopen(request, timeout=130 if name == "phone_manage_app" and args.get("action") == "install" else 45) as response:

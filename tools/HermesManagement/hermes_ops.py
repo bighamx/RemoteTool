@@ -160,13 +160,20 @@ def main():
         if (job / 'cancel').exists():
             phase('cancelled','等待已取消'); exitcode = 0; return
         phase('restarting', '已安全排空，正在正常重启')
-        previous = invoke('admin_gateway_stop', body)
+        previous = invoke('admin_gateway_status', {})
+        previous = {'old_pid': previous['pid']}
         if request['mode'] == 'update':
+            previous = invoke('admin_gateway_stop', body)
             phase('updating','正在运行 hermes update')
             print('使用官方 --yes：自动确认配置迁移和恢复本地暂存修改；冲突由官方更新器报告并保留恢复依据。',flush=True)
             command([str(launcher),'update','--yes','--no-gateway-restart'])
         phase('restarting','正在启动网关')
-        command([str(launcher),'gateway','start'])
+        if request['mode'] == 'update':
+            command([str(launcher),'gateway','start'])
+        else:
+            # Official restart bounds Windows shutdown, fingerprints the old PID,
+            # handles a wedged shutdown, and refuses duplicate gateway instances.
+            command([str(launcher),'gateway','restart','--detach'])
         expected_sha = subprocess.run(['git','rev-parse','HEAD'],cwd=request['source'],capture_output=True,text=True,check=True).stdout.strip()
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:

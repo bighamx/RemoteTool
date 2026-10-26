@@ -38,6 +38,21 @@ class CloudConfigurationTest {
     private fun device(key: String, url: String) = obj("id" to key,"name" to "Device $key","endpoints" to JSONArray(listOf(url)))
     private fun snapshot(vararg devices: JSONObject) = obj("schemaVersion" to 1,"devices" to JSONArray(devices.toList()),"settings" to JSONObject())
 
+    @Test fun appearanceTransfersAndLegacySnapshotsPreserveLocalChoice() {
+        val prefs = context.getSharedPreferences("MainActivity",0)
+        prefs.edit().putString(AppAppearance.KEY,"dark").commit()
+        val exported = configuration.export()
+        assertEquals("dark",exported.getJSONObject("settings").getString("appearance"))
+        prefs.edit().putString(AppAppearance.KEY,"light").commit()
+        configuration.apply(exported)
+        assertEquals("dark",prefs.getString(AppAppearance.KEY,null))
+        configuration.apply(snapshot())
+        assertEquals("dark",prefs.getString(AppAppearance.KEY,null))
+        val invalid = snapshot().apply { getJSONObject("settings").put("appearance","invalid") }
+        assertThrows(IllegalArgumentException::class.java) { configuration.apply(invalid) }
+        assertEquals("dark",prefs.getString(AppAppearance.KEY,null))
+    }
+
     @Test fun deviceLoginsTransferToAFreshPhoneAndAuthenticateWithoutCopyingTokens() = kotlinx.coroutines.runBlocking {
         context.getSharedPreferences("MainActivity",0).edit().putString("devices", JSONArray(listOf(device(id,"https://device.example"))).toString()).commit()
         credentials.save(id, DeviceLogin("同步用户", " 密码\\\"\n保留空格 ", "source-token-not-portable"))

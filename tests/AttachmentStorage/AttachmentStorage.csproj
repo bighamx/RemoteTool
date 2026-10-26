@@ -2,8 +2,11 @@
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="sqlite-net-pcl" Version="1.8.116" />
     <Compile Include="../../WebApplication/Services/RemoteToolPaths.cs" Link="RemoteToolPaths.cs" />
     <Compile Include="../../WebApplication/Services/HermesAttachments.cs" Link="HermesAttachments.cs" />
+    <Compile Include="../../WebApplication/Services/HermesNativeAttachments.cs" Link="HermesNativeAttachments.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexAttachmentAccess.cs" Link="CodexAttachmentAccess.cs" />
     <Compile Include="../../WebApplication/Services/HermesProfiles.cs" Link="HermesProfiles.cs" />
     <Compile Include="../../WebApplication/Services/AssistantMediaPaths.cs" Link="AssistantMediaPaths.cs" />
     <Compile Include="../../WebApplication/Services/AgentHistoryWindow.cs" Link="AgentHistoryWindow.cs" />
