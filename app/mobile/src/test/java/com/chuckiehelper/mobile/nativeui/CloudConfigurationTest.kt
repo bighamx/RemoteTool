@@ -25,14 +25,85 @@ class CloudConfigurationTest {
     private val other = "b".repeat(64)
     private lateinit var context: Context
     private lateinit var configuration: CloudConfiguration
+    private lateinit var credentials: DeviceCredentialStore
+    private lateinit var credentialKey: javax.crypto.SecretKey
     @Before fun prepare() {
         context = RuntimeEnvironment.getApplication()
-        for (name in listOf("MainActivity","app_updates","file-view","RemoteActivity","phone-tools","port-tunnels","codex-$id","hermes-$id","codex-$other","hermes-$other"))
+        for (name in listOf("MainActivity","app_updates","file-view","RemoteActivity","phone-tools","port-tunnels","device-credentials","codex-$id","hermes-$id","codex-$other","hermes-$other"))
             context.getSharedPreferences(name,0).edit().clear().commit()
-        configuration = CloudConfiguration(context)
+        credentialKey = javax.crypto.KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+        credentials = DeviceCredentialStore(context) { credentialKey }
+        configuration = CloudConfiguration(context, credentials)
     }
     private fun device(key: String, url: String) = obj("id" to key,"name" to "Device $key","endpoints" to JSONArray(listOf(url)))
     private fun snapshot(vararg devices: JSONObject) = obj("schemaVersion" to 1,"devices" to JSONArray(devices.toList()),"settings" to JSONObject())
+
+    @Test fun deviceLoginsTransferToAFreshPhoneAndAuthenticateWithoutCopyingTokens() = kotlinx.coroutines.runBlocking {
+        context.getSharedPreferences("MainActivity",0).edit().putString("devices", JSONArray(listOf(device(id,"https://device.example"))).toString()).commit()
+        credentials.save(id, DeviceLogin("同步用户", " 密码\\\"\n保留空格 ", "source-token-not-portable"))
+        val exported = configuration.export()
+        val login = exported.getJSONArray("devices").getJSONObject(0).getJSONObject("credentials")
+        assertEquals(2, login.length())
+        assertEquals("同步用户", login.getString("username"))
+        assertEquals(" 密码\\\"\n保留空格 ", login.getString("password"))
+        assertFalse(exported.toString().contains("source-token-not-portable"))
+        val fresh = object : ContextWrapper(context) {
+            override fun getSharedPreferences(name: String, mode: Int) = super.getSharedPreferences("fresh-$name", mode)
+        }
+        val freshKey = javax.crypto.KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+        val freshStore = DeviceCredentialStore(fresh) { freshKey }
+        CloudConfiguration(fresh, freshStore).apply(exported)
+        val restored = freshStore.read(id)!!
+        assertEquals(login.getString("username"), restored.username)
+        assertEquals(login.getString("password"), restored.password)
+        assertEquals("", restored.token)
+        val disk = fresh.getSharedPreferences("device-credentials",0).getString(id, null)!!
+        assertFalse(disk.contains(restored.username)); assertFalse(disk.contains(restored.password))
+        var attempts = 0
+        val authenticated = DeviceAuthentication.recover(id, id, { freshStore.read(id) }, { emptyList() },
+            { fail("No source token should be validated"); false },
+            { saved -> assertEquals(restored.password, saved.password); attempts++; "fresh-login-token" },
+            { freshStore.save(id, it) })!!
+        assertEquals(1, attempts)
+        assertEquals("fresh-login-token", authenticated.token)
+    }
+
+    @Test fun importingPasswordsRefreshesExistingStoreCachesAndKeepsLocalBackupsEncrypted() {
+        context.getSharedPreferences("MainActivity",0).edit().putString("devices", JSONArray(listOf(device(id,"https://device.example"))).toString()).commit()
+        credentials.save(id, DeviceLogin("old-user", "old-local-password", "old-local-token"))
+        assertEquals("old-user", credentials.read(id)!!.username)
+        val before = context.getSharedPreferences("device-credentials",0).getString(id,null)
+        val writer = DeviceCredentialStore(context) { credentialKey }
+        val incoming = device(id,"https://device.example").put("credentials", obj("username" to "new-user", "password" to "new-password", "token" to "ignored-incoming-token"))
+        CloudConfiguration(context, writer).apply(snapshot(incoming))
+        assertEquals("new-user", credentials.read(id)!!.username)
+        assertEquals("new-password", credentials.read(id)!!.password)
+        assertEquals("", credentials.read(id)!!.token)
+        val backup = JSONObject(context.openFileInput("cloud-before-import.json").bufferedReader().use { it.readText() })
+        assertEquals(before, backup.getJSONObject("_localEncryptedCredentials").getString(id))
+        for (secret in listOf("old-local-password", "old-local-token", "new-password", "ignored-incoming-token")) assertFalse(backup.toString().contains(secret))
+        assertFalse(configuration.export().toString().contains("_localEncryptedCredentials"))
+    }
+
+    @Test fun olderSnapshotsPreserveEncryptedLoginsAndMatchingPasswordsKeepLocalTokens() {
+        credentials.save(id, DeviceLogin("local-user", "local-password", "local-token"))
+        val before = context.getSharedPreferences("device-credentials",0).getString(id,null)
+        configuration.apply(snapshot(device(id,"https://device.example")))
+        assertEquals(before, context.getSharedPreferences("device-credentials",0).getString(id,null))
+        configuration.apply(snapshot(device(id,"https://device.example").put("credentials", obj("username" to "local-user", "password" to "local-password"))))
+        assertEquals("local-token", credentials.read(id)!!.token)
+    }
+
+    @Test fun malformedDeviceCredentialsAreRejectedBeforeAnyWrites() {
+        val before = context.getSharedPreferences("MainActivity",0).all.toMap()
+        for (bad in listOf<Any>("not-an-object", JSONObject.NULL, obj("username" to "u", "password" to 123),
+            obj("username" to "", "password" to "p"), obj("username" to "u", "password" to ""),
+            obj("username" to "u", "password" to "x".repeat(4097)))) {
+            assertThrows(IllegalArgumentException::class.java) { configuration.apply(snapshot(device(id,"https://device.example").put("credentials",bad))) }
+            assertEquals(before, context.getSharedPreferences("MainActivity",0).all)
+            assertNull(credentials.read(id))
+        }
+    }
 
     @Test fun exportIncludesOnlyAllowlistedConfiguration() {
         context.getSharedPreferences("MainActivity",0).edit()
@@ -177,6 +248,9 @@ class CloudConfigurationTest {
 
     @Test fun failedTunnelSaveRollsBackAlreadyAppliedPhoneSettingsAndKeepsCredentials() {
         val incoming = saveNewFeatures()
+        credentials.save(id, DeviceLogin("original-user", "original-password", "original-token"))
+        incoming.getJSONArray("devices").getJSONObject(0).put("credentials", obj("username" to "imported-user", "password" to "imported-password"))
+        val beforeCredentials = context.getSharedPreferences("device-credentials",0).all.toMap()
         val phone = context.getSharedPreferences("phone-tools", 0)
         phone.edit().putBoolean("direct", true).putBoolean("root", false).putInt("port", 19876)
             .putString("token", "keep-local-token").commit()
@@ -202,10 +276,14 @@ class CloudConfigurationTest {
                 }
             }
         }
-        val failure = assertThrows(java.io.IOException::class.java) { CloudConfiguration(failingContext).apply(incoming) }
+        val writer = DeviceCredentialStore(failingContext) { credentialKey }
+        val failure = assertThrows(java.io.IOException::class.java) { CloudConfiguration(failingContext, writer).apply(incoming) }
         assertTrue(failure.message!!.contains("已恢复本机原配置"))
         assertFalse(failSave)
         assertEquals(beforePhone, phone.all)
         assertEquals(beforeTunnel, tunnelPrefs.all)
+        assertEquals(beforeCredentials, context.getSharedPreferences("device-credentials",0).all)
+        assertEquals("original-password", writer.read(id)!!.password)
+        assertEquals("original-token", credentials.read(id)!!.token)
     }
 }

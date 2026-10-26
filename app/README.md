@@ -38,9 +38,9 @@
 
 “我的设备”和“更多”页面提供“云账户”入口，固定连接 `https://api.xbyham.com`。通过手机浏览器打开网站用户名密码登录页，沿用网站 reCAPTCHA 安全验证和授权确认，然后返回 App。原生公共客户端使用 OAuth 授权码、PKCE S256 和随机 state；云账户令牌由独立 Android Keystore 密钥加密保存，与电脑设备登录独立。
 
-不登录仍可使用所有本地设备功能；登录后可手动上传和下载一份云配置快照。同步设备名称、地址、首选连接通道，以及更新偏好、文件排序、远程画质、Codex/Hermes 会话分组设置。电脑密码、设备及云账户令牌、Cookie、会话历史、附件、草稿和消息队列不上传。云端配置由网站提供用户隔离和管理员管理。
+不登录仍可使用所有本地设备功能；登录后可手动上传和下载一份云配置快照。同步设备名称、地址、首选连接通道、已保存的设备用户名和密码，以及更新偏好、文件排序、远程画质、Codex/Hermes 会话分组设置。设备及云账户令牌、Cookie、会话历史、附件、草稿和消息队列不上传。云端配置由网站提供用户隔离和加密存储，配置结构与字段由 App 校验。
 
-上传会替换云端快照，使用版本号防止覆盖其他手机的最新上传；发生冲突后需要刷新并再次确认。下载先显示摘要，经确认后按设备标识合并设备及地址，应用同步设置，保留本机独有设备和登录凭据，不自动连接导入设备。应用前在 App 私有目录保留 `cloud-before-import.json` 旧配置。退出云账户保留本地配置并尝试吊销云端令牌。
+上传会替换云端快照，使用版本号防止覆盖其他手机的最新上传；发生冲突后需要刷新并再次确认。下载先校验并显示摘要，经确认后按设备标识合并设备及地址，应用设置和用户名密码，仍不自动连接导入设备。新手机连接时先验证设备标识，再用导入的登录信息取得本机新令牌；旧快照缺少登录信息时保留本机凭据，账号或密码变化时清除旧令牌。密码在本机使用 Android Keystore 重新加密，导入失败时连同其他配置回滚；`cloud-before-import.json` 仅备份本机加密凭据，不另存明文密码。退出云账户保留本地配置并尝试吊销云端令牌。
 
 网站端使用通用应用数据接口：`/api/app-data/v1/me` 和 `/api/app-data/v1/apps/{appId}/config`。RemoteTool 的 `appId` 为 `remotetool`，OIDC 公共客户端为 `remotetool-android`，授权范围为 `appdata.config`。服务端将配置按“账户 + 应用”隔离，校验客户端与应用绑定关系；新增 App 复用相同的接口和管理页面。网站端需先部署配套接口、数据库安装脚本和客户端注册逻辑，具体见 `wxbackend-netcore` 仓库的接入文档。
 
@@ -85,6 +85,8 @@ rtk proxy .\gradlew.bat :mobile:assembleFullRelease :mobile:lintFullRelease --no
 ```
 
 主 App 产物位于 `mobile/build/outputs/apk/full/release/`，`tools/Publish-AppUpdate.ps1` 默认根据该目录的 `output-metadata.json` 读取版本化文件名。当前 Release 沿用已安装版本的签名，构建机必须使用同一签名密钥；发布脚本可通过 `-PreviousApkPath` 检查签名一致和版本递增。不要通过卸载 App 来解决签名不一致。
+
+两版一起发布时使用 `tools/Publish-AppUpdate.ps1 -IncludeCompanion` 先准备并验证安装包，再加 `-Publish` 发布。脚本从 `phone/release/output-metadata.json` 读取独立版，检查其包名、版本及签名，生成独立的 `remotetool-phone-update.json` 并与主 App 安装包一起上传同一 GitHub Release；主 App 的更新清单仍只指向主 App 包。可用 `-PreviousCompanionApkPath` 验证独立版覆盖升级。
 
 开发调试仍可使用以下命令：
 

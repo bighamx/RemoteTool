@@ -307,6 +307,10 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
     fun reloadCloudConfiguration() {
         devices = readDevices()
         session = session?.let { current ->
+            // Imported credentials have no portable token. Drop a previous in-memory
+            // session token too, so the next request signs in with the updated login.
+            if (credentials.read(current.device.id)?.token?.isEmpty() == true)
+                authenticationSessions[current.device.id]?.token = null
             current.copy(device = devices.find { it.id == current.device.id } ?: current.device)
         }
         configurationVersion++

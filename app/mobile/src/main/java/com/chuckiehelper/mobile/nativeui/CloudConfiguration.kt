@@ -8,12 +8,13 @@ import java.net.URI
 import java.time.Instant
 import java.io.IOException
 
-/** Explicit allowlist: credentials, cookies, conversations and pending writes never enter a snapshot. */
-internal class CloudConfiguration(private val context: Context) {
+/** Explicit allowlist: device passwords are portable; tokens, cookies and conversations are not. */
+internal class CloudConfiguration(private val context: Context,
+    private val credentials: DeviceCredentialStore = DeviceCredentialStore(context)) {
     companion object { const val MAX_BYTES = 512 * 1024 }
     private val main get() = context.getSharedPreferences("MainActivity", 0)
 
-    fun export(): JSONObject {
+    fun export(includeCredentials: Boolean = true): JSONObject {
         val devices = JSONArray()
         for (saved in JSONArray(main.getString("devices", "[]")).objects()) {
             val device = obj("id" to saved.getString("id"), "name" to saved.getString("name"),
@@ -22,6 +23,9 @@ internal class CloudConfiguration(private val context: Context) {
             main.getString("channel_${device.getString("id")}", null)
                 ?.takeIf { preferred -> (0 until addresses.length()).any { addresses.getString(it) == preferred } }
                 ?.let { device.put("preferredEndpoint", it) }
+            if (includeCredentials) credentials.read(device.getString("id"))?.takeIf {
+                it.username.isNotBlank() && it.password.isNotEmpty()
+            }?.let { device.put("credentials", obj("username" to it.username, "password" to it.password)) }
             devices.put(device)
         }
         val updates = context.getSharedPreferences("app_updates", 0)
@@ -73,6 +77,12 @@ internal class CloudConfiguration(private val context: Context) {
             }
             require(addresses.distinct().size == addresses.size) { "设备地址重复" }
             if (d.has("preferredEndpoint")) require(d.getString("preferredEndpoint") in addresses) { "首选通道不在设备地址中" }
+            if (d.has("credentials")) {
+                val login = d.optJSONObject("credentials")
+                require(login != null && login.opt("username") is String && login.opt("password") is String) { "设备登录信息格式无效" }
+                require(login.getString("username").isNotBlank() && login.getString("username").length <= 512 &&
+                    login.getString("password").isNotEmpty() && login.getString("password").length <= 4096) { "设备用户名或密码无效" }
+            }
         }
         val settings = payload.getJSONObject("settings")
         settings.optJSONObject("updates")?.let { p -> for (key in listOf("automatic", "wifiOnly")) require(p.get(key) is Boolean) { "更新设置无效" } }
@@ -105,8 +115,11 @@ internal class CloudConfiguration(private val context: Context) {
     fun apply(payload: JSONObject) {
         validate(payload)
         PhoneCloudConfiguration(context).requireStopped(payload.getJSONObject("settings"))
-        context.openFileOutput("cloud-before-import.json", Context.MODE_PRIVATE).use { it.write(export().toString().toByteArray(Charsets.UTF_8)) }
-        val names = mutableSetOf("MainActivity", "app_updates", "file-view", "RemoteActivity", "phone-tools", "port-tunnels")
+        // A local rollback backup must not create a second plaintext password store.
+        val backup = export(includeCredentials = false).put("_localEncryptedCredentials",
+            JSONObject(context.getSharedPreferences("device-credentials", 0).all))
+        context.openFileOutput("cloud-before-import.json", Context.MODE_PRIVATE).use { it.write(backup.toString().toByteArray(Charsets.UTF_8)) }
+        val names = mutableSetOf("MainActivity", "app_updates", "file-view", "RemoteActivity", "phone-tools", "port-tunnels", "device-credentials")
         for (device in payload.getJSONArray("devices").objects()) for (agent in listOf("codex", "hermes")) names.add("$agent-${device.getString("id")}")
         val previous = names.associateWith { name -> context.getSharedPreferences(name, 0).all.mapValues { (_, value) ->
             if (value is Set<*>) value.toSet() else value
@@ -146,6 +159,15 @@ internal class CloudConfiguration(private val context: Context) {
         if (!main.contains("last_device") && payload.getJSONArray("devices").length() > 0)
             editor.putBoolean("cloud_requires_connection_selection", true)
         check(editor.putString("devices", JSONArray(existing.values.toList()).toString()).commit()) { "设备配置保存失败" }
+        for (device in payload.getJSONArray("devices").objects()) {
+            val login = device.optJSONObject("credentials") ?: continue
+            val id = device.getString("id")
+            val username = login.getString("username")
+            val password = login.getString("password")
+            val old = credentials.read(id)
+            val token = old?.takeIf { it.username == username && it.password == password }?.token.orEmpty()
+            credentials.save(id, DeviceLogin(username, password, token))
+        }
         val settings = payload.getJSONObject("settings")
         settings.optJSONObject("updates")?.let { p -> check(context.getSharedPreferences("app_updates", 0).edit()
             .putBoolean("automatic", p.getBoolean("automatic")).putBoolean("wifi_only", p.getBoolean("wifiOnly")).commit()) { "更新设置保存失败" } }

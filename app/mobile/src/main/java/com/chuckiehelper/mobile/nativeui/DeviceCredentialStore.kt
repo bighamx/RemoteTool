@@ -9,12 +9,13 @@ import javax.crypto.SecretKey
 import org.json.JSONObject
 
 /** Passwords/tokens are encrypted with a non-exportable Android Keystore key. */
-class DeviceCredentialStore(context: Context) {
+class DeviceCredentialStore(context: Context, private val keyProvider: (() -> SecretKey)? = null) {
     private val prefs = context.getSharedPreferences("device-credentials", Context.MODE_PRIVATE)
-    private val cache = mutableMapOf<String, DeviceLogin?>()
+    private val cache = mutableMapOf<String, Pair<String, DeviceLogin?>>()
     private val alias = "ChuckieHelper.DeviceCredentials.v1"
 
     private fun key(): SecretKey {
+        keyProvider?.let { return it() }
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey(alias, null) as? SecretKey)?.let { return it }
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
@@ -26,13 +27,13 @@ class DeviceCredentialStore(context: Context) {
     }
 
     @Synchronized fun read(deviceId: String): DeviceLogin? {
-        if (cache.containsKey(deviceId)) return cache[deviceId]
-        val encrypted = prefs.getString(deviceId, null) ?: return null
+        val encrypted = prefs.getString(deviceId, null) ?: run { cache.remove(deviceId); return null }
+        cache[deviceId]?.takeIf { it.first == encrypted }?.let { return it.second }
         val result = runCatching {
             val row = JSONObject(DeviceCredentialCipher.decrypt(deviceId, encrypted, key()))
             DeviceLogin(row.optString("username"), row.optString("password"), row.optString("token"))
         }.getOrNull()
-        cache[deviceId] = result
+        cache[deviceId] = encrypted to result
         return result
     }
 
@@ -40,7 +41,7 @@ class DeviceCredentialStore(context: Context) {
         val plain = JSONObject().put("username", login.username).put("password", login.password).put("token", login.token).toString()
         val encrypted = DeviceCredentialCipher.encrypt(deviceId, plain, key())
         check(prefs.edit().putString(deviceId, encrypted).commit()) { "无法保存此设备的登录凭据" }
-        cache[deviceId] = login
+        cache[deviceId] = encrypted to login
     }
 
     @Synchronized fun remove(deviceId: String) {

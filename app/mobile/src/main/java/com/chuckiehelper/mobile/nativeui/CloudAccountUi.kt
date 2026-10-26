@@ -65,14 +65,15 @@ internal fun CloudAccountHost(model: CloudAccountModel) {
         }
     }
     if (confirmUpload && model.loggedIn) AlertDialog(onDismissRequest = { confirmUpload = false },
-        title = { Text("上传配置") }, text = { Text("将设备、手机操控设置和端口转发规则等配置保存到云端，覆盖已有配置。密码、工具令牌和聊天记录不上传。") },
+        title = { Text("上传配置") }, text = { Text("上传设备、用户名密码和设置，覆盖云端配置。登录令牌和聊天记录不上传。") },
         confirmButton = { TextButton(onClick = { confirmUpload = false; model.upload() }) { Text("确认上传") } },
         dismissButton = { TextButton(onClick = { confirmUpload = false }) { Text("取消") } })
     model.downloadPreview?.let { payload ->
         AlertDialog(onDismissRequest = { model.dismissPreview() }, title = { Text("应用云端配置") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("${payload.getJSONArray("devices").length()} 台设备 · ${displayTime(payload.optString("exportedAt"))}")
-                Text("合并设备并更新本机设置，原配置将自动备份。")
+                val credentialCount = payload.getJSONArray("devices").objects().count { it.has("credentials") }
+                Text(if (credentialCount > 0) "更新设置和 $credentialCount 台设备的用户名密码，原配置自动备份。" else "合并设备并更新本机设置，原配置自动备份。")
             } },
             confirmButton = { TextButton(enabled = !model.busy, onClick = { model.applyDownload() }) { Text("应用") } },
             dismissButton = { TextButton(enabled = !model.busy, onClick = { model.dismissPreview() }) { Text("取消") } })
