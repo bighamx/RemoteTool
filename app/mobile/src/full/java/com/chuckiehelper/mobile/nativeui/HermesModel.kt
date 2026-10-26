@@ -519,6 +519,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         get() = draftFiles[selectedId].orEmpty()
         private set(value) { draftFiles = draftFiles + (selectedId to value); saveDraftFiles() }
 
+    /** 定时消息（服务端执行，手机退出也会发）。 */
+    var schedules by mutableStateOf<List<JSONObject>>(emptyList())
+        private set
+    var scheduleBusy by mutableStateOf(false)
+        private set
+    var scheduleError by mutableStateOf<String?>(null)
+
     var capabilities by mutableStateOf(JSONObject())
         private set
 
@@ -1180,6 +1187,49 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             else if (hasPendingSubmission && agent == "hermes") error = "上次任务提交结果尚未确认，请使用原标识核对并重试"
             syncWatchService()
         }
+    }
+
+    suspend fun loadSchedules() {
+        val session = selectedId ?: run { schedules = emptyList(); return }
+        try {
+            val items = api.json("$root/schedules?sessionId=" + q(session)).optJSONArray("items") ?: org.json.JSONArray()
+            schedules = items.objects().filter { it.optString("status") == "pending" }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { schedules = emptyList() }
+    }
+
+    suspend fun addSchedule(text: String, sendAt: Long): Boolean {
+        val session = selectedId ?: return false
+        scheduleBusy = true
+        scheduleError = null
+        try {
+            api.json("$root/schedules", obj(
+                "sessionId" to session,
+                "text" to text,
+                "sendAt" to sendAt,
+                "timeZone" to java.util.TimeZone.getDefault().id,
+                "clientKey" to java.util.UUID.randomUUID().toString(),
+            ))
+            loadSchedules()
+            return true
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            scheduleError = connectionFailureMessage(error)
+            return false
+        } finally { scheduleBusy = false }
+    }
+
+    suspend fun cancelSchedule(id: String): Boolean {
+        scheduleBusy = true
+        try {
+            api.json(api.request("$root/schedules/" + q(id), null).newBuilder().delete().build())
+            loadSchedules()
+            return true
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            scheduleError = connectionFailureMessage(error)
+            return false
+        } finally { scheduleBusy = false }
     }
 
     private suspend fun ensureCapabilities(force: Boolean = false) {

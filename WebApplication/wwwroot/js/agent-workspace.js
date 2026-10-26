@@ -53,7 +53,7 @@
         data: () => ({ agent, profile, profiles: [], profileError: '', sessionDetails: null, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
             adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminSettings:{},adminProvider:{},adminEndpoints:[],adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
-            messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [],
+            messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [], schedules: [], showSchedule: false, scheduleText: '', scheduleAt: '', scheduleError: '', scheduleBusy: false,
             activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
             groupByProject: localStorage.getItem(`remotetool:web:groupByProject:${agent}`) === '1',
             collapsedGroups: (() => { try { return JSON.parse(localStorage.getItem(`remotetool:web:collapsedGroups:${agent}`) || '[]'); } catch { return []; } })(),
@@ -547,6 +547,64 @@
                 if (index >= 0) this.collapsedGroups.splice(index, 1); else this.collapsedGroups.push(name);
                 localStorage.setItem(`remotetool:web:collapsedGroups:${this.agent}`, JSON.stringify(this.collapsedGroups));
             },
+            async loadSchedules() {
+                if (this.agent !== 'codex' || !this.selectedId) { this.schedules = []; return; }
+                const id = this.selectedId;
+                try {
+                    const result = await api.get(`${base}/schedules?sessionId=${encodeURIComponent(id)}`);
+                    if (this.selectedId !== id) return;
+                    this.schedules = (result.items || []).filter(row => row.status === 'pending');
+                } catch (error) { if (this.selectedId === id) this.schedules = []; }
+            },
+            localDateTimeInput(date) {
+                const pad = value => String(value).padStart(2, '0');
+                return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+            },
+            openSchedule() {
+                this.scheduleError = '';
+                this.scheduleText = this.draft;
+                this.scheduleAt = this.localDateTimeInput(new Date(Date.now() + 3600 * 1000));
+                this.showSchedule = true;
+            },
+            quickSchedule(minutes, hour, plusDays) {
+                const target = new Date();
+                if (minutes) target.setTime(Date.now() + minutes * 60 * 1000);
+                else { target.setDate(target.getDate() + (plusDays || 0)); target.setHours(hour || 0, 0, 0, 0); }
+                this.scheduleAt = this.localDateTimeInput(target);
+            },
+            async createSchedule() {
+                if (!this.selectedId || !this.scheduleText.trim() || !this.scheduleAt) return;
+                const at = new Date(this.scheduleAt);
+                if (Number.isNaN(at.getTime())) { this.scheduleError = '请选择有效的发送时间'; return; }
+                if (at.getTime() <= Date.now()) { this.scheduleError = '请选择将来的时间'; return; }
+                this.scheduleBusy = true;
+                this.scheduleError = '';
+                try {
+                    await api.post(`${base}/schedules`, {
+                        sessionId: this.selectedId,
+                        text: this.scheduleText,
+                        sendAt: at.toISOString(),
+                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                        clientKey: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)),
+                    });
+                    this.showSchedule = false;
+                    this.scheduleText = '';
+                    await this.loadSchedules();
+                    this.$Message.success('定时消息已提交，由服务端到点发送');
+                } catch (error) { this.scheduleError = error.message; }
+                finally { this.scheduleBusy = false; }
+            },
+            async cancelSchedule(id) {
+                try {
+                    await api.delete(`${base}/schedules/${encodeURIComponent(id)}`);
+                    await this.loadSchedules();
+                } catch (error) { this.error = error.message; }
+            },
+            scheduleChip(row) {
+                const date = new Date(row.send_at * 1000);
+                const pad = value => String(value).padStart(2, '0');
+                return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())} · ${String(row.text || '').replace(/\s+/g, ' ').slice(0, 16)}`;
+            },
             openMoveDialog(session) {
                 this.sessionMenu = null;
                 this.moveTarget = session; this.moveError = ''; this.moveSearch = '';
@@ -660,7 +718,7 @@
         },
         created() { this.loadProfiles(); },
         unmounted() { clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
-        watch: { draft(value) {if(this.selectedId)localStorage.setItem(draftKey(this.selectedId),value);}, attachments: {deep:true,handler(value){if(agent==='hermes'&&this.selectedId)localStorage.setItem(draftFilesKey(this.selectedId),JSON.stringify(value));}}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
+        watch: { selectedId() { this.loadSchedules(); }, draft(value) {if(this.selectedId)localStorage.setItem(draftKey(this.selectedId),value);}, attachments: {deep:true,handler(value){if(agent==='hermes'&&this.selectedId)localStorage.setItem(draftFilesKey(this.selectedId),JSON.stringify(value));}}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
         mounted() {this.refreshSessions();this.loadCapabilities();this.loadModels();this.loadCodexAdmin();this.loadCurrentUsage();this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible')this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible')return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
         beforeUnmount() {this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}
     });

@@ -103,6 +103,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     LaunchedEffect(model) { model.reloadCloudDisplaySettings() }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(api.base) { model.bind(api) }
+    LaunchedEffect(model.selectedId) { model.loadSchedules() }
     LaunchedEffect(api.base, agent, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             if (agent == "codex") while (true) { awaitUiRead(model.fetchUsage()); kotlinx.coroutines.delay(agentUsagePollDelay(model.hasKnownActivity)) }
@@ -187,6 +188,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     var queueDialog by remember { mutableStateOf(false) }
     var filesDialog by remember { mutableStateOf(false) }
     var attachMenu by remember { mutableStateOf(false) }
+    var scheduleDialog by remember { mutableStateOf(false) }
     var commands by remember { mutableStateOf(false) }
     var composerCoordinates by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
     var commandBounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
@@ -900,6 +902,9 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                         )
                     }
                 }
+            ScheduleStrip(model.schedules, model.scheduleBusy) { id ->
+                historyUiScope.launch { model.cancelSchedule(id) }
+            }
             Surface(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
@@ -1044,6 +1049,15 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                                     filePicker.launch(arrayOf("*/*"))
                                 },
                             )
+                            DropdownMenuItem(
+                                text = { Text("定时发送…") },
+                                enabled = model.selectedId != null,
+                                onClick = {
+                                    attachMenu = false
+                                    model.scheduleError = null
+                                    scheduleDialog = true
+                                },
+                            )
                         }
                     }
                     val canSend =
@@ -1085,6 +1099,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
         }
     }
     if (queueDialog) MessageQueueDialog(model.messageQueue) { queueDialog = false }
+    if (scheduleDialog) ScheduleComposerDialog(model, model.draft) { scheduleDialog = false }
     detailsChat?.let { chat ->
         SessionDetailsDialog(api, agent, chat) { detailsChat = null }
     }

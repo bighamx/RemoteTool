@@ -12,7 +12,7 @@ public sealed class ScheduledMessagesController(ScheduledMessageStore store) : C
 {
     [HttpGet]
     public IActionResult List([FromQuery] string sessionId, [FromQuery] string status) =>
-        Ok(store.List(sessionId, status).Select(Shape));
+        Ok(new { items = store.List(sessionId, status).Select(Shape).ToArray() });
 
     [HttpPost]
     public IActionResult Create([FromBody] JsonElement body)
