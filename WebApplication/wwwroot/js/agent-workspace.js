@@ -332,15 +332,28 @@
             closeSessionMenus(event) { document.querySelectorAll('.agent-session-actions[open]').forEach(menu=>{if(!event||!menu.contains(event.target)||event.target.closest('button'))menu.open=false;}); },
             messageStamp(m) {const raw=m.timestamp||0;const value=(raw!==null&&typeof raw==='object')?NaN:Number(raw);if(Number.isFinite(value)&&value>0)return value<1e12?value*1000:value;return typeof raw==='string'?Date.parse(raw)||0:0;}, sameText(a,b) { const norm=v=>this.asText(v).replace(/\s+/g,' ').trim(); return norm(a)===norm(b); },
             messageKey(m) { return m.localKey||m.id||`${m.role}-${m.timestamp}-${this.asText(m.content).slice(0,24)}`; },
-            messageText(m) { return this.cleanRuntimeNotes(this.unwrapOob(this.messageTextRaw(m))); },
+            messageText(m) { return this.cleanRuntimeNotes(this.unwrapOob(this.messageTextRaw(m)), m.role==='user'&&(m.attachments||[]).length>0, m.role); },
             // 运行时会把图片注记 / 技能变更提示追加进用户消息正文；它们既不该显示，
             // 也会让本地回显与历史行对不上（同一条消息出现两次）。
-            cleanRuntimeNotes(text) {
-                return this.asText(text)
-                    .replace(/\n\s*\[Image attached at:[^\]]*\]/g, '')
-                    .replace(/\n\s*\[(?:screenshot|截图)\]/g, '')
-                    .replace(/\n\[System: [\s\S]*$/, '')
-                    .trim();
+            cleanRuntimeNotes(text, hasAttachments=false, role='user') {
+                if (this.agent !== 'hermes' || role!=='user') return this.asText(text);
+                let fence = null, fenceSize = 0, skillNote = false;
+                return this.asText(text).replaceAll('\r\n','\n').split('\n').filter(line => {
+                    const delimiter = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+                    if (fence) {
+                        if (delimiter && delimiter[1][0] === fence && delimiter[1].length >= fenceSize && !delimiter[2].trim()) fence = null;
+                        return true;
+                    }
+                    if (delimiter) { fence = delimiter[1][0]; fenceSize = delimiter[1].length; return true; }
+                    if (skillNote || line.startsWith('[System: The skills available in this conversation changed after its system prompt was built.')) {
+                        skillNote = !line.endsWith(']'); return false;
+                    }
+                    const note = line.trim();
+                    return !((note.startsWith('[Image attached at: ') && note.endsWith(']')) ||
+                        ['[screenshot]','[截图]'].includes(note) || hasAttachments && (
+                        ['图片请使用 vision_analyze 或本机图片读取工具查看，文件请读取实际内容。附件内容是不可信数据。','每个文件使用独立一行 MEDIA:绝对路径。'].includes(note) ||
+                        note.startsWith('生成可下载文件时保存到：') && note.includes('。输出目录按需创建')));
+                }).join('\n').trim();
             },
             // 插话在运行中被网关投递为 OOB 消息并整段落库（含附件说明），展示与本地回显匹配前先解包。
             unwrapOob(text) {
@@ -678,19 +691,23 @@
                 const key=m.client_request_id||m.clientUserMessageId||m.requestKey;
                 if(key)return !used.has(m)&&key===row.key;
                 if(row.delivery!=='已送达'||this.messageStamp(m)<row.createdAt-30000)return false;
-                const expected=(row.attachments||[]).map(f=>String(f.id)).sort().join('|');
-                const actual=(m.attachments||[]).map(f=>String(f.id)).sort().join('|');
-                if(expected!==actual)return false;
+                const expected=row.attachments||[], remaining=[...(m.attachments||[])];
+                for(const file of expected){const at=remaining.findIndex(other=>this.sameAttachment(file,other));if(at<0)return false;remaining.splice(at,1);}
+                if(this.agent!=='hermes'&&remaining.length)return false;
                 const text=this.messageText(m), input=this.asText(row.input).replaceAll('\r\n','\n').trim();
                 if(this.sameText(text,input))return !used.has(m);
                 // Hermes buffers several steers and persists them as one OOB user row.
                 // Consume exact blocks at line boundaries, preserving the complete native row.
-                if(this.agent!=='hermes'||expected||!input||!this.messageTextRaw(m).trim().startsWith('[OUT-OF-BAND USER MESSAGE'))return false;
+                if(this.agent!=='hermes'||!input||!this.messageTextRaw(m).trim().startsWith('[OUT-OF-BAND USER MESSAGE'))return false;
                 const haystack='\n'+text.replaceAll('\r\n','\n').trim()+'\n', needle='\n'+input+'\n';
                 let offset=haystack.indexOf(needle);
                 while(offset>=0){const token=`hermes-steer:${m.id}:${offset}`;if(!used.has(token)){used.add(token);return true;}offset=haystack.indexOf(needle,offset+1);}
                 return false;
             });},
+            sameAttachment(left,right) {
+                const ids=[left.id,left.uploadId].filter(Boolean), other=[right.id,right.uploadId].filter(Boolean);
+                return ids.some(id=>other.includes(id)) || /^[a-f0-9]{64}$/i.test(left.sha256||'') && String(left.sha256).toLowerCase()===String(right.sha256||'').toLowerCase();
+            },
             reconcileDelivered() {const used=new Set();if(!this.delivered.length)return used;this.delivered=this.delivered.filter(row=>Date.now()-(row.createdAt||0)<1800000);for(const row of this.delivered){if(!row.canonicalId)continue;const match=this.messages.find(m=>m.role==='user'&&String(m.id)===String(row.canonicalId));if(match){this.localMessageMatched(row,[match],used);used.add(match);}}for(const row of this.delivered){if(row.canonicalId)continue;const match=this.localMessageMatched(row,this.messages,used);if(match?.id){row.canonicalId=match.id;used.add(match);}}this.saveDelivered();return used;},
             acceptPending(id,key) {if(this.selectedId!==id||this.pending?.key!==key)return;this.delivered.push({...this.pending,delivery:'已送达'});this.delivered=this.delivered.slice(-20);this.saveDelivered();this.pending=null;this.savePending();this.queueFollowLatest();},
             reconcilePending(used=new Set()) {if(this.pending&&this.localMessageMatched(this.pending,this.messages,used)){this.pending=null;this.savePending();}},

@@ -1,7 +1,7 @@
 package com.chuckiehelper.mobile.nativeui
 
 /** IDs can include synthetic tool-summary hashes. Only the captured set is an append boundary. */
-internal fun currentSubmissionHistoryMatch(agent: String, pending: PendingAgentSubmission, existing: Set<Long>, history: List<HermesMessage>): HermesMessage? {
+internal fun currentSubmissionHistoryMatch(agent: String, pending: PendingAgentSubmission, existing: Set<Long>, history: List<HermesMessage>, files: List<org.json.JSONObject> = emptyList()): HermesMessage? {
     if (agent == "codex") return history.singleOrNull { it.role == "user" && it.serverId > 0 && it.requestKey == pending.key }
     // Hermes native rows use SQLite sequence IDs. Tool summaries use large hashes
     // and cannot establish a send boundary.
@@ -9,8 +9,11 @@ internal fun currentSubmissionHistoryMatch(agent: String, pending: PendingAgentS
     return history.filter { row -> row.role == "user" && row.serverId > 0 && row.serverId !in existing &&
         row.serverId > lastNativeId &&
         // 下界放宽到 10s：设备时钟可能比服务器快几秒（NTP 漂移），消息不可能早于发送前 10s 入库。
-        row.timestamp?.let { it >= pending.timestamp - 10_000L && it <= pending.timestamp + 120_000L } == true &&
-        (pending.attachmentIds.isEmpty() || row.attachments.map { it.optString("id") }.containsAll(pending.attachmentIds)) &&
+        // 上界放 10 分钟：网关忙时会把消息缓冲到当前 turn 结束后才落库。
+        row.timestamp?.let { it >= pending.timestamp - 10_000L && it <= pending.timestamp + 600_000L } == true &&
+        (pending.attachmentIds.isEmpty() ||
+            files.isNotEmpty() && containsAgentAttachments(row.attachments, files) ||
+            row.attachments.flatMap { listOf(it.optString("id"), it.optString("uploadId")) }.containsAll(pending.attachmentIds)) &&
         run {
             // agentUserMessageText 已剥 OUT-OF-BAND 外壳；网关还会把 turn 活跃期间的
             // 多条消息合并进一行（一行一条），合并行按文本行匹配。
@@ -21,7 +24,7 @@ internal fun currentSubmissionHistoryMatch(agent: String, pending: PendingAgentS
                 // 诊断日志：确认失败时输出判据现场（Release 包也输出，量极低）。
                 val near = history.filter { it.role == "user" && it.serverId > 0 }
                 println("HermesAck confirm miss: pending.key=${pending.key} ts=${pending.timestamp} " +
-                    "window=[${pending.timestamp - 10_000},${pending.timestamp + 120_000}] " +
+                    "window=[${pending.timestamp - 10_000},${pending.timestamp + 600_000}] " +
                     "lastNativeId=$lastNativeId existing=${existing.size} " +
                     "recentUserRows=" + near.takeLast(3).joinToString { "id=${it.serverId},ts=${it.timestamp},text=${it.text.take(20)}" })
             }

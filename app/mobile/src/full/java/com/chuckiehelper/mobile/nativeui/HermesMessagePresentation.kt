@@ -51,7 +51,14 @@ fun presentHermesMessage(text: String, attached: List<JSONObject>, available: Li
         } ?: candidates.firstOrNull {
             val key = it.optString("messageKey")
             key.isNotBlank() && path.contains("/outbox/$key/")
-        } ?: candidates.singleOrNull().takeIf { expectedOutbox == null }
+        } ?: candidates.firstOrNull {
+            // 同一 run 的 outbox 目录优先（文件名可能重名）。
+            expectedOutbox != null && it.optString("mediaPath").replace('\\', '/').contains("/outbox/$expectedOutbox/")
+        } ?: candidates.singleOrNull()?.takeIf {
+            // 服务端把消息里的 MEDIA 文件登记成 native_<messageId>_ 记录：没有 mediaPath/messageKey。
+            // 这类记录允许按唯一文件名解析；带路径信息的旧任务同名文件仍然要求目录匹配。
+            it.optString("mediaPath").isBlank() && it.optString("messageKey").isBlank()
+        }
         if (file != null) {
             if (files.none { it.optString("id") == file.optString("id") }) files += file
             true

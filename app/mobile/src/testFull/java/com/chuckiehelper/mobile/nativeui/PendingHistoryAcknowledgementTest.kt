@@ -45,4 +45,19 @@ class PendingHistoryAcknowledgementTest {
         val text = "[OUT-OF-BAND USER MESSAGE — direct user message]\n继续\n\n[ChuckieHelper 持久附件]\nfile\n[/OUT-OF-BAND USER MESSAGE]"
         assertNull(restoredPendingHistoryMatch("hermes", pending, listOf(HermesMessage("user", text, 42, timestamp = 11000))))
     }
+
+    @Test fun imageMessagesRequireAttachmentEvidenceAfterNativeIdChanges() {
+        val withImage = pending.copy(attachmentIds = listOf("att-1"))
+        val row = HermesMessage("user", "继续", 42, timestamp = 11000, attachments = emptyList())
+        assertNull(currentSubmissionHistoryMatch("hermes", withImage, setOf(41), listOf(row)))
+        val native = row.copy(attachments = listOf(org.json.JSONObject().put("id", "native_42_hash").put("uploadId", "att-1")))
+        assertEquals(native, currentSubmissionHistoryMatch("hermes", withImage, setOf(41), listOf(native)))
+    }
+
+    @Test fun slowGatewayLandingWithinTenMinutesStillConfirms() {
+        val late = HermesMessage("user", "继续", 42, timestamp = 10000 + 480_000)
+        assertEquals(late, currentSubmissionHistoryMatch("hermes", pending, setOf(41), listOf(late)))
+        val tooLate = HermesMessage("user", "继续", 42, timestamp = 10000 + 700_000)
+        assertNull(currentSubmissionHistoryMatch("hermes", pending, setOf(41), listOf(tooLate)))
+    }
 }

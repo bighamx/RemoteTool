@@ -47,4 +47,18 @@ class HermesMediaTextTest {
         assertEquals(listOf("not-yet-indexed.apk"), shown.unavailable)
         assertEquals("MEDIA:PATH", presentHermesMessage("MEDIA:PATH", emptyList(), emptyList()).text)
     }
+
+    @Test fun singleNameCandidateResolvesEvenWhenOutboxIdDiffers() {
+        // 服务端把文件登记成 native_<messageId>_ 记录，mediaPath 可能为空；
+        // 只要文件名唯一就必须解析成附件，而不是显示“暂不可用”和原始标记。
+        val file = org.json.JSONObject()
+            .put("id", "native_76781_abc")
+            .put("name", "RemoteTool-0.3.104-build107.apk")
+            .put("mime", "application/vnd.android.package-archive")
+        val text = "已打好：\n\nMEDIA:C:\\ProgramData\\RemoteTool\\hermes-attachments\\s\\outbox\\facf6e7b-d9c0\\RemoteTool-0.3.104-build107.apk"
+        val shown = presentHermesMessage(text, listOf(file), emptyList())
+        assertTrue(shown.unavailable.isEmpty())
+        assertEquals(listOf("native_76781_abc"), shown.files.map { it.optString("id") })
+        assertFalse(shown.text.contains("MEDIA:"))
+    }
 }
