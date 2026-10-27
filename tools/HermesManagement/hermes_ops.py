@@ -11,6 +11,26 @@ from datetime import datetime, timezone
 ACTIVE = {"queued", "checking", "waiting", "restarting", "updating"}
 
 
+class GatewaySessionMismatch(RuntimeError):
+    pass
+
+
+def verify_gateway_session(live, expected):
+    if live.get('running') and live.get('session_id') != expected:
+        raise GatewaySessionMismatch('网关运行在错误的 Windows 会话中，不能确认重启成功')
+
+
+def wait_for_gateway_exit(pid, timeout=90):
+    """Recovery may start a gateway only after the old PID is conclusively gone."""
+    from gateway.status import _pid_exists
+    deadline = time.monotonic() + timeout
+    while _pid_exists(pid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(3)
+    return True
+
+
 def cleanup_logs(home):
     """Only this feature's terminal task logs; never remove requests, patches or directories."""
     import re
@@ -117,6 +137,7 @@ def main():
     body = {'key': request['key']}
     exitcode = 1
     invoke = None
+    stopped_pid = None
     run_lock = (job / 'run.lock').open('a+b')
     import msvcrt
     if not run_lock.tell(): run_lock.write(b'0'); run_lock.flush()
@@ -137,12 +158,16 @@ def main():
     try:
         sys.path.insert(0, request['source'])
         import hermes_bootstrap
-        from hermes_admin import invoke
+        from hermes_admin import invoke, require_interactive_session
+        session_id = require_interactive_session()
+        print('Maintenance Windows session=' + str(session_id), flush=True)
         subprocess.run(['schtasks.exe','/Delete','/TN',request['task'],'/F'], capture_output=True, timeout=15)
         phase('checking', '核对全部 Profile 的任务')
         launcher = home / 'bin' / 'hermes.exe'
         if not launcher.is_file(): raise RuntimeError('未找到 Hermes 启动程序')
         live = invoke('admin_gateway_status', {})
+        if live.get('session_id') != session_id:
+            raise RuntimeError('网关不在维护用户的交互式会话中，请先修复网关启动任务；已取消操作')
         if live['active'] and not request['wait']:
             raise RuntimeError('有任务正在运行，请选择等待空闲后重启')
         deadline, stable = time.monotonic() + 1800, 0
@@ -163,6 +188,7 @@ def main():
         previous = invoke('admin_gateway_status', {})
         previous = {'old_pid': previous['pid']}
         if request['mode'] == 'update':
+            stopped_pid = previous['old_pid']
             previous = invoke('admin_gateway_stop', body)
             phase('updating','正在运行 hermes update')
             print('使用官方 --yes：自动确认配置迁移和恢复本地暂存修改；冲突由官方更新器报告并保留恢复依据。',flush=True)
@@ -180,6 +206,7 @@ def main():
             time.sleep(3)
             try:
                 live = invoke('admin_gateway_status', {})
+                verify_gateway_session(live, session_id)
                 if live['running'] and live['fresh'] and live['state'] == 'running' and live['pid'] != previous['old_pid'] and live['code_sha'] == expected_sha and all(value == 'connected' for value in live['platforms'].values()):
                     from urllib.request import Request, urlopen
                     from dotenv import dotenv_values
@@ -188,10 +215,22 @@ def main():
                     with urlopen(Request(url, headers={'Authorization': 'Bearer ' + env.get('API_SERVER_KEY','')}), timeout=5) as response:
                         if response.status == 200:
                             phase('completed','Hermes 已更新，网关与 API 已恢复' if request['mode']=='update' else '网关已重启，API 已恢复'); exitcode = 0; return
+            except GatewaySessionMismatch:
+                raise
             except Exception:
                 continue
         raise RuntimeError('未确认网关恢复；请检查日志，不会重复重启')
     except Exception as error:
+        if stopped_pid is not None and not isinstance(error, GatewaySessionMismatch):
+            try:
+                print('更新维护失败，核对旧网关是否已退出；不重复停止、不启动第二个实例', flush=True)
+                if wait_for_gateway_exit(stopped_pid):
+                    command([str(launcher), 'gateway', 'start'])
+                    print('已提交网关恢复启动；维护仍记为失败，需核对网关状态', flush=True)
+                else:
+                    print('旧网关 PID 仍存在，未启动额外实例；需人工核对退出状态', flush=True)
+            except Exception as recovery_error:
+                print('网关恢复未确认：' + str(recovery_error), flush=True)
         phase('failed', str(error))
     finally:
         try:

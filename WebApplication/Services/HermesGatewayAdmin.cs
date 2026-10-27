@@ -24,6 +24,8 @@ public sealed class HermesGatewayAdmin(HermesManagement management)
         management.BeginMaintenance();
         try {
             var live = await Invoke("status", new { }, ct);
+            if (live["session_id"]?.GetValue<int>() is not > 0)
+                throw new InvalidOperationException("网关未运行在交互式用户会话中，请先在电脑上修复网关启动任务");
             if (live["restart_supported"]?.GetValue<bool>() != true || live["running"]?.GetValue<bool>() != true || live["fresh"]?.GetValue<bool>() != true)
                 throw new InvalidOperationException("当前网关不支持安全重启或状态不可用");
             if (!wait && live["active"]!.GetValue<int>() > 0) throw new InvalidOperationException("有任务正在运行，请选择等待空闲后重启");

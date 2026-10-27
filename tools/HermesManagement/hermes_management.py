@@ -33,32 +33,14 @@ if _bootstrap and _bootstrap.origin:
             sys.exit(subprocess.call([str(_python), str(Path(__file__).resolve())]))
 import hermes_bootstrap
 
-def _restart_gateway_process(home):
-    """Restart the Hermes gateway without inheriting this IIS-supervised process tree.
-
-    Called only after a verified API_SERVER_ENABLED=1 write. The gateway serves the
-    very session that may be running this helper, so a naive in-tree restart would be
-    killed with its caller. The API Server does not require a gateway restart to serve
-    /v1/runs, so a detached, delayed restart is deliberate.
-    """
-    if os.name == "nt":
-        exe = Path(home) / "bin" / "hermes.exe"
-        if exe.is_file():
-            creation = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-            subprocess.Popen([str(exe), "gateway", "restart"], cwd=str(exe.parent),
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                creationflags=creation, close_fds=True)
-            return "hermes gateway restart"
-    return None
-
-
 def api_server_action(action, body):
     """Detect or enable Hermes' loopback API Server in the user's .env.
 
-    The managed poller runs as the service identity and cannot reach the interactive
-    user's .env, so this helper (which runs as the user) reports state and edits the
-    file, but never reboots the gateway unless the caller explicitly asks (restart=true).
+    This supervised helper edits the configured home but never launches a gateway.
+    The HTTP controller routes requested restarts through interactive maintenance.
     """
+    if body.get("restart") is True:
+        raise RuntimeError('重启必须通过交互式用户维护任务执行')
     from hermes_constants import get_hermes_home
     home = get_hermes_home()
     env_path = home / ".env"
@@ -113,10 +95,7 @@ def api_server_action(action, body):
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         live = {"enabled": True, "complete": True}
         api.update({"enabled": True, "host": api["host"] or "127.0.0.1", "port": api["port"] or "8642", "key_set": True})
-    restart_command = None
-    if body.get("restart") is True:
-        restart_command = _restart_gateway_process(home)
-    return {"data": {**api, "restarted": restart_command is not None, "restart_command": restart_command}}
+    return {"data": {**api, "restarted": False, "restart_command": None}}
 
 
 def main():

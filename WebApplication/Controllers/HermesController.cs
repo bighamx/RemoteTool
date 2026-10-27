@@ -45,12 +45,15 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             return StatusCode(503, new { message = error is InvalidOperationException ? error.Message : "无法访问本机 Hermes" });
         }
     }
-    [HttpPost("api-server")] public async Task<IActionResult> EnableApiServer([FromBody] JsonElement body, CancellationToken ct) {
+    [HttpPost("api-server")] public async Task<IActionResult> EnableApiServer([FromBody] JsonElement body, [FromServices] HermesGatewayAdmin gateway, CancellationToken ct) {
         Response.Headers.CacheControl = "no-store";
         try {
             var restart = body.ValueKind == JsonValueKind.Object && body.TryGetProperty("restart", out var flag) && flag.ValueKind == JsonValueKind.True;
-            var result = await management.Invoke("enable_api_server", JsonSerializer.SerializeToElement(new { restart }), ct);
-            return Ok(result);
+            var result = await management.Invoke("enable_api_server", JsonSerializer.SerializeToElement(new { restart = false }), ct);
+            if (!restart) return Ok(result);
+            var response = JsonNode.Parse(result.GetRawText())!.AsObject();
+            response["maintenance"] = await gateway.Start(true, ct);
+            return Ok(response);
         } catch (Exception error) when (error is InvalidOperationException or IOException or OperationCanceledException) {
             return StatusCode(503, new { message = error.Message });
         }

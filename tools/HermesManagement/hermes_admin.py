@@ -7,6 +7,27 @@ import subprocess
 import time
 
 
+def process_session_id(pid):
+    if os.name != 'nt':
+        return None
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.ProcessIdToSessionId.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    kernel.ProcessIdToSessionId.restype = wintypes.BOOL
+    session = wintypes.DWORD()
+    if not kernel.ProcessIdToSessionId(int(pid), ctypes.byref(session)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return session.value
+
+
+def require_interactive_session():
+    session = process_session_id(os.getpid())
+    if session is None or session == 0:
+        raise RuntimeError('维护进程必须运行在登录用户的交互式会话中；已取消操作')
+    return session
+
+
 def status(home):
     from gateway.status import _pid_exists
     state = json.loads((home / "gateway_state.json").read_text(encoding="utf-8-sig"))
@@ -23,7 +44,9 @@ def status(home):
             continue
         with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=3) as db:
             leases += db.execute("SELECT count(*) FROM session_turn_leases WHERE expires_at > ?", (time.time(),)).fetchone()[0]
-    return {"pid": pid, "running": bool(pid and _pid_exists(pid)), "fresh": fresh,
+    running = bool(pid and _pid_exists(pid))
+    return {"pid": pid, "running": running, "fresh": fresh,
+            "session_id": process_session_id(pid) if running else None,
             "state": state.get("gateway_state"), "active": max(leases, int(state.get("active_agents") or 0)),
             "profiles": state.get("served_profiles") or ["default"], "restart_supported": os.name == "nt",
             "code_sha": state.get('code_sha'), "platforms": {key:value.get('state') for key,value in (state.get('platforms') or {}).items()}}
@@ -98,7 +121,7 @@ def invoke(action, body):
     if not marker or state["state"] != "draining" or state["active"] or not state["fresh"] or not state["restart_supported"]:
         raise RuntimeError("网关尚未安全排空，已取消重启")
     from hermes_cli.gateway_windows import _drain_gateway_pid
-    if not _drain_gateway_pid(state["pid"], 20):
+    if not _drain_gateway_pid(state["pid"], 120):
         raise RuntimeError("网关未正常退出；不会强制结束进程")
     clear_drain_request(home=home)
     return {"old_pid": state["pid"]}
