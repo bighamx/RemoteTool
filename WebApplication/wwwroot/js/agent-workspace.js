@@ -332,7 +332,16 @@
             closeSessionMenus(event) { document.querySelectorAll('.agent-session-actions[open]').forEach(menu=>{if(!event||!menu.contains(event.target)||event.target.closest('button'))menu.open=false;}); },
             messageStamp(m) {const raw=m.timestamp||0;const value=(raw!==null&&typeof raw==='object')?NaN:Number(raw);if(Number.isFinite(value)&&value>0)return value<1e12?value*1000:value;return typeof raw==='string'?Date.parse(raw)||0:0;}, sameText(a,b) { const norm=v=>this.asText(v).replace(/\s+/g,' ').trim(); return norm(a)===norm(b); },
             messageKey(m) { return m.localKey||m.id||`${m.role}-${m.timestamp}-${this.asText(m.content).slice(0,24)}`; },
-            messageText(m) { return this.unwrapOob(this.messageTextRaw(m)); },
+            messageText(m) { return this.cleanRuntimeNotes(this.unwrapOob(this.messageTextRaw(m))); },
+            // 运行时会把图片注记 / 技能变更提示追加进用户消息正文；它们既不该显示，
+            // 也会让本地回显与历史行对不上（同一条消息出现两次）。
+            cleanRuntimeNotes(text) {
+                return this.asText(text)
+                    .replace(/\n\s*\[Image attached at:[^\]]*\]/g, '')
+                    .replace(/\n\s*\[(?:screenshot|截图)\]/g, '')
+                    .replace(/\n\[System: [\s\S]*$/, '')
+                    .trim();
+            },
             // 插话在运行中被网关投递为 OOB 消息并整段落库（含附件说明），展示与本地回显匹配前先解包。
             unwrapOob(text) {
                 const raw=this.asText(text); const open=raw.indexOf('[OUT-OF-BAND USER MESSAGE');

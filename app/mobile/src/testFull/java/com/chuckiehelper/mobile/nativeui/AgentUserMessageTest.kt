@@ -26,4 +26,24 @@ class AgentUserMessageTest {
         val raw = "介绍 [OUT-OF-BAND USER MESSAGE] 的作用"
         assertEquals(raw, agentUserMessageText("hermes", raw))
     }
+
+    @Test fun runtimeImageNotesDoNotBreakTheSendReceiptMatch() {
+        val input = "重启是否已经完成？还是无法继续对话 local-cfc1c897ff57"
+        val stored = "$input\n\n[Image attached at: C:\\Users\\chuckie\\AppData\\Local\\hermes\\x.jpg]\n[screenshot]"
+        assertEquals(input, agentUserMessageText("hermes", stored).trim())
+        assertTrue(hermesUserMessageContains(stored, input))
+    }
+
+    @Test fun whitespaceRewritesByTheGatewayStillMatch() {
+        val input = "重启是否已经完成？还是无法继续对话 local-cfc1c897ff57"
+        val stored = "重启是否已经完成？ 还是无法继续对话 local-cfc1c897ff57"
+        assertTrue(hermesUserMessageContains(stored, input))
+    }
+
+    @Test fun runtimeSkillNoticesAreStrippedFromTheChat() {
+        val input = "local-9858c11742bcf8cafe"
+        val stored = "$input\n\n[Image attached at: C:\\x.jpg]\n[screenshot]\n[System: The skills available in this conversation changed after its system prompt was built.\nNow available: foo]"
+        assertEquals(input, agentUserMessageText("hermes", stored).trim())
+        assertTrue(hermesUserMessageContains(stored, input))
+    }
 }
