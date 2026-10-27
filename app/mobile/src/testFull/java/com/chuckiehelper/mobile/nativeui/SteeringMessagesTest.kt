@@ -4,6 +4,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SteeringMessagesTest {
+    @Test fun repeatedMergedBlocksConsumeOccurrencesAndMultilineMatchesCannotOverlap() {
+        val sent = SteeringMessage("one", "session", "继续", setOf(40), 40, "已送达", 10000)
+        val merged = HermesMessage("user", "[OUT-OF-BAND USER MESSAGE — direct]\n继续\n继续\n[/OUT-OF-BAND USER MESSAGE]", 42, timestamp = 12000)
+        val (pending, confirmed) = reconcileSteeringMessages(listOf(merged), listOf(sent, sent.copy(key = "two"), sent.copy(key = "three")))
+        assertEquals(2, confirmed.size)
+        assertEquals(listOf("three"), pending.map { it.key })
+        val whole = sent.copy(text = "第一行\n第二行")
+        val suffix = sent.copy(key = "suffix", text = "第二行")
+        val overlap = reconcileSteeringMessages(listOf(merged.copy(text = "第一行\n第二行")), listOf(whole, suffix))
+        assertEquals(listOf(suffix), overlap.first)
+        val olderUnseen = merged.copy(serverId = 39, text = "继续")
+        assertFalse(steeringAppearsInHistory(sent, listOf(olderUnseen)))
+    }
     @Test fun uncertainSteeringNeverExpiresOrUnlocksResendAndIsScopedToItsAccount() {
         val uncertain = SteeringMessage("key", "session", "once", emptySet(), 0,
             "发送状态待核对", 1000L, accountId = "account-a")

@@ -5,8 +5,10 @@ private val skillNoteStart = "[System: The skills available in this conversation
 internal fun cleanHermesRuntimeNotes(raw: String, hasAttachments: Boolean): String {
     var fence: Char? = null
     var fenceSize = 0
-    var skillNote = false
-    return raw.replace("\r\n", "\n").lines().filter { line ->
+    val lines = raw.replace("\r\n", "\n").lines()
+    var skipThrough = -1
+    return lines.filterIndexed { index, line ->
+        if (index <= skipThrough) return@filterIndexed false
         val delimiter = Regex("^ {0,3}(`{3,}|~{3,})(.*)$").matchEntire(line)
         if (fence != null) {
             if (delimiter != null && delimiter.groupValues[1][0] == fence &&
@@ -14,8 +16,10 @@ internal fun cleanHermesRuntimeNotes(raw: String, hasAttachments: Boolean): Stri
             true
         } else if (delimiter != null) {
             fence = delimiter.groupValues[1][0]; fenceSize = delimiter.groupValues[1].length; true
-        } else if (skillNote || line.startsWith(skillNoteStart)) {
-            skillNote = !line.endsWith(']'); false
+        } else if (line.startsWith(skillNoteStart)) {
+            // An incomplete or quoted notice must not swallow every later user message.
+            val end = (index until lines.size).firstOrNull { lines[it].endsWith(']') }
+            if (end == null) true else { skipThrough = end; false }
         } else {
             val note = line.trim()
             !((note.startsWith("[Image attached at: ") && note.endsWith(']')) ||
@@ -29,16 +33,21 @@ internal fun cleanHermesRuntimeNotes(raw: String, hasAttachments: Boolean): Stri
 
 /** Hermes can persist several buffered steers as one user message. Match complete text blocks. */
 internal fun hermesUserMessageContains(raw: String, input: String): Boolean {
+    return hermesUserMessageRanges(raw, input).isNotEmpty()
+}
+
+/** Line ranges, rather than text keys, distinguish repeated blocks and prevent overlapping receipts. */
+internal fun hermesUserMessageRanges(raw: String, input: String): List<IntRange> {
     val text = agentUserMessageText("hermes", raw).trim()
     val expected = agentUserMessageText("hermes", input).trim()
-    if (expected.isEmpty()) return false
-    if (text == expected || ("\n$text\n").contains("\n$expected\n")) return true
+    if (expected.isEmpty()) return emptyList()
     // 网关偶尔改写空白；按行去掉所有空白后仍要求整行边界一致，避免匹配到行内片段。
     val textLines = text.lines().map { it.replace(Regex("\\s+"), "") }
     val expectedLines = expected.lines().map { it.replace(Regex("\\s+"), "") }
-    val joinedText = "\n" + textLines.joinToString("\n") + "\n"
-    val joinedExpected = "\n" + expectedLines.joinToString("\n") + "\n"
-    return joinedExpected.trim('\n').isNotEmpty() && joinedText.contains(joinedExpected)
+    return (0..textLines.size - expectedLines.size).mapNotNull { start ->
+        val range = start until start + expectedLines.size
+        range.takeIf { textLines.subList(start, start + expectedLines.size) == expectedLines }
+    }
 }
 
 fun agentUserMessageText(agent: String, raw: String, hasAttachments: Boolean = false): String {

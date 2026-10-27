@@ -30,24 +30,23 @@ fun rejectedSteering(message: SteeringMessage): Boolean = message.delivery in se
 fun steeringAppearsInHistory(message: SteeringMessage, history: List<HermesMessage>): Boolean =
     steeringAppearsInHistory(message, history, emptySet())
 
-/** consumedLines: (serverId, 文本行) 粒度——网关会把 turn 活跃期间的多条消息合并进一行
-    （OOB 外壳，一行一条），合并行的每个文本行可以各确认一条 steering。 */
-fun steeringAppearsInHistory(message: SteeringMessage, history: List<HermesMessage>, consumedLines: Set<Pair<Long, String>>): Boolean =
-    message.delivery != "发送失败" && message.delivery != BUSY_STEERING_DELIVERY && history.any { row ->
-        row.role == "user" && row.serverId > 0 && row.serverId !in message.existingIds &&
+fun steeringAppearsInHistory(message: SteeringMessage, history: List<HermesMessage>, consumedLines: Set<Pair<Long, Int>>): Boolean =
+    history.any { steeringHistoryBlock(message, it, consumedLines) != null }
+
+private fun steeringHistoryBlock(message: SteeringMessage, row: HermesMessage, consumedLines: Set<Pair<Long, Int>>): IntRange? {
+    val boundary = message.existingIds.filter { it > 0 && it < 1_000_000_000_000L }.maxOrNull() ?: 0L
+    val eligible = !rejectedSteering(message) &&
+        row.role == "user" && row.serverId > boundary && row.serverId !in message.existingIds &&
             (row.requestKey == message.key || message.delivery == "已送达" && row.requestKey == null && message.timestamp != null &&
                 // 只保留下界：插话在网关队列里可能排队很久才被合并入库（实测 11 分钟），
                 // 上界会把这种合法延迟挡掉。新行保护由 existingIds 边界承担。
                 row.timestamp?.let { at -> at >= message.timestamp - 10_000L } == true) &&
-            (message.attachments.isEmpty() || row.attachments.map { file -> file.optString("id") }
-                .containsAll(message.attachments.map { file -> file.optString("id") })) &&
-            run {
-                val text = message.text.replace("\r\n", "\n").trim()
-                val rowText = agentUserMessageText("hermes", row.text).replace("\r\n", "\n").trim()
-                if (rowText == text) true
-                else hermesUserMessageContains(row.text, text) && (row.serverId to text) !in consumedLines
-            }
+            containsAgentAttachments(row.attachments, message.attachments)
+    if (!eligible) return null
+    return hermesUserMessageRanges(row.text, message.text).firstOrNull { range ->
+        range.none { (row.serverId to it) in consumedLines }
     }
+}
 
 fun pendingSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): List<SteeringMessage> {
     return reconcileSteeringMessages(history, steering).first
@@ -62,22 +61,19 @@ fun isAbandonedSteering(message: SteeringMessage, now: Long = System.currentTime
 }
 
 fun reconcileSteeringMessages(history: List<HermesMessage>, steering: List<SteeringMessage>): Pair<List<SteeringMessage>, List<Pair<SteeringMessage, HermesMessage>>> {
-    val consumed = mutableSetOf<Long>()
-    val consumedLines = mutableSetOf<Pair<Long, String>>()
+    val consumedLines = mutableSetOf<Pair<Long, Int>>()
     val acknowledged = mutableListOf<Pair<SteeringMessage, HermesMessage>>()
     val pending = steering.filter { message ->
         // 不设上界后同文本行可能有多条，取发送时刻之后最早的一行（确定性匹配），
         // consumed/consumedLines 保证一行（或一行内的一个文本行）只确认一条 steering。
-        val match = history.filter { it.serverId !in consumed && steeringAppearsInHistory(message, listOf(it), consumedLines) }
-            .minByOrNull { it.timestamp ?: Long.MAX_VALUE }
+        val match = history.mapNotNull { row -> steeringHistoryBlock(message, row, consumedLines)?.let { row to it } }
+            .minByOrNull { it.first.timestamp ?: Long.MAX_VALUE }
         if (match != null) {
             // 合并行（剥壳后多行）按文本行粒度消费，让同一行确认多条 steering；
             // 单行消息维持整行消费，防止一条入库行确认两条同文本重发。
-            val rowText = agentUserMessageText("hermes", match.text).replace("\r\n", "\n").trim()
-            val text = message.text.replace("\r\n", "\n").trim()
-            if (rowText != text && rowText.contains('\n')) consumedLines += match.serverId to text
-            else consumed += match.serverId
-            acknowledged += message to match; false
+            val (row, range) = match
+            range.forEach { consumedLines += row.serverId to it }
+            acknowledged += message to row; false
         } else if (message.attachments.isEmpty() && outsideSteeringWindow(history, message)) {
             false
         } else true

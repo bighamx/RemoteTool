@@ -4,6 +4,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HermesMediaTextTest {
+    @Test fun canonicalPathsWinEvenWhenTheDisplayNameChangesOrOtherRunsReuseTheName() {
+        val file = org.json.JSONObject().put("id", "native_1_file").put("name", "result.apk")
+            .put("mediaPath", "C:/outbox/key/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_result.apk")
+        val shown = presentHermesMessage("MEDIA:C:/outbox/key/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_result.apk", listOf(file), emptyList())
+        assertTrue(shown.unavailable.isEmpty())
+        assertFalse(shown.text.contains("MEDIA:"))
+        val legacy = org.json.JSONObject().put("id", "native_2_file").put("name", "result.apk")
+        val old = org.json.JSONObject().put("id", "native_3_file").put("name", "result.apk")
+        assertTrue(presentHermesMessage("MEDIA:C:/outbox/new/result.apk", listOf(legacy), listOf(old)).unavailable.isEmpty())
+        assertEquals(listOf("result.apk"), presentHermesMessage("MEDIA:C:/new/result.apk", emptyList(), listOf(file)).unavailable)
+    }
     @Test fun parsesWindowsReturnedMediaWithoutDisplayingPaths() {
         val value = extractHermesMedia("文件已生成\r\n\r\nMEDIA:C:\\ProgramData\\outbox\\run-id\\test image.png\r\nMEDIA:\"C:\\ProgramData\\outbox\\run-id\\test_video.mp4\"\r\n\r\n说明保留")
         assertEquals(listOf("C:/ProgramData/outbox/run-id/test image.png", "C:/ProgramData/outbox/run-id/test_video.mp4"), value.paths)
@@ -60,5 +71,8 @@ class HermesMediaTextTest {
         assertTrue(shown.unavailable.isEmpty())
         assertEquals(listOf("native_76781_abc"), shown.files.map { it.optString("id") })
         assertFalse(shown.text.contains("MEDIA:"))
+        val unrelated = presentHermesMessage(text, emptyList(), listOf(file))
+        assertEquals(listOf("RemoteTool-0.3.104-build107.apk"), unrelated.unavailable)
+        assertTrue(unrelated.text.contains("MEDIA:"))
     }
 }

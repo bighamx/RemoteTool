@@ -8,6 +8,7 @@ namespace RemoteTool.WebApi.Services;
 
 public sealed class HermesAttachments
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> imageHashes = new();
     private readonly string storageRoot;
     private string root => agent == "hermes" && HermesProfileScope.Name != "default"
         ? Path.Combine(storageRoot, ".profiles", HermesProfileScope.Name) : storageRoot;
@@ -118,9 +119,21 @@ public sealed class HermesAttachments
         var name = file.Name;
         if (name.Length > 33 && name[32] == '_') name = name[33..];
         return new { id = Identifier(Path.GetRelativePath(Folder(session), path)), name, size = file.Length,
+            sha256 = ImageHash(path),
             mime = Mime(path), outgoing = Path.GetRelativePath(Folder(session), path).StartsWith("outbox" + Path.DirectorySeparatorChar),
             messageKey = Path.GetRelativePath(Folder(session), path).Split(Path.DirectorySeparatorChar) is var pieces && pieces.Length >= 3 && pieces[0] == "outbox" ? pieces[1] : "",
             url = $"{apiRoot}/sessions/{session}/files/{Identifier(Path.GetRelativePath(Folder(session), path))}?v={file.LastWriteTimeUtc.Ticks}" };
+    }
+    internal static string ImageHash(string path, string mime = null) {
+        var file = new FileInfo(path);
+        if (!(mime ?? Mime(path)).StartsWith("image/") || file.Length > 20 * 1024 * 1024) return null;
+        var key = Path.GetFullPath(path) + "|" + file.Length + "|" + file.LastWriteTimeUtc.Ticks;
+        if (imageHashes.TryGetValue(key, out var saved)) return saved;
+        using var stream = File.OpenRead(path);
+        var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        if (imageHashes.Count >= 512) imageHashes.Clear();
+        imageHashes[key] = hash;
+        return hash;
     }
     public static string Mime(string path) => Path.GetExtension(path).ToLowerInvariant() switch {
         ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".webp" => "image/webp", ".gif" => "image/gif",

@@ -1983,7 +1983,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         saveSteering()
         localSubmissions[id]?.let { local ->
             val acknowledged = if (agent == "hermes" && pendingSubmissions[id]?.key == local.pending.key) null
-                else currentSubmissionHistoryMatch(agent, local.pending, local.existing, history)
+                else currentSubmissionHistoryMatch(agent, local.pending, local.existing, history, local.files)
             if (acknowledged != null) {
                 val canonical = acknowledged.copy(localKey = local.pending.key)
                 rememberMessageKey(id, acknowledged.serverId, local.pending.key)

@@ -42,22 +42,27 @@ fun presentHermesMessage(text: String, attached: List<JSONObject>, available: Li
     val unavailable = mutableListOf<String>()
     val parsed = transformHermesMedia(display) { path ->
         val name = path.substringAfterLast('/')
-        val candidates = (attached + available).distinctBy { it.optString("id") }.filter {
+        val all = (attached + available).distinctBy { it.optString("id") }
+        val candidates = all.filter {
             it.optString("name") == name
         }
         val expectedOutbox = Regex("/outbox/([^/]+)/").find(path)?.groupValues?.get(1)
-        val file = candidates.firstOrNull {
-            it.optString("mediaPath").replace('\\', '/').equals(path, ignoreCase = true)
+        val file = all.firstOrNull {
+            sameAttachmentPath(it.optString("mediaPath"), path)
         } ?: candidates.firstOrNull {
             val key = it.optString("messageKey")
             key.isNotBlank() && path.contains("/outbox/$key/")
         } ?: candidates.firstOrNull {
             // 同一 run 的 outbox 目录优先（文件名可能重名）。
             expectedOutbox != null && it.optString("mediaPath").replace('\\', '/').contains("/outbox/$expectedOutbox/")
-        } ?: candidates.singleOrNull()?.takeIf {
+        } ?: candidates.filter { candidate ->
+            attached.any { it.optString("id") == candidate.optString("id") }
+        }.singleOrNull()?.takeIf {
             // 服务端把消息里的 MEDIA 文件登记成 native_<messageId>_ 记录：没有 mediaPath/messageKey。
             // 这类记录允许按唯一文件名解析；带路径信息的旧任务同名文件仍然要求目录匹配。
             it.optString("mediaPath").isBlank() && it.optString("messageKey").isBlank()
+        } ?: candidates.singleOrNull()?.takeIf {
+            expectedOutbox == null && it.optString("mediaPath").isBlank() && it.optString("messageKey").isBlank()
         }
         if (file != null) {
             if (files.none { it.optString("id") == file.optString("id") }) files += file

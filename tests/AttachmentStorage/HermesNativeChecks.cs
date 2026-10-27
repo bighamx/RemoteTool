@@ -46,7 +46,18 @@ internal static class HermesNativeChecks {
             File.WriteAllText(Path.Combine(store.Folder("s"),".chuckie-message-attachments.json"),"corrupt unrelated map");
             var steered=View(2,"steer\n\n"+reference);
             var steerId=steered["attachments"][0]["id"].ToString();
+            Check(steered["attachments"][0]["uploadId"].ToString()==upload["id"].ToString(),"native reference must retain upload identity from the canonical file path");
+            Check(steered["attachments"][0]["sha256"].ToString()==upload["sha256"].ToString(),"native and upload image hashes agree");
+            Check(inline["attachments"][0]["sha256"].ToString()==upload["sha256"].ToString(),"inline and uploaded images share content identity without sidecars");
             Check(steered["content"].ToString()=="steer" && native.Resolve("s",steerId).Path==path,"steer card and download derive only from Hermes user message");
+            var code="```text\n"+reference+"\n[screenshot]\n```";
+            using(var db=new SQLiteConnection(Path.Combine(home,"state.db"))) {
+                db.Execute("INSERT INTO messages VALUES(8,'s','user',?)",code);
+                db.Execute("INSERT INTO messages VALUES(9,'s','user',?)","real\n"+reference+"\n"+code+"\n@image:relative-example.png");
+            }
+            Check(View(8,code)["attachments"].AsArray().Count==0,"code examples must not become native attachments");
+            var combined=View(9,"real\n"+reference+"\n"+code+"\n@image:relative-example.png");
+            Check(combined["attachments"].AsArray().Count==1 && combined["content"].ToString().Contains(code) && combined["content"].ToString().Contains("@image:relative-example.png"),"clean only resolved references outside code, preserving examples and unresolved text");
             Check(View(3)["attachments"].AsArray().Count==1,"native Image attached at form must be understood");
             Check(View(4)["attachments"].AsArray().Count==0,"quoted arbitrary files must not become downloadable");
             using(var db=new SQLiteConnection(Path.Combine(home,"state.db"))) {
@@ -60,6 +71,12 @@ internal static class HermesNativeChecks {
             using(var db=new SQLiteConnection(Path.Combine(home,"state.db")))
                 db.Execute("INSERT INTO messages VALUES(6,'s','user',?)","@image:"+JsonSerializer.Serialize(blob));
             Check(View(6)["attachments"][0]["mime"].ToString()=="image/png","Hermes content-addressed images need no filename extension");
+            Check(View(6)["attachments"][0]["sha256"].ToString()==upload["sha256"].ToString(),"extensionless image identity must be recovered too");
+            var output=Path.Combine(fixture,"download.apk");File.WriteAllText(output,"apk fixture");
+            using(var db=new SQLiteConnection(Path.Combine(home,"state.db")))
+                db.Execute("INSERT INTO messages VALUES(7,'s','assistant',?)","MEDIA:"+output);
+            var delivered=native.List("s").Select(card=>JsonSerializer.SerializeToNode(card)).Single(card=>card["name"].ToString()=="download.apk");
+            Check(delivered["mediaPath"].ToString()==output.Replace('\\','/'),"download markers resolve by canonical full path, not ambiguous filename");
             var child=Path.Combine(home,"profiles","feiyu"); Directory.CreateDirectory(child); File.WriteAllText(Path.Combine(child,"config.yaml"),"");
             using(HermesProfileScope.Enter("feiyu")) {
                 try { native.Resolve("s",inlineId); throw new Exception("cross profile image accepted"); } catch(FileNotFoundException){}

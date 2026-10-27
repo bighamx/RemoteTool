@@ -337,16 +337,20 @@
             // 也会让本地回显与历史行对不上（同一条消息出现两次）。
             cleanRuntimeNotes(text, hasAttachments=false, role='user') {
                 if (this.agent !== 'hermes' || role!=='user') return this.asText(text);
-                let fence = null, fenceSize = 0, skillNote = false;
-                return this.asText(text).replaceAll('\r\n','\n').split('\n').filter(line => {
+                let fence = null, fenceSize = 0, skipThrough = -1;
+                const lines=this.asText(text).replaceAll('\r\n','\n').split('\n');
+                return lines.filter((line,index) => {
+                    if(index<=skipThrough)return false;
                     const delimiter = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
                     if (fence) {
                         if (delimiter && delimiter[1][0] === fence && delimiter[1].length >= fenceSize && !delimiter[2].trim()) fence = null;
                         return true;
                     }
                     if (delimiter) { fence = delimiter[1][0]; fenceSize = delimiter[1].length; return true; }
-                    if (skillNote || line.startsWith('[System: The skills available in this conversation changed after its system prompt was built.')) {
-                        skillNote = !line.endsWith(']'); return false;
+                    if (line.startsWith('[System: The skills available in this conversation changed after its system prompt was built.')) {
+                        const end=lines.findIndex((item,at)=>at>=index&&item.endsWith(']'));
+                        if(end<0)return true;
+                        skipThrough=end;return false;
                     }
                     const note = line.trim();
                     return !((note.startsWith('[Image attached at: ') && note.endsWith(']')) ||
@@ -357,18 +361,33 @@
             },
             // 插话在运行中被网关投递为 OOB 消息并整段落库（含附件说明），展示与本地回显匹配前先解包。
             unwrapOob(text) {
-                const raw=this.asText(text); const open=raw.indexOf('[OUT-OF-BAND USER MESSAGE');
-                if (open<0) return raw;
-                const start=raw.indexOf(']', open); const close=raw.lastIndexOf('[/OUT-OF-BAND USER MESSAGE]');
+                const raw=this.asText(text).replaceAll('\r\n','\n'), trimmed=raw.trim();
+                if (!trimmed.startsWith('[OUT-OF-BAND USER MESSAGE') || !trimmed.endsWith('[/OUT-OF-BAND USER MESSAGE]')) return raw;
+                const start=trimmed.indexOf(']\n'), close=trimmed.lastIndexOf('[/OUT-OF-BAND USER MESSAGE]');
                 if (start<0||close<=start) return raw;
-                let inner=raw.slice(start+1, close).trim();
-                const note=inner.indexOf('[ChuckieHelper'); if (note>0) inner=inner.slice(0, note).trim();
-                return inner||raw;
+                let inner=trimmed.slice(start+2, close).trim();
+                const note=inner.indexOf('\n\n[ChuckieHelper 持久附件]'); if (note>=0) inner=inner.slice(0, note).trim();
+                return inner;
             },
             messageTextRaw(m) {if (typeof m.content==='string') { if (m.content.startsWith('[{')) { try { const value=JSON.parse(m.content); if (Array.isArray(value)) return value.map(x=>this.asText(x)).filter(Boolean).join('\n')||m.content; } catch {} } return m.content; } if (Array.isArray(m.content)) return m.content.map(x=>this.asText(x)).filter(Boolean).join('\n'); return this.asText(m.text); },
             mediaMarkers(text) {const lines=text.replaceAll('\r\n','\n').split('\n');let fence=null,size=0;const markers=[];for(const [index,line] of lines.entries()){const delimiter=line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);if(fence){if(delimiter&&delimiter[1][0]===fence&&delimiter[1].length>=size&&!delimiter[2].trim())fence=null;continue;}if(delimiter){fence=delimiter[1][0];size=delimiter[1].length;continue;}const match=line.match(/^ {0,3}MEDIA:[ \t]*(.+?)[ \t]*$/i);if(match)markers.push({index,path:match[1].trim().replace(/^['"]|['"]$/g,'')});}return markers;},
-            normalPath(path) {return this.asText(path).replaceAll('\\','/').toLowerCase();},
-            mediaMatches(message) {if(message.role!=='assistant')return[];const byId=new Map();for(const file of [...(message.attachments||[]),...this.sessionFiles.filter(file=>file.outgoing)])if(file.id&&!byId.has(file.id))byId.set(file.id,file);const candidates=[...byId.values()];return this.mediaMarkers(this.messageText(message)).map(marker=>{const path=this.normalPath(marker.path);const exact=candidates.filter(file=>file.mediaPath&&this.normalPath(file.mediaPath)===path);const name=path.split('/').at(-1);const named=candidates.filter(file=>String(file.name||'').toLowerCase()===name);const found=exact.length===1?exact[0]:named.length===1?named[0]:null;return {...marker,file:found};});},
+            normalPath(path) {const value=this.asText(path).replaceAll('\\','/');return /^[a-z]:\//i.test(value)?value.toLowerCase():value;},
+            mediaMatches(message) {
+                if(message.role!=='assistant')return[];
+                const attached=message.attachments||[], byId=new Map();
+                for(const file of [...attached,...this.sessionFiles.filter(file=>file.outgoing)])if(file.id&&!byId.has(file.id))byId.set(file.id,file);
+                const candidates=[...byId.values()];
+                return this.mediaMarkers(this.messageText(message)).map(marker=>{
+                    const path=this.normalPath(marker.path), name=path.split('/').at(-1), outbox=path.match(/\/outbox\/([^/]+)\//)?.[1], windows=/^[a-z]:\//i.test(path);
+                    const exact=candidates.filter(file=>file.mediaPath&&this.normalPath(file.mediaPath)===path);
+                    const named=candidates.filter(file=>(windows?String(file.name||'').toLowerCase():String(file.name||''))===name);
+                    const scoped=named.filter(file=>file.messageKey&&path.includes(`/outbox/${windows?String(file.messageKey).toLowerCase():file.messageKey}/`));
+                    const own=named.filter(file=>!file.mediaPath&&!file.messageKey&&attached.some(item=>item.id===file.id));
+                    const legacy=named.filter(file=>!file.mediaPath&&!file.messageKey);
+                    const found=exact[0]||(scoped.length===1?scoped[0]:null)||(own.length===1?own[0]:null)||(!outbox&&legacy.length===1?legacy[0]:null);
+                    return {...marker,file:found||null};
+                });
+            },
             mediaFiles(message) {const ids=new Set();return this.mediaMatches(message).filter(marker=>marker.file&&!ids.has(marker.file.id)&&ids.add(marker.file.id)).map(marker=>marker.file);},
             unresolvedMedia(message) {return this.mediaMatches(message).filter(marker=>!marker.file);},
             linkedMediaIds(message) {return new Set(this.mediaFiles(message).map(file=>file.id));},
@@ -690,18 +709,30 @@
                 if(m.role!=='user')return false;
                 const key=m.client_request_id||m.clientUserMessageId||m.requestKey;
                 if(key)return !used.has(m)&&key===row.key;
-                if(row.delivery!=='已送达'||this.messageStamp(m)<row.createdAt-30000)return false;
-                const expected=row.attachments||[], remaining=[...(m.attachments||[])];
+                if(row.delivery!=='已送达'||!Number.isFinite(row.createdAt)||row.createdAt<=0||this.messageStamp(m)<row.createdAt-10000)return false;
+                if(Array.isArray(row.historyIds)){
+                    const known=row.historyIds.map(Number).filter(id=>Number.isFinite(id)&&id>0&&id<1e12);
+                    if(row.historyIds.includes(String(m.id)) || known.length&&Number(m.id)<=Math.max(...known))return false;
+                }
+                const expected=[];for(const file of row.attachments||[])if(!expected.some(other=>this.sameAttachment(file,other)))expected.push(file);
+                const remaining=[...(m.attachments||[])];
                 for(const file of expected){const at=remaining.findIndex(other=>this.sameAttachment(file,other));if(at<0)return false;remaining.splice(at,1);}
                 if(this.agent!=='hermes'&&remaining.length)return false;
                 const text=this.messageText(m), input=this.asText(row.input).replaceAll('\r\n','\n').trim();
-                if(this.sameText(text,input))return !used.has(m);
                 // Hermes buffers several steers and persists them as one OOB user row.
-                // Consume exact blocks at line boundaries, preserving the complete native row.
-                if(this.agent!=='hermes'||!input||!this.messageTextRaw(m).trim().startsWith('[OUT-OF-BAND USER MESSAGE'))return false;
-                const haystack='\n'+text.replaceAll('\r\n','\n').trim()+'\n', needle='\n'+input+'\n';
-                let offset=haystack.indexOf(needle);
-                while(offset>=0){const token=`hermes-steer:${m.id}:${offset}`;if(!used.has(token)){used.add(token);return true;}offset=haystack.indexOf(needle,offset+1);}
+                // Consume non-overlapping line ranges, including repeated identical blocks.
+                if(this.agent!=='hermes')return this.sameText(text,input)&&!used.has(m);
+                if(!input)return false;
+                const lines=value=>value.replaceAll('\r\n','\n').trim().split('\n').map(line=>line.replace(/\s+/g,''));
+                const actual=lines(text), wanted=lines(input), whole=actual.length===wanted.length&&actual.every((line,i)=>line===wanted[i]);
+                if(!whole&&!this.messageTextRaw(m).trim().startsWith('[OUT-OF-BAND USER MESSAGE'))return false;
+                if(whole&&used.has(m))return false;
+                for(let start=0;start<=actual.length-wanted.length;start++){
+                    if(!wanted.every((line,i)=>line===actual[start+i]))continue;
+                    const tokens=wanted.map((_,i)=>`hermes-steer:${m.id}:line:${start+i}`);
+                    if(tokens.some(token=>used.has(token)))continue;
+                    tokens.forEach(token=>used.add(token));return true;
+                }
                 return false;
             });},
             sameAttachment(left,right) {
@@ -749,7 +780,7 @@
                 }finally{this.sending=false;}
             },
             async removeQueued(item) {if(!confirm('从队列移除此消息？'))return;try{await api.post(`${base}/sessions/${api.id(this.selectedId)}/queue`,{action:'delete',id:item.id});await this.loadQueue();}catch(e){this.error=e.message;}},
-            async send() {const input=this.draft.trim();if(!this.selectedId||!input||this.sending||this.pending||(this.externalRunning&&this.agent==='codex'))return;const id=this.selectedId;const key=newKey();const files=[...this.attachments];const modelSettings=this.agent==='codex'?{provider:this.selected?.provider||this.selected?.modelProvider||this.modelSelection.provider,model:this.selected?.model||this.modelSelection.model,reasoning_effort:this.selected?.reasoning_effort??this.modelSelection.effort,service_tier:this.selected?.service_tier??this.modelSelection.tier}:null;const submission={key,input,attachments:files,createdAt:Date.now(),delivery:'正在发送',modelSettings};this.pending=submission;this.savePending();this.draft='';this.attachments=[];localStorage.removeItem(`remotetool:web:draft:${agent}:${id}`);this.sending=true;this.queueFollowLatest();try{const body={input,session_id:id,attachment_ids:files.map(f=>f.id)};if(this.agent==='codex'&&modelSettings?.provider&&modelSettings?.model)body.model_settings=modelSettings;if(this.agent==='codex'&&this.context.question?.request_id)body.question_reply_id=this.context.question.request_id;if(this.agent==='hermes'){if(this.modelSelection.provider)body.provider=this.modelSelection.provider;if(this.modelSelection.model)body.model=this.modelSelection.model;}const steering=!!this.activeRun;const route=steering?`${base}/runs/${api.id(this.activeRun)}/steer`:`${base}/runs`;const response=await api.post(route,body,{'Idempotency-Key':key});const accepted=response.delivery!=='unknown'&&response.delivery!=='rejected'&&response.status!=='acceptance_unknown'&&(response.delivery==='accepted'||response.accepted===true||(steering?response.accepted!==false:!!response.run_id));if(this.selectedId!==id){if(accepted){const rows=this.restoreDelivered(id);rows.push({...submission,delivery:'已送达'});localStorage.setItem(echoKey(id),JSON.stringify(rows.slice(-20)));localStorage.removeItem(receiptKey(id));}return;}if(this.pending?.key!==key)return;if(accepted){this.acceptPending(id,key);if(response.run_id){this.activeRun=response.run_id;this.ensureEventStream(response.run_id);}}else{this.pending.delivery='发送状态待核对';this.savePending();}this.loadStatus();this.loadHistory();for(const delay of [800,2500])setTimeout(()=>{if(this.selectedId===id&&(this.pending?.key===key||this.delivered.some(row=>row.key===key)))this.loadHistory();},delay);}catch(error){if(this.selectedId!==id||this.pending?.key!==key)return;if(error.delivery==='rejected'){this.draft=input;this.attachments=files;this.pending=null;this.savePending();this.error=`${error.message}。消息未写入，草稿已恢复。`;}else{this.pending.delivery='发送状态待核对';this.savePending();this.error=`${error.message}。请先核对发送状态，避免重复发送。`;}}finally{this.sending=false;}},
+            async send() {const input=this.draft.trim();if(!this.selectedId||!input||this.sending||this.pending||(this.externalRunning&&this.agent==='codex'))return;const id=this.selectedId;const key=newKey();const files=[...this.attachments];const modelSettings=this.agent==='codex'?{provider:this.selected?.provider||this.selected?.modelProvider||this.modelSelection.provider,model:this.selected?.model||this.modelSelection.model,reasoning_effort:this.selected?.reasoning_effort??this.modelSelection.effort,service_tier:this.selected?.service_tier??this.modelSelection.tier}:null;const submission={key,input,attachments:files,createdAt:Date.now(),delivery:'正在发送',modelSettings,historyIds:this.messages.map(m=>String(m.id)).filter(id=>id!=='undefined')};this.pending=submission;this.savePending();this.draft='';this.attachments=[];localStorage.removeItem(`remotetool:web:draft:${agent}:${id}`);this.sending=true;this.queueFollowLatest();try{const body={input,session_id:id,attachment_ids:files.map(f=>f.id)};if(this.agent==='codex'&&modelSettings?.provider&&modelSettings?.model)body.model_settings=modelSettings;if(this.agent==='codex'&&this.context.question?.request_id)body.question_reply_id=this.context.question.request_id;if(this.agent==='hermes'){if(this.modelSelection.provider)body.provider=this.modelSelection.provider;if(this.modelSelection.model)body.model=this.modelSelection.model;}const steering=!!this.activeRun;const route=steering?`${base}/runs/${api.id(this.activeRun)}/steer`:`${base}/runs`;const response=await api.post(route,body,{'Idempotency-Key':key});const accepted=response.delivery!=='unknown'&&response.delivery!=='rejected'&&response.status!=='acceptance_unknown'&&(response.delivery==='accepted'||response.accepted===true||(steering?response.accepted!==false:!!response.run_id));if(this.selectedId!==id){if(accepted){const rows=this.restoreDelivered(id);rows.push({...submission,delivery:'已送达'});localStorage.setItem(echoKey(id),JSON.stringify(rows.slice(-20)));localStorage.removeItem(receiptKey(id));}return;}if(this.pending?.key!==key)return;if(accepted){this.acceptPending(id,key);if(response.run_id){this.activeRun=response.run_id;this.ensureEventStream(response.run_id);}}else{this.pending.delivery='发送状态待核对';this.savePending();}this.loadStatus();this.loadHistory();for(const delay of [800,2500])setTimeout(()=>{if(this.selectedId===id&&(this.pending?.key===key||this.delivered.some(row=>row.key===key)))this.loadHistory();},delay);}catch(error){if(this.selectedId!==id||this.pending?.key!==key)return;if(error.delivery==='rejected'){this.draft=input;this.attachments=files;this.pending=null;this.savePending();this.error=`${error.message}。消息未写入，草稿已恢复。`;}else{this.pending.delivery='发送状态待核对';this.savePending();this.error=`${error.message}。请先核对发送状态，避免重复发送。`;}}finally{this.sending=false;}},
             async showFiles() {try{const files=await this.loadFiles();this.dialog={title:'会话文件',files,text:'',more:false};}catch(e){this.error=e.message;}},
             async showActiveTools(tool=null) {if(!this.selectedId)return;this.dialog={title:'工具调用详情',tools:[],files:[],text:'',more:false,activeTools:true,selectedTool:tool?.id||null,running:!!(this.activeRun||this.externalRunning)};await this.refreshActiveTools();if(this.toolTimer)clearInterval(this.toolTimer);this.toolTimer=setInterval(()=>{if(this.dialog?.activeTools&&(this.dialog.running||this.externalRunning))this.refreshActiveTools();},2000);},
             async refreshActiveTools(offset=0) {if(!this.dialog?.activeTools||!this.selectedId)return;try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/tools/active?offset=${offset}`);if(!this.dialog?.activeTools)return;const rows=result.data||[];const current=offset?this.dialog.tools||[]:[];const ids=new Set(current.map(row=>row.id));this.dialog.tools=[...current,...rows.filter(row=>!ids.has(row.id))];if(this.dialog.selectedTool){const index=this.dialog.tools.findIndex(row=>row.id===this.dialog.selectedTool);if(index>0)this.dialog.tools.unshift(...this.dialog.tools.splice(index,1));}this.dialog.running=!!result.running;this.dialog.more=!!result.has_more;this.toolOffset=offset+rows.length;this.dialog.title=`工具 ${result.tools??this.dialog.tools.length} 次 · 文件修改 ${result.file_changes??0} 次`;}catch(error){if(error.status!==404)this.error=error.message;}},

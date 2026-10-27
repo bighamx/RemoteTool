@@ -89,8 +89,7 @@ internal fun projectCurrentSubmission(history: List<HermesMessage>, message: Her
     val equivalent = history.firstOrNull { row ->
         if (row.role != "user" || row.serverId <= 0 || row.serverId in existingIds || row.serverId in usedNativeIds) return@firstOrNull false
         if (row.text.replace("\r\n", "\n").trim() != message.text.replace("\r\n", "\n").trim()) return@firstOrNull false
-        if (message.attachments.isNotEmpty() && !row.attachments.map { it.optString("id") }
-                .containsAll(message.attachments.map { it.optString("id") })) return@firstOrNull false
+        if (!containsAgentAttachments(row.attachments, message.attachments)) return@firstOrNull false
         if (row.requestKey != null) return@firstOrNull row.requestKey == message.localKey
         // This is display reconciliation only. Delivery receipts and attachment
         // binding still require their own evidence; do not infer either here.
@@ -112,7 +111,7 @@ internal fun projectCurrentSubmission(history: List<HermesMessage>, message: Her
 
 internal fun attachConfirmedSubmission(history: List<HermesMessage>, id: Long, attachments: List<org.json.JSONObject>): List<HermesMessage> =
     history.map { row -> if (row.serverId == id && row.role == "user") row.copy(
-        attachments = (row.attachments + attachments).distinctBy { it.optString("id") }, delivery = null
+        attachments = mergeAgentAttachments(row.attachments, attachments), delivery = null
     ) else row }
 
 /** Only the live task contributes an overlay. Native rows are never moved or coalesced. */

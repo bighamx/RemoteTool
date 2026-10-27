@@ -17,7 +17,7 @@ public sealed class HermesNativeAttachments(HermesProfiles profiles, HermesAttac
         [Column("content")] public string Content { get; set; }
     }
     public sealed record Content(string Path, byte[] Bytes, string Mime, string Name);
-    private sealed record Source(string Path, string Data, string Mime, string Name) {
+    private sealed record Source(string Path, string Data, string Mime, string Name, string ContentHash = null) {
         public string Digest => Hash(Data ?? (System.IO.Path.GetFullPath(Path) + "|" + File.GetLastWriteTimeUtc(Path).Ticks + "|" + new FileInfo(Path).Length));
         public long Size => Data == null ? new FileInfo(Path).Length : (long)(Data.Length-Data.IndexOf(',')-1) * 3 / 4 - (Data.EndsWith("==") ? 2 : Data.EndsWith('=') ? 1 : 0);
     }
@@ -76,6 +76,19 @@ public sealed class HermesNativeAttachments(HermesProfiles profiles, HermesAttac
         var match=Regex.Match(line,@"^\[[^\]\r\n]*\]\(<?(file:[^\r\n>]+?)>?\)$",RegexOptions.None,TimeSpan.FromMilliseconds(100));
         return match.Success && Uri.TryCreate(match.Groups[1].Value,UriKind.Absolute,out var uri) && uri.IsFile?uri.LocalPath:null;
     }
+    private static IEnumerable<(string Line, bool OutsideCode)> Lines(string text) {
+        char? fence = null; var length = 0;
+        foreach (var line in text.Replace("\r\n", "\n").Split('\n')) {
+            var delimiter = Regex.Match(line,"^ {0,3}(`{3,}|~{3,})(.*)$");
+            if (fence != null) {
+                if (delimiter.Success && delimiter.Groups[1].Value[0] == fence && delimiter.Groups[1].Length >= length && string.IsNullOrWhiteSpace(delimiter.Groups[2].Value)) fence = null;
+                yield return (line,false);
+            } else if (delimiter.Success) {
+                fence = delimiter.Groups[1].Value[0]; length = delimiter.Groups[1].Length;
+                yield return (line,false);
+            } else yield return (line,true);
+        }
+    }
     private bool Safe(string session,string path,bool delivered) {
         if(!System.IO.Path.IsPathFullyQualified(path)) return false;
         var full=System.IO.Path.GetFullPath(path);
@@ -108,11 +121,11 @@ public sealed class HermesNativeAttachments(HermesProfiles profiles, HermesAttac
                 try { digest=Convert.ToHexString(SHA256.HashData(Convert.FromBase64String(data[(comma+1)..]))); } catch(FormatException) { }
                 if(digest==null || !inlineHashes.Add(digest)) continue;
                 var mime=header[5..^7];
-                yield return new Source(null,data,mime,"图片."+(mime=="image/jpeg"?"jpg":mime[6..]));
+                yield return new Source(null,data,mime,"图片."+(mime=="image/jpeg"?"jpg":mime[6..]),digest.ToLowerInvariant());
             }
         }
         var text=string.Join('\n',Text(node));
-        var paths=message.Role=="assistant"?AssistantMediaPaths.Read(text):text.Split('\n').Select(ReferencePath).Where(path=>!string.IsNullOrWhiteSpace(path));
+        var paths=message.Role=="assistant"?AssistantMediaPaths.Read(text):Lines(text).Where(line=>line.OutsideCode).Select(line=>ReferencePath(line.Line)).Where(path=>!string.IsNullOrWhiteSpace(path));
         foreach(var path in paths.Distinct(OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal).Take(32)) {
             Source source=null;
             try {
@@ -133,6 +146,10 @@ public sealed class HermesNativeAttachments(HermesProfiles profiles, HermesAttac
     private object Metadata(Message message,Source source,string session) {
         var digest=source.Digest;
         return new {id=$"native_{message.Id}_{digest}",name=source.Name,size=source.Size,mime=source.Mime,
+            mediaPath=message.Role=="assistant" ? source.Path?.Replace('\\','/') : null,
+            sha256=source.ContentHash ?? HermesAttachments.ImageHash(source.Path,source.Mime),
+            uploadId=source.Path!=null && System.IO.Path.GetFullPath(source.Path).StartsWith(System.IO.Path.GetFullPath(uploads.Folder(session))+System.IO.Path.DirectorySeparatorChar,OperatingSystem.IsWindows()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal)
+                ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(System.IO.Path.GetRelativePath(uploads.Folder(session),source.Path)))).ToLowerInvariant() : null,
             outgoing=message.Role=="assistant",url=$"{HermesProfileScope.ApiRoot}/sessions/{session}/files/native_{message.Id}_{digest}"};
     }
     private object TryMetadata(Message message,Source source,string session) {
@@ -150,7 +167,13 @@ public sealed class HermesNativeAttachments(HermesProfiles profiles, HermesAttac
             var cards=sources.Select(source=>TryMetadata(message,source,session)).Where(card=>card!=null).ToArray();
             row["attachments"]=JsonSerializer.SerializeToNode(cards);
             if(message.Role=="user" && cards.Length>0 && row["content"] is JsonValue value && value.TryGetValue<string>(out var text)) {
-                row["content"]=string.Join('\n',text.Split('\n').Where(line=>ReferencePath(line)==null && line.Trim() is not ("[image]" or "[screenshot]"))).TrimEnd();
+                var paths = sources.Where(source=>source.Path!=null).Select(source=>System.IO.Path.GetFullPath(source.Path)).ToHashSet(OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal);
+                bool Resolved(string line) {
+                    var path = ReferencePath(line);
+                    try { return path!=null && System.IO.Path.IsPathFullyQualified(path) && paths.Contains(System.IO.Path.GetFullPath(path)); }
+                    catch(ArgumentException) { return false; }
+                }
+                row["content"]=string.Join('\n',Lines(text).Where(line=>!line.OutsideCode || !Resolved(line.Line) && line.Line.Trim() is not ("[image]" or "[screenshot]")).Select(line=>line.Line)).TrimEnd();
             }
         }
         return result;

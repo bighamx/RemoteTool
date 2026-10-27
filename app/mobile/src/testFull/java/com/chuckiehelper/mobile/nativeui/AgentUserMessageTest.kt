@@ -65,5 +65,7 @@ class AgentUserMessageTest {
         assertEquals(raw, agentUserMessageText("codex", raw, true))
         assertEquals(raw, agentUserMessageText("hermes", raw))
         assertEquals("问题\n[System: user example]", agentUserMessageText("hermes", "问题\n[System: user example]"))
+        val incomplete = "[System: The skills available in this conversation changed after its system prompt was built.\n后续消息"
+        assertEquals(incomplete, agentUserMessageText("hermes", incomplete))
     }
 }
