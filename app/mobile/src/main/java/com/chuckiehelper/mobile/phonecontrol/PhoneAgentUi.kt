@@ -130,6 +130,8 @@ class PhoneAgentUi(private val context: Context) {
         "phone_manage_app" -> "正在管理应用"
         "phone_system_setting" -> "正在读写系统设置"
         "phone_wait" -> "正在等待界面变化"
+        "phone_execute" -> "正在执行流程"
+        "phone_get_operation" -> "正在查询回执"
         else -> null
     }
 
@@ -139,12 +141,16 @@ class PhoneAgentUi(private val context: Context) {
         val show = settings.agentOverlay && Settings.canDrawOverlays(context) && (state.connected || state.notice != null)
         if (state == rendered && (overlay != null) == show) return
         rendered = state
-        val title = when { state.notice?.help == true -> "等待协助"; state.operating -> "正在操控手机"; else -> "Agent 连接" }
-        val detail = state.notice?.message ?: listOf(state.operation, state.explanation).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "${state.agent} 已连接" }
-        val focus = if (!LiveUpdateNotification.supported && settings.agentIsland && state.connected && state.notice == null)
-            HyperIslandSupport.extras(context, island, title, detail, false) else null
+        val title = PhoneAgentStatus.title(state)
+        val detail = PhoneAgentStatus.detail(state)
+        // Supply the richer Xiaomi layout. LiveUpdateNotification selects this renderer
+        // exclusively; generic promotion is used only without an active Xiaomi island.
+        val focus = if (settings.agentIsland && state.connected && state.notice == null)
+            HyperIslandSupport.extras(context, island, title, detail, false,
+                summaryName = state.agent, summaryAction = PhoneAgentStatus.shortText(state)) else null
         BackgroundNotification.update(context, "phone-tools", if (state.connected) "$title · $detail" else "手机操控", focus,
-            liveUpdate = settings.agentIsland && state.connected && state.operating)
+            liveUpdate = settings.agentIsland && state.connected && state.operating,
+            liveStatus = PhoneAgentStatus.shortText(state))
         renderNotice(state.notice)
         if (!show) { removeOverlay(); return }
         val maximumContentHeight = minOf(dp(280), (context.resources.displayMetrics.heightPixels * .4f).toInt())
@@ -348,7 +354,8 @@ class PhoneAgentUi(private val context: Context) {
         if (notice.help) action("已完成", "done")
         action(if (notice.help) "暂不处理" else "知道了", "dismissed")
         if (settings.agentIsland) HyperIslandSupport.extras(context, island,
-            if (notice.help) "等待协助" else "Agent 消息", notice.message, notice.help, actions)?.let(builder::addExtras)
+            if (notice.help) "等待协助" else "Agent 消息", notice.message, notice.help, actions,
+            summaryName = notice.agent, summaryAction = if (notice.help) "等待你的协助" else "有新的消息")?.let(builder::addExtras)
         runCatching { notifications.notify(42, builder.build()); renderedNotice = notice.id }
     }
     private fun text(value: String, size: Float, color: Int, bold: Boolean = false) = TextView(context).apply {

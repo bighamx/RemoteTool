@@ -2,7 +2,13 @@
 
 ## 高效操作与恢复（工具 Schema v3）
 
+Agent 可在 MCP initialize 中通过 clientInfo.name 声明显示名称，或在 phone_begin_ui 中传 client_name。名称与操作者身份、缓存键及授权分离。读屏现支持 backend=auto/accessibility/uiautomator、include_unimportant 和独立的 mode=compact/text/raw；默认快速读屏包含可能承载 QQ 正文的“不重要”节点，未压缩 UiAutomation 作为显式诊断路径。参数含用途、耗时及能力限制说明，详见下方 Agent 指南。
+
+超级岛/Live Update 的短文本随当前动作更新，展开通知显示 Agent 名称、任务和操作说明。小米摘要模板左区只显示 Agent 名称（约 4 个汉字），右区显示动作（约 6 个汉字），小岛保留图标。有活跃小米岛模板时关闭 Android 通用 promotion，避免系统优先使用“图标 + 短文本”布局；没有活跃小米岛模板时再使用通用 Live Update（最多提交 7 个字符，左侧图标及可见长度由系统控制）。小米官方建议每区约 4 个中文字，本项目按实机空间放宽右区预算，超长仍可能缩小或裁切，不应将完整任务描述塞进摘要。小米模板是否生效取决于平台授权和系统渲染。参考：[Android Live Updates](https://developer.android.com/reference/android/app/Notification.Builder#setShortCriticalText(java.lang.String))、[小米摘要态设计规范](https://dev.mi.com/xiaomihyperos/documentation/detail?pId=2143)。
+
 新增 phone_execute 和 phone_get_operation，总目录为 30 个工具；以连接设备实际公布的工具为准。观察默认读取应用窗口的精简节点，可切换 text/raw、服务端过滤、字段投影及快照差量。屏幕与截图使用统一物理坐标，非法矩形不可点击，目标歧义或被完全遮挡时返回明确错误。
+
+`phone_launch_app` 启动后立即检查小米跨应用启动确认框，检测窗口为 600ms，界面事件唤醒并以最长 50ms 的间隔复查；只读取系统确认框窗口，不扫描底层应用。识别到系统“启动应用”弹窗、当前操控 App 和本次目标应用时直接点击“始终允许”。不固定屏幕坐标，不处理其他权限弹窗。回执 `launch_confirmation` 包含 `status`、`auto_approved`、`verified`；`verified` 仅表示目标已进入前台。无障碍不可用、没有该系统组件或未识别到弹窗时，不自动点击，原启动请求不会重发。主 App 和独立操控端共用此实现。
 
 普通动作可携带 selector、guard、wait_for、return_state，一次完成定位、操作、条件等待及回读。phone_execute 最多串行执行 20 步、预算最多 30 秒，先校验全部参数，任一步失败或条件超时即停止；不支持任意脚本和递归批次。回执按操作者隔离，并保留已执行步骤；查询或核验后决定下一步，不把部分批次换新 ID 重发。
 
@@ -119,7 +125,7 @@ CLI 会自动初始化，并使用按端点、凭据身份和逻辑 Agent 隔离
 
 `phone_notify_user` 接收 `message`（最多 1000 字）、`kind`（`info` 或 `help`）、`timeout_seconds`，返回 `notice_id`。帮助请求显示“已完成／暂不处理”，Agent 用 `phone_get_user_reply(notice_id)` 读取 `pending/done/dismissed/expired/cancelled/not_found`；不能将等待、超时或断线当作已完成。回执按 Agent 绑定隔离，仅存在本次操控进程，重新启动进程后需核对，不会自动重发消息。
 
-UI 占用由当前连接独享，无需续期；调用 phone_end_ui、断开或停止服务时释放，连续 10 分钟没有 UI 操作也会自动释放。其他连接可并行执行非 UI 任务。duration_seconds 为兼容旧客户端保留，但不再决定占用期限。客户端身份在 30 分钟无请求后失效，需重新 initialize；不会自动重放未知结果。撤销绑定或 WebSocket 断开会移除对应连接提示。协助请求默认等待 600 秒，普通提示默认显示 15 秒。
+UI 占用由当前连接独享，无需续期；调用 phone_end_ui、断开或停止服务时释放，连续 5 分钟没有 UI 操作也会自动释放。其他连接可并行执行非 UI 任务。duration_seconds 为兼容旧客户端保留，但不再决定占用期限。客户端身份在 5 分钟无请求后失效，需重新 initialize；不会自动重放未知结果。撤销绑定或 WebSocket 断开会移除对应连接提示。协助请求默认等待 600 秒，普通提示默认显示 15 秒。
 
 悬浮窗按连接分组展示各自信息，使用半透明背景；整个区域可拖动并记住位置，点击标题或“收起”立即以约 180ms 动画最小化，点击“展开”恢复。长内容自动缓慢滚动，无需手动滚动。操作状态显示“正在操控手机”。连接调用时间线采用紧凑列表，查看调用详情后返回保留滚动位置，并短暂高亮刚查看的条目 0.5 秒。
 

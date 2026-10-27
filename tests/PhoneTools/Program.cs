@@ -34,6 +34,24 @@ app.Map("/phone", async context => { using var ws = await context.WebSockets.Acc
 await app.StartAsync();
 var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single().Replace("http://", "ws://") + "/phone";
 static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
+var disconnectBudget = TimeSpan.FromSeconds(1);
+long idleClock = 0;
+var idleSessions = new PhoneMcpSessions(() => idleClock);
+var idleOwner = idleSessions.Create("binding", "idle");
+idleClock = 299_999;
+Check(idleSessions.DrainExpired().Length == 0, "idle owner survives just before five minutes");
+idleClock = 300_000;
+Check(idleSessions.DrainExpired().Single().AgentId == idleOwner.AgentId, "five minute expiry emits proactive cleanup");
+var idleResumed = idleSessions.Create("binding", "resumed", idleOwner.ResumeToken);
+Check(idleResumed.AgentId == idleOwner.AgentId && idleResumed.Generation == 2, "five minute expiry preserves recoverable owner");
+using (idleSessions.BeginCall(idleResumed)) {
+    idleClock += 600_000;
+    Check(idleSessions.DrainExpired().Length == 0, "idle sweep does not interrupt running calls");
+}
+idleClock += 299_999;
+Check(idleSessions.DrainExpired().Length == 0, "idle clock starts after operation completion");
+idleClock++;
+Check(idleSessions.DrainExpired().Length == 1, "completed owner idles out after five minutes");
 var recovery = new PhoneMcpSessions();
 var oldTransport = recovery.Create("binding-a", "Agent");
 using (recovery.BeginCall(oldTransport)) {
@@ -41,15 +59,22 @@ using (recovery.BeginCall(oldTransport)) {
     catch (PhoneMcpSessionException error) { Check(error.Code == "device_busy", "active recovery error"); }
 }
 try { recovery.Create("binding-b", "Agent", oldTransport.ResumeToken); throw new Exception("Cross-binding recovery accepted"); }
-catch (PhoneMcpSessionException error) { Check(error.Code == "session_recovery_failed", "recovery must enforce binding realm"); }
+catch (PhoneMcpSessionException error) { Check(error.Code == "resume_unknown", "recovery must enforce binding realm"); }
 var recovered = recovery.Create("binding-a", "New display name", oldTransport.ResumeToken);
+Check(recovery.Remove("binding-a", oldTransport.Id) == null && recovery.Get("binding-a", recovered.Id) != null, "stale transport DELETE cannot close resumed owner");
+Check(recovery.RemoveByResumeToken("binding-b", oldTransport.ResumeToken) == null, "resume cleanup must enforce binding realm");
+Check(recovered.Name == "New display name", "recovery accepts the newly declared display name without changing owner");
 Check(recovered.Id != oldTransport.Id && recovered.AgentId == oldTransport.AgentId && recovered.Generation == 2, "stable identity across transport recovery");
 Check(recovery.Get("binding-a", oldTransport.Id) == null, "old transport fenced");
+using (recovery.BeginCall(recovered)) {
+    try { recovery.RemoveByResumeToken("binding-a", recovered.ResumeToken); throw new Exception("Running owner deleted"); }
+    catch (PhoneMcpSessionException error) { Check(error.Code == "device_busy", "cleanup must not interrupt active operation"); }
+}
 try { using var stale = recovery.BeginCall(oldTransport); throw new Exception("Stale transport executed"); }
 catch (PhoneMcpSessionException error) { Check(error.Code == "session_replaced", "old cached client object fenced"); }
-recovery.Remove("binding-a", recovered.Id);
+Check(recovery.RemoveByResumeToken("binding-a", recovered.ResumeToken)?.AgentId == recovered.AgentId, "self cleanup removes only the credential owner");
 try { recovery.Create("binding-a", "Agent", recovered.ResumeToken); throw new Exception("Revoked recovery accepted"); }
-catch (PhoneMcpSessionException error) { Check(error.Code == "session_recovery_failed", "delete revokes recovery credential"); }
+catch (PhoneMcpSessionException error) { Check(error.Code == "resume_unknown", "delete revokes recovery credential"); }
 static async Task<JsonObject> Receive(ClientWebSocket socket) {
     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
     var data = new byte[64 * 1024]; var result = await socket.ReceiveAsync(data, timeout.Token);
@@ -81,8 +106,12 @@ Check(gateway.AuthorizeBinding(id, token, "session-2") == null, "cross-session r
 Check(gateway.AuthorizeBinding(id, new string('x', 64)) == null, "invalid token rejected");
 var invoke = gateway.Invoke("phone-test", "phone_observe", new(), "request-1", false, default);
 var command = await Receive(client); Check(command["request_id"]!.ToString() == "request-1", "forward request ID");
+var duplicatePending = (await gateway.Invoke("phone-test", "phone_observe", new(), "request-1", false, default))["structuredContent"]!;
+Check(duplicatePending["delivery_state"]!.ToString() == "not_sent" && duplicatePending["execution"]!.ToString() == "unknown" && !duplicatePending["retryable"]!.GetValue<bool>(), "duplicate attempt is not resent but original logical operation can already be running");
 await client.SendAsync(Encoding.UTF8.GetBytes(new JsonObject { ["type"] = "result", ["request_id"] = "request-1", ["result"] = new JsonObject { ["isError"] = false, ["content"] = new JsonArray() } }.ToJsonString()), WebSocketMessageType.Text, true, default);
-Check((await invoke)["isError"]!.GetValue<bool>() == false, "roundtrip result");
+var roundtrip = await invoke;
+Check(roundtrip["isError"]!.GetValue<bool>() == false, "roundtrip result");
+Check(roundtrip["structuredContent"]!["delivery_state"]!.ToString() == "sent", "successful relay receipt explicitly reports sent");
 await gateway.AgentSeen("phone-test", "agent-a", "Codex", default);
 var presence = await Receive(client);
 Check(presence["type"]!.ToString() == "agent_presence" && presence["agent_id"]!.ToString() == "agent-a" && presence["agent_name"]!.ToString() == "Codex", "agent connection reaches phone display");
@@ -91,10 +120,22 @@ var scopedCommand = await Receive(client);
 Check(scopedCommand["agent_id"]!.ToString() == "agent-a" && scopedCommand["agent_name"]!.ToString() == "Codex", "tool calls retain the binding identity");
 await client.SendAsync(Encoding.UTF8.GetBytes(new JsonObject { ["type"] = "result", ["request_id"] = "scoped", ["result"] = new JsonObject { ["isError"] = false } }.ToJsonString()), WebSocketMessageType.Text, true, default);
 Check(!(await scoped)["isError"]!.GetValue<bool>(), "scoped tool completes");
+var phoneRejectionTask = gateway.Invoke("phone-test", "phone_observe", new(), "phone-rejection", false, default);
+await Receive(client);
+await client.SendAsync(Encoding.UTF8.GetBytes(new JsonObject { ["type"] = "result", ["request_id"] = "phone-rejection",
+    ["result"] = PhoneGateway.Error("permission_required", "mock denial") }.ToJsonString()), WebSocketMessageType.Text, true, default);
+var rejection = await phoneRejectionTask;
+Check(rejection["isError"]!.GetValue<bool>() && rejection["structuredContent"]!["delivery_state"]!.ToString() == "sent", "phone-side rejection still proves transport delivery");
+Check(JsonNode.Parse(rejection["content"]![0]!["text"]!.ToString())!["delivery_state"]!.ToString() == "sent", "text mirrors structured delivery state");
 Check((await gateway.Invoke("phone-test", "phone_shell", new(), "blocked", false, default))["isError"]!.GetValue<bool>(), "advanced invoke rejected");
 using var cancel = new CancellationTokenSource(100);
 var lost = gateway.Invoke("phone-test", "phone_observe", new(), "lost", false, cancel.Token); await Receive(client);
 Check((await lost)["structuredContent"]!["code"]!.ToString() == "delivery_unknown", "lost receipt never replayed");
+using (var alreadyCancelled = new CancellationTokenSource()) {
+    alreadyCancelled.Cancel();
+    var unsent = (await gateway.Invoke("phone-test", "phone_observe", new(), "unsent", false, alreadyCancelled.Token))["structuredContent"]!;
+    Check(unsent["code"]!.ToString() == "channel_closed" && unsent["execution"]!.ToString() == "not_started" && unsent["delivery_state"]!.ToString() == "not_sent", "cancel before send is definitely not started");
+}
 gateway.RevokeSession("hermes", "other", "session-1"); Check(gateway.AuthorizeBinding(id, token) != null, "profile isolation");
 gateway.RevokeSession("hermes", "work", "session-1"); Check(gateway.AuthorizeBinding(id, token) == null, "delete revokes token");
 var webRoot = address.Replace("ws://", "http://").Replace("/phone", "");
@@ -217,6 +258,28 @@ var concurrentCalls = Enumerable.Range(0, 20).Select(async index => {
     Check(reply["id"]!.GetValue<int>() == 100+index && reply["result"]!["isError"]!.GetValue<bool>() == false, "20 concurrent MCP calls keep response identity");
 });
 await Task.WhenAll(concurrentCalls);
+using (var cleanupHttp = new HttpClient()) {
+    cleanupHttp.DefaultRequestHeaders.Authorization = new("Bearer", external["token"]!.ToString());
+    async Task<(string Sid, string Resume)> StartOwner() {
+        using var response = await cleanupHttp.PostAsync(mcpUrl, new StringContent("""{"jsonrpc":"2.0","id":40,"method":"initialize","params":{}}""", Encoding.UTF8, "application/json"));
+        var result = JsonNode.Parse(await response.Content.ReadAsStringAsync())!["result"]!;
+        Check(result["_meta"]!["remotetool"]!["self_cleanup"]!.ToString() == "resume-token", "initialize advertises self cleanup");
+        return (response.Headers.GetValues("Mcp-Session-Id").Single(), result["_meta"]!["remotetool"]!["resume_token"]!.ToString());
+    }
+    var ownerA = await StartOwner(); var ownerB = await StartOwner();
+    using var noOwner = await cleanupHttp.DeleteAsync(mcpUrl);
+    Check((int)noOwner.StatusCode == 400, "binding token alone cannot close every owner");
+    using var delete = new HttpRequestMessage(HttpMethod.Delete, mcpUrl);
+    delete.Headers.Add("X-RemoteTool-Resume-Token", ownerA.Resume);
+    using var deleted = await cleanupHttp.SendAsync(delete);
+    Check((int)deleted.StatusCode == 204, "bound token and resume credential close self without Web JWT");
+    using var ping = new HttpRequestMessage(HttpMethod.Post, mcpUrl) {
+        Content = new StringContent("""{"jsonrpc":"2.0","id":41,"method":"ping"}""", Encoding.UTF8, "application/json")
+    };
+    ping.Headers.Add("Mcp-Session-Id", ownerB.Sid);
+    using var alive = await cleanupHttp.SendAsync(ping);
+    Check(alive.IsSuccessStatusCode, "self cleanup preserves other owner");
+}
 var otherHost = new PhoneGateway(folder);
 Check(otherHost.AuthorizeBinding(external["id"]!.ToString(), external["token"]!.ToString()) != null, "second host loads binding cache");
 var revoked = await http.DeleteAsync(webRoot + "/api/phone/v1/bindings/" + external["id"]); revoked.EnsureSuccessStatusCode();
@@ -239,6 +302,47 @@ var offlineCall = await offlineClient.PostAsync(offlineUrl, new StringContent("{
 Check(JsonNode.Parse(await offlineCall.Content.ReadAsStringAsync())!["result"]!["isError"]!.GetValue<bool>(), "offline tools/call keeps tool-result contract");
 var badParams = await offlineClient.PostAsync(offlineUrl, new StringContent("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\"}", Encoding.UTF8, "application/json"));
 Check(JsonNode.Parse(await badParams.Content.ReadAsStringAsync())!["error"]!["code"]!.GetValue<int>() == -32602, "invalid tool params use JSON-RPC error");
+var disconnected = (await gateway.Invoke("phone-test", "phone_observe", new(), "offline-direct", false, default))["structuredContent"]!;
+Check(disconnected["code"]!.ToString() == "phone_offline" && disconnected["execution"]!.ToString() == "not_started", "offline calls have definite nonexecution");
+using (var dropped = new ClientWebSocket()) {
+    await dropped.ConnectAsync(new Uri(address), default);
+    await dropped.SendAsync(Encoding.UTF8.GetBytes(hello.ToJsonString()), WebSocketMessageType.Text, true, default);
+    await Receive(dropped);
+    var pendingCall = gateway.Invoke("phone-test", "phone_observe", new(), "drop-pending", false, default);
+    await Receive(dropped);
+    var timer = System.Diagnostics.Stopwatch.StartNew();
+    await dropped.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "test disconnect", default);
+    var missing = (await pendingCall.WaitAsync(disconnectBudget))["structuredContent"]!;
+    var elapsed = timer.Elapsed.TotalMilliseconds;
+    Check(elapsed < disconnectBudget.TotalMilliseconds && missing["execution"]!.ToString() == "unknown" && missing["delivery_state"]!.ToString() == "sent", "disconnect immediately completes pending sent calls without pretending nonexecution");
+    Console.WriteLine($"Relay pending: transport=loopback-ws state=sent elapsed_ms={elapsed:F3} budget_ms={disconnectBudget.TotalMilliseconds:F0}");
+}
+for (var repetition = 0; repetition < 3; repetition++) {
+    foreach (var expectedDelivery in new[] { "not_sent", "possibly_sent", "sent" }) {
+        var isolated = new PhoneGateway(Path.Combine(folder, "fault-" + repetition + "-" + expectedDelivery));
+        using var fake = new FaultingPhoneSocket(hello, failInvokeSend: expectedDelivery == "possibly_sent");
+        var attached = isolated.Attach(fake, default);
+        await fake.Ready.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        using var beforeSend = new CancellationTokenSource();
+        if (expectedDelivery == "not_sent") beforeSend.Cancel();
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var pending = isolated.Invoke("phone-test", "phone_observe", new(), "fault-op", false, beforeSend.Token);
+        if (expectedDelivery != "not_sent") await fake.InvokeReceived.Task.WaitAsync(disconnectBudget);
+        // This fixture returns completed send Tasks. Invoke has therefore advanced
+        // past sendCompleted=true before returning its pending Task to this caller.
+        if (expectedDelivery == "sent") { timer.Restart(); fake.Abort(); }
+        var data = (await pending.WaitAsync(disconnectBudget))["structuredContent"]!;
+        var elapsed = timer.Elapsed.TotalMilliseconds;
+        Check(data["delivery_state"]!.ToString() == expectedDelivery, "deterministic " + expectedDelivery);
+        Check(data["execution"]!.ToString() == (expectedDelivery == "not_sent" ? "not_started" : "unknown"), "execution matches send evidence");
+        Check(data["relay_metrics"]!["send_completed"]!.GetValue<bool>() == (expectedDelivery == "sent"), "send completion flag matches injected boundary");
+        Check(elapsed < disconnectBudget.TotalMilliseconds, "isolated disconnect/cancellation wakes pending within the common budget");
+        Console.WriteLine($"Relay pending: transport=isolated-mock state={expectedDelivery} repetition={repetition + 1} elapsed_ms={elapsed:F3} budget_ms={disconnectBudget.TotalMilliseconds:F0}");
+        fake.Abort();
+        await attached.WaitAsync(TimeSpan.FromSeconds(1));
+    }
+}
+Console.WriteLine($"Deterministic relay states: 3 repetitions each of not_sent, possibly_sent, sent; common pending budget <{disconnectBudget.TotalMilliseconds:F0}ms.");
 await app.StopAsync();
 if (Path.GetFullPath(folder).StartsWith(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "remotetool-phone-tests-")), StringComparison.OrdinalIgnoreCase)) Directory.Delete(folder, true);
 Console.WriteLine("Phone gateway checks passed: WS roundtrip, isolation, unknown receipt, external connection API, MCP and revocation.");

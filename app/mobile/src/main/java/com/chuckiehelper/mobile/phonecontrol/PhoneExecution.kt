@@ -6,6 +6,13 @@ import org.json.JSONObject
 internal object PhoneExecution {
     val actions = setOf("phone_tap", "phone_input_text", "phone_key", "phone_swipe", "phone_gesture", "phone_ui_action", "phone_launch_app")
     val batchTools = actions + setOf("phone_observe", "phone_find_nodes", "phone_wait", "phone_get_capabilities")
+    fun validateObservation(args: JSONObject) {
+        if (args.has("backend")) require(args.getString("backend") in setOf("auto", "accessibility", "uiautomator")) { "backend must be auto/accessibility/uiautomator" }
+        if (args.has("privilege_backend")) require(args.getString("privilege_backend") in setOf("auto", "shizuku", "root")) { "privilege_backend must be auto/shizuku/root" }
+        if (args.has("include_unimportant")) require(args.get("include_unimportant") is Boolean)
+        if (args.has("mode")) require(args.getString("mode") in setOf("compact", "text", "raw"))
+        require(args.optString("backend") != "accessibility" || !args.has("privilege_backend")) { "privilege_backend applies only to uiautomator" }
+    }
     fun validateCoordinates(name: String, args: JSONObject, width: Int, height: Int) {
         fun point(x: Double, y: Double) { require(x.isFinite() && y.isFinite() && x >= 0 && y >= 0 && x < width && y < height) { "Coordinates must lie within the physical display" } }
         when (name) {
@@ -32,7 +39,8 @@ internal object PhoneExecution {
         if (args.has("return_state")) require(args.getString("return_state") in setOf("none", "compact", "text", "raw")) { "Invalid return_state" }
     }
     fun validateWait(args: JSONObject) {
-        require(args.keys().asSequence().all { it in setOf("text", "text_regex", "package_name", "selector", "absent", "stable_ms", "timeout_ms", "explanation") }) { "Unknown wait condition" }
+        require(args.keys().asSequence().all { it in setOf("text", "text_regex", "package_name", "selector", "absent", "stable_ms", "timeout_ms", "require_change", "explanation") }) { "Unknown wait condition" }
+        if (args.has("require_change")) require(args.get("require_change") is Boolean)
         for (key in listOf("text", "text_regex", "package_name")) if (args.has(key)) require(args.get(key) is String)
         if (args.has("text_regex")) PhoneSelectors.validate(JSONObject().put("text_regex", args.getString("text_regex")))
         args.optJSONObject("selector")?.let(PhoneSelectors::validate)
@@ -54,6 +62,7 @@ internal object PhoneExecution {
             require(name in batchTools) { "Tool $name cannot be used in a batch" }
             val arguments = step.optJSONObject("arguments") ?: if (!step.has("arguments")) JSONObject() else error("Step arguments must be an object")
             PhoneToolCatalog.validate(name, arguments)
+            if (name in setOf("phone_observe", "phone_find_nodes")) validateObservation(arguments)
             validateOptions(arguments)
             if (name == "phone_wait") validateWait(arguments)
             name to arguments
@@ -73,4 +82,9 @@ internal object PhoneExecution {
         }
         return true
     }
+    fun stateMarker(data: JSONObject) = JSONObject().apply {
+        for (key in listOf("revision", "revision_epoch", "window_id", "signature", "backend", "rotation", "package", "foreground_package")) if (data.has(key)) put(key, data.get(key))
+    }
+    fun changed(before: JSONObject, after: JSONObject): Boolean =
+        listOf("window_id", "signature", "backend", "rotation", "package", "foreground_package").any { before.opt(it) != after.opt(it) }
 }

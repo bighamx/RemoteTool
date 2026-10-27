@@ -10,7 +10,7 @@ internal data class AgentConnectionState(val id: String, val name: String, val o
 internal data class AgentDisplayState(val connected: Boolean, val agent: String, val operating: Boolean,
     val operation: String, val notice: AgentUserNotice?, val explanation: String = "", val connections: List<AgentConnectionState> = emptyList())
 
-/** Connections are independent. UI ownership ends explicitly, or after ten idle minutes. */
+/** Connections are independent. UI ownership ends explicitly, or after five idle minutes. */
 internal class AgentActivityLedger(private val clock: () -> Long) {
     private data class Agent(var name: String, var seenUntil: Long, var goal: String = "",
         var operation: String = "", var explanation: String = "", var operationUntil: Long = 0)
@@ -22,10 +22,10 @@ internal class AgentActivityLedger(private val clock: () -> Long) {
         expire()
         val clean = name.filter { !it.isISOControl() }.take(40).ifBlank { "Agent" }
         val row = agents.getOrPut(id) { Agent(clean, 0) }
-        row.name = clean; row.seenUntil = clock() + 30 * 60_000L
+        row.name = clean; row.seenUntil = clock() + 5 * 60_000L
         while (agents.size > 128) agents.keys.firstOrNull { it != uiOwner && it != id }?.let { agents.remove(it) } ?: break
     }
-    @Synchronized fun touchConnection(id: String) { agents[id]?.seenUntil = clock() + 30 * 60_000L }
+    @Synchronized fun touchConnection(id: String) { agents[id]?.seenUntil = clock() + 5 * 60_000L }
     @Synchronized fun disconnect(id: String) {
         agents.remove(id)
         if (uiOwner == id) uiOwner = ""
@@ -46,7 +46,7 @@ internal class AgentActivityLedger(private val clock: () -> Long) {
     }
     private fun busy(): Nothing = throw PhoneToolError("ui_busy", "界面正由 ${agents[uiOwner]?.name ?: "其他 Agent"} 占用", JSONObject()
         .put("owner", uiOwner).put("owner_name", agents[uiOwner]?.name ?: "Agent")
-        .put("idle_release_after_ms", (600_000L - (clock() - lastUi)).coerceAtLeast(0)))
+        .put("idle_release_after_ms", (300_000L - (clock() - lastUi)).coerceAtLeast(0)))
     @Synchronized fun endUi(id: String) {
         expire()
         if (uiOwner.isNotEmpty() && uiOwner != id) busy()
@@ -89,8 +89,8 @@ internal class AgentActivityLedger(private val clock: () -> Long) {
     }
     private fun expire() {
         val now = clock()
-        if (uiOwner.isNotEmpty() && now - lastUi >= 600_000L) { agents[uiOwner]?.goal = ""; uiOwner = "" }
+        if (uiOwner.isNotEmpty() && now - lastUi >= 300_000L) { agents[uiOwner]?.goal = ""; uiOwner = "" }
         notices.values.filter { it.status == "pending" && it.expiresAt <= now }.forEach { it.status = "expired" }
-        agents.entries.removeAll { it.key != uiOwner && it.value.seenUntil <= now }
+        agents.filter { it.key != uiOwner && it.value.seenUntil <= now }.keys.toList().forEach(::disconnect)
     }
 }

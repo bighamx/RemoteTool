@@ -2,6 +2,7 @@
 import argparse
 import json
 import re
+import sys
 import time
 from phone_mcp import Phone, PhoneError
 
@@ -25,7 +26,7 @@ class UI:
     def _remember(self, state):
         self.state = state
         self.snap = state.get("snapshot_id")
-        self.nodes = [{**n, "_snapshot_id": self.snap} for n in state.get("nodes", [])]
+        self.nodes = [{**n, "_snapshot_id": self.snap, "_node_actions": state.get("node_actions", True)} for n in state.get("nodes", [])]
         return state
 
     def w(self):
@@ -34,9 +35,13 @@ class UI:
     def h(self):
         return self.state.get("screen_height") or self.caps()["screen_height"]
 
-    def begin(self, message=None):
+    def begin(self, message=None, client_name=None):
         self.caps()
-        result = self.p.call("phone_begin_ui", {"message": message} if message else {})
+        args = {"message": message} if message else {}
+        label = client_name or getattr(self.p, "client_name", None)
+        if label:
+            args["client_name"] = label
+        result = self.p.call("phone_begin_ui", args)
         self._ui = True
         return result
 
@@ -105,6 +110,8 @@ class UI:
         return nodes[0]
 
     def _target(self, node):
+        if node.get("_node_actions") is False:
+            raise PhoneError("read_only_backend", "UiAutomation 节点只供读取；请用 backend=accessibility 重新定位后再操作")
         if not self._usable(node):
             raise PhoneError("invalid_target", "目标不可见、被遮挡或矩形无效")
         snapshot = node.get("_snapshot_id")
@@ -160,11 +167,19 @@ class UI:
             raise PhoneError("input_mismatch", "输入内容未得到唯一输入框回读确认；先检查界面", executed=True, receipt=result)
         return {"input": result, "readback": readback, "ok": True}
 
-    def send(self, text, expected_chat, package_name):
-        """仅用于用户已明确授权的消息；会话标题必须精确匹配，提交后不自动重发。"""
+    def send(self, text, expected_chat, package_name, chat_resource_id=None):
+        """仅用于已授权消息。简称必须同时指定标题控件；唯一定位后锁定完整标题。"""
         if not text or not expected_chat or not package_name:
             raise ValueError("必须提供 text、expected_chat 和 package_name")
-        guard = {"package_name": package_name, "selector": {"text": expected_chat}}
+        self.observe()
+        titles = [n for n in self.nodes if self._usable(n) and not n.get("editable") and (
+            (n.get("resource_id") == chat_resource_id and expected_chat in (n.get("text") or ""))
+            if chat_resource_id else n.get("text") == expected_chat)]
+        title = self._unique(titles)
+        title_selector = {"text": title["text"]}
+        if title.get("resource_id"):
+            title_selector["resource_id"] = title["resource_id"]
+        guard = {"package_name": package_name, "selector": title_selector}
         typed = self.type(text, guard=guard)
         if not typed["ok"]:
             raise PhoneError("input_mismatch", "输入内容未得到回读确认；未点击发送", receipt=typed["input"])
@@ -172,12 +187,25 @@ class UI:
             n.get("text") in ("发送", "Send") or n.get("description") in ("发送", "Send")
             or (n.get("resource_id") or "").rsplit("/", 1)[-1] in ("send_btn", "send", "send_button"))]
         result = self.tap(node=self._unique(buttons), guard=guard)
+        def visible_message():
+            return any(not n.get("editable") and text in (
+                (n.get("text") or "") + "\n" + (n.get("description") or ""))
+                for n in self.nodes if self._usable(n))
+        message_visible = visible_message()
+        if not message_visible and self.state.get("truncated"):
+            try:
+                self.observe(limit=600)
+                message_visible = visible_message()
+            except PhoneError as error:
+                return {"submitted": True, "verified": False, "delivery_confirmed": False,
+                        "operation_id": result.get("operation_id"), "verification_error": error.code,
+                        "next_action": "提交后核验失败；先查回执或截图，不自动重发"}
         editors = [n for n in self.nodes if n.get("editable") and self._usable(n)]
-        message_visible = any(not n.get("editable") and text in (
-            n.get("text") or n.get("description") or "") for n in self.nodes if self._usable(n))
         verified = bool(editors) and all(not n.get("text") for n in editors) and message_visible
         return {"submitted": True, "verified": verified, "delivery_confirmed": False,
                 "operation_id": result.get("operation_id"),
+                "verification_reason": "message_and_empty_input" if verified else
+                    "message_not_accessible" if not message_visible else "input_not_confirmed_empty",
                 "next_action": "核对消息状态；不自动重发" if not verified else "界面已回显，送达状态仍以应用为准"}
 
     def scroll(self, direction="next", times=1):
@@ -208,8 +236,8 @@ class UI:
         return self._action("phone_launch_app", {"package_name": package_name},
                             {"package_name": package_name, "stable_ms": 250, "timeout_ms": 10000})
 
-    def dump_text(self, minlen=1):
-        result = self.observe(mode="text")
+    def dump_text(self, minlen=1, backend="auto", include_unimportant=True):
+        result = self.observe(mode="text", backend=backend, include_unimportant=include_unimportant)
         return [line for line in result.get("text", "").splitlines() if len(line) >= minlen]
 
     def execute(self, steps, max_ms=15000, request_id=None):
@@ -222,17 +250,26 @@ class UI:
             raise PhoneError(str(result.get("code", "batch_failed")), "批次已停止；先检查步骤回执", receipt=result)
         return result
 
+    def get_operation(self, operation_id):
+        """查询本逻辑身份的原操作回执，不重放动作，也不接管 UI。"""
+        return self.p.call("phone_get_operation", {"operation_id": operation_id})
+
     def run(self, steps):
         """本地编排；任何一步失败立即结束，绝不继续后面的步骤。"""
         log = []
-        for step in steps:
+        for index, step in enumerate(steps):
             if not isinstance(step, dict) or len(step) != 1:
                 raise ValueError("每一步必须只含一个动作键；动作参数用对象传入")
             verb, args = next(iter(step.items()))
             if verb not in ("tap", "type", "send", "wait", "scroll", "key", "launch", "screen", "find", "dump_text"):
                 raise ValueError("不支持的动作: " + verb)
             fn = getattr(self, verb)
-            result = fn(**args) if isinstance(args, dict) else fn() if args is True else fn(args)
+            try:
+                result = fn(**args) if isinstance(args, dict) else fn() if args is True else fn(args)
+            except PhoneError as error:
+                error.receipt = {**error.receipt, "local_run": {
+                    "completed_steps": len(log), "failed_index": index, "steps": log}}
+                raise
             log.append({verb: result})
         return log
 
@@ -242,32 +279,50 @@ def main(argv=None):
     parser.add_argument("cmd", choices=("caps", "screen", "find", "tap", "wait", "type", "send",
                                        "scroll", "back", "home", "launch", "dump", "run", "execute", "end"))
     parser.add_argument("args", nargs="*")
-    for name in ("url", "token", "binding", "relay", "agent", "chat", "package"):
+    for name in ("url", "token", "binding", "relay", "agent", "client-name", "chat", "package", "chat-resource-id"):
         parser.add_argument("--" + name)
+    parser.add_argument("--backend", choices=("auto", "accessibility", "uiautomator"), default="auto")
+    parser.add_argument("--include-unimportant", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--timeout", type=float, default=10)
+    parser.add_argument("--close-on-exit", action="store_true", help="Standalone task only: close this owner in finally; omit for a multi-command workflow")
     parser.add_argument("--why", default="Hermes 正在操作手机界面以完成用户任务")
     args = parser.parse_args(argv)
     ui = UI(**{k: getattr(args, k) for k in ("url", "token", "binding", "relay", "agent")},
-            explanation=args.why)
-    cmd, rest = args.cmd, args.args
-    if cmd in ("run", "execute"):
-        with open(rest[0], encoding="utf-8") as stream:
-            data = json.load(stream)
-        result = ui.run(data) if cmd == "run" else ui.execute(data, int(args.timeout*1000))
-    elif cmd == "send":
-        result = ui.send(rest[0], args.chat, args.package)
-    elif cmd == "wait":
-        result = ui.wait(rest[0], args.timeout)
-    elif cmd in ("back", "home"):
-        result = ui.key(cmd)
-    elif cmd == "end":
-        result = ui.p.dispose()
-    elif cmd == "dump":
-        result = ui.dump_text()
-    else:
-        result = getattr(ui, cmd)(*rest)
-    print(result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=1))
-    return 0
+            explanation=args.why, client_name=args.client_name)
+    try:
+        cmd, rest = args.cmd, args.args
+        if cmd in ("run", "execute"):
+            with open(rest[0], encoding="utf-8") as stream:
+                data = json.load(stream)
+            result = ui.run(data) if cmd == "run" else ui.execute(data, int(args.timeout*1000))
+        elif cmd == "send":
+            result = ui.send(rest[0], args.chat, args.package, args.chat_resource_id)
+        elif cmd == "wait":
+            result = ui.wait(rest[0], args.timeout)
+        elif cmd in ("back", "home"):
+            result = ui.key(cmd)
+        elif cmd == "end":
+            result = ui.p.dispose()
+        elif cmd == "dump":
+            result = ui.dump_text(backend=args.backend, include_unimportant=args.include_unimportant)
+        elif cmd in ("screen", "find"):
+            ui.observe(backend=args.backend, include_unimportant=args.include_unimportant)
+            result = getattr(ui, cmd)(*rest)
+        else:
+            result = getattr(ui, cmd)(*rest)
+        print(result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=1))
+        return 0
+    finally:
+        if args.close_on_exit and args.cmd != "end":
+            primary_error = sys.exc_info()[0] is not None
+            try:
+                cleanup = ui.p.dispose()
+                if cleanup.get("cleanup_pending") or cleanup.get("requires_user_authorization"):
+                    raise PhoneError("cleanup_pending", "收尾未确认，保留连接缓存")
+            except PhoneError as error:
+                print(json.dumps({"cleanup_error": error.code}, ensure_ascii=False), file=sys.stderr)
+                if not primary_error:
+                    raise
 
 
 if __name__ == "__main__":

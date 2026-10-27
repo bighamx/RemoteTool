@@ -3,6 +3,8 @@
 REMOTETOOL_HERMES_SKILL points at android-phone-ui-automation.
 """
 import concurrent.futures
+import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -67,6 +69,25 @@ class UiHelperTests(unittest.TestCase):
         self.assertEqual(["phone_get_capabilities", "phone_begin_ui", "phone_tap"],
                          [call[0] for call in self.phone.calls])
 
+    def test_standalone_cli_cleans_up_after_caps_error_without_masking_primary_error(self):
+        from unittest.mock import MagicMock
+        ui = MagicMock()
+        ui.caps.side_effect = mcp.PhoneError("cap_failed")
+        ui.p.dispose.side_effect = mcp.PhoneError("cleanup_failed")
+        with patch.object(ui_module, "UI", return_value=ui), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(mcp.PhoneError) as error:
+                ui_module.main(["caps", "--close-on-exit"])
+        self.assertEqual("cap_failed", error.exception.code)
+        ui.p.dispose.assert_called_once()
+
+    def test_multi_command_cli_does_not_close_shared_identity_by_default(self):
+        from unittest.mock import MagicMock
+        ui = MagicMock()
+        ui.caps.return_value = {"schema_version": 3}
+        with patch.object(ui_module, "UI", return_value=ui), contextlib.redirect_stdout(io.StringIO()):
+            ui_module.main(["caps"])
+        ui.p.dispose.assert_not_called()
+
     def test_wait_consumes_snapshot_without_extra_observe(self):
         self.ui.wait("搜索")
         self.assertEqual("s1", self.ui.snap)
@@ -90,6 +111,21 @@ class UiHelperTests(unittest.TestCase):
         with self.assertRaises(mcp.PhoneError):
             self.ui.tap(node=old)
         self.assertEqual([], self.phone.calls)
+
+    def test_explicit_ui_name_and_readonly_dump_nodes(self):
+        self.ui.begin(client_name="Hermes 商品查询")
+        self.assertEqual("Hermes 商品查询", self.phone.calls[-1][1]["client_name"])
+        self.ui._remember({**state(nodes=[node()]), "node_actions": False})
+        with self.assertRaises(mcp.PhoneError) as error:
+            self.ui.tap(node=self.ui.nodes[0])
+        self.assertEqual("read_only_backend", error.exception.code)
+
+    def test_observation_method_and_projection_are_independent(self):
+        self.ui.observe(backend="uiautomator", include_unimportant=True, privilege_backend="root", mode="text")
+        args = self.phone.calls[-1][1]
+        self.assertEqual("uiautomator", args["backend"])
+        self.assertEqual("text", args["mode"])
+        self.assertTrue(args["include_unimportant"])
 
     def test_invalid_and_obscured_nodes_never_click(self):
         for extra in ({"bounds": [1175, 476, 1080, 637]}, {"bounds": [0, 2174, 1080, 2174]},
@@ -137,21 +173,89 @@ class UiHelperTests(unittest.TestCase):
             self.ui.send("正文", "", "com.example.app")
         self.assertEqual([], self.phone.calls)
 
-    def test_send_guards_input_and_submit_and_does_not_claim_delivery(self):
+    def _prepare_send(self):
         self.ui._remember(state(nodes=[node(editable=True, text="", resource_id="app:id/input")]))
+        self.phone.replies["phone_observe"] = state(nodes=[
+            node(editable=True, text="", resource_id="app:id/input"),
+            node(node_id="title", text="群标题", resource_id="app:id/title")])
         self.phone.replies["phone_input_text"] = {"state": state("typed", [
             node(editable=True, text="正文", resource_id="app:id/input"),
             node(node_id="send", text="发送", resource_id="app:id/send_btn")])}
         self.phone.replies["phone_tap"] = {"state": state("submitted", [
             node(editable=True, text="", resource_id="app:id/input"),
             node(node_id="message", text="正文")]), "operation_id": "send-id"}
+
+    def test_send_guards_input_and_submit_and_does_not_claim_delivery(self):
+        self._prepare_send()
         result = self.ui.send("正文", "群标题", "com.example.app")
         writes = [c for c in self.phone.calls if c[0] in ("phone_input_text", "phone_tap")]
         self.assertEqual(2, len(writes))
         for _, args, _ in writes:
-            self.assertEqual({"package_name": "com.example.app", "selector": {"text": "群标题"}}, args["guard"])
+            self.assertEqual({"package_name": "com.example.app", "selector": {
+                "text": "群标题", "resource_id": "app:id/title"}}, args["guard"])
         self.assertTrue(result["verified"])
         self.assertFalse(result["delivery_confirmed"])
+
+    def test_inaccessible_message_does_not_repeat_observe_or_send(self):
+        self._prepare_send()
+        self.phone.replies["phone_tap"]["state"]["nodes"] = [node(editable=True, text="")]
+        result = self.ui.send("正文", "群标题", "com.example.app")
+        self.assertTrue(result["submitted"])
+        self.assertFalse(result["verified"])
+        self.assertEqual("message_not_accessible", result["verification_reason"])
+        self.assertEqual(1, sum(c[0] == "phone_observe" for c in self.phone.calls))
+        self.assertEqual(1, sum(c[0] == "phone_tap" for c in self.phone.calls))
+
+    def test_truncated_observation_gets_one_bounded_readback(self):
+        self._prepare_send()
+        initial = self.phone.replies["phone_observe"]
+        final = self.phone.replies["phone_tap"]["state"]
+        observations = iter([initial, final])
+        original_call = self.phone.call
+        def call(tool, args=None, **kw):
+            if tool == "phone_observe":
+                self.phone.calls.append((tool, args or {}, kw))
+                return next(observations)
+            return original_call(tool, args, **kw)
+        self.phone.call = call
+        self.phone.replies["phone_tap"] = {"state": {
+            **state("partial", [node(editable=True, text="")]), "truncated": True}, "operation_id": "send-id"}
+        result = self.ui.send("正文", "群标题", "com.example.app")
+        self.assertTrue(result["verified"])
+        reads = [c for c in self.phone.calls if c[0] == "phone_observe"]
+        self.assertEqual(600, reads[-1][1]["limit"])
+        self.assertEqual(2, len(reads))
+        self.assertEqual(1, sum(c[0] == "phone_tap" for c in self.phone.calls))
+
+    def test_short_chat_name_requires_unique_explicit_title_control(self):
+        self.phone.replies["phone_observe"] = state(nodes=[
+            node(text="后花园 ·IT交流中心 [C1]", resource_id="app:id/title")])
+        # Stop after guard construction; no actual input or send is performed.
+        with patch.object(self.ui, "type", side_effect=mcp.PhoneError("test_stop")) as typed:
+            with self.assertRaises(mcp.PhoneError):
+                self.ui.send("正文", "后花园", "com.example.app", "app:id/title")
+        self.assertEqual({"text": "后花园 ·IT交流中心 [C1]", "resource_id": "app:id/title"},
+                         typed.call_args.kwargs["guard"]["selector"])
+
+    def test_partial_name_alone_cannot_match_message_content(self):
+        self.phone.replies["phone_observe"] = state(nodes=[node(text="后花园 ·IT交流中心")])
+        with self.assertRaises(mcp.PhoneError):
+            self.ui.send("正文", "后花园", "com.example.app")
+        self.assertNotIn("phone_input_text", [c[0] for c in self.phone.calls])
+
+    def test_run_error_contains_prior_receipts_and_failed_index(self):
+        self.phone.replies["phone_tap"] = mcp.PhoneError("stale_snapshot", receipt={"operation_id": "failed"})
+        with self.assertRaises(mcp.PhoneError) as error:
+            self.ui.run([{"key": "back"}, {"tap": "搜索"}, {"key": "home"}])
+        local = error.exception.receipt["local_run"]
+        self.assertEqual(1, local["completed_steps"])
+        self.assertEqual(1, local["failed_index"])
+        self.assertEqual(1, len(local["steps"]))
+        self.assertEqual(1, sum(c[0] == "phone_key" for c in self.phone.calls))
+
+    def test_operation_query_does_not_acquire_ui(self):
+        self.ui.get_operation("previous")
+        self.assertEqual([("phone_get_operation", {"operation_id": "previous"}, {})], self.phone.calls)
 
 
 @unittest.skipUnless(SKILL, "Set REMOTETOOL_HERMES_SKILL for installed Hermes helper tests")
@@ -166,6 +270,10 @@ class McpHelperTests(unittest.TestCase):
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
+            def do_DELETE(self):
+                owner.calls.append({"method": "DELETE"})
+                self.send_response(204)
+                self.end_headers()
             def do_POST(self):
                 message = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 owner.calls.append(message)
@@ -216,11 +324,85 @@ class McpHelperTests(unittest.TestCase):
         with self.assertRaises(mcp.PhoneError):
             mcp.Phone(url=self.url.removesuffix("/mcp") + "/api/old", token="test", agent="chat")
 
+    def test_agent_config_and_runtime_precedence(self):
+        config = Path(self.temp.name) / "state" / "phone-mcp.json"
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({"url": self.url, "token": "test", "agent": "explicit-config-chat"}), encoding="utf-8")
+        self.assertEqual("explicit-config-chat", mcp.Phone().agent)
+        with patch.dict(os.environ, {"HERMES_SESSION_ID": "runtime-chat"}):
+            self.assertEqual("runtime-chat", mcp.Phone().agent)
+            self.assertEqual("argument-chat", mcp.Phone(agent="argument-chat").agent)
+        with patch.dict(os.environ, {"PHONE_MCP_AGENT": "environment-chat"}):
+            self.assertEqual("environment-chat", mcp.Phone().agent)
+
+    def test_delete_uses_negotiated_version(self):
+        client = self.client()
+        client.initialize()
+        client._save_sid(client.sid, {"protocol": "2025-06-18", "resume_token": "secret"})
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.__enter__.return_value.status = 204
+        with patch.object(client._opener, "open", return_value=response) as request:
+            client.dispose(end_ui=False, disconnect=False)
+        self.assertEqual("2025-06-18", request.call_args.args[0].get_header("Mcp-protocol-version"))
+
+    def test_cached_cleanup_uses_only_its_resume_token_without_reinitializing(self):
+        client = self.client()
+        client.initialize()
+        client._save_sid("expired", {"protocol": "2025-06-18", "resume_token": "secret", "self_cleanup": "resume-token"})
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.__enter__.return_value.status = 204
+        before = len(self.calls)
+        with patch.object(client._opener, "open", return_value=response) as request:
+            result = client.dispose()
+        sent = request.call_args.args[0]
+        self.assertEqual("secret", sent.get_header("X-remotetool-resume-token"))
+        self.assertIsNone(sent.get_header("Mcp-session-id"))
+        self.assertEqual("2025-06-18", sent.get_header("Mcp-protocol-version"))
+        self.assertEqual(before, len(self.calls))
+        self.assertEqual("cached_logical_owner", result["scope"])
+        self.assertNotIn(client.key, client._read_cache())
+
+    def test_cleanup_busy_keeps_resume_credentials(self):
+        client = self.client()
+        client.initialize()
+        client._save_sid(client.sid, {"protocol": "2025-11-25", "resume_token": "secret", "self_cleanup": "resume-token"})
+        import urllib.error,io
+        error = urllib.error.HTTPError(self.url, 409, "busy", {}, io.BytesIO(b'{"code":"device_busy"}'))
+        with patch.object(client._opener, "open", side_effect=error):
+            with self.assertRaises(mcp.PhoneError) as result:
+                client.cleanup_cached()
+        self.assertEqual("device_busy", result.exception.code)
+        self.assertEqual("secret", client._read_cache()[client.key]["resume_token"])
+
+    def test_explicit_reset_never_deletes_other_agent_cache_or_creates_identity(self):
+        client = self.client()
+        client.initialize()
+        other = self.client("other-chat")
+        other.initialize()
+        with self.assertRaises(mcp.PhoneError):
+            client.forget_cached()
+        self.assertIn(client.key, client._read_cache())
+        before = len(self.calls)
+        result = client.forget_cached(True)
+        self.assertEqual(before, len(self.calls))
+        self.assertNotIn(client.key, other._read_cache())
+        self.assertIn(other.key, other._read_cache())
+        self.assertFalse(result["new_identity_created"])
+
     def test_cross_process_style_cache_reuse_and_chat_isolation(self):
         self.client().call("phone_get_capabilities")
         self.client().call("phone_get_capabilities")
         self.client("other-chat").call("phone_get_capabilities")
         self.assertEqual(2, sum(c["method"] == "initialize" for c in self.calls))
+
+    def test_client_display_name_is_configurable_separately_from_identity(self):
+        client = mcp.Phone(url=self.url, token="test", agent="chat", client_name="Codex phone diagnostics")
+        client.initialize()
+        initialize = next(c for c in self.calls if c["method"] == "initialize")
+        self.assertEqual("Codex phone diagnostics", initialize["params"]["clientInfo"]["name"])
+        self.assertEqual("chat", client.agent)
 
     def test_concurrent_clients_initialize_once(self):
         clients = [self.client() for _ in range(4)]
@@ -239,6 +421,7 @@ class McpHelperTests(unittest.TestCase):
         self.assertEqual("secret", init[-1]["params"]["_meta"]["remotetool/resume_token"])
         writes = [c for c in self.calls if c["method"] == "tools/call"]
         self.assertEqual(["original", "original"], [c["params"]["_meta"]["remotetool/request_id"] for c in writes])
+        self.assertFalse(any(c["method"] == "DELETE" for c in self.calls), "resume already fences the old transport; do not silently delete it")
 
     def test_unrelated_404_does_not_recover(self):
         client = self.client()

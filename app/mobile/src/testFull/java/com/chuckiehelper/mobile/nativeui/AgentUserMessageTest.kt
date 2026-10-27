@@ -4,6 +4,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AgentUserMessageTest {
+    @Test fun mergedSteersPreserveOtherDevicesTextAndMatchMultilineInput() {
+        val config = "{\n  \"mcpServers\": {}\n}"
+        val combined = "手机不在home局域网\n在office局域网\nphonetool直连是启用了的\n$config"
+        val raw = "[OUT-OF-BAND USER MESSAGE — a direct message from the user]\n$combined\n[/OUT-OF-BAND USER MESSAGE]"
+        assertEquals(combined, agentUserMessageText("hermes", raw))
+        assertTrue(hermesUserMessageContains(raw, config))
+        assertTrue(hermesUserMessageContains(raw, "在office局域网"))
+        assertFalse(hermesUserMessageContains(raw, "office局域网"))
+        assertFalse(hermesUserMessageContains(raw, ""))
+    }
     @Test fun hermesSteeringEnvelopeAndPersistenceNotesAreHiddenFromTheChat() {
         val input = "请检查图片"
         val raw = "[OUT-OF-BAND USER MESSAGE — a direct message from the user]\n" + input +

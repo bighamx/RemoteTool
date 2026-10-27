@@ -6,6 +6,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import com.chuckiehelper.mobile.background.BackgroundNotification
+import com.chuckiehelper.mobile.background.LiveUpdateNotification
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -19,6 +20,25 @@ class NotificationTestService : Service() { override fun onBind(intent: Intent?)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = android.app.Application::class)
 class BackgroundNotificationTest {
+    @Test fun xiaomiIslandAndAndroidPromotionNeverCompeteAndFallbackCanResume() {
+        val service = Robolectric.buildService(NotificationTestService::class.java).create().get()
+        val notification = Notification.Builder(service, "test").setSmallIcon(android.R.drawable.ic_dialog_info).build()
+        val params = """{"param_v2":{"param_island":{"bigIslandArea":{},"smallIslandArea":{}}}}"""
+        notification.extras.putString("miui.focus.param", params)
+        notification.extras.putString("android.shortCriticalText", "旧摘要")
+        LiveUpdateNotification.apply(service, notification, true, "读取界面")
+        assertFalse(notification.extras.getBoolean("android.requestPromotedOngoing"))
+        assertFalse(notification.extras.containsKey("android.shortCriticalText"))
+        assertEquals(params, notification.extras.getString("miui.focus.param"))
+        notification.extras.putString("miui.focus.param", """{"param_v2":{"param_island":{"dismissIsland":true}}}""")
+        LiveUpdateNotification.apply(service, notification, true)
+        assertTrue(notification.extras.getBoolean("android.requestPromotedOngoing"))
+        notification.extras.remove("miui.focus.param")
+        LiveUpdateNotification.apply(service, notification, true)
+        assertTrue(notification.extras.getBoolean("android.requestPromotedOngoing"))
+        LiveUpdateNotification.apply(service, notification, false)
+        assertFalse(notification.extras.getBoolean("android.requestPromotedOngoing"))
+    }
     @Test fun anEndingAgentDismissesItsIslandWithoutStoppingOtherFeatures() {
         val phone = Robolectric.buildService(NotificationTestService::class.java).create().get()
         val tunnel = Robolectric.buildService(NotificationTestService::class.java).create().get()

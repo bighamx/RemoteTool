@@ -44,4 +44,20 @@ class ExternalAgentActivityTest {
         assertNull(externalActivityTiming(snapshot).startedAt)
         assertEquals("执行中", externalActivityLabel(active()))
     }
+
+    @Test fun hermesNativeCompressionPhaseIsRecognizedWithoutAnAppInitiatedRequest() {
+        for (description in listOf("context compression started", "context compression in progress")) {
+            val snapshot = active().put("activity_text", description)
+            assertEquals("正在压缩上下文", externalActivityLabel(snapshot))
+            // Hermes exposes the turn start, not the compression start. Do not reuse it.
+            assertNull(externalActivityTiming(snapshot).startedAt)
+            assertNull(externalActivityTiming(snapshot).lastResponseAt)
+            assertFalse(externalActivityCompacting(snapshot.put("running", false)))
+        }
+        for (description in listOf("context compression completed", "context compression timed out",
+            "context compression failed", "terminal: echo context compression started")) {
+            assertFalse(externalActivityCompacting(active().put("activity_text", description)))
+        }
+        assertFalse(externalActivityCompacting(active().put("activity_text", "context compression started").put("available", false)))
+    }
 }

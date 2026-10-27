@@ -5,6 +5,17 @@ namespace RemoteTool.WebApi.Services.Codex;
 
 internal static class CodexRunAttachments
 {
+    public static string RequestKey(JsonNode item)
+    {
+        // UserMessageThreadItem uses clientId, including messages added by turn/steer.
+        // The outgoing parameter is clientUserMessageId; its name is not echoed back.
+        foreach (var name in new[] { "clientId", "clientUserMessageId", "clientRequestId" }) {
+            var value = item.S(name);
+            if (!string.IsNullOrEmpty(value)) return value;
+        }
+        return "";
+    }
+
     // Call under the run journal lock. Never associate attachments by message text.
     public static JsonArray Read(JsonObject journal, string session, string key)
     {

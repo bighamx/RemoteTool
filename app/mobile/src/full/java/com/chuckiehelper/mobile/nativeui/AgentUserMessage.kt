@@ -1,5 +1,12 @@
 package com.chuckiehelper.mobile.nativeui
 
+/** Hermes can persist several buffered steers as one user message. Match complete text blocks. */
+internal fun hermesUserMessageContains(raw: String, input: String): Boolean {
+    val text = agentUserMessageText("hermes", raw).trim()
+    val expected = agentUserMessageText("hermes", input).trim()
+    return expected.isNotEmpty() && (text == expected || ("\n$text\n").contains("\n$expected\n"))
+}
+
 fun agentUserMessageText(agent: String, raw: String): String {
     var text = raw.replace("\r\n", "\n")
     if (agent == "hermes") {

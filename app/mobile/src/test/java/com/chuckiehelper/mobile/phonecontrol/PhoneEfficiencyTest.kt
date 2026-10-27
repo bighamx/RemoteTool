@@ -26,6 +26,12 @@ class PhoneEfficiencyTest {
     private fun row(text: String, bounds: Boolean = true) = JSONObject().put("node_id", text).put("text", text)
         .put("visible", true).put("bounds_valid", bounds).put("description", "").put("resource_id", "input")
     private fun state(vararg rows: JSONObject) = JSONObject().put("nodes", JSONArray(rows.toList())).put("package", "target").put("foreground_package", "target")
+    @Test fun capabilitiesIdentifyTheInstalledAppBuild() {
+        val app = engine.capabilities().getJSONObject("app")
+        assertEquals(com.chuckiehelper.mobile.BuildConfig.APPLICATION_ID, app.getString("package_name"))
+        assertEquals(com.chuckiehelper.mobile.BuildConfig.VERSION_NAME, app.getString("version_name"))
+        assertEquals(com.chuckiehelper.mobile.BuildConfig.VERSION_CODE, app.getInt("version_code"))
+    }
     @Test fun invalidAndOffscreenRectanglesNeverBecomeClickPoints() {
         val screen = Rect(0, 0, 1080, 2400)
         for (bad in listOf(Rect(1175,476,1080,637), Rect(28,2387,1080,2344), Rect(0,2174,1080,2174), Rect(0,-30,100,-1)))

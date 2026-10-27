@@ -42,7 +42,7 @@ class PhoneToolsTest {
     @Test fun interruptedExecutionIsNotReplayedAfterRestart() {
         val journal = PhoneJournal(context); journal.begin("interrupted", "digest"); journal.close()
         val restarted = PhoneJournal(context)
-        assertEquals("unknown", restarted.status("interrupted").getString("state"))
+        assertEquals("interrupted", restarted.status("interrupted").getString("state"))
         try { restarted.existing("interrupted", "digest"); fail("must not replay") }
         catch (e: PhoneToolError) { assertEquals("delivery_unknown", e.code) }
     }

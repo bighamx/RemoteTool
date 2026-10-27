@@ -17,7 +17,13 @@ class PhoneHttpServer(private val engine: PhoneEngine) : NanoHTTPD("0.0.0.0", en
             if (path == "/mcp") {
                 val sessionId = session.headers["mcp-session-id"].orEmpty()
                 if (session.method == Method.DELETE) {
-                    val client = sessions.remove(sessionId) ?: return json(Response.Status.NOT_FOUND, JSONObject().put("code", "session_not_found"))
+                    val resume = session.headers["x-remotetool-resume-token"].orEmpty()
+                    if (resume.isNotEmpty() && sessionId.isNotEmpty() || resume.isEmpty() && sessionId.isEmpty())
+                        return json(Response.Status.BAD_REQUEST, JSONObject().put("code", "session_required").put("message", "Specify exactly one owner credential"))
+                    val client = try { if (resume.isNotEmpty()) sessions.removeByResumeToken(resume) else sessions.remove(sessionId) }
+                    catch (error: PhoneToolError) {
+                        return json(Response.Status.CONFLICT, JSONObject().put("code", error.code).put("execution", "not_started").put("retry_after_ms", 250))
+                    } ?: return json(Response.Status.NOT_FOUND, JSONObject().put("code", if (resume.isEmpty()) "session_not_found" else "resume_unknown"))
                     engine.disconnect(client.owner)
                     return newFixedLengthResponse(Response.Status.NO_CONTENT, "application/json", "")
                 }
@@ -65,7 +71,7 @@ class PhoneHttpServer(private val engine: PhoneEngine) : NanoHTTPD("0.0.0.0", en
                             .apply { getJSONObject("error").put("data", JSONObject().put("code", error.code)) })
                     }
                     result.getJSONObject("result").put("_meta", JSONObject().put("remotetool", JSONObject().put("agent_id", created.logicalId)
-                        .put("resume_token", created.resumeToken).put("generation", created.generation)))
+                        .put("resume_token", created.resumeToken).put("generation", created.generation).put("self_cleanup", "resume-token").put("idle_timeout_seconds", 300)))
                     engine.connectionSeen(created.owner, created.name, JSONObject().put("client_info", message.optJSONObject("params")?.optJSONObject("clientInfo"))
                         .put("remote_address", session.remoteIpAddress).put("protocol_version", result.optJSONObject("result")?.optString("protocolVersion")))
                 }

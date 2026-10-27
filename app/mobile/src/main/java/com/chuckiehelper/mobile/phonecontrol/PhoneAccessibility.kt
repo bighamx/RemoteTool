@@ -20,21 +20,45 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class PhoneAccessibility : AccessibilityService() {
-    override fun onServiceConnected() { current = this }
+    override fun onServiceConnected() {
+        serviceInfo?.let { info ->
+            info.flags = info.flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+            serviceInfo = info
+        }
+        current = this
+    }
     override fun onDestroy() { if (current === this) current = null; clearSnapshots(); PhoneAccessibilityControl.request(this); super.onDestroy() }
     override fun onInterrupt() = Unit
     private val changes = Object()
     private val revisions = java.util.concurrent.ConcurrentHashMap<Int, Long>()
+    private val eventRevision = java.util.concurrent.atomic.AtomicLong()
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event != null) synchronized(changes) { revisions.merge(event.windowId, 1L, Long::plus); changes.notifyAll() }
+        if (event != null) synchronized(changes) { revisions.merge(event.windowId, 1L, Long::plus); eventRevision.incrementAndGet(); changes.notifyAll() }
     }
-    fun awaitChange(window: Int, revision: Long, milliseconds: Long) = synchronized(changes) {
+    fun awaitChange(revision: Long, milliseconds: Long) = synchronized(changes) {
         val duration = milliseconds.coerceIn(1, 1000)
         val started = System.nanoTime()
         var remaining = duration
-        while ((revisions[window] ?: 0L) == revision && remaining > 0) {
+        while (eventRevision.get() == revision && remaining > 0) {
             changes.wait(remaining)
             remaining = duration - (System.nanoTime() - started) / 1_000_000
+        }
+    }
+    /** Launch checks must not traverse the underlying app, whose large tree can take hundreds of ms. */
+    @Synchronized internal fun observeAppLaunch(owner: String): JSONObject {
+        val foreground = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            .sortedWith(compareByDescending<AccessibilityWindowInfo> { it.isFocused }.thenByDescending { it.isActive }.thenByDescending { it.layer })
+            .firstOrNull()?.root
+        val pkg = foreground?.let { root -> try { root.packageName?.toString().orEmpty() }
+            finally { @Suppress("DEPRECATION") root.recycle() } }.orEmpty()
+        if (pkg != PhoneAppLaunch.SYSTEM_PACKAGE) return JSONObject().put("foreground_package", pkg)
+            .put("event_revision", eventRevision.get())
+        return try { observe(100, owner, JSONObject().put("package_name", PhoneAppLaunch.SYSTEM_PACKAGE)
+            .put("filter", JSONObject().put("package_name", PhoneAppLaunch.SYSTEM_PACKAGE))) }
+        catch (error: PhoneToolError) {
+            if (error.code != "window_not_found") throw error
+            // The dialog may finish between the cheap window check and collecting nodes.
+            JSONObject().put("event_revision", eventRevision.get())
         }
     }
     private data class Snapshot(val owner: String, val created: Long, val nodes: Map<String, AccessibilityNodeInfo>, val rows: Map<String, JSONObject>, val scope: String)
@@ -76,7 +100,8 @@ class PhoneAccessibility : AccessibilityService() {
             row.put("occluded", visible != null && tap == null)
             if (tap != null) row.put("tap_point", JSONObject().put("x", tap.centerX()).put("y", tap.centerY()))
             val useful = row.optString("text").isNotBlank() || row.optString("description").isNotBlank() || node.isClickable || node.isEditable || node.isScrollable
-            if ((mode == "raw" || node.isVisibleToUser && visible != null && useful) && (selector == null || PhoneSelectors.matches(row, selector)) &&
+            if ((options.optBoolean("include_unimportant", true) || node.isImportantForAccessibility) &&
+                (mode == "raw" || node.isVisibleToUser && visible != null && useful) && (selector == null || PhoneSelectors.matches(row, selector)) &&
                 (contains == null || contains.keys().asSequence().all { row.optString(it).contains(contains.getString(it), true) })) {
                 @Suppress("DEPRECATION") val copy = AccessibilityNodeInfo.obtain(node)
                 nodes[id] = copy; rows.put(row)
@@ -107,7 +132,9 @@ class PhoneAccessibility : AccessibilityService() {
         snapshots[snapshot] = Snapshot(owner, now, nodes, indexed, scope)
         val signature = java.security.MessageDigest.getInstance("SHA-256").digest(rows.toString().toByteArray()).joinToString("") { "%02x".format(it) }
         val result = info.put("snapshot_id", snapshot).put("package", pkg).put("foreground_package", foregroundPackage.ifBlank { pkg }).put("nodes", rows)
-            .put("window_id", selected?.id ?: -1).put("revision", revisions[selected?.id ?: -1] ?: 0L).put("signature", signature)
+            .put("backend", "accessibility").put("include_unimportant", options.optBoolean("include_unimportant", true)).put("node_actions", true)
+            .put("window_id", selected?.id ?: -1).put("revision", observationRevision.incrementAndGet()).put("revision_epoch", observationEpoch)
+            .put("event_revision", eventRevision.get()).put("window_revision", revisions[selected?.id ?: -1] ?: 0L).put("signature", signature)
             .put("mode", mode).put("truncated", truncated).put("visited_nodes", visited)
             .apply { if (mode == "text") put("text", (0 until rows.length()).map { rows.getJSONObject(it) }.flatMap { listOf(it.optString("text"), it.optString("description")) }.filter { it.isNotBlank() }.distinct().joinToString("\n")) }
         if (options.has("changed_since")) {
@@ -269,6 +296,8 @@ class PhoneAccessibility : AccessibilityService() {
         return result ?: fail("screenshot_failed", "系统拒绝截图：$error（受保护窗口可能不可截图）")
     }
     companion object {
+        private val observationRevision = java.util.concurrent.atomic.AtomicLong()
+        private val observationEpoch = UUID.randomUUID().toString()
         @Volatile var current: PhoneAccessibility? = null; private set
         fun requireService() = current ?: fail("permission_required", "请在系统设置中启用 RemoteTool 无障碍服务")
     }

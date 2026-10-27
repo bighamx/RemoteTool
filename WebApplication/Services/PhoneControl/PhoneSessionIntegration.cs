@@ -52,6 +52,7 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
         var text = new System.Text.StringBuilder();
         text.AppendLine("【RemoteTool Android 手机操作能力】");
         text.AppendLine($"本会话已绑定一部 Android 手机，设备标识：{phone}。这部手机与运行 Agent 的电脑是不同的设备。");
+        text.AppendLine("开始手机 UI 会话时，通过 phone_begin_ui(client_name=自己的名称,message=任务目标) 声明真实 Agent 名称。HTTP MCP 也应在 initialize.clientInfo.name 声明名称，名称不用于鉴权。读屏的 backend=auto/accessibility/uiautomator 选择采集通道；include_unimportant 默认 true，保留可能承载聊天正文的节点；mode=compact/text/raw 只决定输出。UiAutomation 是慢速诊断路径，节点只读，不作为每步动作后的默认回读。");
         text.AppendLine(enabled
             ? "你可以通过本会话已注册的 phone_* 工具查看和操作这部手机。用户要求处理手机上的任务时，请结合下列能力执行任务，而不只是提供手动操作步骤。RemoteTool 负责将工具请求经服务端转发到手机，手机与电脑无需处于同一局域网。"
             : "当前仅注入手机能力说明，尚未为本会话启用可调用的 phone_* 工具。下列内容描述可提供的能力，不代表当前已能执行；需要直接操作时，应在新建会话时选择“启用工具”，或使用用户另行配置的可用 MCP 连接。");
@@ -82,7 +83,7 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
             text.AppendLine("UI 占用、节点快照和 notice_id 都归属当前连接。phone_end_ui 只释放 UI，不断开连接；后续批次仍用同一连接重新 phone_begin_ui。遇到 ui_busy/device_busy 时等待或说明冲突，不能新建连接绕过，也不能释放其他 Agent 的占用。只有 HTTP 404 session_not_found 才丢弃过期会话并重新 initialize 一次，重新检查能力、获取 UI 并观察后继续，不盲目重放原操作。收到 connection_closed_by_user 必须停止并说明用户已断开，用户明确允许继续后才能新建连接，不能自动重连。");
             if (tools.Any(tool => tool["inputSchema"]?["properties"]?["explanation"] != null)) text.AppendLine("工具支持可选 explanation 参数：每次调用可直接用用户的语言简短说明正在做什么、为什么做（最多 240 字符），会随本次操作显示在手机悬浮提示中，无需为普通操作说明额外调用 phone_notify_user。只写面向用户的目的或动作摘要，不写敏感输入、凭据或内部推理。需要用户回应的协助请求仍使用 phone_notify_user(kind=help)。未提供该参数的工具不要传入；phone_disconnect 仍会立即撤下提示。");
             text.AppendLine("1. 首次操作先调用 phone_get_capabilities 核对实际能力；以本次返回的设备、权限和可用后端为准，不把连接成功当成操作成功。");
-            if (names.Contains("phone_begin_ui") && names.Contains("phone_end_ui")) text.AppendLine("开始查看或操作界面前，先调用 phone_begin_ui，用简短 message 告知用户正在做什么；占用由当前连接独享，无需续期，连续十分钟没有 UI 操作会自动释放；其他连接仍可执行非 UI 任务。使用 phone_shell 操作 UI 时必须设置 ui_operation=true。再调用 phone_observe 或 phone_screenshot 查看当前界面，按实际页面操作，避免使用过时坐标。");
+            if (names.Contains("phone_begin_ui") && names.Contains("phone_end_ui")) text.AppendLine("开始查看或操作界面前，先调用 phone_begin_ui，用简短 message 告知用户正在做什么；占用由当前连接独享，无需续期，连续五分钟没有 UI 操作会自动释放；其他连接仍可执行非 UI 任务。使用 phone_shell 操作 UI 时必须设置 ui_operation=true。再调用 phone_observe 或 phone_screenshot 查看当前界面，按实际页面操作，避免使用过时坐标。");
             text.AppendLine("2. 以各工具的参数 Schema 为准。界面坐标使用原始屏幕像素；按节点操作时使用最新观察结果中的 snapshot_id 和节点标识，节点标识在 30 秒后失效。界面变化后重新观察，不要沿用旧节点或猜测控件位置。");
             text.AppendLine("3. 操作后重新观察或读取相关状态，核验实际结果；需要等待页面变化时使用 phone_wait。返回的截图可用于视觉判断，文字和结构化结果可用于状态判断。");
             if (names.Contains("phone_notify_user") && names.Contains("phone_get_user_reply")) text.AppendLine("需要用户解锁、重开应用或其他协助时，用 phone_notify_user(kind=help) 明确请求，保存 notice_id，再用 phone_get_user_reply 核对回执；pending、过期、取消或超时都不代表用户完成。等待用户手动处理时先释放 UI，保留当前连接并以合理间隔查询同一 notice_id，恢复操作前重新获取 UI 并观察。在收到回复前不要继续依赖该操作的步骤。普通提示使用 kind=info。");

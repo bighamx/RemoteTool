@@ -22,13 +22,19 @@
   },
   {
     "name": "phone_begin_ui",
-    "description": "Acquire exclusive UI ownership on your EXISTING connection before reading or operating the screen. Reuse this same session for all UI calls; do not initialize a new session for each batch. On ui_busy wait or report the conflict, never create another identity to bypass it. Other connections may continue non-UI work. Ends on phone_end_ui, disconnect, stop or 10 minutes without UI activity. No renewal needed; duration_seconds is ignored.",
+    "description": "Acquire exclusive UI ownership on your EXISTING connection before reading or operating the screen. Declare your own client_name so the phone identifies the actual agent\/task. Reuse this same session for all UI calls; do not initialize a new session for each batch. On ui_busy wait or report the conflict, never create another identity to bypass it. Ends explicitly or after 5 idle minutes; duration_seconds is ignored.",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "client_name": {
+          "type": "string",
+          "description": "Your user-visible agent\/task name, 1–40 characters, e.g. Codex 商品查询 or Hermes 日程助手. Persists on this owner until disconnect; does not change authorization or take over another agent. MCP clients should also declare clientInfo.name during initialize.",
+          "minLength": 1,
+          "maxLength": 40
+        },
         "message": {
           "type": "string",
-          "description": ""
+          "description": "Short task goal shown in expanded status; no credentials or hidden reasoning."
         },
         "duration_seconds": {
           "type": "integer",
@@ -253,7 +259,7 @@
   },
   {
     "name": "phone_observe",
-    "description": "Read target application UI on your current UI ownership. Default compact excludes empty\/invisible nodes and system\/agent overlays. mode=raw for diagnostic nodes, include_system=true for all windows, mode=text adds a concise text dump. filter selects text\/text_contains\/text_regex\/description\/resource_id\/class\/package_name\/clickable\/editable\/visible. changed_since uses a previous snapshot_id and returns delta only when scope matches. Coordinates are physical screen pixels; snapshot\/node IDs expire in 30 seconds.",
+    "description": "Read target application UI on your current UI ownership. Choose backend for collection and mode for output; these are independent. Compact\/text do not invent missing content. Coordinates are physical screen pixels; Accessibility node\/snapshot IDs expire in 30 seconds. UiAutomation IDs are read-only and cannot be used for node actions.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -263,34 +269,65 @@
         },
         "limit": {
           "type": "integer",
-          "description": ""
+          "description": "Output node budget, 1–600; filters apply before this limit. Response reports requested_limit/effective_limit; raw out-of-range requests are clamped.",
+          "minimum": 1,
+          "maximum": 600,
+          "default": 400
         },
         "mode": {
           "type": "string",
-          "description": ""
+          "description": "compact (default): useful visible nodes; text: same collection plus joined readable text; raw: diagnostic nodes including empty\/invisible rows, still subject to budgets.",
+          "enum": [
+            "compact",
+            "text",
+            "raw"
+          ]
         },
         "package_name": {
           "type": "string",
-          "description": ""
+          "description": "Accessibility: select a visible app window. UiAutomation: verify current root package; does not launch\/switch apps."
         },
         "include_system": {
           "type": "boolean",
-          "description": ""
+          "description": "Accessibility only: include system\/overlay windows for diagnosis; UiAutomation rejects true."
         },
         "filter": {
           "type": "object",
-          "description": ""
+          "description": "Server filter: exact text\/description\/resource_id\/class\/package_name, text_contains\/text_regex, clickable\/editable\/visible."
         },
         "changed_since": {
           "type": "string",
-          "description": ""
+          "description": "Accessibility delta against a same-owner\/scope snapshot; UiAutomation always returns a full snapshot with reset=true."
         },
         "fields": {
           "type": "array",
-          "description": "",
+          "description": "Project node fields to reduce output; geometry\/identity safety fields remain.",
           "items": {
             "type": "string"
           }
+        },
+        "backend": {
+          "type": "string",
+          "description": "auto (default): prefer the fast Accessibility service, otherwise UiAutomation. accessibility: require that service; never silently switch. uiautomator: explicit privileged XML dump, slower (often seconds), requires authorized Shizuku\/root; useful for comparison and missing text.",
+          "enum": [
+            "auto",
+            "accessibility",
+            "uiautomator"
+          ]
+        },
+        "include_unimportant": {
+          "type": "boolean",
+          "description": "Default true: include views Android marks unimportant, which may contain QQ\/chat message text. false: filter them in Accessibility or use a compressed UiAutomation dump. Independent of mode; disabling can omit real content.",
+          "default": true
+        },
+        "privilege_backend": {
+          "type": "string",
+          "description": "UiAutomation executor only: auto (default), shizuku or root. Explicit choices fail if unavailable; ignored by auto when Accessibility is selected.",
+          "enum": [
+            "auto",
+            "shizuku",
+            "root"
+          ]
         },
         "explanation": {
           "type": "string",
@@ -309,7 +346,7 @@
   },
   {
     "name": "phone_find_nodes",
-    "description": "Find UI nodes by text\/resource_id\/description; returns a fresh snapshot.",
+    "description": "Find UI nodes by text\/resource_id\/description; returns a fresh snapshot. Select backend and include_unimportant just as phone_observe; UiAutomation handles are read-only.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -324,6 +361,44 @@
         "description": {
           "type": "string",
           "description": ""
+        },
+        "mode": {
+          "type": "string",
+          "description": "compact\/text\/raw output, independent of collection backend."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum 600 matching nodes. Response reports requested_limit/effective_limit; raw out-of-range requests are clamped.",
+          "minimum": 1,
+          "maximum": 600,
+          "default": 400
+        },
+        "package_name": {
+          "type": "string",
+          "description": ""
+        },
+        "backend": {
+          "type": "string",
+          "description": "auto (default): prefer the fast Accessibility service, otherwise UiAutomation. accessibility: require that service; never silently switch. uiautomator: explicit privileged XML dump, slower (often seconds), requires authorized Shizuku\/root; useful for comparison and missing text.",
+          "enum": [
+            "auto",
+            "accessibility",
+            "uiautomator"
+          ]
+        },
+        "include_unimportant": {
+          "type": "boolean",
+          "description": "Default true: include views Android marks unimportant, which may contain QQ\/chat message text. false: filter them in Accessibility or use a compressed UiAutomation dump. Independent of mode; disabling can omit real content.",
+          "default": true
+        },
+        "privilege_backend": {
+          "type": "string",
+          "description": "UiAutomation executor only: auto (default), shizuku or root. Explicit choices fail if unavailable; ignored by auto when Accessibility is selected.",
+          "enum": [
+            "auto",
+            "shizuku",
+            "root"
+          ]
         },
         "explanation": {
           "type": "string",
@@ -385,7 +460,7 @@
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
         }
       },
       "required": [],
@@ -438,7 +513,7 @@
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
         }
       },
       "required": [
@@ -496,7 +571,7 @@
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
         }
       },
       "required": [
@@ -535,7 +610,7 @@
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
         }
       },
       "required": [
@@ -551,7 +626,7 @@
   },
   {
     "name": "phone_launch_app",
-    "description": "Launch installed app by package_name.",
+    "description": "Launch installed app by package_name. The engine briefly checks Xiaomi's cross-app launch dialog and selects Always allow only when the system dialog names this caller and the requested target. No second agent confirmation is needed. launch_confirmation reports handling; verified means the target reached foreground, not that any in-app task completed.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -574,7 +649,7 @@
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
         }
       },
       "required": [
@@ -621,6 +696,10 @@
         "timeout_ms": {
           "type": "integer",
           "description": ""
+        },
+        "require_change": {
+          "type": "boolean",
+          "description": "Default false for standalone wait; true waits for window/content to change after its initial observation."
         },
         "explanation": {
           "type": "string",
@@ -1133,7 +1212,7 @@
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
         }
       },
       "required": [
@@ -1177,7 +1256,7 @@
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000). Returns matched + fresh state; a timeout does not repeat the action."
+          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
         }
       },
       "required": [

@@ -7,11 +7,17 @@ internal static class CodexAttachmentInputChecks
 {
     public static void Run()
     {
+        var nativeSteer = new JsonObject { ["type"] = "userMessage", ["clientId"] = "steer-key" };
+        if (CodexRunAttachments.RequestKey(nativeSteer) != "steer-key" ||
+            CodexRunAttachments.RequestKey(new JsonObject { ["clientId"] = null, ["clientRequestId"] = "legacy" }) != "legacy")
+            throw new Exception("Native user-message clientId must identify steering receipts");
         var journal = new JsonObject {
             ["ordinary"] = new JsonObject { ["session_id"]="s", ["key"]="ordinary-key", ["attachment_ids"]=new JsonArray("image-a"),
                 ["steering_requests"]=new JsonObject { ["steer-key"]=new JsonObject { ["attachment_ids"]=new JsonArray("image-b") } } },
             ["queued"] = new JsonObject { ["session_id"]="s", ["key"]="queue-key", ["native_queue"]=true,["attachment_ids"]=new JsonArray("image-c") }
         };
+        if (CodexRunAttachments.Read(journal, "s", CodexRunAttachments.RequestKey(nativeSteer))?[0]?.ToString() != "image-b")
+            throw new Exception("Native steering history must recover the image through clientId without text matching");
         foreach(var pair in new[]{("ordinary-key","image-a"),("steer-key","image-b"),("queue-key","image-c")}) {
             var saved=System.Text.Json.Nodes.JsonNode.Parse(journal.ToJsonString())!.AsObject();
             var ids=CodexRunAttachments.Read(saved,"s",pair.Item1);

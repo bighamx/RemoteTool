@@ -83,7 +83,7 @@ class PhoneObservationTest {
         engine.invoke("phone_begin_ui", JSONObject(), "begin", agentId = "a")
         val args = JSONObject().put("selector", JSONObject().put("text", "点击"))
             .put("guard", JSONObject().put("package_name", "target.app"))
-            .put("wait_for", JSONObject().put("selector", JSONObject().put("text", "点击")))
+            .put("wait_for", JSONObject().put("selector", JSONObject().put("text", "点击")).put("require_change", false))
             .put("return_state", "compact")
         val result = engine.invoke("phone_tap", args, "tap", agentId = "a")
         assertFalse(result.toString(), result.getBoolean("isError"))
@@ -93,11 +93,77 @@ class PhoneObservationTest {
         assertEquals(result.toString(), engine.invoke("phone_tap", args, "tap", agentId = "a").toString())
         assertEquals(1, clicks.get())
     }
+    @Test fun actionWaitCannotMatchUnchangedPreActionScreen() {
+        engine.invoke("phone_begin_ui", JSONObject(), "begin", agentId = "a")
+        val args = JSONObject().put("selector", JSONObject().put("text", "点击"))
+            .put("wait_for", JSONObject().put("text_regex", "点击|WLAN").put("timeout_ms", 10))
+        val result = engine.invoke("phone_tap", args, "unchanged", agentId = "a")
+        val data = result.getJSONObject("structuredContent")
+        assertTrue(result.getBoolean("isError"))
+        assertEquals("postcondition_timeout", data.getString("code"))
+        assertFalse(data.getJSONObject("state").getBoolean("matched"))
+        assertFalse(data.getJSONObject("state").getBoolean("state_changed"))
+        assertEquals(data.getJSONObject("state_before").getString("signature"), data.getJSONObject("state").getString("signature"))
+        assertEquals(1, clicks.get())
+    }
+    @Test fun actionWaitReturnsNewWindowEvenWhenTextAlreadyMatched() {
+        val next = window(node("点击 WLAN 已连接"), 7, AccessibilityWindowInfo.TYPE_APPLICATION)
+        shadowOf(root).setOnPerformActionListener { _, _ ->
+            clicks.incrementAndGet(); shadowOf(service).setWindows(listOf(next)); true
+        }
+        engine.invoke("phone_begin_ui", JSONObject(), "begin", agentId = "a")
+        val result = engine.invoke("phone_tap", JSONObject().put("selector", JSONObject().put("text", "点击"))
+            .put("wait_for", JSONObject().put("text_regex", "点击|WLAN")), "changed", agentId = "a")
+        assertFalse(result.toString(), result.getBoolean("isError"))
+        val data = result.getJSONObject("structuredContent")
+        assertEquals(1, data.getJSONObject("state_before").getInt("window_id"))
+        assertEquals(7, data.getJSONObject("state").getInt("window_id"))
+        assertTrue(data.getJSONObject("state").getBoolean("state_changed"))
+    }
+    @Test fun revisionsRemainMonotonicAcrossWindowsButDoNotProveContentChange() {
+        val first = service.observe(owner = "a")
+        shadowOf(service).setWindows(listOf(window(node("其他页面"), 7, AccessibilityWindowInfo.TYPE_APPLICATION)))
+        val second = service.observe(owner = "a")
+        assertTrue(second.getLong("revision") > first.getLong("revision"))
+        assertEquals(first.getString("revision_epoch"), second.getString("revision_epoch"))
+        assertTrue(PhoneExecution.changed(first, second))
+        val third = service.observe(owner = "a")
+        assertTrue(third.getLong("revision") > second.getLong("revision"))
+        assertFalse(PhoneExecution.changed(second, third))
+    }
+    @Test fun observationBudgetsReportNormalizationWithoutIntegerOverflow() {
+        engine.invoke("phone_begin_ui", JSONObject(), "begin", agentId = "a")
+        for ((index, requested) in listOf(1L, 300L, 600L, 1200L, Long.MAX_VALUE, 0L, -2L).withIndex()) {
+            val result = engine.invoke("phone_observe", JSONObject().put("limit", requested), "budget-$index", agentId = "a")
+            assertFalse(result.toString(), result.getBoolean("isError"))
+            val data = result.getJSONObject("structuredContent")
+            assertEquals(requested, data.getLong("requested_limit"))
+            assertEquals(requested.coerceIn(1, 600).toInt(), data.getInt("effective_limit"))
+        }
+        val found = engine.invoke("phone_find_nodes", JSONObject().put("text", "点击").put("limit", 1200), "find-budget", agentId = "a")
+            .getJSONObject("structuredContent")
+        assertEquals(1200, found.getInt("requested_limit")); assertEquals(600, found.getInt("effective_limit"))
+        val default = engine.invoke("phone_observe", JSONObject(), "default-budget", agentId = "a").getJSONObject("structuredContent")
+        assertEquals(400, default.getInt("requested_limit")); assertEquals(400, default.getInt("effective_limit"))
+    }
+    @Test fun stateChangeDetectsRotationAndPackageEvenWithReusedWindowAndSignature() {
+        val before = JSONObject().put("window_id", 1).put("signature", "same").put("rotation", 0)
+            .put("package", "one.app").put("foreground_package", "one.app")
+        for ((key, value) in listOf("rotation" to 90, "package" to "two.app", "foreground_package" to "two.app")) {
+            val after = JSONObject(before.toString()).put(key, value)
+            assertTrue(PhoneExecution.changed(before, after))
+            assertEquals(value, PhoneExecution.stateMarker(after).get(key))
+        }
+        assertFalse(PhoneExecution.changed(before, JSONObject(before.toString()).put("revision", 99)))
+    }
     @Test fun mismatchedGuardAndAmbiguousSelectorDoNotClick() {
         engine.invoke("phone_begin_ui", JSONObject(), "begin", agentId = "a")
         val args = JSONObject().put("selector", JSONObject().put("text", "点击")).put("guard", JSONObject().put("package_name", "wrong.app"))
         val failed = engine.invoke("phone_tap", args, "guard-failed", agentId = "a").getJSONObject("structuredContent")
         assertEquals("precondition_failed", failed.getString("code")); assertEquals("not_started", failed.getString("execution"))
+        val recorded = engine.status("guard-failed")
+        assertEquals("completed", recorded.getString("state"))
+        assertTrue(recorded.isNull("started_at")); assertFalse(recorded.isNull("finished_at"))
         val duplicate = node("点击", true)
         shadowOf(duplicate).setAccessibilityWindowInfo(window); shadowOf(root).addChild(duplicate)
         val ambiguous = engine.invoke("phone_tap", JSONObject().put("selector", JSONObject().put("text", "点击")), "ambiguous", agentId = "a")

@@ -46,6 +46,18 @@ def hermes_home() -> Path:
     return Path.home() / "AppData" / "Local" / "hermes" if os.name == "nt" else Path.home() / ".hermes"
 
 
+def load_agent(agent=None):
+    value = agent or os.environ.get("PHONE_MCP_AGENT") or os.environ.get("HERMES_SESSION_ID")
+    if not value:
+        path = hermes_home() / "state" / "phone-mcp.json"
+        if path.exists():
+            value = json.loads(path.read_text(encoding="utf-8")).get("agent")
+    if not isinstance(value, str) or not value.strip() or len(value) > 160:
+        raise PhoneError("agent_identity_required",
+                         "请通过 --agent、PHONE_MCP_AGENT、HERMES_SESSION_ID 或配置文件 agent 指定当前聊天的稳定身份")
+    return value
+
+
 def _relay_url(base, binding_id):
     base = base.rstrip("/")
     if base.endswith("/mcp"):
@@ -140,7 +152,7 @@ def _with_lock(fn, timeout=20):
     lock = _cache_path().with_suffix(".lock")
     fd = os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(fd, "r+b") as stream:
-        if stream.seek(0, 2) == 0: stream.write(b"0"); stream.flush()
+        # Windows permits locking beyond EOF; never write an unowned lock byte.
         deadline = time.monotonic() + timeout
         while True:
             try:
@@ -164,16 +176,17 @@ def _with_lock(fn, timeout=20):
 
 class Phone:
     def __init__(self, url=None, token=None, binding=None, relay=None, timeout=60, quiet=False,
-                 explanation=None, agent=None):
+                 explanation=None, agent=None, client_name="hermes-agent"):
         self.url, self.token, self.mode, _ = load_config(url, token, binding, relay)
         self.timeout = timeout
         self.quiet = quiet
         self.explanation = explanation
+        self.client_name = client_name or "hermes-agent"
+        if not isinstance(self.client_name, str) or not self.client_name.strip() or len(self.client_name) > 40 or any(ord(c) < 32 for c in self.client_name):
+            raise PhoneError("invalid_config", "client_name 必须为 1–40 个可显示字符")
         self.transport = {}
         self._opener = urllib.request.build_opener(NoRedirect())
-        self.agent = agent or os.environ.get("PHONE_MCP_AGENT") or os.environ.get("HERMES_SESSION_ID")
-        if not self.agent:
-            raise PhoneError("agent_identity_required", "请设置 PHONE_MCP_AGENT 或 --agent 为当前聊天的稳定标识，不能与其他 Agent 共用")
+        self.agent = load_agent(agent)
         self.key = hashlib.sha256((self.url + "\n" + self.token + "\n" + self.agent).encode()).hexdigest()[:24]
         self.sid = self._cached_sid()
 
@@ -240,7 +253,7 @@ class Phone:
                 return self.sid
             if force and not cached.get("resume_token"):
                 raise PhoneError("session_recovery_failed", "缺少原连接恢复凭据；不会自动创建另一身份")
-            params = {"protocolVersion": PROTO, "capabilities": {}, "clientInfo": {"name": "hermes-agent", "version": "1.2"}}
+            params = {"protocolVersion": PROTO, "capabilities": {}, "clientInfo": {"name": self.client_name, "version": "1.2"}}
             if cached.get("resume_token"):
                 params["_meta"] = {"remotetool/resume_token": cached["resume_token"]}
             _, headers, body = self._http({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params})
@@ -254,7 +267,8 @@ class Phone:
             resume = result.get("_meta", {}).get("remotetool", {}).get("resume_token")
             if not resume:
                 raise PhoneError("service_upgrade_required", "服务未返回新版身份恢复凭据；请更新 RemoteTool")
-            self._save_sid(sid, {"protocol": result.get("protocolVersion"), "resume_token": resume}, locked=True)
+            self._save_sid(sid, {"protocol": result.get("protocolVersion"), "resume_token": resume,
+                                "self_cleanup": result.get("_meta", {}).get("remotetool", {}).get("self_cleanup")}, locked=True)
             self._http({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
             return sid
         return _with_lock(connect_locked)
@@ -311,20 +325,22 @@ class Phone:
         out = {}
         if not self.sid:
             return {"already_disconnected": True}
+        if end_ui and disconnect and self._read_cache().get(self.key, {}).get("self_cleanup") == "resume-token":
+            return self.cleanup_cached()
         blocked = False
         try:
             if end_ui:
                 out["end_ui"] = self.call("phone_end_ui", {})
         except PhoneError as exc:
             out["end_ui"] = exc.code
-            blocked = exc.code in ("connection_closed_by_user", "session_recovery_failed")
+            blocked = exc.code in ("connection_closed_by_user", "session_recovery_failed", "resume_unknown")
         if blocked: return {**out, "requires_user_authorization": True}
         try:
             if disconnect:
                 out["disconnect"] = self.call("phone_disconnect", {})
         except PhoneError as exc:
             out["disconnect"] = exc.code
-            blocked = exc.code in ("connection_closed_by_user", "session_recovery_failed")
+            blocked = exc.code in ("connection_closed_by_user", "session_recovery_failed", "resume_unknown")
         if blocked: return {**out, "requires_user_authorization": True}
         if disconnect and isinstance(out.get("disconnect"), str):
             return {**out, "cleanup_pending": True}
@@ -332,7 +348,7 @@ class Phone:
             try:
                 req = urllib.request.Request(self.url, method="DELETE", headers={
                     "Authorization": "Bearer " + self.token, "Mcp-Session-Id": self.sid,
-                    "MCP-Protocol-Version": PROTO})
+                    "MCP-Protocol-Version": self._read_cache().get(self.key, {}).get("protocol") or PROTO})
                 with self._opener.open(req, timeout=15) as resp:
                     out["delete"] = resp.status
             except Exception as exc:
@@ -345,6 +361,50 @@ class Phone:
         _with_lock(remove_cache)
         self.sid = None
         return out
+
+    def cleanup_cached(self):
+        """Explicitly close this cached logical owner, even after its transport ID expired.
+
+        Does not initialize, enumerate other sessions, or delete a shared binding.
+        """
+        cached = self._read_cache().get(self.key, {})
+        resume = cached.get("resume_token")
+        if not resume:
+            raise PhoneError("owner_credential_required", "没有该操作者的恢复凭据，不能清理其他连接")
+        if cached.get("self_cleanup") != "resume-token":
+            raise PhoneError("cleanup_not_supported", "服务未公布恢复凭据自助清理能力；保留缓存")
+        request = urllib.request.Request(self.url, method="DELETE", headers={
+            "Authorization": "Bearer " + self.token, "X-RemoteTool-Resume-Token": resume,
+            "MCP-Protocol-Version": cached.get("protocol") or PROTO})
+        try:
+            with self._opener.open(request, timeout=15) as response:
+                if response.status != 204:
+                    raise PhoneError("cleanup_failed", "服务端未确认清理；保留缓存")
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", "replace"); error.close()
+            raise PhoneError(_err_code(body, error.code), "清理未确认；保留缓存", status=error.code) from None
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
+            raise PhoneError("cleanup_pending", "清理回执缺失；保留缓存，不新建身份") from error
+        def clear():
+            data = self._read_cache()
+            if data.get(self.key, {}).get("resume_token") == resume:
+                data.pop(self.key, None)
+                _write_cache(data)
+        _with_lock(clear)
+        self.sid = None
+        return {"deleted": True, "delete": 204, "scope": "cached_logical_owner"}
+
+    def forget_cached(self, confirm_reset=False):
+        """Local reset only, after the user explicitly authorizes a fresh connection."""
+        if not confirm_reset:
+            raise PhoneError("confirmation_required", "重建身份需用户明确授权；不会自动清除恢复凭据")
+        def clear():
+            data = self._read_cache()
+            data.pop(self.key, None)
+            _write_cache(data)
+        _with_lock(clear)
+        self.sid = None
+        return {"local_cache_removed": True, "remote_sessions_deleted": False, "new_identity_created": False}
 
 
 def _err_code(body, status):
@@ -369,14 +429,16 @@ def _parse(body):
 
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("cmd", choices=("caps", "tools", "probe", "sessions", "call", "end"))
+    parser.add_argument("cmd", choices=("caps", "tools", "probe", "sessions", "call", "end", "cleanup", "reset"))
+    parser.add_argument("--confirm-reset", action="store_true", help="Only after explicit user authorization; resets this local cache, does not delete any remote owner")
     parser.add_argument("tool", nargs="?")
     parser.add_argument("arguments", nargs="?", default="{}")
-    for name in ("url", "token", "binding", "relay", "agent", "request-id", "args-file"):
+    for name in ("url", "token", "binding", "relay", "agent", "client-name", "request-id", "args-file"):
         parser.add_argument("--" + name)
     options = parser.parse_args(argv[1:])
     cmd = options.cmd
     kw = {k: getattr(options, k) for k in ("url", "token", "binding", "relay", "agent")}
+    kw["client_name"] = options.client_name
     if cmd == "probe":
         for label, conf in (("configured MCP", kw),):
             try:
@@ -394,6 +456,10 @@ def main(argv):
         print(json.dumps({p.key: {k: v for k, v in row.items() if k != "resume_token"}}, ensure_ascii=False, indent=1))
     elif cmd == "end":
         print(json.dumps(p.dispose(), ensure_ascii=False))
+    elif cmd == "cleanup":
+        print(json.dumps(p.cleanup_cached(), ensure_ascii=False))
+    elif cmd == "reset":
+        print(json.dumps(p.forget_cached(options.confirm_reset), ensure_ascii=False))
     elif cmd == "call":
         if not options.tool: parser.error("call 需要工具名")
         args = json.loads(Path(options.args_file).read_text(encoding="utf-8") if options.args_file else options.arguments)

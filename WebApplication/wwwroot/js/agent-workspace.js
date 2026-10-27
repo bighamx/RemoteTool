@@ -664,8 +664,25 @@
             restoreDelivered(id) {try{const rows=JSON.parse(localStorage.getItem(echoKey(id))||'[]');return Array.isArray(rows)?rows.filter(row=>row.key&&Date.now()-(row.createdAt||0)<1800000).slice(-20):[];}catch{return[];}},
             saveDelivered() {if(!this.selectedId)return;if(this.delivered.length)localStorage.setItem(echoKey(this.selectedId),JSON.stringify(this.delivered));else localStorage.removeItem(echoKey(this.selectedId));},
             localMessage(row) {return {role:'user',content:row.input,attachments:row.attachments||[],localKey:row.key,delivery:row.delivery,timestamp:row.createdAt};},
-            localMessageMatched(row,messages,used=new Set()) {return messages.find(m=>{if(m.role!=='user'||used.has(m))return false;const key=m.client_request_id||m.clientUserMessageId||m.requestKey;if(key)return key===row.key;if(row.delivery!=='已送达')return false;const expected=(row.attachments||[]).map(f=>String(f.id)).sort().join('|');const actual=(m.attachments||[]).map(f=>String(f.id)).sort().join('|');return expected===actual&&this.sameText(this.messageText(m),row.input)&&this.messageStamp(m)>=row.createdAt-30000;});},
-            reconcileDelivered() {const used=new Set();if(!this.delivered.length)return used;this.delivered=this.delivered.filter(row=>Date.now()-(row.createdAt||0)<1800000);for(const row of this.delivered){if(!row.canonicalId)continue;const match=this.messages.find(m=>m.role==='user'&&String(m.id)===String(row.canonicalId));if(match)used.add(match);}for(const row of this.delivered){if(row.canonicalId)continue;const match=this.localMessageMatched(row,this.messages,used);if(match?.id){row.canonicalId=match.id;used.add(match);}}this.saveDelivered();return used;},
+            localMessageMatched(row,messages,used=new Set()) {return messages.find(m=>{
+                if(m.role!=='user')return false;
+                const key=m.client_request_id||m.clientUserMessageId||m.requestKey;
+                if(key)return !used.has(m)&&key===row.key;
+                if(row.delivery!=='已送达'||this.messageStamp(m)<row.createdAt-30000)return false;
+                const expected=(row.attachments||[]).map(f=>String(f.id)).sort().join('|');
+                const actual=(m.attachments||[]).map(f=>String(f.id)).sort().join('|');
+                if(expected!==actual)return false;
+                const text=this.messageText(m), input=this.asText(row.input).replaceAll('\r\n','\n').trim();
+                if(this.sameText(text,input))return !used.has(m);
+                // Hermes buffers several steers and persists them as one OOB user row.
+                // Consume exact blocks at line boundaries, preserving the complete native row.
+                if(this.agent!=='hermes'||expected||!input||!this.messageTextRaw(m).trim().startsWith('[OUT-OF-BAND USER MESSAGE'))return false;
+                const haystack='\n'+text.replaceAll('\r\n','\n').trim()+'\n', needle='\n'+input+'\n';
+                let offset=haystack.indexOf(needle);
+                while(offset>=0){const token=`hermes-steer:${m.id}:${offset}`;if(!used.has(token)){used.add(token);return true;}offset=haystack.indexOf(needle,offset+1);}
+                return false;
+            });},
+            reconcileDelivered() {const used=new Set();if(!this.delivered.length)return used;this.delivered=this.delivered.filter(row=>Date.now()-(row.createdAt||0)<1800000);for(const row of this.delivered){if(!row.canonicalId)continue;const match=this.messages.find(m=>m.role==='user'&&String(m.id)===String(row.canonicalId));if(match){this.localMessageMatched(row,[match],used);used.add(match);}}for(const row of this.delivered){if(row.canonicalId)continue;const match=this.localMessageMatched(row,this.messages,used);if(match?.id){row.canonicalId=match.id;used.add(match);}}this.saveDelivered();return used;},
             acceptPending(id,key) {if(this.selectedId!==id||this.pending?.key!==key)return;this.delivered.push({...this.pending,delivery:'已送达'});this.delivered=this.delivered.slice(-20);this.saveDelivered();this.pending=null;this.savePending();this.queueFollowLatest();},
             reconcilePending(used=new Set()) {if(this.pending&&this.localMessageMatched(this.pending,this.messages,used)){this.pending=null;this.savePending();}},
             async verifyPending() {if(!this.pending)return;const id=this.selectedId,key=this.pending.key;try{const query=`key=${api.id(key)}`+(this.agent==='hermes'?`&session_id=${api.id(id)}`:'');const result=await api.get(`${base}/runs/lookup?${query}`);if(this.selectedId!==id||this.pending?.key!==key)return;if(result.found){if(result.delivery==='rejected'){this.draft=this.pending.input;this.attachments=this.pending.attachments||[];this.pending=null;this.savePending();this.error='服务端确认未写入，草稿已恢复。';return;}const accepted=result.delivery==='accepted'||(this.agent==='hermes'&&result.delivery!=='unknown'&&!!result.run_id&&['started','submitting','running','queued','stopping','waiting_for_approval','completed','failed','cancelled','interrupted'].includes(result.status));if(accepted){if(this.pending.kind==='queue'){this.pending=null;this.savePending();this.loadQueue();}else this.acceptPending(id,key);if(result.run_id&&!terminal.has(result.status)){this.activeRun=result.run_id;this.ensureEventStream(result.run_id);}}else{this.pending.delivery='发送状态待核对';this.pending.checkedMissing=false;this.savePending();}}else{this.pending.delivery='仍未查到发送记录，请核对历史';this.pending.checkedMissing=true;this.savePending();}this.loadHistory();}catch(e){this.error=e.message;}},

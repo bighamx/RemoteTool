@@ -1596,7 +1596,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     if(kind is not ("userMessage" or "agentMessage"))continue;
                     var role=kind=="userMessage"?"user":"assistant";
                     var firstUser = role == "user" && ReferenceEquals(item, turn.A("items").FirstOrDefault(candidate => candidate.S("type") == "userMessage"));
-                    var requestKey = role == "user" ? item.S("clientUserMessageId", item.S("clientRequestId")) : "";
+                    var requestKey = role == "user" ? CodexRunAttachments.RequestKey(item) : "";
                     if (firstUser && requestKey.Length == 0) primaryRequestKeys.TryGetValue(turn.S("id"), out requestKey);
                     var text=role=="user"?string.Join('\n',item.A("content").Where(c=>c.S("type")=="text").Select(c=>c.S("text"))):item.S("text");
                     object timestamp=source.Resolve(item.S("id"),role,text,ref position,out var nativeTime)?nativeTime:

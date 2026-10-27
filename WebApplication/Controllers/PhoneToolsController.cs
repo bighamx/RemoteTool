@@ -81,7 +81,7 @@ public sealed class PhoneToolsController(PhoneGateway gateway, ILogger<PhoneTool
                 return McpError(body, -32602, "Invalid recovery metadata", "invalid_params");
             client = gateway.McpSessions.Create(id, (p["clientInfo"] as JsonObject)?["name"]?.ToString() ?? "Agent", p["_meta"]?["remotetool/resume_token"]?.GetValue<string>());
             Response.Headers["Mcp-Session-Id"] = client.Id;
-            await gateway.AgentSeen(row["phone_id"]!.ToString(), client.AgentId, client.Name, ct);
+            await gateway.AgentSeen(row["phone_id"]!.ToString(), client.AgentId, client.Name, ct, client.Generation);
         } else if (Request.Headers["Mcp-Session-Id"].FirstOrDefault() is { Length: > 0 } sessionId) {
             client = gateway.McpSessions.Get(id, sessionId);
             if (client == null) return NotFound(new { code="session_not_found", message="Initialize a new MCP session; do not replay uncertain actions" });
@@ -89,7 +89,7 @@ public sealed class PhoneToolsController(PhoneGateway gateway, ILogger<PhoneTool
         switch (method) {
             case "initialize": result = new JsonObject { ["protocolVersion"] = PhoneMcpProtocol.SelectVersion(p["protocolVersion"]?.GetValue<string>()), ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() }, ["serverInfo"] = new JsonObject { ["name"] = "remotetool-phone-relay", ["version"] = "1.2.0" },
                 ["instructions"] = PhoneMcpProtocol.Instructions,
-                ["_meta"] = new JsonObject { ["remotetool"] = new JsonObject { ["resume_token"] = client!.ResumeToken, ["agent_id"] = client.LogicalId, ["generation"] = client.Generation } } }; break;
+                ["_meta"] = new JsonObject { ["remotetool"] = new JsonObject { ["resume_token"] = client!.ResumeToken, ["agent_id"] = client.LogicalId, ["generation"] = client.Generation, ["self_cleanup"] = "resume-token", ["idle_timeout_seconds"] = 300 } } }; break;
             case "ping": result = new JsonObject(); break;
             case "tools/list": result = new JsonObject { ["tools"] = gateway.Tools(row["phone_id"]!.ToString(), row["advanced"]?.GetValue<bool>() == true) }; break;
             case "tools/call":
@@ -102,6 +102,8 @@ public sealed class PhoneToolsController(PhoneGateway gateway, ILogger<PhoneTool
                     result = await gateway.Invoke(row["phone_id"]!.ToString(), toolName, p["arguments"] as JsonObject ?? new(), p["_meta"]?["remotetool/request_id"]?.ToString() ?? "mcp-" + Guid.NewGuid().ToString("N"), row["advanced"]?.GetValue<bool>() == true, ct, client?.AgentId ?? id, client?.Name ?? "Agent"); break;
             default: return Ok(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = body["id"]?.DeepClone(), ["error"] = new JsonObject { ["code"] = -32601, ["message"] = "Method not found" } });
         }
+        if (client != null && method != "initialize" && method != "tools/call")
+            await gateway.TouchAgent(row["phone_id"]!.ToString(), client.AgentId, ct, client.Generation);
         return Measured(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = body["id"]?.DeepClone(), ["result"] = result });
     }
     private IActionResult Measured(JsonObject data) {
@@ -125,11 +127,18 @@ public sealed class PhoneToolsController(PhoneGateway gateway, ILogger<PhoneTool
             id != null && System.Text.RegularExpressions.Regex.IsMatch(id, "^[a-zA-Z0-9_.:-]{1,160}$"));
     private IActionResult InvalidArguments(string message) => BadRequest(new { code = "invalid_arguments", message });
     [HttpDelete("bound/{id}/mcp")] public async Task<IActionResult> DeleteMcp(string id, CancellationToken ct) {
+        if (Request.Headers.ContainsKey("Origin")) return StatusCode(403);
         var row = gateway.AuthorizeBinding(id, Request.Headers.Authorization.ToString().Replace("Bearer ", "", StringComparison.Ordinal));
         if (row == null) return Unauthorized();
-        var client = gateway.McpSessions.Remove(id, Request.Headers["Mcp-Session-Id"].ToString());
-        if (client == null) return NotFound(new { code="session_not_found" });
-        await gateway.DisconnectAgent(row["phone_id"]!.ToString(), client.AgentId, ct);
+        var resume = Request.Headers["X-RemoteTool-Resume-Token"].ToString();
+        var session = Request.Headers["Mcp-Session-Id"].ToString();
+        if (!string.IsNullOrEmpty(resume) && !string.IsNullOrEmpty(session)) return BadRequest(new { code="invalid_arguments", message="Specify session ID or resume token, not both" });
+        if (string.IsNullOrEmpty(resume) && string.IsNullOrEmpty(session)) return BadRequest(new { code="session_required", message="Deleting a whole binding without owner credentials is not supported" });
+        PhoneMcpSessions.Client? client;
+        try { client = !string.IsNullOrEmpty(resume) ? gateway.McpSessions.RemoveByResumeToken(id, resume) : gateway.McpSessions.Remove(id, session); }
+        catch (PhoneMcpSessionException error) { return Conflict(new { code=error.Code, execution="not_started", retry_after_ms=250 }); }
+        if (client == null) return NotFound(new { code=string.IsNullOrEmpty(resume) ? "session_not_found" : "resume_unknown" });
+        await gateway.DisconnectAgent(row["phone_id"]!.ToString(), client.AgentId, ct, client.Generation);
         return NoContent();
     }
     [HttpGet("bound/{id}/mcp")] public IActionResult NoStream() => StatusCode(405);

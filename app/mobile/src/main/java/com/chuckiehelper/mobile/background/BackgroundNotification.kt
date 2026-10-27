@@ -13,14 +13,14 @@ import androidx.core.app.NotificationCompat
 object BackgroundNotification {
     private const val ID = 41
     private const val CHANNEL = "remotetool-background"
-    private data class Feature(val service: Service, val text: String, val action: String?, val stop: PendingIntent?, val focus: android.os.Bundle? = null, val liveUpdate: Boolean = false)
+    private data class Feature(val service: Service, val text: String, val action: String?, val stop: PendingIntent?, val focus: android.os.Bundle? = null, val liveUpdate: Boolean = false, val liveStatus: String = "")
     private val features = linkedMapOf<String, Feature>()
     private var lastFocus: android.os.Bundle? = null
 
     @Synchronized
-    fun update(context: Context, owner: String, text: String, focus: android.os.Bundle? = null, liveUpdate: Boolean = false) {
+    fun update(context: Context, owner: String, text: String, focus: android.os.Bundle? = null, liveUpdate: Boolean = false, liveStatus: String = "") {
         val current = features[owner] ?: return
-        features[owner] = current.copy(text = text, focus = focus, liveUpdate = liveUpdate)
+        features[owner] = current.copy(text = text, focus = focus, liveUpdate = liveUpdate, liveStatus = liveStatus)
         runCatching { refresh(context) }
     }
 
@@ -75,6 +75,7 @@ object BackgroundNotification {
             }
         }
         lastFocus = focus?.let { android.os.Bundle(it) }
-        return LiveUpdateNotification.apply(context, builder.build(), features.values.any { it.liveUpdate })
+        return LiveUpdateNotification.apply(context, builder.build(), features.values.any { it.liveUpdate },
+            features.values.firstOrNull { it.liveUpdate }?.liveStatus?.ifBlank { "执行任务" } ?: "")
     }
 }

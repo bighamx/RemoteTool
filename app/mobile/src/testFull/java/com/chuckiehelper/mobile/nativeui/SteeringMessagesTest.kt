@@ -97,4 +97,13 @@ class SteeringMessagesTest {
         assertEquals(1, ackDupe.size)
         assertEquals(1, pendingDupe.size)
     }
+    @Test fun mergedMultilineSteeringAcknowledgesWithoutReplacingCanonicalText() {
+        val config = "{\n  \"mcpServers\": {}\n}"
+        val merged = HermesMessage("user", "来自Web的消息\n$config", 101, timestamp = 700_000L)
+        val sent = SteeringMessage("phone", "session", config, setOf(100), 100, "已送达", 10_000L)
+        val (pending, acknowledged) = reconcileSteeringMessages(listOf(merged), listOf(sent))
+        assertTrue(pending.isEmpty())
+        assertEquals(merged, acknowledged.single().second)
+        assertEquals(listOf(merged), mergeSteeringMessages(listOf(merged), listOf(sent)))
+    }
 }

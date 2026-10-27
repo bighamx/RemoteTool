@@ -31,7 +31,7 @@ internal object HyperIslandSupport {
         return HyperIslandStatus(protocol, allowed)
     }
 
-    fun parameters(title: String, message: String, urgent: Boolean, island: Boolean): JSONObject {
+    fun parameters(title: String, message: String, urgent: Boolean, island: Boolean, summaryName: String = title, summaryAction: String = message): JSONObject {
         fun obj(vararg entries: Pair<String, Any>) = JSONObject().apply { entries.forEach { put(it.first, it.second) } }
         val pic = obj("type" to 1, "pic" to "miui.focus.pic_agent")
         val params = obj("protocol" to 1, "business" to "phone_agent", "updatable" to true,
@@ -40,18 +40,20 @@ internal object HyperIslandSupport {
             "baseInfo" to obj("type" to 2, "title" to title.take(40), "content" to message.take(140)),
             "picInfo" to pic,
             "tickerPic" to "miui.focus.pic_agent", "aodPic" to "miui.focus.pic_agent")
+        // A-region accepts text instead of a picture. Keeping both wastes its narrow width.
+        val left = obj("type" to 1, "textInfo" to obj("title" to PhoneAgentStatus.islandText(summaryName.ifBlank { "Agent" })))
+        val right = obj("title" to PhoneAgentStatus.islandText(summaryAction, maxUnits = 12))
         if (island) params.put("param_island", obj("islandProperty" to if (urgent) 2 else 1,
             "islandTimeout" to 120, "islandOrder" to urgent,
-            "bigIslandArea" to obj("imageTextInfoLeft" to obj("type" to 1, "picInfo" to pic,
-                "textInfo" to obj("title" to title.take(8), "content" to message.take(8))), "picInfo" to pic),
+            "bigIslandArea" to obj("imageTextInfoLeft" to left, "textInfo" to right),
             "smallIslandArea" to obj("picInfo" to pic)))
         return obj("param_v2" to params)
     }
 
     fun extras(context: Context, status: HyperIslandStatus, title: String, message: String, urgent: Boolean,
-        actions: List<Pair<String, Notification.Action>> = emptyList()): Bundle? {
+        actions: List<Pair<String, Notification.Action>> = emptyList(), summaryName: String = title, summaryAction: String = message): Bundle? {
         if (!status.allowed || status.protocol < 2) return null
-        val parameters = parameters(title, message, urgent, status.protocol >= 3)
+        val parameters = parameters(title, message, urgent, status.protocol >= 3, summaryName, summaryAction)
         if (actions.isNotEmpty()) parameters.getJSONObject("param_v2").put("actions",
             org.json.JSONArray(actions.map { JSONObject().put("action", it.first) }))
         val serialized = parameters.toString()

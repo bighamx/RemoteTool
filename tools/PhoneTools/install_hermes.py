@@ -15,6 +15,8 @@ def main():
     destination = home / "plugins" / "remotetool_phone"
     marker = destination / ".remotetool-ready"
     destination.mkdir(parents=True, exist_ok=True)
+    # A previous successful install cannot certify this replacement or its live registration.
+    marker.unlink(missing_ok=True)
     for path in source.iterdir():
         if path.is_file():
             target = destination / path.name
@@ -30,8 +32,12 @@ def main():
     activation = find_activation((state or {}).get("activations"), "remotetool_phone")
     expected = {tool["name"] for tool in json.loads((source / "tools.json").read_text(encoding="utf-8"))}
     registered = set((activation or {}).get("deferred", {}).get("tools", []))
-    if not state or not state.get("reloaded") or not expected.issubset(registered):
-        raise RuntimeError("Gateway did not confirm phone tool registration")
+    if not state:
+        raise RuntimeError("Gateway did not confirm phone tool registration: no control endpoint responded")
+    if not state.get("reloaded"):
+        raise RuntimeError("Gateway did not confirm phone tool registration: reload was not acknowledged")
+    if not expected.issubset(registered):
+        raise RuntimeError("Gateway did not confirm phone tool registration: missing " + ", ".join(sorted(expected - registered)))
     from hermes_cli.plugins import discover_plugins
     from hermes_cli.config import load_config_readonly
     from hermes_cli.tools_config import _get_platform_tools

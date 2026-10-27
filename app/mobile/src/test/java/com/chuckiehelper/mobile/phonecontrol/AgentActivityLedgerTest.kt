@@ -47,10 +47,12 @@ class AgentActivityLedgerTest {
         now = 121_000
         assertTrue(state.snapshot().connected)
         assertTrue(state.snapshot().operating)
-        now = 600_000
+        now = 240_000
+        state.touchConnection("a")
+        now = 300_000
         assertTrue(state.snapshot().connected)
         assertFalse(state.snapshot().operating)
-        now = 1_800_000
+        now = 540_000
         assertFalse(state.snapshot().connected)
     }
     @Test fun endingOneAgentCannotEndAnotherAgentsDeclaration() {
@@ -129,17 +131,31 @@ class AgentActivityLedgerTest {
         assertEquals(2, state.snapshot().connections.size)
         assertEquals("a", state.snapshot().connections.single { it.ownsUi }.id)
         try { state.beginUi("b", "操作", 600); fail("exclusive") } catch (error: PhoneToolError) { assertEquals("ui_busy", error.code) }
-        now = 599_999
+        now = 299_999
         state.beginUi("a", "仍在等待", 600)
-        now = 600_000
+        now = 300_000
         assertFalse(state.snapshot().connections.any { it.ownsUi })
+        state.seen("b", "Hermes")
         state.beginUi("b", "操作", 15)
-        now += 599_999
+        now += 299_999
         state.requireUi("b")
         now += 2
         assertTrue(state.snapshot().connections.single { it.id == "b" }.ownsUi)
         state.disconnect("b")
+        state.seen("a", "Codex")
         state.beginUi("a", "接管", 600)
         assertEquals("a", state.snapshot().connections.single { it.ownsUi }.id)
+    }
+    @Test fun fiveMinuteIdleClearsDisplayAndHelpWithoutClosingOtherActiveOwner() {
+        var now = 0L
+        val state = AgentActivityLedger { now }
+        state.seen("idle", "Idle"); state.beginUi("idle", "等待", 300)
+        val help = state.notify("idle", "help", true, 600)
+        now = 299_999
+        state.seen("active", "Active")
+        assertEquals(2, state.snapshot().connections.size)
+        now = 300_000
+        assertEquals(listOf("active"), state.snapshot().connections.map { it.id })
+        assertEquals("cancelled", state.result("idle", help.id)?.status)
     }
 }

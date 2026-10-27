@@ -6,15 +6,21 @@ internal fun externalActivityRunning(snapshot: JSONObject?, session: String?, no
     snapshot != null && snapshot.optBoolean("available") && snapshot.optBoolean("running") &&
         snapshot.optString("session_id") == session && now - verifiedAt <= 30_000
 
+/** Hermes persists these exact live phase descriptions; terminal stamps must not match. */
+internal fun externalActivityCompacting(snapshot: JSONObject?): Boolean =
+    snapshot?.optString("kind") == "compact" ||
+        (snapshot?.optBoolean("available") == true && snapshot.optBoolean("running") &&
+            snapshot.optString("activity_text") in setOf("context compression started", "context compression in progress"))
+
 internal fun externalActivityTiming(snapshot: JSONObject?) = AgentRunTiming(
-    startedAt = parseMessageTimestamp(snapshot?.opt(if (snapshot.optString("kind") == "compact") "phase_started_at" else "started_at")),
+    startedAt = parseMessageTimestamp(snapshot?.opt(if (externalActivityCompacting(snapshot)) "phase_started_at" else "started_at")),
     lastResponseAt = parseMessageTimestamp(snapshot?.opt("last_response_at"))?.takeIf {
-        snapshot?.optString("kind") != "compact" || parseMessageTimestamp(snapshot.opt("phase_started_at"))?.let { start -> it >= start } == true
+        !externalActivityCompacting(snapshot) || parseMessageTimestamp(snapshot?.opt("phase_started_at"))?.let { start -> it >= start } == true
     },
 )
 
 internal fun externalActivityLabel(snapshot: JSONObject?) =
-    if (snapshot?.optString("kind") == "compact") "正在压缩上下文" else "执行中"
+    if (externalActivityCompacting(snapshot)) "正在压缩上下文" else "执行中"
 
 internal fun externalActivityEvents(snapshot: JSONObject?): List<HermesEvent> {
     if (snapshot == null) return emptyList()

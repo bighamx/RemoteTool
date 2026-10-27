@@ -50,6 +50,7 @@ class InstallerTests(unittest.TestCase):
             (plugin / ".remotetool-ready").write_text("1")
             with self.assertRaisesRegex(RuntimeError, "did not confirm"):
                 self.run_install(home, None)
+            self.assertFalse((plugin / ".remotetool-ready").exists())
 
     def test_incomplete_runtime_registration_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

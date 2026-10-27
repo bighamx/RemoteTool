@@ -2,6 +2,28 @@
 
 ## v3 高效操作接口
 
+### Agent 名称与采集方式
+
+MCP initialize 的 clientInfo.name 由 Agent 客户端声明，作为手机上的连接名称；恢复原身份时可更新显示名称，不改变 logical agent 或权限。通过注入工具操作时，在 phone_begin_ui 中声明 client_name（1–40 个可显示字符）和 message。该名称持续到本 owner 断开，不会被后续请求的通道默认名覆盖；名称只用于展示，不是鉴权凭据。
+
+    {"client_name":"Codex 商品查询","message":"查询商品价格并核对型号"}
+
+phone_observe 和 phone_find_nodes 将采集与输出分开：
+
+| 参数 | 选择与用途 |
+| --- | --- |
+| backend=auto | 默认优先快速 Accessibility；未运行时使用已授权的 UiAutomation。 |
+| backend=accessibility | 明确使用本应用无障碍服务；不可用时失败，不静默换后端。适合常规读取和后续节点动作。 |
+| backend=uiautomator | 显式运行特权 XML dump，通常需数秒。适合同页对照或文字缺失诊断；节点只读，不能用于 node_id 动作。 |
+| include_unimportant=true | 默认包含 Android 标记为“不重要”的节点，可能承载 QQ 正文；本版无障碍服务已请求对应标志。UiAutomation 对应未压缩 dump。 |
+| include_unimportant=false | Accessibility 过滤这些行但继续遍历子节点；UiAutomation 使用压缩 dump。输出更少，但可能丢正文。 |
+| privilege_backend | UiAutomation 执行权限通道：auto/shizuku/root；明确指定的后端不可用则失败。 |
+| mode | compact 精简节点；text 为同一采集结果追加文本；raw 输出诊断行。它不切换采集后端或自动补出缺失信息。 |
+
+例如优先 phone_observe({"backend":"accessibility","include_unimportant":true,"mode":"text"})；需要诊断时显式改用 {"backend":"uiautomator","privilege_backend":"root","include_unimportant":true,"mode":"text"}。不要每次动作后都执行慢速 dump。
+
+返回 backend、include_unimportant、node_actions、truncated 等信息；UiAutomation 还返回实际 privilege_backend、occlusion_checked=false。它不支持差量，changed_since 会得到完整结果及 reset=true；include_system=true 仅用于 Accessibility。动作后的 return_state 仍走默认快速观察路径，需要其他采集方式时单独调用。
+
 本项目统一使用 schema_version=3 的手机端、服务端和配套脚本，不保留旧服务执行分支。首次读取能力确认版本，版本不符时明确提示更新，不回退到旧接口。标准 MCP 协议仍协商 2025-11-25/06-18/03-26；协议版本协商与手机工具 Schema 是不同维度，扩展使用普通工具和 _meta。
 
 - phone_observe 默认 mode=compact，优先目标应用窗口，只输出有语义且可见的节点。mode=text 同时返回可读文本，mode=raw 用于诊断，include_system=true 显式包含系统及悬浮窗口。package_name 选择窗口，filter 做服务端过滤，fields 投影字段。truncated=true 表示达到输出或遍历上限，不能把“未返回”当作不存在。
@@ -20,6 +42,10 @@
     }
 
 phone_wait 可单独使用相同条件；selector 配合 absent=true 等待消失，stable_ms 范围 0–2000，timeout_ms 范围 1–10000。只判断目标窗口的快照签名，本应用面板刷新不影响它。稳定不等于业务成功，优先指定业务后置条件。返回 matched、新快照、wait_ms，选择器等待另带 matched_nodes。matched=false 表示超时，不代表前一个动作未执行。等待已返回新状态，不要再 sleep 后无条件重复 observe。
+
+动作附带 wait_for 默认 require_change=true，先采集 state_before，再执行动作；执行后窗口或内容签名有变化且条件成立才命中。预期界面不变时显式设 false。独立 phone_wait 默认 false；显式 true 以等待开始时的观察为基线。条件应选择目标页面独有元素，宽泛的 WLAN|网络 等正则即使在变化后匹配也不能证明跳转完成。
+
+Accessibility revision 是同一 revision_epoch 内跨窗口递增的观察序号，不代表内容变化；窗口局部事件数另见 window_revision。核对动作前后使用 state_before 和 state 的 window_id/signature，观察先后使用 revision；不同 epoch、后端或查询范围不可直接比较。
 
 changed_since 接受本操作者的旧 snapshot_id。窗口和查询范围一致时返回 delta=true、变化的 nodes 和 removed_nodes；旧快照失效、窗口或范围变化时返回完整状态及 reset=true。后续动作使用新 snapshot_id，节点引用仍是 30 秒有效的临时引用。
 
@@ -44,9 +70,13 @@ execution 区分 not_started、receipt_available、unknown，不等于业务成�
 
 ## 身份恢复与现成客户端
 
+恢复凭据未知、过期或已撤销时返回 resume_unknown，区别于用户明确断开和正在执行的 device_busy；不自动创建另一身份。当 initialize 公布 _meta.remotetool.self_cleanup="resume-token" 时，绑定/App Bearer 配合 X-RemoteTool-Resume-Token 可对原 /mcp URL 发 DELETE，仅清理这个逻辑 owner；不能带另一个会话头，也不能不带 owner 凭据清空整个绑定。执行中的 owner 返回 409 device_busy，保留回执与缓存，等待后再处理。
+
+UI CLI 的 --close-on-exit 在 finally 收尾，适合一次独立任务；连续多条 CLI 复用同一会话时不要开启，在整轮结束后调用 end。UiAutomation 句柄用于动作时明确返回 read_only_backend，应改用 accessibility 重观察。phone_execute 的步骤回执还包含该步可获得的 truncated、visited_nodes、backend，未返回这些字段不能推断没有截断。
+
 初始化可返回 _meta.remotetool.resume_token/agent_id/generation。恢复凭据必须保密，不能展示给模型或打印进日志。明确收到 HTTP 404 session_not_found 后，在新初始化的 params._meta["remotetool/resume_token"] 提交凭据；传输 ID 更新，操作者及 UI/快照/消息/回执归属不变，旧传输被拒绝。旧调用仍运行时返回 device_busy，凭据无效或撤销时返回 session_recovery_failed，不自动建立替代身份。
 
-恢复只在同一服务实例内有效；服务重启后需重新建立授权连接，不盲目重放操作。用户手动断开后恢复不能清除禁止状态，必须停止。HTTP DELETE 撤销恢复凭据。传输闲置 30 分钟回收；恢复凭据最多保留 24 小时且有数量上限。显示名称不是恢复凭据。
+恢复只在同一服务实例内有效；服务重启后需重新建立授权连接，不盲目重放操作。用户手动断开后恢复不能清除禁止状态，必须停止。HTTP DELETE 撤销恢复凭据。传输闲置 5 分钟回收；恢复凭据最多保留 24 小时且有数量上限。显示名称不是恢复凭据。
 
 本项目 remotetool_phone.py 会自动初始化、发送通知并记录协商版本。短命 CLI 应指定独立、稳定的逻辑 Agent/聊天标识，例如：
 
@@ -86,7 +116,7 @@ initialize 一次 → 记住响应头和版本 → tools/list
 
 UI、节点快照、协助通知按逻辑操作者隔离。经恢复凭据接管的新传输继承同一操作者，独立操作者之间不能混用。观察和截图也是 UI 操作；Shell 操作 UI 时设 ui_operation=true。节点使用当前操作者最新 snapshot_id/node_id，30 秒失效，页面变化后重新观察。
 
-`phone_end_ui` 仅结束一批 UI 操作，不断开连接。下一批再次 `begin_ui`，不再 `initialize`。UI 无须续期，10 分钟无 UI 操作自动释放；其他连接可并行处理非 UI 任务。同一批中的观察、操作、核验按顺序执行，不并发点击和读取变化中的页面。
+`phone_end_ui` 仅结束一批 UI 操作，不断开连接。下一批再次 `begin_ui`，不再 `initialize`。UI 无须续期，5 分钟无 UI 操作自动释放；其他连接可并行处理非 UI 任务。同一批中的观察、操作、核验按顺序执行，不并发点击和读取变化中的页面。
 
 普通操作用可选 `explanation` 简述动作与目的（用户语言、最多 240 字符），不写凭据、敏感输入或内部推理。需要用户解锁、授权或人工处理时使用 `phone_notify_user(kind=help)`，保留 `notice_id`，释放 UI 后用同一连接以合理间隔查 `phone_get_user_reply`；pending、超时、dismissed 不代表完成。得到回复后重新获取 UI 并观察，再继续依赖该步骤的操作。
 

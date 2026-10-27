@@ -77,7 +77,7 @@ class PhoneConnectionLog(context: Context) : SQLiteOpenHelper(context, "phone-co
         active.keys.toList().forEach { owner ->
             val id = active[owner]!!
             readableDatabase.rawQuery("SELECT last_seen FROM connections WHERE id=?", arrayOf(id)).use {
-                if (it.moveToFirst() && System.currentTimeMillis() - it.getLong(0) > 30 * 60_000L) disconnect(owner, "idle_expired")
+                if (it.moveToFirst() && System.currentTimeMillis() - it.getLong(0) > 5 * 60_000L) disconnect(owner, "idle_expired")
             }
         }
         return query("SELECT c.*, (SELECT COUNT(*) FROM activity a WHERE a.connection_id=c.id) call_count FROM connections c WHERE ended IS ${if (history) "NOT " else ""}NULL ORDER BY started DESC LIMIT 100 OFFSET ?", arrayOf(offset.coerceAtLeast(0).toString()))

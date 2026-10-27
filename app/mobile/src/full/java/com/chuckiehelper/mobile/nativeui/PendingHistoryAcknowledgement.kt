@@ -14,9 +14,7 @@ internal fun currentSubmissionHistoryMatch(agent: String, pending: PendingAgentS
         run {
             // agentUserMessageText 已剥 OUT-OF-BAND 外壳；网关还会把 turn 活跃期间的
             // 多条消息合并进一行（一行一条），合并行按文本行匹配。
-            val text = agentUserMessageText(agent, pending.input).trim()
-            val rowText = agentUserMessageText(agent, row.text).trim()
-            rowText == text || (rowText.contains('\n') && rowText.split('\n').any { it.trim() == text })
+            hermesUserMessageContains(row.text, pending.input)
         } }
         .also { matched ->
             if (matched.isEmpty()) {

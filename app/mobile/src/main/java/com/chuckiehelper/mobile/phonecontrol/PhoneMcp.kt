@@ -43,6 +43,8 @@ class PhoneMcp(private val list: (Boolean) -> JSONArray, private val call: (Stri
     }
     companion object {
         val instructions = """
+            Declare your real clientInfo.name during MCP initialize, or client_name in phone_begin_ui on the existing owner; names are display metadata, never authorization.
+            Reading: backend=auto/accessibility/uiautomator selects collection; include_unimportant=true retains potentially omitted chat text; mode=compact/text/raw only selects output. UiAutomation is slower and its nodes are read-only; reobserve through accessibility for node actions.
             Control the bound Android phone with configured phone_* tools or the persistent MCP adapter. A missing chat binding is a setup error: use the explicitly configured endpoint, not plugin source or another chat's credentials.
             HTTP: initialize once; retain Mcp-Session-Id and negotiated MCP-Protocol-Version on subsequent requests. Reuse across batches and short-lived processes; isolate caches by endpoint, credentials and logical agent. The shipped CLI accepts --agent <stable-chat-id>. Never share identities between independent agents.
             When initialize returns _meta.remotetool.resume_token, keep it private. After explicit HTTP 404 session_not_found, initialize with params._meta["remotetool/resume_token"] to recover the same owner; the old transport is fenced. device_busy means an old call is still running. On connection_closed_by_user or failed recovery stop, never silently create another identity or bypass ownership.

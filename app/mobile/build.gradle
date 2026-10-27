@@ -19,8 +19,8 @@ android {
         full {
             dimension 'edition'
             applicationId 'com.chuckiehelper.mobile'
-            versionCode 98
-            versionName '0.3.95'
+            versionCode 106
+            versionName '0.3.103'
             buildConfigField 'boolean', 'PHONE_COMPANION', 'false'
             manifestPlaceholders = [appLabel: 'RemoteTool', appIcon: '@mipmap/ic_launcher',
                 siblingPackage: 'com.chuckiehelper.phonecontrol', accessibilityLabel: 'RemoteTool 手机操控', notificationLabel: 'RemoteTool 手机通知',
@@ -30,8 +30,8 @@ android {
         phone {
             dimension 'edition'
             applicationId 'com.chuckiehelper.phonecontrol'
-            versionCode 9
-            versionName '0.2.7'
+            versionCode 17
+            versionName '0.2.15'
             buildConfigField 'boolean', 'PHONE_COMPANION', 'true'
             manifestPlaceholders = [appLabel: '手机操控', appIcon: '@drawable/ic_phone_control',
                 siblingPackage: 'com.chuckiehelper.mobile', accessibilityLabel: '手机操控 · 无障碍', notificationLabel: '手机操控 · 通知读取',
@@ -62,6 +62,8 @@ android {
         if (variant.buildType.name == 'release') {
             def prefix = variant.flavorName == 'phone' ? 'RemoteTool-PhoneControl' : 'RemoteTool'
             def archive = tasks.register("archive${variant.name.capitalize()}CrashMapping", Copy) {
+                inputs.property('apkVersionName', variant.versionName)
+                inputs.property('apkVersionCode', variant.versionCode)
                 from layout.buildDirectory.file("outputs/mapping/${variant.name}/mapping.txt")
                 into layout.buildDirectory.dir('outputs/crash-mappings')
                 rename { "${prefix}-${variant.versionName}-${variant.versionCode}-mapping.txt" }

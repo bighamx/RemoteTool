@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 class PhoneClient:
-    def __init__(self, url=None, token=None, agent=None, cache_directory=None):
+    def __init__(self, url=None, token=None, agent=None, cache_directory=None, client_name=None):
         self.url = (url or os.environ.get("REMOTETOOL_PHONE_URL", "")).rstrip("/")
         self.token = token or os.environ.get("REMOTETOOL_PHONE_TOKEN", "")
         parts = urllib.parse.urlsplit(self.url)
@@ -38,6 +38,7 @@ class PhoneClient:
         self._gate = threading.RLock()
         self._transport = threading.local()
         self.agent = agent or os.environ.get("REMOTETOOL_PHONE_AGENT")
+        self.client_name = client_name or os.environ.get("REMOTETOOL_PHONE_CLIENT_NAME") or "RemoteTool CLI"
         self.cache = None
         if self.agent:
             key = hashlib.sha256((self.url + "\n" + hashlib.sha256(self.token.encode()).hexdigest() + "\n" + self.agent).encode()).hexdigest()
@@ -53,7 +54,7 @@ class PhoneClient:
         lock = self.cache.with_suffix(".lock")
         fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
         with os.fdopen(fd, "r+b") as stream:
-            if stream.seek(0, 2) == 0: stream.write(b"0"); stream.flush()
+            # Windows permits locking beyond EOF; never write an unowned lock byte.
             started = time.monotonic()
             while True:
                 try:
@@ -86,7 +87,7 @@ class PhoneClient:
                     self.protocol_version = saved.get("protocol_version", self.protocol_version)
                 if self.session_id and self.session_id != replace_session: return
                 self.session_id = None
-                params = {"protocolVersion": self.protocol_version, "capabilities": {}, "clientInfo": {"name": "RemoteTool CLI", "version": "1.2.0"}}
+                params = {"protocolVersion": self.protocol_version, "capabilities": {}, "clientInfo": {"name": self.client_name, "version": "1.3.1"}}
                 if self.resume_token: params["_meta"] = {"remotetool/resume_token": self.resume_token}
                 result = self.request("" if self.url.endswith("/mcp") else "/mcp", {"jsonrpc": "2.0", "id": "initialize", "method": "initialize", "params": params})
                 if "error" in result: raise RuntimeError(result["error"].get("data", {}).get("code", result["error"]["message"]))
@@ -189,15 +190,19 @@ def serve_stdio(client, source=None, target=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--agent", help="Stable logical agent/chat identity for isolated cross-process session reuse")
+    parser.add_argument("--client-name", help="Agent-declared display name for MCP initialize, separate from cache identity")
     sub = parser.add_subparsers(dest="mode", required=True)
     sub.add_parser("mcp")
     sub.add_parser("tools")
     observe = sub.add_parser("observe"); observe.add_argument("--screenshot", action="store_true")
+    observe.add_argument("--backend", choices=("auto", "accessibility", "uiautomator"), default="auto")
+    observe.add_argument("--mode", choices=("compact", "text", "raw"), default="compact")
+    observe.add_argument("--include-unimportant", action=argparse.BooleanOptionalAction, default=True)
     call = sub.add_parser("call"); call.add_argument("tool"); call.add_argument("--args", default="{}"); call.add_argument("--args-file"); call.add_argument("--request-id")
     upload = sub.add_parser("upload"); upload.add_argument("path"); upload.add_argument("--name")
     download = sub.add_parser("download"); download.add_argument("name"); download.add_argument("path")
     args = parser.parse_args(argv)
-    client = PhoneClient(agent=args.agent)
+    client = PhoneClient(agent=args.agent, client_name=args.client_name)
     if args.mode != "mcp" and not client.agent:
         parser.error("CLI commands require --agent <stable-task-or-chat-id> or REMOTETOOL_PHONE_AGENT; use a distinct ID for each independent agent")
     if args.mode == "mcp":
@@ -207,7 +212,8 @@ def main(argv=None):
         client.connect()
         result = client.mcp({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     elif args.mode == "observe":
-        result = client.call("phone_observe", {"screenshot": args.screenshot})
+        result = client.call("phone_observe", {"screenshot": args.screenshot, "backend": args.backend,
+            "mode": args.mode, "include_unimportant": args.include_unimportant})
     elif args.mode == "call":
         result = client.call(args.tool, json.loads(Path(args.args_file).read_text(encoding="utf-8")) if args.args_file else json.loads(args.args), args.request_id)
     elif args.mode == "upload":

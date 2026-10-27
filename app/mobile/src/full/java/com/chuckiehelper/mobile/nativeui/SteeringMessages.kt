@@ -45,9 +45,7 @@ fun steeringAppearsInHistory(message: SteeringMessage, history: List<HermesMessa
                 val text = message.text.replace("\r\n", "\n").trim()
                 val rowText = agentUserMessageText("hermes", row.text).replace("\r\n", "\n").trim()
                 if (rowText == text) true
-                else rowText.contains('\n') && rowText.split('\n').any { line ->
-                    line.trim() == text && (row.serverId to line.trim()) !in consumedLines
-                }
+                else hermesUserMessageContains(row.text, text) && (row.serverId to text) !in consumedLines
             }
     }
 

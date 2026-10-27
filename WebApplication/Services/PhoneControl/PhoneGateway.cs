@@ -14,7 +14,13 @@ public sealed class PhoneGateway {
         public readonly WebSocket Socket = socket;
         public volatile JsonObject Hello = hello;
         public readonly SemaphoreSlim SendLock = new(1, 1);
+        public volatile bool Closed;
         public readonly ConcurrentDictionary<string, TaskCompletionSource<JsonObject>> Pending = new();
+        public bool Online => !Closed && Socket.State == WebSocketState.Open;
+        public void Close() {
+            Closed = true;
+            foreach (var pending in Pending.Values) pending.TrySetException(new PhoneOfflineException());
+        }
     }
     private readonly ConcurrentDictionary<string, Connection> phones = new();
     private readonly ConcurrentDictionary<string, (string Name, long At)> agentNames = new();
@@ -43,12 +49,12 @@ public sealed class PhoneGateway {
         if (name == "bindings.json") { cachedBindings = null; bindingsStamp = null; }
     }
     public static string Digest(string value) => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
-    public JsonArray Devices() => new(phones.Select(pair => (JsonNode)new JsonObject {
+    public JsonArray Devices() => new(phones.Where(pair => pair.Value.Online).Select(pair => (JsonNode)new JsonObject {
         ["id"] = pair.Key, ["name"] = pair.Value.Hello["device"]?["name"]?.ToString() ?? pair.Key,
         ["online"] = true, ["capabilities"] = pair.Value.Hello["capabilities"]?.DeepClone()
     }).ToArray());
     public JsonArray Tools(string phone, bool advanced) {
-        if (!phones.TryGetValue(phone, out var connection)) throw new PhoneOfflineException();
+        if (!phones.TryGetValue(phone, out var connection) || !connection.Online) throw new PhoneOfflineException();
         return new JsonArray((connection.Hello["tools"]?.AsArray() ?? new()).OfType<JsonObject>()
             .Where(t => advanced || t["annotations"]?["destructiveHint"]?.GetValue<bool>() != true).Select(t => t.DeepClone()).ToArray());
     }
@@ -66,7 +72,7 @@ public sealed class PhoneGateway {
                 pairs[phone] = hash; Save("pairings.json", pairs);
             }
             hello.Remove("phone_token"); connection = new Connection(socket, hello);
-            if (phones.TryGetValue(phone, out var previous)) previous.Socket.Abort();
+            if (phones.TryGetValue(phone, out var previous)) { previous.Close(); previous.Socket.Abort(); }
             phones[phone] = connection;
             await Send(connection, new JsonObject { ["type"] = "ready" }, ct);
             while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested) {
@@ -78,18 +84,24 @@ public sealed class PhoneGateway {
                 if (result?["type"]?.ToString() == "result" && connection.Pending.TryRemove(result["request_id"]?.ToString() ?? "", out var completion))
                     completion.TrySetResult(result["result"]!.DeepClone().AsObject());
             }
-        } catch (Exception error) when (error is WebSocketException or OperationCanceledException or InvalidDataException or System.Text.Json.JsonException) { }
+        } catch (Exception error) when (error is WebSocketException or OperationCanceledException or IOException or ObjectDisposedException or System.Text.Json.JsonException) { }
         finally {
             if (connection != null) {
+                connection.Close();
                 ((ICollection<KeyValuePair<string, Connection>>)phones).Remove(new(phone, connection));
-                foreach (var pending in connection.Pending.Values) pending.TrySetException(new IOException("delivery_unknown: phone disconnected; observe before retrying"));
             }
             socket.Abort();
         }
     }
-    private static async Task Send(Connection connection, JsonObject message, CancellationToken ct) {
+    private static async Task Send(Connection connection, JsonObject message, CancellationToken ct, Action? sending = null) {
         await connection.SendLock.WaitAsync(ct);
-        try { await connection.Socket.SendAsync(System.Text.Encoding.UTF8.GetBytes(message.ToJsonString()), WebSocketMessageType.Text, true, ct); }
+        try {
+            if (!connection.Online) throw new PhoneOfflineException();
+            var bytes = System.Text.Encoding.UTF8.GetBytes(message.ToJsonString());
+            ct.ThrowIfCancellationRequested();
+            sending?.Invoke();
+            await connection.Socket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+        }
         finally { connection.SendLock.Release(); }
     }
     public string AgentName(string id, string fallback = "Agent") => agentNames.TryGetValue(id, out var value) ? value.Name : fallback;
@@ -101,14 +113,27 @@ public sealed class PhoneGateway {
         if (phone == null || !phones.TryGetValue(phone, out var connection)) return;
         try { foreach (var agent in agents) await Send(connection, new JsonObject { ["type"] = "agent_presence", ["agent_id"] = agent, ["connected"] = false }, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception error) when (error is WebSocketException or IOException or OperationCanceledException or ObjectDisposedException) { }
+        catch (Exception error) when (error is WebSocketException or IOException or OperationCanceledException or ObjectDisposedException or PhoneOfflineException) { }
     }
-    public async Task DisconnectAgent(string phone, string id, CancellationToken ct) {
+    public async Task DisconnectAgent(string phone, string id, CancellationToken ct, int? generation = null) {
         agentNames.TryRemove(id, out _);
         if (phones.TryGetValue(phone, out var connection))
-            await Send(connection, new JsonObject { ["type"]="agent_presence", ["agent_id"]=id, ["connected"]=false }, ct);
+            await Send(connection, new JsonObject { ["type"]="agent_presence", ["agent_id"]=id, ["connected"]=false, ["generation"]=generation }, ct);
     }
-    public async Task AgentSeen(string phone, string id, string? name, CancellationToken ct) {
+    public async Task ExpireSessions(CancellationToken ct) {
+        foreach (var client in McpSessions.DrainExpired()) {
+            if (McpSessions.HasLiveOwner(client.AgentId)) continue;
+            string? phone;
+            lock (diskLock) { phone = Read("bindings.json")[client.Binding]?["phone_id"]?.ToString(); }
+            if (phone != null) await DisconnectAgent(phone, client.AgentId, ct, client.Generation);
+        }
+    }
+    public async Task TouchAgent(string phone, string id, CancellationToken ct, int generation) {
+        if (phones.TryGetValue(phone, out var connection))
+            await Send(connection, new JsonObject { ["type"]="agent_presence", ["agent_id"]=id, ["connected"]=true,
+                ["touch_only"]=true, ["generation"]=generation }, ct);
+    }
+    public async Task AgentSeen(string phone, string id, string? name, CancellationToken ct, int? generation = null) {
         if (!string.IsNullOrWhiteSpace(name)) {
             var cleaned = new string(name.Where(ch => !char.IsControl(ch)).Take(40).ToArray());
             agentNames[id] = (string.IsNullOrWhiteSpace(cleaned) ? "Agent" : cleaned, Environment.TickCount64);
@@ -116,25 +141,63 @@ public sealed class PhoneGateway {
         }
         if (!phones.TryGetValue(phone, out var connection)) return;
         try { await Send(connection, new JsonObject { ["type"] = "agent_presence", ["agent_id"] = id,
-            ["agent_name"] = AgentName(id), ["connected"] = true }, ct); }
+            ["agent_name"] = AgentName(id), ["connected"] = true, ["generation"] = generation }, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception error) when (error is WebSocketException or IOException or OperationCanceledException or ObjectDisposedException) { }
+        catch (Exception error) when (error is WebSocketException or IOException or OperationCanceledException or ObjectDisposedException or PhoneOfflineException) { }
     }
     public async Task<JsonObject> Invoke(string phone, string tool, JsonObject args, string requestId, bool advanced, CancellationToken ct,
         string agentId = "server", string? agentName = null) {
-        if (!phones.TryGetValue(phone, out var connection)) return Error("phone_offline", "手机不在线");
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        double sendMs = 0;
+        bool sendCompleted = false;
+        bool sendAttempted = false;
+        JsonObject Timed(JsonObject result, bool received = false) {
+            if (received) {
+                if (result["structuredContent"] is not JsonObject) result["structuredContent"] = new JsonObject();
+                result["structuredContent"]!["delivery_state"] = "sent";
+            }
+            if (result["structuredContent"] is JsonObject data) {
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                data["relay_metrics"] = new JsonObject { ["total_ms"] = Math.Round(elapsed, 3), ["send_ms"] = Math.Round(sendCompleted ? sendMs : elapsed, 3),
+                    ["reply_wait_ms"] = Math.Round(sendCompleted ? Math.Max(0, elapsed - sendMs) : 0, 3), ["send_completed"] = sendCompleted };
+                if (result["content"] is JsonArray content && content.FirstOrDefault() is JsonObject text && text["type"]?.ToString() == "text")
+                    text["text"] = data.ToJsonString();
+            }
+            return result;
+        }
+        JsonObject NotStarted(string code, string message) {
+            var result = Error(code, message);
+            var data = result["structuredContent"]!.AsObject();
+            data["operation_id"] = requestId; data["execution"] = "not_started"; data["delivery_state"] = "not_sent";
+            return Timed(result);
+        }
+        if (!phones.TryGetValue(phone, out var connection) || !connection.Online) return NotStarted("phone_offline", "手机不在线，请等待通道重连");
         if (!(connection.Hello["tools"]?.AsArray() ?? new()).Any(t => t?["name"]?.ToString() == tool &&
-            (advanced || t?["annotations"]?["destructiveHint"]?.GetValue<bool>() != true))) return Error("tool_unavailable", "工具不可用或高级操作未允许");
+            (advanced || t?["annotations"]?["destructiveHint"]?.GetValue<bool>() != true))) return NotStarted("tool_unavailable", "工具不可用或高级操作未允许");
         var completion = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!connection.Pending.TryAdd(requestId, completion)) return Error("device_busy", "请求正在执行");
+        if (!connection.Pending.TryAdd(requestId, completion)) {
+            var duplicate = Error("device_busy", "相同 operation_id 已在等待回执；请查询原回执，不要换新 ID 重发");
+            var data = duplicate["structuredContent"]!.AsObject();
+            data["operation_id"] = requestId; data["delivery_state"] = "not_sent";
+            data["execution"] = "unknown"; data["retryable"] = false;
+            return Timed(duplicate);
+        }
         var timeout = PhoneToolPolicy.TimeoutSeconds(tool, args);
         try {
             await Send(connection, new JsonObject { ["type"] = "invoke", ["request_id"] = requestId, ["tool"] = tool, ["arguments"] = args.DeepClone(),
                 ["allow_advanced"] = advanced, ["deadline"] = DateTimeOffset.UtcNow.AddSeconds(timeout).ToUnixTimeMilliseconds(),
-                ["agent_id"] = agentId, ["agent_name"] = agentName ?? AgentName(agentId) }, ct);
-            return await completion.Task.WaitAsync(TimeSpan.FromSeconds(timeout + 5), ct);
-        } catch (Exception error) when (error is TimeoutException or IOException or WebSocketException or OperationCanceledException) {
-            return Error("delivery_unknown", "手机操作回执缺失，请观察核对，不要自动重发");
+                ["agent_id"] = agentId, ["agent_name"] = agentName ?? AgentName(agentId) }, ct, () => sendAttempted = true);
+            sendMs = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            sendCompleted = true;
+            return Timed(await completion.Task.WaitAsync(TimeSpan.FromSeconds(timeout + 5), ct), received: true);
+        } catch (Exception error) when (error is TimeoutException or IOException or WebSocketException or OperationCanceledException or PhoneOfflineException or ObjectDisposedException) {
+            if (!sendAttempted) return NotStarted(error is PhoneOfflineException ? "phone_offline" : "channel_closed", "请求未发送，通道已关闭或请求已取消");
+            var result = Error("delivery_unknown", "手机操作回执缺失，请观察核对，不要自动重发");
+            result["structuredContent"]!["operation_id"] = requestId;
+            result["structuredContent"]!["execution"] = "unknown";
+            result["structuredContent"]!["delivery_state"] = sendCompleted ? "sent" : "possibly_sent";
+            result["structuredContent"]!["channel_state"] = connection.Online ? "open" : "closed";
+            return Timed(result);
         } finally { connection.Pending.TryRemove(requestId, out _); }
     }
     public JsonObject CreateBinding(string phone, bool advanced, string agent, string profile) {
@@ -155,7 +218,7 @@ public sealed class PhoneGateway {
             return new JsonArray(Read("bindings.json").Where(pair => pair.Value?["agent"]?.ToString() == "external")
                 .Select(pair => (JsonNode)new JsonObject { ["id"] = pair.Key, ["phone_id"] = pair.Value!["phone_id"]?.DeepClone(),
                     ["allow_advanced"] = pair.Value!["advanced"]?.DeepClone(), ["created"] = pair.Value!["created"]?.DeepClone(),
-                    ["online"] = phones.ContainsKey(pair.Value!["phone_id"]!.ToString()) }).ToArray());
+                    ["online"] = phones.TryGetValue(pair.Value!["phone_id"]!.ToString(), out var connection) && connection.Online }).ToArray());
         }
     }
     public void RemoveBinding(string id) { lock (diskLock) { var rows = Read("bindings.json"); rows.Remove(id); Save("bindings.json", rows); } }
@@ -170,6 +233,6 @@ public sealed class PhoneGateway {
             return row.DeepClone().AsObject();
         }
     }
-    public static JsonObject Error(string code, string message) => new() { ["isError"] = true, ["structuredContent"] = new JsonObject { ["code"] = code, ["message"] = message, ["retryable"] = code != "delivery_unknown" && code == "device_busy" },
+    public static JsonObject Error(string code, string message) => new() { ["isError"] = true, ["structuredContent"] = new JsonObject { ["code"] = code, ["message"] = message, ["retryable"] = code is "device_busy" },
         ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = code + ": " + message }) };
 }

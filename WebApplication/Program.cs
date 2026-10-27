@@ -75,6 +75,7 @@ namespace RemoteTool.WebApi
 
             var builder = WebApplication.CreateBuilder(args);
             builder.Services.AddSingleton<Services.PhoneControl.PhoneGateway>();
+            builder.Services.AddHostedService<Services.PhoneControl.PhoneSessionReaper>();
             builder.Services.AddSingleton<Services.PhoneControl.PhoneSessionIntegration>();
 
             // 上传文件大小限制（默认 500MB，可在 appsettings 中通过 FileUpload:MaxSizeMB 覆盖）

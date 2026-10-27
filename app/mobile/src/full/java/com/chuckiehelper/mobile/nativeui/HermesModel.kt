@@ -350,7 +350,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     val requestingCompaction get() = compactionRequest?.first == selectedId && compactionRequest != null
     val hasExecution get() = requestingCompaction || (runStateVerified && runSession == selectedId) || externalRunning
     val executionKey get() = if (requestingCompaction) "compact-request-${compactionRequest?.second}" else runId ?: externalActivity?.optString("activity_id")?.takeIf { externalRunning }?.let { "external-$it" }
-    val executionTiming get() = if (requestingCompaction) AgentRunTiming(startedAt = compactionRequest?.second) else if (streamCompacting) AgentRunTiming(startedAt = streamCompaction?.second) else if (runId != null) currentRunTiming else externalActivityTiming(externalActivity)
+    val executionTiming get() = if (requestingCompaction) AgentRunTiming(startedAt = compactionRequest?.second) else if (streamCompacting) AgentRunTiming(startedAt = streamCompaction?.second) else if (externalActivityCompacting(currentRunActivity)) externalActivityTiming(currentRunActivity) else if (runId != null) currentRunTiming else externalActivityTiming(externalActivity)
     private var runActivitySnapshot by mutableStateOf<Pair<String, JSONObject>?>(null)
     private var runActivityObservedAt by mutableLongStateOf(0L)
     private var runActivityAttempt: Pair<String, Long>? = null
@@ -362,7 +362,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (saved != null && (!streamConnected || events.isEmpty() || streamGap)) externalActivityEvents(saved).ifEmpty { events } else events
     } else externalActivityEvents(externalActivity)
     val executionEventCount get() = if (runId != null) maxOf(eventCount, currentRunActivity?.optInt("event_count") ?: 0) else externalActivity?.optInt("event_count") ?: 0
-    val executionState get() = if (requestingCompaction) "正在提交压缩请求" else if (streamCompacting) "正在压缩上下文" else if (runId != null) state else externalActivityLabel(externalActivity)
+    val executionState get() = if (requestingCompaction) "正在提交压缩请求" else if (streamCompacting || externalActivityCompacting(currentRunActivity)) "正在压缩上下文" else if (runId != null) state else externalActivityLabel(externalActivity)
     val executionCompacting get() = requestingCompaction || executionState == "正在压缩上下文"
 
     private var externalActivityJob: Job? = null

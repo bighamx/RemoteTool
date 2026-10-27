@@ -17,6 +17,7 @@ class PhoneRelay(private val engine: PhoneEngine, url: String, private val cooki
     @Volatile private var socket: WebSocket? = null
     private var attempts = 0
     @Volatile private var advertisedAdvanced = engine.settings.advanced
+    private val presence = PhonePresenceFence()
     init {
         require(endpoint.startsWith("wss://") || endpoint.startsWith("ws://")); connect()
         scheduler.scheduleAtFixedRate({
@@ -45,7 +46,14 @@ class PhoneRelay(private val engine: PhoneEngine, url: String, private val cooki
                 if (message.optString("type") == "ready") { state = "已连接"; return }
                 if (message.optString("type") == "agent_presence") {
                     val agent = "web:" + message.optString("agent_id", "server").take(160)
-                    if (message.optBoolean("connected", true)) runCatching { engine.connectionSeen(agent, message.optString("agent_name", "Agent"), JSONObject().put("relay", endpoint.substringBefore("/ws/phone-agent"))) }
+                    val connected = message.optBoolean("connected", true)
+                    val generation = if (message.has("generation") && !message.isNull("generation")) message.optInt("generation") else null
+                    if (message.optBoolean("touch_only")) {
+                        if (presence.canTouch(agent, generation)) engine.touchConnection(agent)
+                        return
+                    }
+                    if (!presence.accept(agent, generation, connected)) return
+                    if (connected) runCatching { engine.connectionSeen(agent, message.optString("agent_name", "Agent"), JSONObject().put("relay", endpoint.substringBefore("/ws/phone-agent"))) }
                     else engine.disconnect(agent)
                     return
                 }
@@ -85,6 +93,7 @@ class PhoneRelay(private val engine: PhoneEngine, url: String, private val cooki
     private fun retry(ws: WebSocket, message: String) {
         if (closed || socket !== ws) return
         engine.webDisconnected()
+        presence.clear()
         state = "离线：$message"
         scheduler.schedule({ connect() }, minOf(30L, 1L shl minOf(attempts++, 5)), TimeUnit.SECONDS)
     }
