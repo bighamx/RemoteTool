@@ -36,7 +36,7 @@ public sealed class HermesProfiles(IConfiguration configuration)
     public string? ApiKey(string name)
     {
         var path = name == "default"
-            ? configuration["Hermes:KeyFile"] ?? Environment.GetEnvironmentVariable("HERMES_API_KEY_FILE") ?? RemoteToolPaths.HermesKeyFile
+            ? configuration["Hermes:KeyFile"] ?? Environment.GetEnvironmentVariable("HERMES_API_KEY_FILE") ?? (OperatingSystem.IsMacOS() && !File.Exists(RemoteToolPaths.HermesKeyFile) ? Path.Combine(Root, ".env") : RemoteToolPaths.HermesKeyFile)
             : Path.Combine(HomeFor(name), ".env");
         if (!File.Exists(path)) return null;
         foreach (var line in File.ReadLines(path)) {
@@ -80,6 +80,12 @@ public sealed class HermesProfileFilter(HermesProfiles profiles) : IAsyncActionF
         var name = context.RouteData.Values["profile"]?.ToString() ?? "default";
         try { profiles.HomeFor(name); }
         catch (ArgumentException error) { context.Result = new NotFoundObjectResult(new { message = error.Message }); return; }
-        using (HermesProfileScope.Enter(name)) await next();
+        using (HermesProfileScope.Enter(name)) {
+            var executed = await next();
+            if (executed.Exception is HermesSetupRequired error && !context.HttpContext.Response.HasStarted) {
+                executed.Result = new ObjectResult(new { message = error.Message, code = "hermes_setup_required", delivery = "rejected" }) { StatusCode = 409 };
+                executed.ExceptionHandled = true;
+            }
+        }
     }
 }

@@ -27,7 +27,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             using var upstream = await bridge.SendAsync(HttpMethod.Get, "v1/capabilities", null, null, ct);
             if (upstream.IsSuccessStatusCode) result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
             else result["channel"] = false;
-        } catch (Exception error) when (error is InvalidOperationException or HttpRequestException or IOException) { result["channel"] = false; }
+        } catch (Exception error) when (error is HermesSetupRequired or InvalidOperationException or HttpRequestException or IOException) { result["channel"] = false; }
         result["chuckie_features"] = new System.Text.Json.Nodes.JsonObject { ["attachment_steering"] = true, ["external_session_activity"] = true, ["message_actions"] = true };
         // The loopback API Server is a separate switch in the user's .env and can be off
         // while the channel is reachable. Surface it so clients can prompt instead of

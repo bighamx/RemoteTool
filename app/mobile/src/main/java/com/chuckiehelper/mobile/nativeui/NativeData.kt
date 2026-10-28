@@ -202,7 +202,7 @@ class NativeApi(
                 }
                 android.util.Log.w("ChuckieNetwork", "${request.method} ${request.url.encodedPath}: ${error.javaClass.simpleName}")
                 if (request.method in setOf("GET", "HEAD") && !probing && error !is LoginRequired &&
-                    (error !is ApiRequestFailure || error.status in setOf(502, 503, 504))) throw ReadConnectionFailure(error)
+                    (error !is ApiRequestFailure || error.status in setOf(502, 503, 504))) throw wrapReadFailure(error)
                 throw error
             }
             for (cookie in result.second) withContext(Dispatchers.Main) {
