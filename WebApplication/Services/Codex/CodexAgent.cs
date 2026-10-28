@@ -1079,6 +1079,12 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             } finally { desktop.Restart(); }
         } finally { settingsLock.Release(); }
     }
+    /** cc-switch 聚合模式把 model_catalog_json 指向它生成的目录（含 ccs-* 编码 slug）。 */
+    private static bool IsAggregateCatalog(JsonObject config) {
+        var path = config.S("model_catalog_json");
+        return path.Length > 0 && path.Contains("cc-switch", StringComparison.OrdinalIgnoreCase);
+    }
+
     /** cc-switch 会缓存 live 配置；重启它可以让它重新读取，避免之后用自己的旧快照覆盖我们刚写入的 provider。 */
     private void RestartCcSwitch() {
         try {
@@ -1435,9 +1441,13 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     if (selected.S("providerBaseUrl").Length > 0) edits.Add(("model_providers." + selected.S("modelProvider") + ".base_url", selected["providerBaseUrl"]));
                     if (selected.ContainsKey("reasoningEffort")) edits.Add(("model_reasoning_effort", selected["reasoningEffort"]));
                     if (selected.ContainsKey("serviceTier")) edits.Add(("service_tier", selected["serviceTier"]));
+                    // 聚合模式下模型目录由 cc-switch 生成（含 ccs-* 编码 slug）；切到官方或普通 provider
+                    // 必须同时清掉这个键，否则模型列表仍是聚合目录、选中项也没有代理解码。
+                    var leavingAggregate = IsAggregateCatalog(await Config());
+                    if (leavingAggregate) edits.Add(("model_catalog_json", ""));
                     await EditConfig(edits.ToArray());
                     await RestartForProviderChange();
-                    return Obj(("saved", true));
+                    return Obj(("saved", true), ("left_aggregate", leavingAggregate));
                 }
                 finally { settingsLock.Release(); }
             }

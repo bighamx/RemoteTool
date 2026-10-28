@@ -151,6 +151,7 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: (
                 }
                 TextButton(onClick = { model.importCurrentAccount() }, enabled = !model.switchingAccount) { Text("同步电脑当前登录") }
                 if (model.loginInfo != null && !model.loginInfo!!.optBoolean("completed")) TextButton(onClick = { model.showLogin() }) { Text("查看登录验证码") }
+                model.providerNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 model.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },

@@ -533,6 +533,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
 
     var providers by mutableStateOf(JSONObject())
+    /** 切换 provider 后的提示（例如退出聚合模式）。 */
+    var providerNotice by mutableStateOf<String?>(null)
         private set
 
     var approval by mutableStateOf<JSONObject?>(null)
@@ -1672,7 +1674,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         try {
             val body = obj("provider" to providerId)
             if (providerModel.isNotBlank()) body.put("model", providerModel)
-            api.json("$root/default-model", body)
+            val saved = api.json("$root/default-model", body)
+            providerNotice = if (saved.optBoolean("left_aggregate"))
+                "已退出聚合模式。CC Switch 里可能仍显示聚合，如需保持请在它里面切回普通供应商。" else null
             providers = api.json("$root/providers")
             onDone()
         } catch (cancelled: CancellationException) { throw cancelled }
