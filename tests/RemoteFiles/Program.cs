@@ -10,6 +10,10 @@ try {
     Reject(() => FilePathPolicy.Resolve(root, ""), "blank path must not map to root");
     Reject(() => FilePathPolicy.Resolve(root, "../escape"), "relative escape");
     var service = new FileService();
+    if (OperatingSystem.IsMacOS()) {
+        Check(FilePathPolicy.IsWithin("/tmp/example", "/private/tmp/example/child"), "Mac system aliases preserve directory boundaries");
+        Check(!FilePathPolicy.IsWithin("/tmp/example", "/private/tmp/example-other/child"), "Mac alias normalization rejects prefix siblings");
+    }
     var source = Path.Combine(root, "source"); Directory.CreateDirectory(source);
     var nested = Path.Combine(source, "child"); Directory.CreateDirectory(nested); File.WriteAllText(Path.Combine(nested, "value.txt"), "source");
     Check(!service.CopyDirectory(source, Path.Combine(source, "copy")), "self-recursive copy rejected");
@@ -50,5 +54,6 @@ try {
     var reject = Path.Combine(root, "reject");
     Check(!service.Decompress(malicious, reject), "archive traversal refused");
     Check(!File.Exists(Path.Combine(reject, "safe.txt")) && !Directory.Exists(Path.Combine(root, "escaped")), "invalid archive preflight writes no entries");
+    MacImagePreviewChecks.Run(service, root);
 } finally { Directory.Delete(root, true); }
 Console.WriteLine($"Remote file checks: {count} passed");

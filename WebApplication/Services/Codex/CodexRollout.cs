@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Runtime.InteropServices;
 using static RemoteTool.WebApi.Services.Codex.CodexJson;
 
 namespace RemoteTool.WebApi.Services.Codex;
@@ -34,17 +35,30 @@ internal static class CodexRollout
         return true;
     }
     public static bool WriterLocked(string home, string path) {
-        if (string.IsNullOrWhiteSpace(path) || !OperatingSystem.IsWindows()) return false;
+        if (string.IsNullOrWhiteSpace(path) || !(OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())) return false;
         if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(home) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
         var locks = Path.Combine(home, "thread-writer-locks");
         var id = System.Text.RegularExpressions.Regex.Match(Path.GetFileName(path), "[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}").Value;
         var nativeLock = Directory.Exists(locks) && id.Length > 0;
         var target = nativeLock ? Path.Combine(locks, id + ".lock") : path;
         if (!File.Exists(target)) return false;
+        if (OperatingSystem.IsMacOS()) {
+            if (!nativeLock) return false;
+            // FileStream itself takes a shared flock on Unix and would hide a busy writer.
+            var fd = open(target, 0);
+            if (fd < 0) return false;
+            try {
+                if (flock(fd, 2 | 4) == 0) { flock(fd, 8); return false; }
+                return Marshal.GetLastPInvokeError() == 35; // Darwin EWOULDBLOCK.
+            } finally { close(fd); }
+        }
         try { using var probe = new FileStream(target, FileMode.Open, FileAccess.Read, nativeLock ? FileShare.None : FileShare.Read); return false; }
         catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33) { return true; }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
     }
     public static string LastModel(string home, string path) => LastSettings(home, path).S("model");
     public static JsonObject LastSettings(string home, string path) => CodexRolloutSnapshot.Read(home, path)["settings"]!.AsObject();
+    [DllImport("libc", SetLastError = true)] private static extern int flock(int fd, int operation);
+    [DllImport("libc", SetLastError = true)] private static extern int open(string path, int flags);
+    [DllImport("libc")] private static extern int close(int fd);
 }

@@ -16,8 +16,8 @@ public sealed class PlatformController(MacDesktopBridge desktop) : ControllerBas
         }
         return Ok(new { platform = OperatingSystem.IsMacOS() ? "macOS" : OperatingSystem.IsWindows() ? "Windows" : "Linux",
             desktopConfigured = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() && desktop.Configured,
-            desktopFormat = OperatingSystem.IsWindows() ? "mp4" : OperatingSystem.IsMacOS() ? "jpeg" : null,
-            desktopNote = OperatingSystem.IsMacOS() ? "Mac 第一版使用 JPEG 帧；仅支持当前登录用户的主屏幕，尚未接入 H.264" : null,
-            permissions, error, terminal = "line", desktopCollaboration = OperatingSystem.IsWindows() });
+            desktopFormat = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? "mp4" : null,
+            desktopNote = OperatingSystem.IsMacOS() ? "支持多显示器、H.264 和 JPEG 回退；Mac 锁屏后需先在电脑上解锁" : null,
+            permissions, error, terminal = "line", desktopCollaboration = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() });
     }
 }

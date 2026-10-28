@@ -16,7 +16,6 @@ public static class InputWebSocketHandler
     public static async Task RunAsync(WebSocket webSocket, ISystemControlService systemService, CancellationToken ct = default)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(4096);
-        var keys = new HashSet<string>();
         var virtualKeys = new HashSet<byte>();
         JsonElement? pointer = null;
         try
@@ -41,10 +40,6 @@ public static class InputWebSocketHandler
                     {
                         var r = request.RootElement;
                         var type = r.TryGetProperty("type", out var kind) ? kind.GetString() : "";
-                        if (type == "key" && r.TryGetProperty("code", out var code)) {
-                            if (r.TryGetProperty("isKeyDown", out var down) && down.GetBoolean()) keys.Add(code.GetString()!);
-                            else keys.Remove(code.GetString()!);
-                        }
                         if (type == "keyboard" && r.TryGetProperty("vkCode", out var vk)) {
                             if (r.TryGetProperty("isKeyDown", out var down) && down.GetBoolean()) virtualKeys.Add((byte)vk.GetInt32());
                             else virtualKeys.Remove((byte)vk.GetInt32());
@@ -70,7 +65,8 @@ public static class InputWebSocketHandler
             } catch (Exception error) when (error is IOException or InvalidOperationException or OperationCanceledException) { }
             if (systemService is MacSystemService mac) {
                 try {
-                    foreach (var code in keys) await mac.NativeAsync(JsonSerializer.SerializeToElement(new { type = "key", code, isKeyDown = false }));
+                    // Native release also works after locking; ordinary key-up requests are rejected there.
+                    await mac.NativeAsync(JsonSerializer.SerializeToElement(new { type = "release" }));
                     await mac.NativeAsync(JsonSerializer.SerializeToElement(new { type = "stop-capture" }));
                 } catch (Exception error) when (error is IOException or InvalidOperationException or OperationCanceledException) { }
             }

@@ -6,6 +6,15 @@ if (args.Length == 1 && args[0] == "--attachment-input-only") {
     return;
 }
 
+if (args.Length == 3 && args[0] == "--desktop-probe") {
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    var live = await CodexDesktopActivity.Read(args[1], args[2], timeout.Token);
+    if (!live.B("available")) throw new Exception("Installed desktop did not return an activity snapshot");
+    Console.WriteLine($"Desktop activity: running={live.B("running")}, status={live.S("status")}");
+    return;
+}
+await CodexMacDesktopChecks.Run();
+MacNonDesktopChecks.Run();
 await HermesHistoryPagesChecks.Run();
 await ScheduledMessageChecks.Run();
 TextEncodingChecks.Run();
@@ -287,6 +296,13 @@ try {
     desktop["turns"]![1]!["status"] = "completed"; desktop["turns"]![1]!["items"]![1]!["completed"] = true;
     Check(!CodexDesktopActivity.Project(desktop)["running"].GetValue<bool>(), "completed desktop turn is idle despite a retained writer");
     Check(!CodexDesktopActivity.Project(new())["available"].GetValue<bool>(), "incomplete desktop snapshot cannot prove idle");
+    var activity = JsonNode.Parse("""{"running":true,"activity_id":"turn-local","event_count":3,"progress":[{}]}""")!.AsObject();
+    var idle = JsonNode.Parse("""{"available":true,"running":false,"activity_id":"turn-desktop","turn_statuses":{"turn-desktop":"completed"}}""")!.AsObject();
+    CodexDesktopActivity.Merge(activity, idle);
+    Check(activity.B("running") && activity.S("activity_id") == "turn-local", "idle desktop cannot hide another client's active task");
+    idle["turn_statuses"]!["turn-local"] = "interrupted";
+    CodexDesktopActivity.Merge(activity, idle);
+    Check(!activity.B("running") && activity.A("progress").Count == 0 && activity.L("event_count") == 0, "confirmed terminal turn clears a stale rollout timer and progress");
 } finally { Directory.Delete(temp, true); }
 var overviewRun = JsonNode.Parse("""{"run_id":"run-1","session_id":"session-1","status":"started"}""")!.AsObject();
 var overviewCopy = RemoteTool.WebApi.Services.AgentOverview.RunDocument(overviewRun, "session-1");

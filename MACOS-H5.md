@@ -11,8 +11,9 @@
 | 工作台主屏幕图标、独立窗口启动 | 根路径已配置 Web App Manifest、图标和 Service Worker；需要 HTTPS 或 localhost |
 | 文件、Docker、Compose、定时任务 | 复用原有工作台页面 |
 | macOS Codex CLI 桥接、用户数据目录、zsh | 已适配，需实机验证已安装 Codex 的协议版本 |
-| Mac 桌面代理、多显示器切换、触摸、拖拽、滚轮、按键、Unicode 文字、剪贴板 API | 已写入 Swift 源码，需 Mac 编译和授权验证 |
+| Mac 桌面代理、多显示器切换、触摸、拖拽、滚轮、按键、Unicode 文字、剪贴板 API | 已实现；新安装仍需在 Mac 编译并授权，实测范围见下文 |
 | 上游新版 Web 远程桌面 | Mac 使用 ScreenCaptureKit NV12 → VideoToolbox H.264，最高 1920 宽、20 FPS、目标 3 Mbps；支持手机双指缩放／平移，MJPEG 保留为回退；锁屏时提示在电脑上解锁 |
+| Android 原生 App 视频格式 | `/api/stream?format=h264` 输出带 AUD 的 Annex B 流；默认请求仍输出网页使用的 MP4。`tests/test_macos_stream_formats.py` 用生成画面验证两种输出的真实硬件编码和解码，不依赖屏幕录制权限 |
 | Mac 音频、锁屏远程解锁、网络自适应码率 | 本版未实现 |
 | Mac 温度、风扇、每核 CPU 曲线 | 本版未实现；不伪造传感器数据 |
 | Hermes 聊天 | 使用上游工作台现有页面和 API |
@@ -27,7 +28,9 @@
 - H.264 桌面流需要提供 `h264_videotoolbox` 编码器的 FFmpeg；可通过 `REMOTETOOL_FFMPEG_PATH` 指定绝对路径。
 - 如需容器管理：启动 Docker Desktop。默认读取 `~/.docker/run/docker.sock`；可用 `Docker:Host` 配置实际 Socket URI。
 
-## 2. 构建桌面代理（可选）
+## 2. 构建原生代理（终端与桌面功能需要）
+
+构建脚本同时生成桌面代理和终端使用的 `RemoteToolPtyAgent`。仅使用 PTY 终端时无需屏幕录制或辅助功能权限；下面的授权步骤用于远程桌面。
 
 在项目根目录运行：
 
@@ -51,7 +54,7 @@ python3 tools/configure-macos.py
 dotnet run --project WebApplication --urls http://127.0.0.1:5104
 ```
 
-脚本会询问登录账号密码、生成 JWT 密钥，并探测 Codex 和已构建的 Mac 代理。已有 `appsettings.json` 时不会覆盖。
+脚本会询问登录账号密码、生成 JWT 密钥，并探测 Codex 和已构建的 Mac 代理。已有 `appsettings.json` 时不会覆盖。若生成配置后才构建代理，需要手动补填 `RemoteControl:MacAgentExecutable`，或单独配置 `RemoteControl:MacPtyExecutable`。
 
 电脑浏览器打开：`http://127.0.0.1:5104/`。
 
@@ -78,6 +81,7 @@ dotnet run --project WebApplication --urls http://0.0.0.0:5104
 | `Codex:WorkingDirectory` | `/Users/你的用户名/Documents/Codex/Mobile` |
 | `RemoteControl:FFmpegPath` | FFmpeg 的绝对路径；也可使用 `REMOTETOOL_FFMPEG_PATH` 环境变量 |
 | `RemoteControl:MacAgentExecutable` | 代理 `.app/Contents/MacOS/RemoteToolMacAgent` 的绝对路径 |
+| `RemoteControl:MacPtyExecutable` | 可选；默认读取桌面代理同目录的 `RemoteToolPtyAgent` |
 | `CloudflareAccess:Team` / `Audience` / `Email` | 可选的旧式单邮箱配置；现在可在工作台“设置 → 身份验证”维护多个允许邮箱，同时配置任意标准 OIDC 提供方。OIDC 回调固定为外部站点的 `/access/callback`。 |
 | `Hermes:HomeDirectory` | Hermes 实际的数据目录 |
 | `Hermes:SourceDirectory` | Hermes 源码安装目录 |
@@ -116,3 +120,29 @@ python3 tests/test_macos_h5_integration.py
 Linux 上的编译和模拟测试不能证明 Mac 系统 API、Swift 编译、真实 Agent 版本或浏览器权限已经通过。本版暂未接入 WebRTC、音频或网络自适应码率；H.264 使用 FFmpeg 的 VideoToolbox 硬件编码器。
 
 终端已在 Chrome 390px 手机模拟视口中验证连接、发送、回车与 Ctrl+C。iPhone Safari 和实际 Mac 锁屏状态需要单独验证。
+
+
+## 7. Mac 兼容性修复与验证
+
+- Codex 桌面协作通过 `Codex:Home/ipc/ipc.sock` 连接，并校验对端 UID 和可执行文件；原生写入锁使用非阻塞 `flock` 检测。
+- 接管时传入预期轮次；进度连接失败后转为结果待确认，不自动重发；桌面确认同一轮次结束时清除旧计时，同时保留其他客户端的真实运行状态。
+- H.264 支持 Android 所需的 Annex B/AUD 与浏览器所需的 fragmented MP4。H.264/MJPEG 采集前区分锁屏（423）、录屏未授权（403）和显示器断开（503）。
+- 输入断线使用原生 `release` 释放按键，即使随后锁屏也可清理；锁屏命令使用已授权代理发送 Control+Command+Q，替代新版 macOS 已删除的 CGSession 路径。
+- 能力接口正确声明多显示器、H.264 和桌面协作。其他 Mac Codex 客户端未退出时拒绝切换账号，避免桌面与后台身份不一致。
+- 图片预览使用系统 `sips` 输出真实 JPEG，按比例缩放且保留原文件；复制/解压识别 `/var`、`/tmp`、`/etc` 的标准系统链接，保留普通链接循环与压缩包越界防护。
+- PTY 区分结构化控制帧与普通 Shell 花括号命令；Unix 项目路径保留大小写，根目录分组和子目录匹配正确；Web 禁用未实现的 Mac 休眠操作。
+
+相关检查：
+
+```bash
+dotnet run --project tests/RemoteFiles
+dotnet run --project tests/AgentContracts
+dotnet run --project tests/BridgeStartup -- WebApplication/bin/Release/net8.0/WebApplication.dll
+REMOTETOOL_TEST_DOTNET=dotnet python3 tests/test_macos_stream_formats.py
+python3 tests/test_macos_pty.py
+node --check WebApplication/wwwroot/js/remote.js
+```
+
+视频测试使用生成的 NV12 画面验证真实 VideoToolbox 编码和 FFmpeg 解码，锁屏与权限响应使用隔离代理验证。Mac 原生写入锁、对端身份拒绝、进程检测、断线恢复、文件转换及 PTY 均有对应检查。
+
+实机已验证本机/HTTPS 视频数据与输入 WebSocket，以及终端花括号命令、窗口尺寸和中文输出。完整手机交互、Windows 实机及关机/重启/睡眠等操作未覆盖；Mac 锁屏远程解锁、音频和自适应码率尚未实现。

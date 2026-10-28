@@ -24,7 +24,13 @@ public sealed class MacSystemService(MacDesktopBridge desktop) : ISystemControlS
     public void CancelShutdown() => throw new PlatformNotSupportedException("macOS 第一版不支持取消关机");
     public void Sleep() => Run("/usr/bin/pmset", "sleepnow");
     public void Hibernate() => throw new PlatformNotSupportedException("macOS 不提供本项目的独立休眠操作");
-    public void LockWorkstation() => Run("/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession", "-suspend");
+    public void LockWorkstation() {
+        // CGSession was removed from recent macOS releases; use the trusted input agent.
+        try {
+            foreach (var code in new[] { "ControlLeft", "MetaLeft", "KeyQ" })
+                desktop.Call(new { type = "key", code, isKeyDown = true });
+        } finally { desktop.Call(new { type = "release" }); }
+    }
     public bool KillProcess(int id) { using var p = Process.GetProcessById(id); p.Kill(); return true; }
     public Task<List<ProcessInfo>> GetProcessListAsync() => Task.Run(() => {
         var rows = new List<ProcessInfo>();

@@ -9,14 +9,15 @@ internal static class CodexDesktopActivity
     private sealed record Entry(long At, Task<JsonObject> Pending);
     private static readonly object gate = new();
     private static readonly Dictionary<string, Entry> cache = new();
-    public static async Task<JsonObject> Read(string session, CancellationToken ct) {
+    public static async Task<JsonObject> Read(string home, string session, CancellationToken ct) {
         Task<JsonObject> task;
         lock (gate) {
             var now = Environment.TickCount64;
-            if (!cache.TryGetValue(session, out var entry) || now - entry.At > 1500 && entry.Pending.IsCompleted) {
-                foreach (var key in cache.Where(pair => now - pair.Value.At > 10000 && pair.Value.Pending.IsCompleted).Select(pair => pair.Key).ToArray()) cache.Remove(key);
+            var key = Path.GetFullPath(home) + "\n" + session;
+            if (!cache.TryGetValue(key, out var entry) || now - entry.At > 1500 && entry.Pending.IsCompleted) {
+                foreach (var expired in cache.Where(pair => now - pair.Value.At > 10000 && pair.Value.Pending.IsCompleted).Select(pair => pair.Key).ToArray()) cache.Remove(expired);
                 if (cache.Count >= 16) return Obj(("available", false));
-                cache[session] = entry = new(now, Capture(session));
+                cache[key] = entry = new(now, Capture(home, session));
             }
             task = entry.Pending;
         }
@@ -24,12 +25,26 @@ internal static class CodexDesktopActivity
         result["session_id"] = session;
         return result;
     }
-    private static async Task<JsonObject> Capture(string session) {
+    private static async Task<JsonObject> Capture(string home, string session) {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try {
-            await foreach (var snapshot in CodexDesktopSync.Follow(session, timeout.Token)) return Project(snapshot);
+            await foreach (var snapshot in new CodexDesktopSync(home).Follow(session, timeout.Token)) return Project(snapshot);
         } catch (Exception error) when (error is IOException or OperationCanceledException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or System.ComponentModel.Win32Exception or System.Text.Json.JsonException or CodexError) { }
         return Obj(("available", false));
+    }
+    internal static void Merge(JsonObject activity, JsonObject desktop) {
+        if (!desktop.B("available")) return;
+        var current = activity.S("activity_id");
+        var finished = current.Length > 0 && desktop["turn_statuses"].S(current) is "completed" or "failed" or "interrupted";
+        // Desktop can finish the same turn; its idle view says nothing about another client's turn.
+        if (!activity.B("running") || desktop.B("running") || finished) {
+            if (desktop.S("activity_id") != current) {
+                activity["progress"] = new JsonArray(); activity["event_count"] = 0; activity["last_response_at"] = null;
+            }
+            foreach (var field in new[] { "available", "running", "activity_id", "kind", "started_at", "phase_started_at" }) activity[field] = desktop[field]?.DeepClone();
+        }
+        activity["observed_only"] = true; activity["source"] = "desktop";
+        if (!activity.B("running")) { activity["progress"] = new JsonArray(); activity["event_count"] = 0; }
     }
     internal static JsonObject Project(JsonObject snapshot) {
         var turns = snapshot.A("turns").ToList();
