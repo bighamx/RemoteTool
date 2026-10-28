@@ -78,7 +78,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         if (!body.ContainsKey("model_settings")) { await SessionSelection(id, prepare: true); return; }
         if (body["model_settings"] is not JsonObject requested) throw new CodexError("模型配置格式无效");
         CodexSessionModelSelection.RequireCurrentRequest(requested, await Config());
-        var selection = CodexModelSettings.Validate(requested, await ProviderCatalog(requested.S("provider"), ct));
+        var sessionRuntimeModels = (await rpc.Call("model/list", new(), ct)).A("data");
+        var selection = CodexModelSettings.Validate(requested, await ProviderCatalog(requested.S("provider"), ct), sessionRuntimeModels);
         if (await NativeQueueStillOwns(id))
             throw new CodexError("此会话仍有原生队列任务，请等待队列结束后按当前模型配置发送；本次消息未写入。", 409, "session_writer_busy", "rejected");
         JsonObject current; lock (gate) loaded.TryGetValue(id, out current);
@@ -999,6 +1000,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private async Task<JsonObject> Models() {
         var config = await Config(); var catalog = await rpc.Call("model/list", new());
         var current = config.S("model_provider", "openai");
+        var aggregate = IsAggregateCatalog(config);
         var currentOfficial = CodexProviderModels.IsOfficial(current, config["model_providers"]?[current]);
         // 当前运行时可能就是三方端点：官方行绝不能复用它返回的目录。
         JsonObject officialCatalog = currentOfficial ? catalog : null;
@@ -1013,6 +1015,20 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             var discovered = official ? null : await CodexProviderModels.Discover(entry.Value, providers[entry.Key]);
             var native = official ? officialCatalog ?? new JsonObject() : catalog;
             var choices = CodexProviderModels.Catalog(entry.Key, config, providers[entry.Key], native, discovered);
+            if (aggregate && entry.Key == current) {
+                // 聚合目录在运行时里已经是合并后的列表（ccs-<provider>/<model>），直接透传并标注来源。
+                var merged = new JsonArray();
+                foreach (var model in catalog.A("data")) {
+                    var clone = model.DeepClone().AsObject();
+                    var slug = clone.S("model", clone.S("id"));
+                    clone["source"] = slug.StartsWith("ccs-", StringComparison.OrdinalIgnoreCase)
+                        ? slug[4..].Split('/').FirstOrDefault() : "官方";
+                    merged.Add(clone);
+                }
+                choices["data"] = merged;
+                choices["aggregate"] = true;
+            }
+            if (aggregate) choices["aggregate"] = true;
             if (official && officialCatalog == null && choices.S("models_warning").Length == 0)
                 choices["models_warning"] = "未登录官方账户，暂无法读取官方模型目录";
             return (JsonNode)Obj(("slug", entry.Key), ("name", entry.Value.S("name", entry.Key)), ("authenticated", true), ("is_current", entry.Key == current),
@@ -1022,7 +1038,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 ("models_warning", choices.S("models_warning")), ("models", choices.A("data")));
         })));
         rows = CodexProviderModels.MergeOfficialAliases(rows, current);
-        return Obj(("providers", rows), ("provider", current), ("model", config.S("model")), ("reasoning_effort", config["model_reasoning_effort"]), ("service_tier", config["service_tier"]));
+        return Obj(("providers", rows), ("provider", current), ("model", config.S("model")), ("aggregate", aggregate),
+            ("reasoning_effort", config["model_reasoning_effort"]), ("service_tier", config["service_tier"]));
     }
     private async Task EditConfig(params (string Key, object Value)[] edits) {
         lock (gate) if (active.Count > 0) throw new CodexError("请先停止手机 Codex 任务再修改全局配置", 409);
@@ -1436,7 +1453,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 await settingsLock.WaitAsync(context.RequestAborted);
                 try {
                     context.RequestAborted.ThrowIfCancellationRequested();
-                    var selected = CodexModelSettings.Validate(body, await ProviderCatalog(body.S("provider"), context.RequestAborted));
+                    var runtimeModels = (await rpc.Call("model/list", new(), context.RequestAborted)).A("data");
+                    var selected = CodexModelSettings.Validate(body, await ProviderCatalog(body.S("provider"), context.RequestAborted), runtimeModels);
                     var edits = new List<(string Key, object Value)> { ("model_provider", selected.S("modelProvider")), ("model", selected.S("model")) };
                     if (selected.S("providerBaseUrl").Length > 0) edits.Add(("model_providers." + selected.S("modelProvider") + ".base_url", selected["providerBaseUrl"]));
                     if (selected.ContainsKey("reasoningEffort")) edits.Add(("model_reasoning_effort", selected["reasoningEffort"]));

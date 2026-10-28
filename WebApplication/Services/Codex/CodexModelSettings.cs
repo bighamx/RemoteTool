@@ -5,14 +5,22 @@ namespace RemoteTool.WebApi.Services.Codex;
 
 internal static class CodexModelSettings
 {
-    public static JsonObject Validate(JsonObject body, JsonObject catalog) {
+    public static JsonObject Validate(JsonObject body, JsonObject catalog, JsonArray runtimeModels = null) {
         var model = body.S("model").Trim(); var provider = body.S("provider").Trim();
         if (model.Length is 0 or > 256 || provider.Length is 0 or > 80) throw new CodexError("请选择 Provider 和模型");
         var detail = catalog.A("data").FirstOrDefault(row => row.S("model", row.S("id")) == model);
+        // 聚合模式（cc-switch stack）下模型 slug 由代理编码，provider 的发现结果里没有它；
+        // 只要当前运行时目录里有这个模型就接受。
+        var aggregateModel = false;
+        if (detail == null && runtimeModels != null) {
+            detail = runtimeModels.FirstOrDefault(row => row.S("model", row.S("id")) == model);
+            aggregateModel = detail != null;
+        }
         if (detail == null) throw new CodexError("该 Provider 未提供所选模型，请刷新模型列表");
         var result = Obj(("model", model), ("modelProvider", provider));
         var official = provider == "openai" || catalog.B("official_provider");
         if (official) result["officialProvider"] = true;
+        if (aggregateModel) result["aggregateModel"] = true;
         if (!official && CodexRuntimeCatalog.Window(detail) > 0) result["modelMetadata"] = detail.DeepClone();
         if (provider != "openai" && catalog.S("base_url").Length > 0) result["providerBaseUrl"] = catalog.S("base_url");
         if (body.ContainsKey("reasoning_effort")) {

@@ -1654,6 +1654,15 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                         }
                     } else {
                         val choices = provider!!.array("models")
+                        // 聚合模式（cc-switch stack）下列表是合并目录，带上每行的来源标签。
+                        val sourceByModel = buildMap {
+                            for (index in 0 until choices.length()) {
+                                val item = choices.optJSONObject(index) ?: continue
+                                val name = item.optString("model", item.optString("id", item.optString("name")))
+                                val source = item.optString("source")
+                                if (name.isNotBlank() && source.isNotBlank()) put(name, source)
+                            }
+                        }
                         val rows =
                             (0 until choices.length())
                                 .map {
@@ -1688,11 +1697,13 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                                         model.modelWarning = null
                                     },
                                 )
-                                Text(
-                                    name,
-                                    Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+                                Column(Modifier.weight(1f)) {
+                                    Text(name, style = MaterialTheme.typography.bodySmall)
+                                    sourceByModel[name]?.let {
+                                        Text("来源：$it", style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                                 if (provider!!.optString("slug") == resolvedProvider && name == currentModel)
                                     Text("当前使用", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
                             }
