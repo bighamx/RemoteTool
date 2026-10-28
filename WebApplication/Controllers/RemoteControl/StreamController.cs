@@ -508,6 +508,11 @@ public class StreamController : ControllerBase
             if (!status.GetProperty("displays").EnumerateArray().Any(d => d.GetProperty("id").GetUInt32() == selected))
                 throw new InvalidOperationException("所选显示器已断开，请重新选择显示器");
             return selected;
+        } catch (OperationCanceledException error) when (!ct.IsCancellationRequested) {
+            _logger.LogWarning(error, "Mac display status timed out");
+            Response.StatusCode = 503;
+            await Response.WriteAsJsonAsync(new { message = "Mac 桌面代理响应超时，请稍后重试" }, ct);
+            return null;
         } catch (Exception error) when (error is IOException or InvalidOperationException or System.ComponentModel.Win32Exception) {
             _logger.LogWarning(error, "Mac display selection failed");
             Response.StatusCode = 503;

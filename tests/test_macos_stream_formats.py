@@ -43,7 +43,10 @@ else:
         request=json.loads(line)
         with (Path(__file__).parent/'input-events.jsonl').open('a') as events:
             events.write(json.dumps(request)+'\n')
-        print((Path(__file__).parent/'state.json').read_text(),flush=True)
+        state=json.loads((Path(__file__).parent/'state.json').read_text())
+        if request.get('type')=='status':
+            time.sleep(state.pop('statusDelaySeconds',0))
+        print(json.dumps(state),flush=True)
 ''')
     agent.chmod(0o700)
     state = {'displayId': 1, 'displays': [{'id': 1}], 'sessionLocked': False,
@@ -127,6 +130,20 @@ else:
                 with client.open(base + '/api/input/session-state', timeout=5) as response:
                     assert json.load(response)['message']
                 print('PASS: desktop preflight', expected, 'for H.264, MJPEG and session state')
+            # The real bridge cancels an unresponsive helper after 15 seconds. Both
+            # preflight callers must return a usable 503, not an unhandled 500.
+            state_file.write_text(json.dumps({**state, 'statusDelaySeconds': 20}))
+            for route in ['/api/stream?format=h264', '/api/stream/legacy']:
+                try:
+                    client.open(base + route, timeout=25)
+                    raise AssertionError('Unresponsive desktop accepted')
+                except urllib.error.HTTPError as error:
+                    assert error.code == 503, (route, error.code)
+                    assert '超时' in json.load(error)['message']
+                print('PASS: desktop status timeout returns JSON 503', route)
+            state_file.write_text(json.dumps(state))
+            with client.open(base + '/api/input/session-state', timeout=5) as response:
+                assert not json.load(response)['locked'], 'Helper must recover after a timed-out process is stopped'
         finally:
             process.terminate()
             try:
