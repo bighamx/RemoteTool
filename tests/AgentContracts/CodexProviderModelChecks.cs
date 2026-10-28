@@ -59,6 +59,24 @@ internal static class CodexProviderModelChecks
         var catalog = CodexProviderModels.Catalog("local", config, saved, native, discovered);
         Check(catalog.A("data").Count == 2, "all provider models, deduplicated");
         Check(!catalog.A("data").Any(m => m.S("model").StartsWith("gpt")), "no unrelated native catalog leakage");
+        var proxyConfig = Obj(("model_provider", "custom"), ("model", "gpt-6-astra"),
+            ("model_catalog_json", "/fixture/cc-switch-model-catalog.json"),
+            ("model_providers", Obj(("custom", Obj(("name", "custom"), ("base_url", "http://127.0.0.1:15721/v1"), ("requires_openai_auth", true))),
+                ("local", endpoint))));
+        var proxyNative = Obj(("data", CodexProviderModels.Normalize(Obj(("data", new JsonArray("gpt-6-sol", "gpt-6.1-sol", "gpt-6-astra"))))));
+        proxyNative.A("data").Add(Obj(("model", "hidden-model"), ("hidden", true)));
+        Check(CodexProviderModels.UsesNativeCatalog("custom", proxyConfig), "active proxy uses its explicitly configured CLI catalog");
+        var proxyCatalog = CodexProviderModels.Catalog("custom", proxyConfig, new JsonObject(), proxyNative, null);
+        var proxySelection = CodexModelSettings.Validate(Obj(("provider", "custom"), ("model", "gpt-6-sol"), ("reasoning_effort", "medium")), proxyCatalog);
+        Check(proxySelection.S("model") == "gpt-6-sol" && proxySelection.S("modelProvider") == "custom", "old session keeps its non-default model and proxy route");
+        Check(proxyCatalog.A("data").Count == 3 && !proxyCatalog.B("official_provider"), "explicit proxy catalog filters hidden models without relabeling the provider as official");
+        Check(!CodexProviderModels.UsesNativeCatalog("local", proxyConfig) &&
+            !CodexProviderModels.Catalog("local", proxyConfig, saved, proxyNative, discovered).A("data").Any(m => m.S("model").StartsWith("gpt")),
+            "active proxy catalog cannot leak into a different provider");
+        proxyConfig.Remove("model_catalog_json");
+        Check(!CodexProviderModels.UsesNativeCatalog("custom", proxyConfig) &&
+            !CodexProviderModels.Catalog("custom", proxyConfig, new JsonObject(), proxyNative, null).A("data").Any(m => m.S("model") == "gpt-6-sol"),
+            "custom endpoints without an explicit CLI catalog retain scoped discovery");
         var selection = CodexModelSettings.Validate(Obj(("provider", "local"), ("model", "deepseek"), ("reasoning_effort", ""), ("service_tier", "priority")), catalog);
         Check(selection.S("reasoningEffort") == "medium" && selection.S("serviceTier") == "default", "custom reasoning has nonempty default and clears inherited fast tier");
         var resume = Obj(("config", Obj(("preserved", true))));

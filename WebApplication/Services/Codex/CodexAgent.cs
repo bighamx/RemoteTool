@@ -992,9 +992,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private async Task<JsonObject> ProviderCatalog(string provider, CancellationToken ct = default) {
         var config = await Config();
         if (provider != "openai" && config["model_providers"]?[provider] == null) throw new CodexError("Provider 不存在，请刷新列表");
-        var official = CodexProviderModels.IsOfficial(provider, config["model_providers"]?[provider]);
-        var native = official ? await rpc.Call("model/list", new(), ct) : new JsonObject();
-        var discovered = official ? null : await CodexProviderModels.Discover(config["model_providers"]?[provider], providers[provider], ct);
+        var nativeCatalog = CodexProviderModels.UsesNativeCatalog(provider, config);
+        var native = nativeCatalog ? await rpc.Call("model/list", new(), ct) : new JsonObject();
+        var discovered = nativeCatalog ? null : await CodexProviderModels.Discover(config["model_providers"]?[provider], providers[provider], ct);
         return CodexProviderModels.Catalog(provider, config, providers[provider], native, discovered);
     }
     private async Task<JsonObject> Models() {
@@ -1013,7 +1013,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         known["openai"] ??= Obj(("name", "OpenAI / ChatGPT"));
         var rows = new JsonArray(await Task.WhenAll(known.Select(async entry => {
             var official = CodexProviderModels.IsOfficial(entry.Key, entry.Value);
-            var discovered = official ? null : await CodexProviderModels.Discover(entry.Value, providers[entry.Key]);
+            var discovered = CodexProviderModels.UsesNativeCatalog(entry.Key, config) ? null : await CodexProviderModels.Discover(entry.Value, providers[entry.Key]);
             var native = official ? officialCatalog ?? new JsonObject() : catalog;
             var choices = CodexProviderModels.Catalog(entry.Key, config, providers[entry.Key], native, discovered);
             if (aggregate && entry.Key == current) {

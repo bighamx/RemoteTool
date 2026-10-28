@@ -146,3 +146,16 @@ node --check WebApplication/wwwroot/js/remote.js
 视频测试使用生成的 NV12 画面验证真实 VideoToolbox 编码和 FFmpeg 解码，锁屏与权限响应使用隔离代理验证。Mac 原生写入锁、对端身份拒绝、进程检测、断线恢复、文件转换及 PTY 均有对应检查。
 
 实机已验证本机/HTTPS 视频数据与输入 WebSocket，以及终端花括号命令、窗口尺寸和中文输出。完整手机交互、Windows 实机及关机/重启/睡眠等操作未覆盖；Mac 锁屏远程解锁、音频和自适应码率尚未实现。
+
+
+## 8. 自定义代理的原生模型目录
+
+当当前 Provider 配置了 `model_catalog_json` 时，手机模型列表和发送前校验使用 CLI 的 `model/list` 读取这份目录。CC Switch 等代理可能不提供可用的 HTTP `/models`；仅回退到全局默认模型会误拒绝旧会话使用的其他模型。
+
+此规则仅适用于当前 Provider 的显式 CLI 目录，保留 Provider 身份和所选模型；其他 Provider 继续使用各自的发现结果。桥接协议 v30 使运行中的旧桥接升级后加载修复。
+
+可运行隔离集成检查（使用临时 CODEX_HOME 和不可连接的代理地址，不创建推理任务）：
+
+```bash
+dotnet run --project tests/BridgeStartup -- WebApplication/bin/Release/net8.0/WebApplication.dll proxy-catalog /absolute/path/to/codex
+```

@@ -18,6 +18,10 @@ internal static class CodexProviderModels
         (provider?["http_headers"] as JsonObject)?.Count is not > 0 &&
         (provider?["env_http_headers"] as JsonObject)?.Count is not > 0;
 
+    internal static bool UsesNativeCatalog(string provider, JsonObject config) =>
+        IsOfficial(provider, config["model_providers"]?[provider]) ||
+        provider == config.S("model_provider", "openai") && !string.IsNullOrWhiteSpace(config.S("model_catalog_json"));
+
     internal static JsonArray MergeOfficialAliases(JsonArray rows, string current) {
         var official = rows.Where(row => row.B("official_provider")).ToArray();
         if (official.Length == 0) return rows;
@@ -62,7 +66,8 @@ internal static class CodexProviderModels
     }
 
     internal static JsonObject Catalog(string provider, JsonObject config, JsonNode saved, JsonObject native, JsonObject discovered) {
-        if (IsOfficial(provider, config["model_providers"]?[provider])) return Obj(("official_provider", true),
+        // An explicit CLI catalog belongs to the active routing endpoint, including CC Switch.
+        if (UsesNativeCatalog(provider, config)) return Obj(("official_provider", IsOfficial(provider, config["model_providers"]?[provider])),
             ("data", new JsonArray(native.A("data").Where(m => !m.B("hidden")).Select(m => m.DeepClone()).ToArray())));
         var models = discovered?.A("data").DeepClone().AsArray() ?? new JsonArray();
         // Only explicitly configured models supplement this endpoint's own catalog.
