@@ -469,6 +469,14 @@
                 try { await this.refreshAll(current); if(current===this.epoch){await this.$nextTick();this.scrollToLatest();} } finally { if(current===this.epoch)this.historyLoading=false; }
             },
             async refreshAll(epoch=this.epoch) { if (!this.selectedId) return;
+                if(this.agent==='hermes') {
+                    // Render history as soon as it arrives. Context/model reads may
+                    // launch Python helpers and must not hold the message pane open.
+                    const history=this.loadHistory(epoch);
+                    void Promise.allSettled([this.loadStatus(epoch),this.loadContext(epoch),this.loadSessionDetail(epoch)]);
+                    await history;
+                    return;
+                }
                 const current=this.startRead('overview',epoch);
                 const versions=new Map(readVersions);
                 const unchanged=kind=>current()&&readVersions.get(kind)===versions.get(kind);

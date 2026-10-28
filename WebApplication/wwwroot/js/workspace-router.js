@@ -5,15 +5,16 @@
         system: 'controls', processes: 'processes', desktop: 'screenshot', terminal: 'terminal',
         docker: 'docker', 'docker/images': 'images', 'docker/compose': 'compose', files: 'files'
     };
-    const sources = { home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
+    const sources = { home: '/', remote: '/remote/index', tunnels: '/Tunnels', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
     const assets = {
+        tunnels: { styles: ['workspace-pages.css'], scripts: ['web-api.js', 'tunnels.js'] },
         remote: { styles: ['remote.css', 'performance.css', 'vendor/xterm/xterm.css'], scripts: ['remote-nav.js', 'mp4box.all.min.js', 'performance.js', 'media-preview.js', 'vendor/xterm/xterm.js', 'vendor/xterm/addon-fit.js', 'remote.js'] },
         jobs: { styles: ['workspace-pages.css'], scripts: ['web-api.js', 'jobs-page.js'] },
         codex: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-workspace.js'] },
         hermes: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-workspace.js'] },
         identity: { styles: ['workspace-pages.css', 'identity-settings.css'], scripts: ['web-api.js', 'oidc-settings.js'] }
     };
-    const titles = { home: '总览', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes', identity: '身份验证' };
+    const titles = { home: '总览', tunnels: '端口转发', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes', identity: '身份验证' };
     const loadedScripts = new Set([...document.scripts].map(script => new URL(script.src, location.href).pathname));
     const loadedStyles = new Set([...document.querySelectorAll('link[rel="stylesheet"]')].map(link => new URL(link.href, location.href).pathname));
     const pendingScripts = new Map();
@@ -26,6 +27,7 @@
 
     const legacy = () => {
         const path = location.pathname.toLowerCase();
+        if (path === '/tunnels') return 'tunnels';
         if (path.startsWith('/agents/')) return path.includes('hermes') ? 'hermes' : 'codex';
         if (path === '/hangfire') return 'jobs';
         if (path.startsWith('/remote')) {
@@ -175,7 +177,7 @@
             event.preventDefault(); window.RemoteToolWorkspace.remote(params.get('tab') || 'controls', params.get('path') || params.get('composePath'));
         } else {
             const path = url.pathname.toLowerCase();
-            const route = path === '/hangfire' ? 'jobs' : path.startsWith('/agents/') ? (path.includes('hermes') ? 'hermes' : 'codex') : null;
+            const route = path === '/tunnels' ? 'tunnels' : path === '/hangfire' ? 'jobs' : path.startsWith('/agents/') ? (path.includes('hermes') ? 'hermes' : 'codex') : null;
             if (route) { event.preventDefault(); location.hash = `/${route}`; }
         }
     });
