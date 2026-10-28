@@ -1000,7 +1000,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private async Task<JsonObject> Models() {
         var config = await Config(); var catalog = await rpc.Call("model/list", new());
         var current = config.S("model_provider", "openai");
-        var aggregate = IsAggregateCatalog(config);
+        var aggregate = IsAggregateCatalog(config) ||
+            catalog.A("data").Any(row => row.S("model", row.S("id")).StartsWith("ccs-", StringComparison.OrdinalIgnoreCase));
         var currentOfficial = CodexProviderModels.IsOfficial(current, config["model_providers"]?[current]);
         // 当前运行时可能就是三方端点：官方行绝不能复用它返回的目录。
         JsonObject officialCatalog = currentOfficial ? catalog : null;
@@ -1096,10 +1097,18 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             } finally { desktop.Restart(); }
         } finally { settingsLock.Release(); }
     }
-    /** cc-switch 聚合模式把 model_catalog_json 指向它生成的目录（含 ccs-* 编码 slug）。 */
+    /** 聚合（stack）模式的唯一可靠特征：目录里出现 cc- switch 编码的 ccs-<provider>/<model> slug。
+        路由模式同样会写 model_catalog_json，只看这个键会误判。 */
     private static bool IsAggregateCatalog(JsonObject config) {
         var path = config.S("model_catalog_json");
-        return path.Length > 0 && path.Contains("cc-switch", StringComparison.OrdinalIgnoreCase);
+        if (path.Length == 0) return false;
+        try {
+            var full = Path.IsPathRooted(path) ? path : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", path);
+            if (!File.Exists(full)) return false;
+            var catalog = JsonNode.Parse(File.ReadAllText(full)) as JsonObject;
+            return catalog?["models"] is JsonArray models &&
+                models.Any(row => row.S("slug", row.S("model", row.S("id"))).StartsWith("ccs-", StringComparison.OrdinalIgnoreCase));
+        } catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { return false; }
     }
 
     /** cc-switch 会缓存 live 配置；重启它可以让它重新读取，避免之后用自己的旧快照覆盖我们刚写入的 provider。 */
