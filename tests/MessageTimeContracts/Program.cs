@@ -10,6 +10,31 @@ foreach(var field in new[]{"session_id","activity_id","available","running"}) {
     other[field]=field is "available" or "running"?JsonValue.Create(false):JsonValue.Create("other");
     if(CodexDesktopRunResume.CanResume(lost,"session",other))throw new Exception("Unrelated/completed desktop turn must never be adopted");
 }
+foreach (var status in new[] { "completed", "failed", "interrupted" }) {
+    var ended = lost.DeepClone().AsObject(); ended["approval"] = new JsonObject();
+    var desktop = observation.DeepClone().AsObject();
+    desktop["activity_id"] = "newer-turn";
+    desktop["turn_statuses"] = new JsonObject { ["turn"] = status, ["newer-turn"] = "inProgress" };
+    if (!CodexDesktopRunResume.Complete(ended, "session", desktop) || ended["status"]!.ToString() != status ||
+        ended.ContainsKey("error_code") || ended.ContainsKey("approval"))
+        throw new Exception("Exact terminal turn must reconcile even while a newer task is running");
+}
+foreach (var scenario in new[] { "missing", "other-turn", "unavailable", "other-session", "inProgress", "other-owner", "other-error" }) {
+    var unchanged = lost.DeepClone().AsObject();
+    var desktop = observation.DeepClone().AsObject();
+    desktop["turn_statuses"] = new JsonObject { ["turn"] = "completed" };
+    if (scenario == "missing") desktop.Remove("turn_statuses");
+    if (scenario == "other-turn") desktop["turn_statuses"] = new JsonObject { ["unrelated"] = "completed" };
+    if (scenario == "unavailable") desktop["available"] = false;
+    if (scenario == "other-session") desktop["session_id"] = "other";
+    if (scenario == "inProgress") desktop["turn_statuses"]!["turn"] = "inProgress";
+    if (scenario == "other-owner") unchanged["owner"] = "mobile";
+    if (scenario == "other-error") unchanged["error_code"] = "delivery_unknown";
+    var before = unchanged.ToJsonString();
+    if (CodexDesktopRunResume.Complete(unchanged, "session", desktop) || before != unchanged.ToJsonString())
+        throw new Exception("Unproven run result must remain unknown: " + scenario);
+}
+Console.WriteLine("10 exact-turn completion recovery checks passed");
 CodexDesktopRunResume.Restore(lost);
 if(lost["status"]!.ToString()!="started" || lost.ContainsKey("error_code"))throw new Exception("Restore must reset tracking state");
 Console.WriteLine("6 run ownership recovery contracts passed");

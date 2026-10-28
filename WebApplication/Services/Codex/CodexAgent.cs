@@ -587,6 +587,17 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             state = runs[id]?.DeepClone() as JsonObject ?? throw new CodexError("任务记录不存在，请刷新会话", 404, "run_not_found");
             tracked = active.GetValueOrDefault(state.S("session_id")) == id;
         }
+        if (state.S("owner") == "desktop" && state.S("status") == "acceptance_unknown" &&
+            state.S("error_code") == "run_tracking_lost" && state.S("turn_id").Length > 0) {
+            // A bridge restart loses its subscription, not the desktop's accepted turn.
+            await FindActiveRun(state.S("session_id"), ct);
+            var observed = await CodexDesktopActivity.Read(home, state.S("session_id"), ct);
+            lock (gate) {
+                if (CodexDesktopRunResume.Complete(runs[id]!.AsObject(), state.S("session_id"), observed)) Persist();
+                state = runs[id]!.DeepClone().AsObject();
+                tracked = active.GetValueOrDefault(state.S("session_id")) == id;
+            }
+        }
         if (state.S("status") is not ("started" or "submitting")) return state;
         if (tracked && state.S("owner") != "desktop" && state.S("phase") != "preparing") {
             CodexRpc owner; lock (gate) sessionRpcs.TryGetValue(state.S("session_id"), out owner);
@@ -1771,10 +1782,13 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     var live = await handoff.Read(pendingId, context.RequestAborted);
                     return Obj(("found", true), ("run_id", pendingId), ("status", live.S("status")), ("session_id", live.S("session_id")));
                 }
+                string foundId; lock (gate) foundId = runs.FirstOrDefault(entry => entry.Value.S("key") == key).Key;
+                if (foundId != null) {
+                    var found = await ReconcileRun(foundId, context.RequestAborted);
+                    return Obj(("found", true), ("run_id", foundId), ("status", found.S("status")),
+                        ("delivery", RunDelivery(found)), ("session_id", found.S("session_id")));
+                }
                 lock (gate) {
-                    var found = runs.FirstOrDefault(entry => entry.Value.S("key") == key);
-                    if (found.Value != null) return Obj(("found", true), ("run_id", found.Key), ("status", found.Value.S("status")),
-                        ("delivery", RunDelivery(found.Value)), ("session_id", found.Value.S("session_id")));
                     var steering = runs.Where(entry => entry.Value?["steering_requests"]?[key] != null).Take(2).ToArray();
                     if (steering.Length != 1) return Obj(("found", false));
                     var receipt = steering[0].Value["steering_requests"][key];
@@ -1919,7 +1933,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         catch (Exception) when (!context.Response.HasStarted) { context.Response.StatusCode = 503; await context.Response.WriteAsJsonAsync(new { message = "本机 Codex 处理失败；任务不会自动重发" }); }
     }
     private async Task Stream(HttpContext context, string run) {
-        lock (gate) if (!runs.ContainsKey(run)) throw new CodexError("任务不存在", 404);
+        await ReconcileRun(run, context.RequestAborted);
         context.Response.ContentType = "text/event-stream"; context.Response.Headers.CacheControl = "no-store";
         long.TryParse(context.Request.Headers["Last-Event-ID"], out var last);
         last = Math.Max(0, last);
