@@ -22,7 +22,7 @@ internal sealed class CodexDesktopSync(string home)
         return Request("thread-follower-start-turn", 2, Obj(("conversationId", id),
             ("turnStart", Obj(("request", request), ("context", Obj(("inheritThreadSettings", true)))))));
     }
-    public Task<JsonObject> StopCompact(string id, string expectedTurnId = null) => Request("thread-follower-interrupt-turn", 3, Obj(("conversationId", id), ("mode", "user-stop"), ("expectedTurnId", expectedTurnId)));
+    public Task<JsonObject> StopCompact(string id, string expectedTurnId = null) => Request("thread-follower-interrupt-turn", expectedTurnId == null ? 3 : 4, Obj(("conversationId", id), ("mode", "user-stop"), ("expectedTurnId", expectedTurnId)));
     public Task<JsonObject> SteerTurn(string id, JsonArray input, string key) => Request("thread-follower-steer-turn", 1,
         Obj(("conversationId", id), ("input", input), ("clientUserMessageId", key), ("attachments", new JsonArray()),
             ("restoreMessage", Obj(("id", key), ("cwd", null), ("context", Obj(("workspaceRoots", new JsonArray()))), ("responsesapiClientMetadata", new JsonObject())))));
@@ -39,7 +39,41 @@ internal sealed class CodexDesktopSync(string home)
         }
         return Request(action, 1, parameters);
     }
-    private async Task<JsonObject> Request(string method, int version, JsonObject parameters) {
+    private Task<JsonObject> Request(string method, int version, JsonObject parameters) {
+        if (!OperatingSystem.IsMacOS()) return RequestCore(method, version, parameters);
+        return RecoverOwner(parameters.S("conversationId"),
+            () => RequestCore(method, version, parameters), OpenThread,
+            id => RequestCore("thread-owner-discovery", 1, Obj(("hostId", "local"), ("conversationId", id))));
+    }
+    internal static async Task<JsonObject> RecoverOwner(string id, Func<Task<JsonObject>> request,
+        Func<string, Task> open, Func<string, Task<JsonObject>> discover) {
+        try { return await request(); }
+        catch (CodexError error) when (error.Code == "desktop_no_client" && Guid.TryParseExact(id, "D", out _)) {
+            // The broker explicitly rejected routing: no owner received the operation.
+            await open(id);
+            for (var attempt = 0; ; attempt++) {
+                await Task.Delay(250);
+                try { await discover(id); break; }
+                catch (CodexError unavailable) when (unavailable.Code == "desktop_no_client" && attempt < 1) { }
+            }
+            // A timeout or disconnect must never enter this retry path.
+            return await request();
+        }
+    }
+    private static async Task OpenThread(string id) {
+        try {
+            using var process = Process.Start(new ProcessStartInfo("/usr/bin/open") {
+                UseShellExecute = false, ArgumentList = { "-g", "codex://threads/" + id }
+            });
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            if (process == null) throw new IOException("Cannot open desktop thread");
+            await process.WaitForExitAsync(timeout.Token);
+            if (process.ExitCode != 0) throw new IOException("Desktop rejected thread URL");
+        } catch (Exception error) when (error is IOException or OperationCanceledException or System.ComponentModel.Win32Exception) {
+            throw new CodexError("桌面会话尚未加载，本次消息未写入。请在 Mac Codex 中打开该会话后重试。", 409, "session_owner_unavailable");
+        }
+    }
+    private async Task<JsonObject> RequestCore(string method, int version, JsonObject parameters) {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var dispatched = false;
         try {
@@ -54,7 +88,8 @@ internal sealed class CodexDesktopSync(string home)
             for (var i = 0; i < 128; i++) {
                 var response = await Read(pipe, timeout.Token);
                 if (response.S("requestId") != requestId) continue;
-                if (response.S("resultType") != "success") throw new CodexError("桌面 Codex 未接受操作：" + response.S("error", "会话所有者暂不可用"), 409);
+                if (response.S("resultType") != "success") throw new CodexError("桌面 Codex 未接受操作：" + response.S("error", "会话所有者暂不可用"), 409,
+                    response.S("error") == "no-client-found" ? "desktop_no_client" : "");
                 return response["result"] as JsonObject ?? new();
             }
             throw new IOException("Desktop response missing");
@@ -187,11 +222,17 @@ internal sealed class CodexDesktopSync(string home)
         await stream.WriteAsync(payload, ct);
     }
     private static async Task<JsonObject> Read(Stream stream, CancellationToken ct) {
-        var header = new byte[4]; await stream.ReadExactlyAsync(header, ct);
-        var length = BitConverter.ToInt32(header);
-        if (length is <= 0 or > 16 * 1024 * 1024) throw new IOException("Invalid desktop IPC frame");
-        var payload = new byte[length]; await stream.ReadExactlyAsync(payload, ct);
-        return JsonNode.Parse(payload)!.AsObject();
+        while (true) {
+            var header = new byte[4]; await stream.ReadExactlyAsync(header, ct);
+            var length = BitConverter.ToInt32(header);
+            if (length is <= 0 or > 16 * 1024 * 1024) throw new IOException("Invalid desktop IPC frame");
+            var payload = new byte[length]; await stream.ReadExactlyAsync(payload, ct);
+            var message = JsonNode.Parse(payload)!.AsObject();
+            if (message.S("type") != "client-discovery-request") return message;
+            // Transient RemoteTool clients never own desktop threads.
+            await Write(stream, Obj(("type", "client-discovery-response"), ("requestId", message.S("requestId")),
+                ("response", Obj(("canHandle", false)))), ct);
+        }
     }
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint pid);
     [DllImport("libc", SetLastError = true)] private static extern int getpeereid(int socket, out uint uid, out uint gid);
