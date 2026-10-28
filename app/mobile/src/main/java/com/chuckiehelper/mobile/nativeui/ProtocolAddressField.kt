@@ -1,6 +1,7 @@
 package com.chuckiehelper.mobile.nativeui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material3.*
@@ -43,10 +44,11 @@ internal fun ProtocolAddressField(value: String, onValueChange: (String) -> Unit
     var custom by remember { mutableStateOf(false) }
     val parts = if (custom && allowCustom) ProtocolAddress("", value) else splitProtocolAddress(value, protocols, allowCustom)
     var menu by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Box(Modifier.widthIn(min = 86.dp).padding(top = 8.dp)) {
             // 选择框按内容自适应（http/https/自定义），不再固定 112dp 占掉地址栏宽度。
             OutlinedButton(onClick={menu=true}, enabled=enabled,
+                shape = RoundedCornerShape(4.dp),
                 contentPadding=PaddingValues(start = 12.dp, end = 6.dp),
                 modifier=Modifier.height(56.dp)) {
                 Text(parts.protocol.ifEmpty { "自定义" }, maxLines = 1, style = MaterialTheme.typography.bodyMedium)
