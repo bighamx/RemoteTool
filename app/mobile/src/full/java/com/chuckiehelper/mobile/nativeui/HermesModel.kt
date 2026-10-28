@@ -1664,6 +1664,22 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         refreshSessions()
         fetchModels()
     }
+    /** 切到某个三方 provider（写 config.toml 的 model_provider + model，服务端会重启运行时与桌面 Codex）。 */
+    fun useProvider(providerId: String, providerModel: String, onDone: () -> Unit) = launch {
+        if (switchingAccount) return@launch
+        switchingAccount = true
+        error = null
+        try {
+            val body = obj("provider" to providerId)
+            if (providerModel.isNotBlank()) body.put("model", providerModel)
+            api.json("$root/default-model", body)
+            providers = api.json("$root/providers")
+            onDone()
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { error = connectionFailureMessage(failure) }
+        finally { switchingAccount = false }
+    }
+
     fun switchAccount(id: String, workspace: Boolean, onDone: () -> Unit) = launch {
         if (switchingAccount) return@launch
         if (conversationUi.hasSubmitting() || uploading) {

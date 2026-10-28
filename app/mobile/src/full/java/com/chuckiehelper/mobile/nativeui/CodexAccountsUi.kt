@@ -82,6 +82,7 @@ private fun CodexUsageValues(usage: JSONObject?, compact: Boolean, onClick: () -
 @Composable
 fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: () -> Unit) {
     var remove by remember { mutableStateOf<JSONObject?>(null) }
+    var showProviders by remember { mutableStateOf(false) }
     var resetWorkspace by remember { mutableStateOf<JSONObject?>(null) }
     val source = model.workspaces
     AlertDialog(
@@ -133,6 +134,21 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: (
                         }
                     }
                 }
+                val providerRows = model.providers.array("endpoints").objects()
+                val activeProvider = providerRows.firstOrNull { it.optBoolean("current") }
+                HorizontalDivider()
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("三方供应商", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            activeProvider?.let { "当前：${it.optString("name")} · ${it.optString("model").ifBlank { "模型未指定" }}" }
+                                ?: "当前走官方账户",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    OutlinedButton(onClick = { model.fetchProviders(); showProviders = true }, enabled = !model.switchingAccount) { Text("选择") }
+                }
                 TextButton(onClick = { model.importCurrentAccount() }, enabled = !model.switchingAccount) { Text("同步电脑当前登录") }
                 if (model.loginInfo != null && !model.loginInfo!!.optBoolean("completed")) TextButton(onClick = { model.showLogin() }) { Text("查看登录验证码") }
                 model.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -147,6 +163,52 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: (
         }
     }
     resetWorkspace?.let { account -> CodexResetCreditsDialog(model, account) { resetWorkspace = null } }
+    if (showProviders) CodexProviderPickerDialog(model) { showProviders = false }
+}
+
+/** 二级列表：选择一个三方 provider（写 config.toml 并重启运行时/桌面 Codex）。 */
+@Composable
+private fun CodexProviderPickerDialog(model: HermesModel, close: () -> Unit) {
+    val rows = model.providers.array("endpoints").objects()
+    AlertDialog(
+        onDismissRequest = { if (!model.switchingAccount) close() },
+        title = { Text("三方供应商") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (rows.isEmpty()) Text("还没有配置供应商。可在“Provider 管理”里添加。", style = MaterialTheme.typography.bodySmall)
+                LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(rows, key = { it.optString("id") }) { row ->
+                        val current = row.optBoolean("current")
+                        OutlinedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(row.optString("name"), style = MaterialTheme.typography.titleSmall)
+                                        Text(row.optString("base_url"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(
+                                            row.optString("model").ifBlank { "模型未指定" } +
+                                                if (row.optBoolean("uses_openai_auth")) " · 用官方登录凭据" else "",
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                    }
+                                    if (current) Text("使用中", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                                    else OutlinedButton(
+                                        enabled = !model.switchingAccount,
+                                        onClick = { model.useProvider(row.optString("id"), row.optString("model")) { close() } },
+                                    ) { Text("切换") }
+                                }
+                                if (!row.optBoolean("has_api_key")) Text("尚未配置密钥", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+                Text("切换会重启电脑 Codex 和 CC Switch，正在执行的任务会停止。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                model.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            }
+        },
+        confirmButton = { TextButton(onClick = { model.fetchProviders() }, enabled = !model.switchingAccount) { Text("刷新") } },
+        dismissButton = { TextButton(onClick = close) { Text("关闭") } },
+    )
 }
 
 @Composable

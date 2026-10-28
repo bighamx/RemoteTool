@@ -1079,6 +1079,21 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             } finally { desktop.Restart(); }
         } finally { settingsLock.Release(); }
     }
+    /** cc-switch 会缓存 live 配置；重启它可以让它重新读取，避免之后用自己的旧快照覆盖我们刚写入的 provider。 */
+    private void RestartCcSwitch() {
+        try {
+            var running = System.Diagnostics.Process.GetProcessesByName("cc-switch").Where(p => p.Id != Environment.ProcessId).ToArray();
+            if (running.Length == 0) return;
+            string path = null;
+            foreach (var process in running) {
+                try { path ??= process.MainModule?.FileName; process.Kill(); process.WaitForExit(5000); }
+                catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
+            }
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+        } catch (Exception) { /* 重启第三方工具失败不应影响切换本身 */ }
+    }
+
     /** 切换 provider 只改 config 不重启的话，正在运行的运行时仍走旧端点；桌面端还会把旧配置写回。 */
     private async Task RestartForProviderChange() {
         var desktop = CodexDesktopRestart.Capture(OwnedProcessIds());
@@ -1087,7 +1102,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             foreach (var session in sessionRpcs.Keys.ToArray()) await ReleaseSessionCore(session);
             await desktop.Stop();
             await Launch();
-        } finally { desktop.Restart(); }
+        } finally { desktop.Restart(); RestartCcSwitch(); }
     }
 
     private async Task<JsonObject> BeginLogin(JsonObject body) {
