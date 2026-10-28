@@ -44,12 +44,13 @@ internal fun ProtocolAddressField(value: String, onValueChange: (String) -> Unit
     var custom by remember { mutableStateOf(false) }
     val parts = if (custom && allowCustom) ProtocolAddress("", value) else splitProtocolAddress(value, protocols, allowCustom)
     var menu by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Box(Modifier.widthIn(min = 86.dp).padding(top = 8.dp)) {
+    Row(Modifier.fillMaxWidth()) {
+        // 不设最小宽度：按钮完全按内容收缩，避免 http 后面留出一段空白。
+        Box(Modifier.padding(top = 8.dp)) {
             // 选择框按内容自适应（http/https/自定义），不再固定 112dp 占掉地址栏宽度。
             OutlinedButton(onClick={menu=true}, enabled=enabled,
                 shape = RoundedCornerShape(4.dp),
-                contentPadding=PaddingValues(start = 12.dp, end = 6.dp),
+                contentPadding=PaddingValues(start = 10.dp, end = 0.dp),
                 modifier=Modifier.height(56.dp)) {
                 Text(parts.protocol.ifEmpty { "自定义" }, maxLines = 1, style = MaterialTheme.typography.bodyMedium)
                 Icon(Icons.Outlined.ArrowDropDown, null, Modifier.size(18.dp))
