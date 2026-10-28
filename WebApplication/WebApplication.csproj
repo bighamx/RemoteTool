@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
+    <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(MSBuildThisFileDirectory)../packages/cloudflare</RestoreAdditionalProjectSources>
     <Nullable>disable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <EnableShadowCopying>true</EnableShadowCopying>
@@ -12,7 +13,8 @@
     <!-- 发布时只保留英文、中文卫星程序集，去掉其他语言文件夹以减小体积 -->
     <SatelliteResourceLanguages>en;zh</SatelliteResourceLanguages>
     <Version>1.2.0</Version>
-    <InformationalVersion>$([System.DateTime]::Now.ToString("yy.M.d.HHmm"))</InformationalVersion>
+    <!-- UTC build timestamp, with minute precision shared by the API and Web UI. -->
+    <InformationalVersion>$([System.DateTime]::UtcNow.ToString("yyyyMMdd.HHmm"))</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
@@ -21,6 +23,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Built from the local Cloudflare.Kit SDK; bundled package keeps CI/self-hosted builds reproducible. -->
+    <PackageReference Include="Cloudflare.Kit" Version="0.1.0" />
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
     <PackageReference Include="Hangfire.AspNetCore" Version="1.8.23" />
     <PackageReference Include="Hangfire.Console" Version="1.4.3" />

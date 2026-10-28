@@ -22,7 +22,7 @@ import org.json.JSONObject
 
 data class Device(val id: String, val name: String, val endpoints: List<String>)
 
-data class Endpoint(val url: String, val ms: Long)
+data class Endpoint(val url: String, val ms: Long, val serverVersion: String? = null)
 
 data class ChannelCheck(
     val url: String,
@@ -34,7 +34,9 @@ data class ChannelCheck(
         get() = !checking && ms != null && error == null
 }
 
-data class Session(val device: Device, val channels: List<Endpoint>, val api: NativeApi)
+data class Session(val device: Device, val channels: List<Endpoint>, val api: NativeApi) {
+    val serverVersion get() = channels.firstOrNull { it.url == api.base }?.serverVersion
+}
 
 fun obj(vararg fields: Pair<String, Any?>) =
     JSONObject().apply { fields.forEach { put(it.first, it.second) } }
@@ -431,12 +433,44 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         save()
     }
 
+    suspend fun refreshServerVersion() {
+        val current = session ?: return
+        try {
+            val identity = current.api.json("/api/device/identity")
+            if (session?.api === current.api && identity.optString("id") == current.device.id) {
+                val latest = session ?: return
+                session = latest.copy(channels = latest.channels.map {
+                    if (it.url == current.api.base) it.copy(serverVersion = identity.serverBuildVersion()) else it
+                })
+            }
+        } catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { /* A version read must not interrupt an existing connection. */ }
+    }
+
     fun rename(device: Device, name: String) {
         devices =
             devices.map {
                 if (it.id == device.id) it.copy(name = name.trim().ifEmpty { it.name }) else it
             }
         save()
+    }
+
+    suspend fun editEndpoint(device: Device, oldUrl: String, raw: String) {
+        val url = normalizedDeviceAddress(raw)
+        val (id, _) = probe(url)
+        require(id == device.id) { "此地址属于另一台电脑，不能替换当前设备地址" }
+        val current = devices.find { it.id == device.id } ?: error("设备已被移除")
+        val updated = current.copy(endpoints = replacedDeviceAddresses(current.endpoints, oldUrl, url))
+        devices = devices.map { if (it.id == id) updated else it }
+        if (prefs.getString("channel_$id", null) == oldUrl) prefs.edit().putString("channel_$id", url).apply()
+        channelDevice = channelDevice?.let { if (it.id == id) updated else it }
+        channelChecks = channelChecks.filter { it.url != oldUrl }
+        save()
+        val active = session?.takeIf { it.device.id == id }
+        if (active != null) {
+            session = active.copy(device = updated)
+            if (active.api.base == oldUrl && oldUrl != url) startConnection(updated, url)
+        }
     }
 
     fun disconnect() {
@@ -637,18 +671,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         }
 
     suspend fun add(name: String, raw: String, expected: String?) {
-        val uri = URI(raw.trim().trimEnd('/'))
-        require(
-            uri.scheme in listOf("http", "https") &&
-                uri.host != null &&
-                uri.userInfo == null &&
-                uri.query == null &&
-                uri.fragment == null &&
-                uri.path.isNullOrEmpty()
-        ) {
-            "请输入完整的 http:// 或 https:// 根地址"
-        }
-        val url = uri.toString()
+        val url = normalizedDeviceAddress(raw)
         val (id, _) = probe(url)
         require(expected == null || id == expected) { "此地址属于另一台电脑，不能加入当前设备" }
         val old = devices.find { it.id == id }
@@ -666,6 +689,6 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         val data = NativeApi(url, true).json("/api/device/identity")
         val id = data.getString("id")
         require(id.matches(Regex("[0-9a-f]{64}"))) { "设备标识格式不正确" }
-        return id to Endpoint(url, SystemClock.elapsedRealtime() - start)
+        return id to Endpoint(url, SystemClock.elapsedRealtime() - start, data.serverBuildVersion())
     }
 }

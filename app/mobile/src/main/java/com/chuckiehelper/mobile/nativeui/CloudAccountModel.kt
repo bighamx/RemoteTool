@@ -26,7 +26,7 @@ internal class CloudHttpFailure(val status: Int, val value: JSONObject?, val ret
         ?: value?.optString("title")?.takeIf { it.isNotBlank() }
         ?: "云服务请求失败（HTTP $status）")
 
-internal class CloudAccountModel(app: Application) : AndroidViewModel(app) {
+internal class CloudAccountModel(app: Application) : AndroidViewModel(app), CloudflareAccountSource {
     companion object {
         const val BASE = "https://api.xbyham.com"
         const val REDIRECT = "remotetool://cloud/login"
@@ -50,6 +50,36 @@ internal class CloudAccountModel(app: Application) : AndroidViewModel(app) {
     var downloadPreview by mutableStateOf<JSONObject?>(null); private set
     var configurationVersion by mutableIntStateOf(0); private set
     val loggedIn get() = account != null
+    override val subject get() = account?.optString("subject").orEmpty()
+    private val configWriteLock = kotlinx.coroutines.sync.Mutex()
+
+    override fun cachedCloudflareAccounts(): org.json.JSONArray = CloudflareCloudConfiguration(getApplication()).read()
+
+    override suspend fun cloudflareAccounts(): org.json.JSONArray {
+        val result = api()
+        val section = result.optJSONObject("payload")?.optJSONObject("settings")?.optJSONObject("cloudflare")
+        val rows = section?.getJSONArray("accounts") ?: org.json.JSONArray()
+        CloudflareCloudConfiguration.validate(rows)
+        CloudflareCloudConfiguration(getApplication()).write(rows)
+        return org.json.JSONArray(rows.toString())
+    }
+    override suspend fun updateCloudflareAccounts(transform: (org.json.JSONArray, Boolean) -> org.json.JSONArray) {
+        val owner = subject
+        configWriteLock.lock()
+        try {
+            val result = api()
+            val payload = result.optJSONObject("payload") ?: withContext(Dispatchers.IO) { snapshots.export() }
+            val section = result.optJSONObject("payload")?.optJSONObject("settings")?.optJSONObject("cloudflare")
+            val rows = transform(section?.getJSONArray("accounts") ?: org.json.JSONArray(), section != null)
+            CloudflareCloudConfiguration.validate(rows)
+            val merged = CloudflareCloudConfiguration.merge(payload, rows)
+            snapshots.validate(merged)
+            require(owner.isNotBlank() && owner == subject) { "云账户已切换，请重试" }
+            val saved = api(obj("expectedRevision" to result.getLong("revision"), "payload" to merged))
+            CloudflareCloudConfiguration(getApplication()).write(rows)
+            cloudInfo = saved; revision = saved.getLong("revision")
+        } finally { configWriteLock.unlock() }
+    }
     val subtitle get() = if (loggedIn) displayName else "同步设备与设置"
     private var revision: Long? = null
     private var accountGeneration = 0L
@@ -241,11 +271,19 @@ internal class CloudAccountModel(app: Application) : AndroidViewModel(app) {
     }
     fun refresh() = work { readInfo() }
     fun upload() = work {
+        configWriteLock.lock()
+        try {
         val expected = revision ?: throw IOException("请先刷新云端状态，再上传配置")
         val payload = withContext(Dispatchers.IO) { snapshots.export() }
+        val latest = api()
+        require(latest.getLong("revision") == expected) { "云配置已更新，请刷新后重试" }
+        latest.optJSONObject("payload")?.optJSONObject("settings")?.optJSONObject("cloudflare")?.let {
+            payload.getJSONObject("settings").put("cloudflare", JSONObject(it.toString()))
+        }
         val result = api(obj("expectedRevision" to expected, "payload" to payload))
         cloudInfo = result; revision = result.getLong("revision")
         notice = "已上传"
+        } finally { configWriteLock.unlock() }
     }
     fun download() = work {
         val result = api()

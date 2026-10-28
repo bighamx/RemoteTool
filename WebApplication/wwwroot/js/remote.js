@@ -3255,8 +3255,8 @@ class RemoteControl {
 
         tbody.innerHTML = filtered.map(container => `
             <tr data-container-id="${this.escapeHtml(container.id)}" data-container-name="${this.escapeHtml(container.names)}">
-                <td>${this.escapeHtml(container.names)}</td>
-                <td>${this.escapeHtml(container.image)}</td>
+                <td title="${this.escapeHtml(container.names)}">${this.escapeHtml(container.names)}</td>
+                <td title="${this.escapeHtml(container.image)}">${this.escapeHtml(container.image)}</td>
                 <td><span class="status-badge ${container.state === 'running' ? 'running' : 'stopped'}">${this.escapeHtml(container.state)}</span></td>
                 <td class="stats-cpu stats-column">${container.state === 'running' ? '<span class="stats-loading">...</span>' : '<span class="stats-na">-</span>'}</td>
                 <td class="stats-mem stats-column">${container.state === 'running' ? '<span class="stats-loading">...</span>' : '<span class="stats-na">-</span>'}</td>

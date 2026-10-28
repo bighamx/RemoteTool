@@ -84,6 +84,7 @@ PublishScripts/
 
 # NuGet Packages
 *.nupkg
+!packages/cloudflare/Cloudflare.Kit.*.nupkg
 # The packages folder can be excluded if Package Restore is turned on in VS
 # packages/
 # !packages/build/

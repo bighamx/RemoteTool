@@ -10,5 +10,5 @@
     <p v-if="error" class="workspace-alert">{{error}}</p>
     <div class="overview-section-label">常用功能</div>
     <div class="overview-grid"><a v-for="item in shortcuts" :key="item.href" :href="item.href" class="overview-shortcut"><span class="shortcut-icon"><span class="shortcut-glyph" :style="{maskImage:'url('+item.icon+')',WebkitMaskImage:'url('+item.icon+')'}"></span></span><strong>{{item.title}}</strong><small>{{item.description}}</small><span class="shortcut-arrow">→</span></a></div>
-    <footer class="version-footer">Version: @ViewBag.Version · Build: @ViewBag.BuildInfo</footer>
+    <footer class="version-footer">服务端版本 @ViewBag.BuildInfo</footer>
 </div>

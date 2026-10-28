@@ -13,5 +13,5 @@ public sealed class DeviceController : ControllerBase
     // Deliberately public so the Android app can verify an endpoint before sending credentials.
     [HttpGet("identity")]
     [ResponseCache(NoStore = true)]
-    public IActionResult Get() => Ok(new { id = _identity.Id, protocolVersion = 1 });
+    public IActionResult Get() => Ok(new { id = _identity.Id, protocolVersion = 1, serverVersion = ServerBuild.Version });
 }

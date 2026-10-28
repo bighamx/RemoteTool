@@ -129,7 +129,7 @@ internal fun CloudAccountHost(model: CloudAccountModel, appearance: AppAppearanc
             }
         } }, confirmButton = {}, dismissButton = { TextButton(onClick = { chooseAppearance = false }) { Text("取消") } })
     if (confirmUpload && model.loggedIn) AlertDialog(onDismissRequest = { confirmUpload = false },
-        title = { Text("上传配置") }, text = { Text("上传设备、用户名密码和设置，覆盖云端配置。登录令牌和聊天记录不上传。") },
+        title = { Text("上传配置") }, text = { Text("上传设备、用户名密码和设置，保留云端 Cloudflare 配置。登录令牌和聊天记录不上传。") },
         confirmButton = { TextButton(onClick = { confirmUpload = false; model.upload() }) { Text("确认上传") } },
         dismissButton = { TextButton(onClick = { confirmUpload = false }) { Text("取消") } })
     model.downloadPreview?.let { payload ->
@@ -137,6 +137,8 @@ internal fun CloudAccountHost(model: CloudAccountModel, appearance: AppAppearanc
             text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("${payload.getJSONArray("devices").length()} 台设备 · ${displayTime(payload.optString("exportedAt"))}")
                 val credentialCount = payload.getJSONArray("devices").objects().count { it.has("credentials") }
+                val cfCount = payload.getJSONObject("settings").optJSONObject("cloudflare")?.optJSONArray("accounts")?.length() ?: 0
+                if (cfCount > 0) Text("$cfCount 个 Cloudflare 账户")
                 Text(if (credentialCount > 0) "更新设置和 $credentialCount 台设备的用户名密码，原配置自动备份。" else "合并设备并更新本机设置，原配置自动备份。")
             } },
             confirmButton = { TextButton(enabled = !model.busy, onClick = { model.applyDownload() }) { Text("应用") } },

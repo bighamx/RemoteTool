@@ -8,7 +8,7 @@ import java.net.URI
 import java.time.Instant
 import java.io.IOException
 
-/** Explicit allowlist: device passwords are portable; tokens, cookies and conversations are not. */
+/** Explicit allowlist: device passwords and CF credentials are portable; login tokens/cookies and conversations are not. */
 internal class CloudConfiguration(private val context: Context,
     private val credentials: DeviceCredentialStore = DeviceCredentialStore(context)) {
     companion object { const val MAX_BYTES = 512 * 1024 }
@@ -45,6 +45,7 @@ internal class CloudConfiguration(private val context: Context,
         return validate(obj("schemaVersion" to 1, "appVersion" to BuildConfig.VERSION_NAME,
             "exportedAt" to Instant.now().toString(), "devices" to devices,
             "settings" to obj(
+                "cloudflare" to if (includeCredentials && CloudflareCloudConfiguration(context).canSync) obj("accounts" to CloudflareCloudConfiguration(context).read()) else null,
                 "appearance" to AppAppearance.from(main.getString(AppAppearance.KEY, null)).value,
                 "phoneTools" to phoneTools, "portTunnels" to portTunnels,
                 "updates" to obj("automatic" to updates.getBoolean("automatic", true), "wifiOnly" to updates.getBoolean("wifi_only", true)),
@@ -86,6 +87,7 @@ internal class CloudConfiguration(private val context: Context,
             }
         }
         val settings = payload.getJSONObject("settings")
+        settings.optJSONObject("cloudflare")?.let { CloudflareCloudConfiguration.validate(it.getJSONArray("accounts")) }
         if (settings.has("appearance")) require(settings.get("appearance") is String && settings.getString("appearance") in AppAppearance.entries.map { it.value }) { "外观设置无效" }
         settings.optJSONObject("updates")?.let { p -> for (key in listOf("automatic", "wifiOnly")) require(p.get(key) is Boolean) { "更新设置无效" } }
         settings.optJSONObject("fileView")?.let { p ->
@@ -120,8 +122,9 @@ internal class CloudConfiguration(private val context: Context,
         // A local rollback backup must not create a second plaintext password store.
         val backup = export(includeCredentials = false).put("_localEncryptedCredentials",
             JSONObject(context.getSharedPreferences("device-credentials", 0).all))
+            .put("_localEncryptedCloudflare", JSONObject(context.getSharedPreferences("cloud-account", 0).all.filterKeys { it.startsWith("cf:") }))
         context.openFileOutput("cloud-before-import.json", Context.MODE_PRIVATE).use { it.write(backup.toString().toByteArray(Charsets.UTF_8)) }
-        val names = mutableSetOf("MainActivity", "app_updates", "file-view", "RemoteActivity", "phone-tools", "port-tunnels", "device-credentials")
+        val names = mutableSetOf("MainActivity", "app_updates", "file-view", "RemoteActivity", "phone-tools", "port-tunnels", "device-credentials", "cloud-account")
         for (device in payload.getJSONArray("devices").objects()) for (agent in listOf("codex", "hermes")) names.add("$agent-${device.getString("id")}")
         val previous = names.associateWith { name -> context.getSharedPreferences(name, 0).all.mapValues { (_, value) ->
             if (value is Set<*>) value.toSet() else value
@@ -191,5 +194,6 @@ internal class CloudConfiguration(private val context: Context,
             }
         } }
         PhoneCloudConfiguration(context).apply(settings)
+        settings.optJSONObject("cloudflare")?.let { CloudflareCloudConfiguration(context).write(it.getJSONArray("accounts")) }
     }
 }

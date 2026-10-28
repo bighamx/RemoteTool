@@ -287,9 +287,14 @@ fun NativeApp(model: NativeModel) {
 
 @Composable
 fun ToolRow(title: String, subtitle: String, icon: ImageVector, onClick: () -> Unit) {
+    ToolRow(title, subtitle, icon = { Icon(icon, null, tint = MaterialTheme.colorScheme.primary) }, onClick = onClick)
+}
+
+@Composable
+fun ToolRow(title: String, subtitle: String, icon: @Composable () -> Unit, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+            icon()
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
@@ -344,8 +349,10 @@ fun SelectionContainerCompat(value: String) {
 
 @Composable
 private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTools: () -> Unit) {
+    LaunchedEffect(model.session?.api) { model.refreshServerVersion() }
     var addTo by remember { mutableStateOf<Device?>(null) }
     var adding by remember { mutableStateOf(false) }
+    var editingAddress by remember { mutableStateOf<Pair<Device,String>?>(null) }
     var manage by remember { mutableStateOf<Device?>(null) }
     var delete by remember { mutableStateOf<Device?>(null) }
     var rename by remember { mutableStateOf<Device?>(null) }
@@ -376,6 +383,8 @@ private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTo
                             if (model.session?.device?.id == device.id) {
                                 Text("当前连接", color = MaterialTheme.colorScheme.primary,
                                     style = MaterialTheme.typography.labelMedium)
+                                Text("服务端 ${model.session?.serverVersion ?: "版本未提供"}",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                         IconButton(onClick = { manage = device }) {
@@ -410,6 +419,7 @@ private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTo
         }
     }
     if (adding) AddDeviceDialog(model, addTo) { adding = false }
+    editingAddress?.let { (device, url) -> AddDeviceDialog(model, device, url) { editingAddress = null; manage = model.devices.find { it.id == device.id } } }
     manage?.let { device ->
         ModalBottomSheet(onDismissRequest = { manage = null }) {
             Column(Modifier.padding(20.dp)) {
@@ -417,6 +427,7 @@ private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTo
                 device.endpoints.forEach { url ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(url, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        IconButton(onClick = { manage = null; editingAddress = device to url }) { Icon(Icons.Outlined.Edit, "编辑地址") }
                         IconButton(
                             onClick = {
                                 model.removeEndpoint(device, url)
@@ -471,15 +482,15 @@ private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTo
 }
 
 @Composable
-private fun AddDeviceDialog(model: NativeModel, device: Device?, close: () -> Unit) {
+private fun AddDeviceDialog(model: NativeModel, device: Device?, originalUrl: String? = null, close: () -> Unit) {
     var name by remember { mutableStateOf("") }
-    var url by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf(originalUrl ?: "http://") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = { if (!busy) close() },
-        title = { Text(if (device == null) "添加设备" else "添加地址") },
+        title = { Text(if (originalUrl != null) "编辑地址" else if (device == null) "添加设备" else "添加地址") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (device == null)
@@ -489,12 +500,7 @@ private fun AddDeviceDialog(model: NativeModel, device: Device?, close: () -> Un
                         label = { Text("设备名称") },
                         singleLine = true,
                     )
-                OutlinedTextField(
-                    url,
-                    { url = it },
-                    label = { Text("http:// 或 https:// 地址") },
-                    singleLine = true,
-                )
+                ProtocolAddressField(url, { url = it }, enabled = !busy)
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
@@ -506,7 +512,8 @@ private fun AddDeviceDialog(model: NativeModel, device: Device?, close: () -> Un
                     busy = true
                     scope.launch {
                         try {
-                            model.add(name, url, device?.id)
+                            if (originalUrl != null && device != null) model.editEndpoint(device, originalUrl, url)
+                            else model.add(name, url, device?.id)
                             close()
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) throw e

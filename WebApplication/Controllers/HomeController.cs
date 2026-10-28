@@ -22,7 +22,7 @@ namespace RemoteTool.Web.Controllers
         {
             var assembly = System.Reflection.Assembly.GetEntryAssembly();
             ViewBag.Version = assembly?.GetName().Version?.ToString() ?? "Unknown";
-            ViewBag.BuildInfo = assembly?.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "Unknown";
+            ViewBag.BuildInfo = RemoteTool.WebApi.Services.ServerBuild.Version;
             return View();
         }
 

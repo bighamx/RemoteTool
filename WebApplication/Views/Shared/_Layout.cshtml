@@ -27,7 +27,7 @@
                     <a v-for="item in group.items" :key="item.key" :data-nav="item.key" :href="item.href"><img v-if="item.image" class="nav-icon-image" :src="item.icon" alt=""><span v-else class="nav-icon-mark" :style="{maskImage:'url('+item.icon+')',WebkitMaskImage:'url('+item.icon+')'}" aria-hidden="true"></span> {{item.label}}</a>
                 </template>
             </nav>
-            <div class="sidebar-footer"><span class="sidebar-online-dot"></span><span>当前设备 · <strong title="@Environment.MachineName">@Environment.MachineName</strong></span></div>
+            <div class="sidebar-footer"><span class="sidebar-online-dot"></span><div class="sidebar-device"><span>当前设备 · <strong title="@Environment.MachineName">@Environment.MachineName</strong></span><small class="sidebar-version">服务端 @RemoteTool.WebApi.Services.ServerBuild.Version</small></div></div>
         </aside>
         <div class="app-workspace">
             <header class="app-topbar">

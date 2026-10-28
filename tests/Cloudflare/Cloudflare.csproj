@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><RestoreAdditionalProjectSources>$(MSBuildThisFileDirectory)../../packages/cloudflare</RestoreAdditionalProjectSources></PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Cloudflare.Kit" Version="0.1.0" />
+    <Using Include="Microsoft.AspNetCore.Http" />
+    <Using Include="Microsoft.Extensions.Configuration" />
+    <Compile Include="../../WebApplication/Services/Cloudflare/CloudflareAccounts.cs" Link="CloudflareAccounts.cs" />
+    <Compile Include="../../WebApplication/Controllers/CloudflareController.cs" Link="CloudflareController.cs" />
+    <Compile Include="../../WebApplication/Services/RemoteToolPaths.cs" Link="RemoteToolPaths.cs" />
+    <Compile Include="../../WebApplication/Services/IdentityDataDirectory.cs" Link="IdentityDataDirectory.cs" />
+  </ItemGroup>
+</Project>

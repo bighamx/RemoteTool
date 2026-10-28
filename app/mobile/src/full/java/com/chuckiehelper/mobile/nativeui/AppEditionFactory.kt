@@ -51,7 +51,7 @@ private class FullEdition(
     override fun reloadSettings() = updates.reloadCloudSettings()
     override fun openUpdates() = updates.open()
     override fun normalizeRoute(route: String) = if (route == "文件") "Codex" else route
-    override fun ownsToolbar(route: String) = route in listOf("Codex", "Hermes", "文件")
+    override fun ownsToolbar(route: String) = route in listOf("Codex", "Hermes", "文件", "Cloudflare")
     private fun draft(deviceId: String?) = shares.ready?.takeIf { it.deviceId == deviceId }
     override fun shareId(deviceId: String?) = draft(deviceId)?.id
     override fun shareRoute(deviceId: String?) = draft(deviceId)?.let { if (it.agent == "codex") "Codex" else "Hermes" }
@@ -96,6 +96,9 @@ private class FullEdition(
         }
     }
     @Composable override fun MoreItems(onDetail: (String) -> Unit) {
+        ToolRow("Cloudflare", "DNS · R2 · D1 · Tunnel", icon = {
+            androidx.compose.foundation.Image(painterResource(R.drawable.ic_cloudflare), null, Modifier.size(24.dp))
+        }) { onDetail("Cloudflare") }
         ToolRow("文件管理", "浏览 · 传输 · 图片与视频预览", Icons.Outlined.Folder) { onDetail("文件") }
         ToolRow(
             "Docker",
@@ -127,6 +130,7 @@ private class FullEdition(
         onDetail: (String) -> Unit, onClose: () -> Unit): Boolean {
         val sharedDraft = draft(deviceId)
         when (route) {
+            "Cloudflare" -> CloudflareScreen(api, error, onClose)
             "系统" -> SystemScreen(api, onProcesses = { onDetail("进程") }, onTerminal = { onDetail("终端") }, onError = error)
             "进程" -> ProcessScreen(api, error)
             "远程" -> RemoteScreen(api)
