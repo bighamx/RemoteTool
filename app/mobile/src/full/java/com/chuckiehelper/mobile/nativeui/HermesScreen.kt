@@ -1649,6 +1649,11 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                                             else ""),
                                         style = MaterialTheme.typography.labelSmall,
                                     )
+                                    // 官方目录需要官方登录态；拿不到时把原因显示出来，别只剩“0 个模型”。
+                                    val warning = p.optString("models_warning")
+                                    if (p.array("models").length() == 0 && warning.isNotBlank())
+                                        Text(warning, style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }

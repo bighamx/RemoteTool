@@ -95,7 +95,19 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: (
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("当前账户：" + model.accounts.optJSONObject("current_identity")?.optString("email").orEmpty().ifBlank { "尚未识别" }, style = MaterialTheme.typography.bodyMedium)
+                val identityEmail = model.accounts.optJSONObject("current_identity")?.optString("email").orEmpty()
+                val hasWorkspaces = source.array("data").objects().isNotEmpty()
+                val activeProviderName = model.providers.array("endpoints").objects().firstOrNull { it.optBoolean("current") }?.optString("name").orEmpty()
+                Text(
+                    when {
+                        identityEmail.isNotBlank() -> "当前账户：$identityEmail"
+                        // 跑三方 provider 时 Codex 侧没有官方身份，但工作空间记录还在——不要写“尚未识别”。
+                        hasWorkspaces && activeProviderName.isNotBlank() -> "官方账户已保存，当前使用三方供应商（$activeProviderName）"
+                        hasWorkspaces -> "官方账户已保存，当前未使用"
+                        else -> "当前账户：尚未识别（可点下方“同步电脑当前登录”）"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
                 Text("选择同一账户的个人／团队工作空间。切换会自动重启电脑 Codex，正在执行的任务会停止。", style = MaterialTheme.typography.bodySmall)
                 LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(source.array("data").objects(), key = { it.getString("id") }) { account ->

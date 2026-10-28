@@ -19,8 +19,8 @@ android {
         full {
             dimension 'edition'
             applicationId 'com.chuckiehelper.mobile'
-            versionCode 123
-            versionName '0.3.120'
+            versionCode 124
+            versionName '0.3.121'
             buildConfigField 'boolean', 'PHONE_COMPANION', 'false'
             manifestPlaceholders = [appLabel: 'RemoteTool', appIcon: '@mipmap/ic_launcher',
                 siblingPackage: 'com.chuckiehelper.phonecontrol', accessibilityLabel: 'RemoteTool 手机操控', notificationLabel: 'RemoteTool 手机通知',
