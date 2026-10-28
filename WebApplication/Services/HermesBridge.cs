@@ -4,13 +4,15 @@ using System.Text.Json;
 
 namespace RemoteTool.WebApi.Services;
 
+public sealed class HermesSetupRequired(string message) : Exception(message);
+
 /// <summary>Server-only credential access. No client-supplied upstream URL or key.</summary>
 public sealed class HermesBridge(IHttpClientFactory clients, IConfiguration configuration)
 {
     public async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, JsonElement? body, string? idempotency, CancellationToken ct, string? lastEvent = null)
     {
         var key = new HermesProfiles(configuration).ApiKey(HermesProfileScope.Name);
-        if (string.IsNullOrWhiteSpace(key)) throw new InvalidOperationException("服务端尚未配置 Hermes API_SERVER_KEY 文件");
+        if (string.IsNullOrWhiteSpace(key)) throw new HermesSetupRequired("Hermes 尚未接入：请启用本机 API Server，并配置 API_SERVER_KEY 密钥文件");
         var root = new Uri(configuration["Hermes:BaseUrl"] ?? "http://127.0.0.1:8642/");
         if (!root.IsLoopback || root.Scheme is not ("http" or "https")) throw new InvalidOperationException("Hermes 必须使用服务端本机地址");
         var routedPath = HermesProfileScope.Name == "default" ? path : "p/" + HermesProfileScope.Name + "/" + path;

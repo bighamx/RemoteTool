@@ -10,6 +10,13 @@ class NetworkReadPolicyTest {
             connectionFailureMessage(ApiRequestFailure("thread not found: abc", 409)))
         assertEquals("请求无效", connectionFailureMessage(ApiRequestFailure("请求无效", 400)))
     }
+    @Test fun serverSetupErrorsKeepTheirMessageAndDelivery() {
+        val missing = ApiRequestFailure("Hermes 未配置 API_SERVER_KEY", 503, "hermes_setup_required", "rejected")
+        assertSame(missing, wrapReadFailure(missing))
+        assertEquals("Hermes 未配置 API_SERVER_KEY", connectionFailureMessage(wrapReadFailure(missing)))
+        assertTrue(writeWasRejected(wrapReadFailure(missing)))
+        assertTrue(wrapReadFailure(SocketException("connection reset")) is ReadConnectionFailure)
+    }
     @Test fun readRetriesOnceWhileWritesAndProbesNeverReplay() {
         val abort = SocketException("Software caused connection abort")
         assertTrue(mayRetryRead("GET", false, 0, abort))

@@ -16,7 +16,7 @@
 | Android 原生 App 视频格式 | `/api/stream?format=h264` 输出带 AUD 的 Annex B 流；默认请求仍输出网页使用的 MP4。`tests/test_macos_stream_formats.py` 用生成画面验证两种输出的真实硬件编码和解码，不依赖屏幕录制权限 |
 | Mac 音频、锁屏远程解锁、网络自适应码率 | 本版未实现 |
 | Mac 温度、风扇、每核 CPU 曲线 | 本版未实现；不伪造传感器数据 |
-| Hermes 聊天 | 使用上游工作台现有页面和 API |
+| Hermes 聊天 | 需要本机 Hermes API Server；Mac 默认读取 Hermes `.env` 中的 API 密钥，缺少接入配置时返回明确提示 |
 | Mac 与 Codex 桌面 App 同时写入同一会话 | 未实现桌面 IPC 协作；会话占用时先退出原写入客户端 |
 
 ## 1. 在 Mac 上准备环境
@@ -86,12 +86,20 @@ dotnet run --project WebApplication --urls http://0.0.0.0:5104
 | `Hermes:HomeDirectory` | Hermes 实际的数据目录 |
 | `Hermes:SourceDirectory` | Hermes 源码安装目录 |
 | `Hermes:PythonExecutable` | Hermes 虚拟环境中 `bin/python` 的绝对路径 |
-| `Hermes:KeyFile` | 包含 `API_SERVER_KEY` 的文件路径 |
+| `Hermes:KeyFile` | 可选；显式配置优先。Mac 默认先读取已有 RemoteTool 专用密钥文件，否则读取 Hermes 数据目录的 `.env` |
 | `Docker:Host` | `unix:///Users/你的用户名/.docker/run/docker.sock` |
 
 Mac 数据默认保存在 `~/Library/Application Support/RemoteTool`。`REMOTETOOL_DATA_DIR` 可以覆盖服务数据目录；不要指向已有 Codex 配置目录。服务应由已经登录桌面的普通用户启动，以复用该用户的 Codex 登录和桌面权限。Mac 的关机／重启不自动提权；权限不足会返回实际错误。
 
 已在双显示器 Mac 上实测：两块屏幕均可输出 1920×1080 H.264；390px Chrome 手机模拟视口可切换副屏、缩放／平移，放大后的输入坐标通过检查。静止画面样本约 0.65 Mbps，动态画面流量和操作延迟仍需按实际网络测试。PTY 可执行命令、同步终端尺寸，Ctrl+C 可中断长命令后继续使用 Shell。锁屏状态下的桌面输入仍需单独验证。
+
+## Hermes 接入前置条件
+
+安装 Hermes CLI 不会自动启用聊天 HTTP 接口。需在 Hermes 的 `.env` 中设置 `API_SERVER_ENABLED=true`、`API_SERVER_HOST=127.0.0.1`、`API_SERVER_PORT=8642`，并配置强随机 `API_SERVER_KEY`。密钥通过本机密码管理器保存；运行文件限制为当前用户可读，不放入 Git。
+
+使用 Hermes 自身的网关启动方式保持 API 服务运行，确认仅监听回环地址，未带凭据访问会话接口返回 401。启动前核对已配置的消息平台及定时任务，避免意外恢复其他入口。RemoteTool 读取会话时不会自动开启或重启 Hermes 网关。
+
+服务端 `Hermes:KeyFile` 或 `HERMES_API_KEY_FILE` 显式配置优先，即使指定文件不存在也不会借用其他密钥。未配置时，Mac 保留已有 RemoteTool 专用密钥文件的优先级，否则读取 `Hermes:HomeDirectory/.env`（默认 `~/.hermes/.env`）。新建空会话不调用模型；完整回复仍需实际发送消息验证。
 
 ## 5. 实机验证顺序
 

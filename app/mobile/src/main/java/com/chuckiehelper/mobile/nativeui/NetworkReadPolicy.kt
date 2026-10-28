@@ -19,6 +19,9 @@ fun staleRunFailure(error: Exception): Boolean = error is ApiRequestFailure &&
         error.message.orEmpty().contains("thread not found", ignoreCase = true))
 class ReadConnectionFailure(cause: IOException) : IOException("读取时连接暂时中断，请重新连接", cause)
 
+fun wrapReadFailure(error: IOException): IOException =
+    if (error is ApiRequestFailure || error is LoginRequired) error else ReadConnectionFailure(error)
+
 fun mayRetryRead(method: String, probing: Boolean, attempt: Int, error: IOException, noRetry: Boolean = false): Boolean =
     method in setOf("GET", "HEAD") && !probing && !noRetry && attempt == 0 &&
         (error !is ApiRequestFailure || error.status in setOf(502, 503, 504)) && error !is LoginRequired
