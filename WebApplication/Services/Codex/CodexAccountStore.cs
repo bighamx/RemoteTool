@@ -163,6 +163,21 @@ internal sealed class CodexAccountStore
         CodexJson.Atomic(path, data); // Native auth.json intentionally stays unchanged.
     }
     public static bool DesktopBusy(IEnumerable<int> excluded) {
+        if (OperatingSystem.IsMacOS()) {
+            var skip = excluded.ToHashSet();
+            foreach (var process in System.Diagnostics.Process.GetProcessesByName("codex")
+                .Concat(System.Diagnostics.Process.GetProcessesByName("ChatGPT"))
+                .Concat(System.Diagnostics.Process.GetProcessesByName("Codex"))) using (process) {
+                try {
+                    if (skip.Contains(process.Id) || process.HasExited) continue;
+                    if (process.ProcessName.Equals("codex", StringComparison.Ordinal)) return true;
+                    var path = process.MainModule?.FileName ?? "";
+                    if (path.EndsWith("/ChatGPT.app/Contents/MacOS/ChatGPT", StringComparison.Ordinal) ||
+                        path.EndsWith("/Codex.app/Contents/MacOS/Codex", StringComparison.Ordinal)) return true;
+                } catch (InvalidOperationException) { }
+            }
+            return false;
+        }
         if (!OperatingSystem.IsWindows()) return false;
         var snapshot = CreateToolhelp32Snapshot(2, 0);
         if (snapshot == new IntPtr(-1)) throw new CodexError("无法检查其他 Codex 进程；未执行切换", 409);

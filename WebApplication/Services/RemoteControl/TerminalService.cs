@@ -98,30 +98,12 @@ internal static class MacPtySession
         {
             var message = await WebSocketTextReader.Read(socket, buffer, CancellationToken.None);
             if (message is null) break;
-            byte opcode = 1;
-            byte[] payload;
-            if (message.StartsWith('{'))
-            {
-                using var parsed = JsonDocument.Parse(message);
-                var root = parsed.RootElement;
-                var type = root.GetProperty("type").GetString();
-                if (type == "resize")
-                {
-                    var cols = Math.Clamp(root.GetProperty("cols").GetInt32(), 20, 500);
-                    var rows = Math.Clamp(root.GetProperty("rows").GetInt32(), 5, 200);
-                    payload = [(byte)cols, (byte)(cols >> 8), (byte)rows, (byte)(rows >> 8)];
-                    opcode = 2;
-                }
-                else if (type == "input") payload = Encoding.UTF8.GetBytes(root.GetProperty("data").GetString() ?? "");
-                else continue;
-            }
-            else payload = Encoding.UTF8.GetBytes(message + "\r");
-            if (payload.Length > 65536) continue;
+            if (MacTerminalInput.Encode(message) is not { } frame || frame.Payload.Length > 65536) continue;
             var header = new byte[5];
-            header[0] = opcode;
-            BitConverter.TryWriteBytes(header.AsSpan(1), payload.Length);
+            header[0] = frame.Opcode;
+            BitConverter.TryWriteBytes(header.AsSpan(1), frame.Payload.Length);
             await process.StandardInput.BaseStream.WriteAsync(header);
-            await process.StandardInput.BaseStream.WriteAsync(payload);
+            await process.StandardInput.BaseStream.WriteAsync(frame.Payload);
             await process.StandardInput.BaseStream.FlushAsync();
         }
     }

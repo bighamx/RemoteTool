@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -9,23 +10,23 @@ using static RemoteTool.WebApi.Services.Codex.CodexJson;
 namespace RemoteTool.WebApi.Services.Codex;
 
 /** Compatibility with the installed desktop IPC v1 thread-availability event. */
-internal static class CodexDesktopSync
+internal sealed class CodexDesktopSync(string home)
 {
-    public static async Task<bool> NotifyAvailable(IEnumerable<string> threadIds) {
+    public async Task<bool> NotifyAvailable(IEnumerable<string> threadIds) {
         return await Notify(threadIds, "thread-unarchived", 1);
     }
-    public static Task<bool> NotifyRemoved(IEnumerable<string> threadIds) => Notify(threadIds, "thread-archived", 2);
-    public static Task<JsonObject> Compact(string id) => Request("thread-follower-compact-thread", 1, Obj(("conversationId", id)));
-    public static Task<JsonObject> StartTurn(string id, JsonObject request) {
+    public Task<bool> NotifyRemoved(IEnumerable<string> threadIds) => Notify(threadIds, "thread-archived", 2);
+    public Task<JsonObject> Compact(string id) => Request("thread-follower-compact-thread", 1, Obj(("conversationId", id)));
+    public Task<JsonObject> StartTurn(string id, JsonObject request) {
         request["threadId"] = id;
         return Request("thread-follower-start-turn", 2, Obj(("conversationId", id),
             ("turnStart", Obj(("request", request), ("context", Obj(("inheritThreadSettings", true)))))));
     }
-    public static Task<JsonObject> StopCompact(string id) => Request("thread-follower-interrupt-turn", 3, Obj(("conversationId", id), ("mode", "user-stop")));
-    public static Task<JsonObject> SteerTurn(string id, JsonArray input, string key) => Request("thread-follower-steer-turn", 1,
+    public Task<JsonObject> StopCompact(string id, string expectedTurnId = null) => Request("thread-follower-interrupt-turn", 3, Obj(("conversationId", id), ("mode", "user-stop"), ("expectedTurnId", expectedTurnId)));
+    public Task<JsonObject> SteerTurn(string id, JsonArray input, string key) => Request("thread-follower-steer-turn", 1,
         Obj(("conversationId", id), ("input", input), ("clientUserMessageId", key), ("attachments", new JsonArray()),
             ("restoreMessage", Obj(("id", key), ("cwd", null), ("context", Obj(("workspaceRoots", new JsonArray()))), ("responsesapiClientMetadata", new JsonObject())))));
-    public static Task<JsonObject> Reply(string id, JsonObject request, JsonObject response) {
+    public Task<JsonObject> Reply(string id, JsonObject request, JsonObject response) {
         var method = request.S("method");
         var parameters = Obj(("conversationId", id), ("requestId", request["id"]));
         string action;
@@ -38,16 +39,13 @@ internal static class CodexDesktopSync
         }
         return Request(action, 1, parameters);
     }
-    private static async Task<JsonObject> Request(string method, int version, JsonObject parameters) {
-        if (!OperatingSystem.IsWindows()) throw new CodexError("桌面会话被其他客户端占用，当前系统不支持桌面协作", 409);
+    private async Task<JsonObject> Request(string method, int version, JsonObject parameters) {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        using var pipe = new NamedPipeClientStream(".", "codex-ipc", PipeDirection.InOut, PipeOptions.Asynchronous);
         var dispatched = false;
         try {
             using var connect = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
             connect.CancelAfter(TimeSpan.FromSeconds(2));
-            await pipe.ConnectAsync(connect.Token);
-            if (!Trusted(pipe)) throw new CodexError("无法验证桌面 Codex 连接", 409);
+            using var pipe = await Connect(connect.Token);
             var clientId = await Initialize(pipe, timeout.Token);
             var requestId = Guid.NewGuid().ToString();
             dispatched = true;
@@ -66,10 +64,8 @@ internal static class CodexDesktopSync
             throw new CodexError("桌面操作结果尚未确认，请核对会话状态；不会自动重发", 504, "delivery_unknown");
         }
     }
-    public static async IAsyncEnumerable<JsonObject> Follow(string id, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct) {
-        using var pipe = new NamedPipeClientStream(".", "codex-ipc", PipeDirection.InOut, PipeOptions.Asynchronous);
-        await pipe.ConnectAsync(ct);
-        if (!Trusted(pipe)) throw new IOException("Untrusted desktop pipe");
+    public async IAsyncEnumerable<JsonObject> Follow(string id, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct) {
+        using var pipe = await Connect(ct);
         var clientId = await Initialize(pipe, ct);
         async Task Following(bool value) => await Write(pipe, Obj(("type", "broadcast"), ("sourceClientId", clientId),
             ("method", "thread-stream-following-changed"), ("version", 1),
@@ -118,6 +114,35 @@ internal static class CodexDesktopSync
         return (path.Contains("\\OpenAI.Codex_", StringComparison.OrdinalIgnoreCase) && Path.GetFileName(path).Equals("ChatGPT.exe", StringComparison.OrdinalIgnoreCase)) ||
             (path.Contains("\\OpenAI\\Codex\\", StringComparison.OrdinalIgnoreCase) && Path.GetFileName(path).Equals("node.exe", StringComparison.OrdinalIgnoreCase));
     }
+    private async Task<Stream> Connect(CancellationToken ct) {
+        if (OperatingSystem.IsWindows()) {
+            var pipe = new NamedPipeClientStream(".", "codex-ipc", PipeDirection.InOut, PipeOptions.Asynchronous);
+            try {
+                await pipe.ConnectAsync(ct);
+                if (!Trusted(pipe)) throw new IOException("Untrusted desktop pipe");
+                return pipe;
+            } catch { pipe.Dispose(); throw; }
+        }
+        if (!OperatingSystem.IsMacOS()) throw new IOException("Desktop collaboration is unsupported on this platform");
+        var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        try {
+            await socket.ConnectAsync(new UnixDomainSocketEndPoint(Path.Combine(home, "ipc", "ipc.sock")), ct);
+            if (!TrustedMac(socket)) throw new IOException("Untrusted desktop socket");
+            return new NetworkStream(socket, ownsSocket: true);
+        } catch (SocketException error) { socket.Dispose(); throw new IOException("Desktop socket unavailable", error); }
+        catch { socket.Dispose(); throw; }
+    }
+    private static bool TrustedMac(Socket socket) {
+        var fd = socket.Handle.ToInt32();
+        uint size = sizeof(int);
+        // LOCAL_PEERPID and getpeereid bind trust to the connected process, not a socket filename.
+        if (getpeereid(fd, out var uid, out _) != 0 || uid != geteuid() ||
+            getsockopt(fd, 0, 2, out var pid, ref size) != 0 || size != sizeof(int)) return false;
+        using var server = Process.GetProcessById(pid);
+        var path = server.MainModule?.FileName ?? "";
+        return path.EndsWith("/ChatGPT.app/Contents/MacOS/ChatGPT", StringComparison.Ordinal) ||
+            path.EndsWith("/Codex.app/Contents/MacOS/Codex", StringComparison.Ordinal);
+    }
     private static async Task<string> Initialize(Stream pipe, CancellationToken ct) {
         var id = Guid.NewGuid().ToString();
         await Write(pipe, Obj(("type", "request"), ("requestId", id), ("sourceClientId", "initializing-client"),
@@ -130,22 +155,12 @@ internal static class CodexDesktopSync
         }
         throw new CodexError("桌面 Codex 连接初始化失败", 409);
     }
-    private static async Task<bool> Notify(IEnumerable<string> threadIds, string method, int version) {
-        if (!OperatingSystem.IsWindows()) return false;
+    private async Task<bool> Notify(IEnumerable<string> threadIds, string method, int version) {
         var ids = threadIds.Where(id => Guid.TryParse(id, out _)).Distinct().ToArray();
         if (ids.Length == 0) return true;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try {
-            using var pipe = new NamedPipeClientStream(".", "codex-ipc", PipeDirection.InOut, PipeOptions.Asynchronous);
-            await pipe.ConnectAsync(timeout.Token);
-            if (!GetNamedPipeServerProcessId(pipe.SafePipeHandle, out var pid)) return false;
-            using var server = Process.GetProcessById((int)pid);
-            using var current = Process.GetCurrentProcess();
-            if (server.SessionId != current.SessionId) return false;
-            var path = server.MainModule?.FileName ?? "";
-            // Never send to a same-named pipe owned by an unrelated program/session.
-            if (!(path.Contains("\\OpenAI.Codex_", StringComparison.OrdinalIgnoreCase) && Path.GetFileName(path).Equals("ChatGPT.exe", StringComparison.OrdinalIgnoreCase)) &&
-                !(path.Contains("\\OpenAI\\Codex\\", StringComparison.OrdinalIgnoreCase) && Path.GetFileName(path).Equals("node.exe", StringComparison.OrdinalIgnoreCase))) return false;
+            using var pipe = await Connect(timeout.Token);
             var requestId = Guid.NewGuid().ToString();
             await Write(pipe, Obj(("type", "request"), ("requestId", requestId), ("sourceClientId", "initializing-client"),
                 ("method", "initialize"), ("version", 0), ("params", Obj(("clientType", "chuckiehelper"))), ("timeoutMs", 1500)), timeout.Token);
@@ -179,4 +194,7 @@ internal static class CodexDesktopSync
         return JsonNode.Parse(payload)!.AsObject();
     }
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint pid);
+    [DllImport("libc", SetLastError = true)] private static extern int getpeereid(int socket, out uint uid, out uint gid);
+    [DllImport("libc")] private static extern uint geteuid();
+    [DllImport("libc", SetLastError = true)] private static extern int getsockopt(int socket, int level, int option, out int value, ref uint length);
 }

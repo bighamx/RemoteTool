@@ -5,7 +5,12 @@ namespace RemoteTool.WebApi.Services.Codex;
 
 internal static class CodexProjects
 {
-    public static string RootSignature(JsonArray roots) => string.Join('\n', roots.Select(root => Path.TrimEndingDirectorySeparator(Path.GetFullPath(root.S("path"))).ToLowerInvariant()).Distinct().Order());
+    internal static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+    private static StringComparison PathComparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+    public static string RootSignature(JsonArray roots) => string.Join('\n', roots.Select(root => {
+        var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root.S("path")));
+        return OperatingSystem.IsWindows() ? path.ToLowerInvariant() : path;
+    }).Distinct(PathComparer).Order(PathComparer));
     public static string DirectoryPath(string path) {
         if (!Path.IsPathFullyQualified(path)) throw new CodexError("请选择电脑上的绝对目录路径");
         var full = Path.GetFullPath(path);
@@ -41,13 +46,14 @@ internal static class CodexProjects
                 string normalized;
                 try { normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)); } catch (Exception error) when (error is ArgumentException or IOException) { continue; }
                 if (normalized.Length <= bestLength) continue;
-                var hit = full.Equals(normalized, StringComparison.OrdinalIgnoreCase)
-                    || full.StartsWith(normalized + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+                var hit = full.Equals(normalized, PathComparison)
+                    || full.StartsWith(Path.EndsInDirectorySeparator(normalized) ? normalized : normalized + Path.DirectorySeparatorChar, PathComparison);
                 if (hit) { bestName = name; bestLength = normalized.Length; }
             }
         }
         if (bestName != null) return (bestName, true);
-        return (full.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[^1], false);
+        var leaf = Path.GetFileName(full);
+        return (leaf.Length > 0 ? leaf : full, false);
     }
     public static async Task<JsonArray> List(CodexRpc rpc) {
         var rows = new JsonArray(); string cursor = null;
@@ -66,7 +72,7 @@ internal static class CodexProjects
         var roots = project.A("roots").Select(r => r.S("path")).Where(p => p.Length > 0).ToArray();
         if (roots.Length == 0) throw new CodexError("此项目没有本机工作目录");
         var path = requested.Length > 0 ? DirectoryPath(requested) : DirectoryPath(roots[0]);
-        if (!roots.Any(root => Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)).Equals(Path.TrimEndingDirectorySeparator(path), StringComparison.OrdinalIgnoreCase)))
+        if (!roots.Any(root => Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)).Equals(Path.TrimEndingDirectorySeparator(path), PathComparison)))
             throw new CodexError("所选工作目录不属于此项目");
         return path;
     }

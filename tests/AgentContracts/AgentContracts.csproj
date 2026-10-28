@@ -14,6 +14,8 @@
     <Compile Include="../../WebApplication/Services/Codex/CodexRpc.cs" Link="CodexRpc.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexAttachmentInput.cs" Link="CodexAttachmentInput.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexRunAttachments.cs" Link="CodexRunAttachments.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexProjects.cs" Link="CodexProjects.cs" />
+    <Compile Include="../../WebApplication/Services/RemoteControl/MacTerminalInput.cs" Link="MacTerminalInput.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexTitleGenerator.cs" Link="CodexTitleGenerator.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexRunRecovery.cs" Link="CodexRunRecovery.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexHistoryFileStamp.cs" Link="CodexHistoryFileStamp.cs" />

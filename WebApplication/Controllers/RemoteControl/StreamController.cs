@@ -37,6 +37,10 @@ public class StreamController : ControllerBase
             await Response.WriteAsync("远程桌面视频流在 Linux 上已禁用", cancellationToken);
             return;
         }
+        if (_systemService is MacSystemService) {
+            displayId = await MacDisplay(displayId, cancellationToken);
+            if (displayId == null) return;
+        }
         var response = Response;
         response.Headers.Append("Content-Type", $"multipart/x-mixed-replace; boundary={Boundary}");
 
@@ -136,7 +140,7 @@ public class StreamController : ControllerBase
         CancellationToken cancellationToken = default)
     {
         if (OperatingSystem.IsMacOS()) {
-            await StreamMacH264(displayId, cancellationToken);
+            await StreamMacH264(displayId, format, cancellationToken);
             return;
         }
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
@@ -484,8 +488,42 @@ public class StreamController : ControllerBase
         }
     }
 
-    private async Task StreamMacH264(uint? displayId, CancellationToken cancellationToken)
+    private async Task<uint?> MacDisplay(uint? displayId, CancellationToken ct)
     {
+        try {
+            var status = await ((MacSystemService)_systemService).NativeAsync(JsonSerializer.SerializeToElement(new { type = "status" }));
+            if (status.TryGetProperty("sessionLocked", out var locked) && locked.GetBoolean()) {
+                Response.StatusCode = 423;
+                Response.Headers["X-Screen-Locked"] = "1";
+                await Response.WriteAsJsonAsync(new { locked = true, platform = "macOS", unlockSupported = false,
+                    message = "Mac 已锁屏，请先在电脑上解锁后重新连接远程桌面" }, ct);
+                return null;
+            }
+            if (status.TryGetProperty("screenRecording", out var recording) && !recording.GetBoolean()) {
+                Response.StatusCode = 403;
+                await Response.WriteAsJsonAsync(new { message = "请在 Mac 系统设置中授予 RemoteTool 屏幕录制权限" }, ct);
+                return null;
+            }
+            var selected = displayId is > 0 ? displayId.Value : status.GetProperty("displayId").GetUInt32();
+            if (!status.GetProperty("displays").EnumerateArray().Any(d => d.GetProperty("id").GetUInt32() == selected))
+                throw new InvalidOperationException("所选显示器已断开，请重新选择显示器");
+            return selected;
+        } catch (OperationCanceledException error) when (!ct.IsCancellationRequested) {
+            _logger.LogWarning(error, "Mac display status timed out");
+            Response.StatusCode = 503;
+            await Response.WriteAsJsonAsync(new { message = "Mac 桌面代理响应超时，请稍后重试" }, ct);
+            return null;
+        } catch (Exception error) when (error is IOException or InvalidOperationException or System.ComponentModel.Win32Exception) {
+            _logger.LogWarning(error, "Mac display selection failed");
+            Response.StatusCode = 503;
+            await Response.WriteAsJsonAsync(new { message = error.Message }, ct);
+            return null;
+        }
+    }
+
+    private async Task StreamMacH264(uint? displayId, string format, CancellationToken cancellationToken)
+    {
+        var rawH264 = string.Equals(format, "h264", StringComparison.OrdinalIgnoreCase);
         if (_systemService is not MacSystemService mac || !await CheckFfmpegAvailableAsync(cancellationToken)) {
             Response.StatusCode = 503;
             await Response.WriteAsync("Mac H.264 编码器不可用", cancellationToken);
@@ -498,25 +536,15 @@ public class StreamController : ControllerBase
             return;
         }
 
-        uint selectedDisplay;
-        try {
-            var status = await mac.NativeAsync(JsonSerializer.SerializeToElement(new { type = "status" }));
-            selectedDisplay = displayId is > 0 ? displayId.Value : status.GetProperty("displayId").GetUInt32();
-            if (!status.GetProperty("displays").EnumerateArray().Any(d => d.GetProperty("id").GetUInt32() == selectedDisplay))
-                throw new InvalidOperationException("所选显示器已断开");
-        } catch (Exception error) {
-            _logger.LogWarning(error, "Mac display selection failed");
-            Response.StatusCode = 503;
-            await Response.WriteAsync("无法获取 Mac 显示器", cancellationToken);
-            return;
-        }
+        var selectedDisplay = await MacDisplay(displayId, cancellationToken);
+        if (selectedDisplay == null) return;
 
         // Sunshine-style path: ScreenCaptureKit NV12 -> VideoToolbox. The desktop
         // agent sends raw pixels, with no JPEG loss or base64 copies in between.
         var captureStart = new ProcessStartInfo(executable) {
             UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true
         };
-        foreach (var arg in new[] { "--raw-stream", selectedDisplay.ToString(), "1920", "20" })
+        foreach (var arg in new[] { "--raw-stream", selectedDisplay.Value.ToString(), "1920", "20" })
             captureStart.ArgumentList.Add(arg);
         using var capture = Process.Start(captureStart) ?? throw new InvalidOperationException("无法启动 Mac 桌面采集");
         var captureErrors = capture.StandardError.ReadToEndAsync();
@@ -557,10 +585,13 @@ public class StreamController : ControllerBase
                 "-framerate", "20", "-i", "pipe:0", "-an",
                 "-c:v", "h264_videotoolbox", "-realtime", "1",
                 "-b:v", "3M", "-maxrate", "4M", "-bufsize", "2M",
-                "-g", "20", "-bf", "0", "-profile:v", "baseline",
-                "-movflags", "+empty_moov+default_base_moof+frag_every_frame",
-                "-flush_packets", "1", "-f", "mp4", "pipe:1"
+                "-g", "20", "-bf", "0", "-profile:v", "baseline"
             }) encodeStart.ArgumentList.Add(arg);
+            // Android reads Annex B NAL units; browsers consume fragmented MP4.
+            foreach (var arg in rawH264
+                ? new[] { "-bsf:v", "h264_metadata=aud=insert", "-flush_packets", "1", "-f", "h264", "pipe:1" }
+                : new[] { "-movflags", "+empty_moov+default_base_moof+frag_every_frame", "-flush_packets", "1", "-f", "mp4", "pipe:1" })
+                encodeStart.ArgumentList.Add(arg);
             encoder = Process.Start(encodeStart) ?? throw new InvalidOperationException("无法启动 H.264 编码器");
             encodeErrors = encoder.StandardError.ReadToEndAsync();
             var runningEncoder = encoder;
@@ -572,7 +603,7 @@ public class StreamController : ControllerBase
                 finally { try { runningEncoder.StandardInput.Close(); } catch (IOException) { } }
             }, linked.Token);
 
-            Response.ContentType = "video/mp4";
+            Response.ContentType = rawH264 ? "video/h264" : "video/mp4";
             Response.Headers.CacheControl = "no-cache, no-store";
             Response.Headers["X-Capture-Method"] = "ScreenCaptureKit + VideoToolbox";
             Response.Headers["X-Capture-Source"] = $"{width}x{height}";

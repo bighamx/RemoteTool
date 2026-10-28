@@ -19,6 +19,7 @@ try {
     }
     Console.WriteLine("PASS: missing/empty/whitespace/relative home rejected with explicit startup error");
 } finally { File.Delete(file); }
+await CodexDesktopRecoveryChecks.Run(assembly);
 if (args.Length > 1 && args[1] == "sid") {
     var launcher = assembly.GetType("RemoteTool.WebApi.Services.RemoteControl.InteractiveProcessLauncher", true)!;
     var sid = (string)launcher.GetMethod("GetInteractiveUserSid")!.Invoke(null, null)!;

@@ -2805,17 +2805,16 @@ class RemoteControl {
             card.classList.remove('disabled');
             delete card._platformClickHandler;
         });
-        if (info.platform === 'Linux') {
-            // 仅允许 shutdown、reboot，其他禁用
-            const linuxAllowed = ['shutdown', 'reboot'];
+        if (info.platform === 'Linux' || info.platform === 'macOS') {
+            const allowed = info.platform === 'macOS' ? ['shutdown', 'reboot', 'sleep', 'lock'] : ['shutdown', 'reboot'];
             controlCards.forEach(card => {
                 const action = card.getAttribute('data-action');
-                if (linuxAllowed.indexOf(action) === -1) {
+                if (allowed.indexOf(action) === -1) {
                     card.classList.add('disabled');
                     const handler = (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        this.showToast('该操作仅支持 Windows ', 'warning');
+                        this.showToast(`${info.platform} 暂不支持此操作`, 'warning');
                     };
                     card._platformClickHandler = handler;
                     card.addEventListener('click', handler, true);

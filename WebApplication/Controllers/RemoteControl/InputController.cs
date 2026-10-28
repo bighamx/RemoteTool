@@ -207,6 +207,12 @@ public class InputController : ControllerBase
                 var locked = status.GetProperty("sessionLocked").GetBoolean();
                 return Ok(new {
                     available = status.GetProperty("screenRecording").GetBoolean(),
+                    platform = "macOS", unlockSupported = false,
+                    screenRecording = status.GetProperty("screenRecording").GetBoolean(),
+                    accessibility = status.GetProperty("accessibility").GetBoolean(),
+                    message = locked ? "Mac 已锁屏，请先在电脑上解锁后重新连接远程桌面" :
+                        !status.GetProperty("screenRecording").GetBoolean() ? "请在 Mac 系统设置中授予 RemoteTool 屏幕录制权限" :
+                        !status.GetProperty("accessibility").GetBoolean() ? "请在 Mac 系统设置中授予 RemoteTool 辅助功能权限以启用键鼠控制" : null,
                     desktop = locked ? "Locked" : "Default", locked,
                     width = status.GetProperty("width").GetInt32(),
                     height = status.GetProperty("height").GetInt32(),

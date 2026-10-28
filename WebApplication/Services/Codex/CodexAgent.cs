@@ -17,6 +17,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private readonly string configPath;
     private readonly string folder, home, journal;
     private readonly CodexAccountStore accounts;
+    private readonly CodexDesktopSync desktopSync;
     private readonly CodexHandoff handoff;
     private readonly CodexTitleGenerator titles;
     private readonly object gate = new();
@@ -357,7 +358,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private async Task NotifyDesktop(IEnumerable<string> ids, bool force = false) {
         string[] pending;
         lock (gate) pending = ids.Where(id => force || !desktopAnnounced.Contains(id)).Distinct().ToArray();
-        if (pending.Length > 0 && await CodexDesktopSync.NotifyAvailable(pending)) lock (gate) foreach (var id in pending) desktopAnnounced.Add(id);
+        if (pending.Length > 0 && await desktopSync.NotifyAvailable(pending)) lock (gate) foreach (var id in pending) desktopAnnounced.Add(id);
     }
 
     private async Task<JsonObject> WorkspaceUsage(string id, bool refresh, CancellationToken ct) {
@@ -441,6 +442,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         settings = Read(config); folder = settings.S("state_folder", Path.GetDirectoryName(config)!); home = settings.S("home");
         if (string.IsNullOrWhiteSpace(home) || !Path.IsPathFullyQualified(home))
             throw new InvalidOperationException("Codex bridge home must be a non-empty absolute path; regenerate connection.json through the web service.");
+        desktopSync = new CodexDesktopSync(home);
         sessionPins = new CodexSessionPins(Path.Combine(home, "remotetool-session-pins.json"));
         sessionMoves = new CodexSessionMoves(Path.Combine(home, "remotetool-session-moved.json"));
         titles = new CodexTitleGenerator(Path.GetDirectoryName(config)!);
@@ -538,7 +540,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         }
         if (owned != null) { lock (gate) return runs[owned]?.DeepClone().AsObject() ?? Obj(("run_id", null)); }
         if (candidates.Length == 0) return Obj(("run_id", null));
-        var observed = await CodexDesktopActivity.Read(session, ct);
+        var observed = await CodexDesktopActivity.Read(home, session, ct);
         string restored = null, key = null;
         lock (gate) {
             if (active.TryGetValue(session, out owned)) restored = owned;
@@ -612,7 +614,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 if (state.S("status") is "started" or "submitting") {
                     if (expected.Length == 0 || state.S("turn_id") != expected)
                         throw new CodexError("任务已变化，请刷新后再次选择中断并接管", 409, "takeover_target_changed");
-                    if (state.S("owner") == "desktop") await CodexDesktopSync.StopCompact(id);
+                    if (state.S("owner") == "desktop") await desktopSync.StopCompact(id, expected);
                     else await Runtime(id).Call("turn/interrupt", Obj(("threadId", id), ("turnId", expected)), ct);
                     for (var i = 0; i < 40; i++) {
                         lock (gate) if (!active.ContainsKey(id)) break;
@@ -620,18 +622,18 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     }
                     lock (gate) if (active.ContainsKey(id)) throw new CodexError("已请求中断，原任务尚未结束。请刷新状态后重试接管。", 409, "takeover_pending");
                 }
-            } else if (CodexRollout.IsRunning(home, RolloutPath(thread))) {
+            } else if (CodexRollout.WriterLocked(home, RolloutPath(thread))) {
                 using var probe = CancellationTokenSource.CreateLinkedTokenSource(ct); probe.CancelAfter(TimeSpan.FromSeconds(3));
-                var desktop = await CodexDesktopActivity.Read(id, probe.Token);
+                var desktop = await CodexDesktopActivity.Read(home, id, probe.Token);
                 if (!desktop.B("available"))
                     throw new CodexError("原所有者无法访问，手机不能安全中断此任务。请退出持有该会话的 Codex 客户端后重试。", 409, "session_owner_unavailable");
                 if (desktop.B("running")) {
                     if (expected.Length == 0 || desktop.S("activity_id") != expected)
                         throw new CodexError("任务已变化，请刷新后再次选择中断并接管", 409, "takeover_target_changed");
-                    await CodexDesktopSync.StopCompact(id);
+                    await desktopSync.StopCompact(id, expected);
                     for (var i = 0; i < 20; i++) {
                         using var poll = CancellationTokenSource.CreateLinkedTokenSource(ct); poll.CancelAfter(TimeSpan.FromSeconds(2));
-                        desktop = await CodexDesktopActivity.Read(id, poll.Token);
+                        desktop = await CodexDesktopActivity.Read(home, id, poll.Token);
                         if (desktop.B("available") && !desktop.B("running")) break;
                         await Task.Delay(200, ct);
                     }
@@ -648,7 +650,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             } catch (CodexError error) when (error.Message.Contains("already has an active writer", StringComparison.OrdinalIgnoreCase)) {
                 await ReleaseSessionCore(id);
                 using var probe = CancellationTokenSource.CreateLinkedTokenSource(ct); probe.CancelAfter(TimeSpan.FromSeconds(3));
-                var desktop = await CodexDesktopActivity.Read(id, probe.Token);
+                var desktop = await CodexDesktopActivity.Read(home, id, probe.Token);
                 if (!desktop.B("available")) throw new CodexError("原所有者仍持有写入权限且无法访问。请退出对应 Codex 客户端后重试。", 409, "session_owner_unavailable");
                 if (desktop.B("running")) throw new CodexError("其他端已启动新任务，尚未接管；请刷新状态后重试。", 409, "takeover_target_changed");
                 return Obj(("ready", true), ("mode", "desktop_cooperation"), ("message", "原任务已结束，手机可通过桌面协作继续发送；草稿未自动发送"));
@@ -818,11 +820,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 project = (await rpc.Call("project/read", Obj(("projectId", id))))["project"]!;
                 cwd = CodexProjects.ProjectDirectory(project, body.S("cwd"));
             } else if (mode == "new") {
-                var paths = body.A("roots").Select(root => CodexProjects.DirectoryPath(root.S("path"))).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                var paths = body.A("roots").Select(root => CodexProjects.DirectoryPath(root.S("path"))).Distinct(CodexProjects.PathComparer).ToArray();
                 if (paths.Length == 0) paths = new[] { CodexProjects.DirectoryPath(body.S("cwd")) };
                 if (paths.Length > 16) throw new CodexError("一个项目最多选择 16 个工作目录");
                 cwd = body.S("cwd").Length > 0 ? CodexProjects.DirectoryPath(body.S("cwd")) : paths[0];
-                if (!paths.Contains(cwd, StringComparer.OrdinalIgnoreCase)) throw new CodexError("默认工作目录必须是项目中的文件夹");
+                if (!paths.Contains(cwd, CodexProjects.PathComparer)) throw new CodexError("默认工作目录必须是项目中的文件夹");
                 var name = body.S("project_name").Trim();
                 if (name.Length is < 1 or > 120) throw new CodexError("项目名称需为 1～120 个字符");
                 var roots = new JsonArray(paths.Select(path => (JsonNode)Obj(("path", path))).ToArray());
@@ -874,7 +876,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             lock (gate) { if (runs[run].S("status") == "started") { runs[run]!["status"] = "interrupted"; Persist(); } active.Remove(session); }
         }
         await ReleaseSessionCore(session);
-        await CodexDesktopSync.NotifyAvailable(new[] { session });
+        await desktopSync.NotifyAvailable(new[] { session });
         return Obj(("released", true));
     }
     private async Task<JsonObject> CompactSession(string id, string key) {
@@ -902,7 +904,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     active[id] = run;
                     runs[run] = Obj(("run_id", run), ("key", key), ("kind", "compact"), ("owner", "desktop"), ("session_id", id), ("status", "started"), ("output", "")); Persist();
                 }
-                try { await CodexDesktopSync.Compact(id); }
+                try { await desktopSync.Compact(id); }
                 catch (CodexError desktopError) {
                     lock (gate) { runs[run]!["status"] = desktopError.Status == 504 ? "acceptance_unknown" : "failed"; runs[run]!["error"] = desktopError.Message; active.Remove(id); Persist(); }
                     if (desktopError.Status == 504) _ = ObserveDesktopCompact(id, run, path, offset);
@@ -982,6 +984,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         try {
             accounts.ValidateWorkspaceSwitch(id);
             if (accounts.List().S("current") == id) return;
+            if (OperatingSystem.IsMacOS() && DesktopBusy())
+                throw new CodexError("请先退出 Mac 上的 Codex 桌面和其他 Codex CLI 后再切换账号，避免桌面继续使用旧身份", 409, "desktop_running");
             // Verify the target before stopping processes; failed validation leaves the
             // running desktop and its current credentials intact.
             var targetAuth = accounts.WorkspaceAuth(id);
@@ -1138,9 +1142,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             if (desktopOwner) {
                 lock (gate) { runs[run]!["owner"] = "desktop"; Persist(); }
                 if (steeringTurn.Length > 0) {
-                    await CodexDesktopSync.SteerTurn(session, inputs, key);
+                    await desktopSync.SteerTurn(session, inputs, key);
                     result = Obj(("turn", Obj(("id", steeringTurn))));
-                } else { turnRequest.Remove("threadId"); result = (await CodexDesktopSync.StartTurn(session, turnRequest))["result"] as JsonObject ?? new(); }
+                } else { turnRequest.Remove("threadId"); result = (await desktopSync.StartTurn(session, turnRequest))["result"] as JsonObject ?? new(); }
             } else {
                 try { result = await Runtime(session).Call("turn/start", turnRequest); }
                 catch (CodexError error) { throw TranslateBusyThread(session, error); }
@@ -1189,7 +1193,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var seenTools = new Dictionary<string, string>();
         var assistantMessages = new CodexAssistantMessageStream();
         try {
-            await foreach (var snapshot in CodexDesktopSync.Follow(session, timeout.Token)) {
+            await foreach (var snapshot in desktopSync.Follow(session, timeout.Token)) {
                 string turnId; lock (gate) turnId = runs[run].S("turn_id");
                 var turn = DesktopTurns(snapshot).LastOrDefault(t => (turnId.Length > 0 && t.S("turnId") == turnId) || t["params"].S("clientUserMessageId") == key);
                 if (turn == null) continue;
@@ -1239,8 +1243,13 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     Emit(run, status == "completed" ? "run.completed" : "run.failed"); ClearApprovals(run); return;
                 }
             }
-        } catch (Exception error) when (error is IOException or OperationCanceledException or InvalidOperationException or System.Text.Json.JsonException) { }
-        lock (gate) { runs[run]!["status"] = "acceptance_unknown"; runs[run]!["error"] = "桌面会话进度连接中断，请核对会话历史；不会自动重发"; active.Remove(session); Persist(); }
+        } catch (Exception error) when (error is IOException or OperationCanceledException or InvalidOperationException or System.Text.Json.JsonException or CodexError or ArgumentException or System.ComponentModel.Win32Exception) { }
+        lock (gate) {
+            if (!CodexRunRecovery.Recover(runs[run]!.AsObject(), false)) return;
+            if (active.GetValueOrDefault(session) == run) active.Remove(session);
+            Persist();
+        }
+        ClearApprovals(run);
         Emit(run, "run.failed");
     }
     private static long MessageId(string id) => CodexHistoryWindow.MessageId(id);
@@ -1375,7 +1384,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             if (p.Length == 3 && p[2] == "takeover" && method == "POST") return await TakeoverSession(p[1], body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "handover" && method == "POST") return await HandoverSession(p[1], body, context.RequestAborted);
             if (p.Length == 3 && p[2] == "active-run" && method == "GET") return await FindActiveRun(p[1], context.RequestAborted);
-            if (p.Length == 3 && p[2] == "desktop-activity" && method == "GET") return await CodexDesktopActivity.Read(p[1], context.RequestAborted);
+            if (p.Length == 3 && p[2] == "desktop-activity" && method == "GET") return await CodexDesktopActivity.Read(home, p[1], context.RequestAborted);
             if (p.Length == 1 && method == "GET") {
                 var request = Obj(("limit", 50), ("sortKey", "updated_at"), ("sourceKinds", new JsonArray("cli", "vscode", "appServer")), ("modelProviders", new JsonArray()));
                 if (context.Request.Query["cursor"].Count > 0) request["cursor"] = context.Request.Query["cursor"].ToString();
@@ -1513,7 +1522,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     lock (gate) { if (runs[run].S("status") == "started") { runs[run]!["status"] = "interrupted"; Persist(); } active.Remove(session); }
                 }
                 await ReleaseSessionCore(session);
-                await CodexDesktopSync.NotifyAvailable(new[] { session });
+                await desktopSync.NotifyAvailable(new[] { session });
                 return Obj(("released", true));
             }
             if (p.Length == 3 && p[2] == "delete") {
@@ -1525,7 +1534,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     sessionPins.Set(session, false);
                     sessionMoves.Remove(session);
                     lock (gate) { sessionOverrides.Remove(session); PersistModels(); }
-                    await CodexDesktopSync.NotifyRemoved(new[] { session });
+                    await desktopSync.NotifyRemoved(new[] { session });
                     return Obj(("deleted", true));
                 } finally { settingsLock.Release(); }
             }
@@ -1647,7 +1656,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             var state = await ReconcileRun(p[1], context.RequestAborted);
             if (p.Length == 2) {
                 if (state.S("owner") == "desktop" && state.S("status") == "started" && state.S("turn_id").Length > 0) {
-                    var observed = await CodexDesktopActivity.Read(state.S("session_id"), context.RequestAborted);
+                    var observed = await CodexDesktopActivity.Read(home, state.S("session_id"), context.RequestAborted);
                     if (observed.B("available") && (observed.S("activity_id") != state.S("turn_id") || !observed.B("running"))) {
                         // The tracked desktop turn ended or a newer one replaced it. Never keep its old timer alive.
                         var known = observed["turn_statuses"].S(state.S("turn_id"));
@@ -1669,7 +1678,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 state["runtime"] = Obj(("model", state.S("model")), ("provider", state.S("provider"))); return state;
             }
             if (p[2] == "stop") {
-                if (state.S("status") == "started" && state.S("owner") == "desktop") await CodexDesktopSync.StopCompact(state.S("session_id"));
+                if (state.S("status") == "started" && state.S("owner") == "desktop") await desktopSync.StopCompact(state.S("session_id"));
                 else if (state.S("turn_id").Length > 0 && state.S("status") == "started") await Runtime(state.S("session_id")).Call("turn/interrupt", Obj(("threadId", state.S("session_id")), ("turnId", state.S("turn_id"))));
                 return Obj(("stop_requested", state.S("status") == "started"), ("stopped", state.S("status") is not ("started" or "submitting")));
             }
@@ -1688,7 +1697,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 }
                 await ReleaseSessionCore(state.S("session_id"));
                 lock (gate) { active.Remove(state.S("session_id")); }
-                await CodexDesktopSync.NotifyAvailable(new[] { state.S("session_id") });
+                await desktopSync.NotifyAvailable(new[] { state.S("session_id") });
                 return Obj(("released", true), ("interrupted", state.S("status") == "started"));
             }
             if (p[2] == "approval") {
@@ -1706,7 +1715,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 JsonObject answer = request.S("method").EndsWith("requestUserInput") ? Obj(("answers", body["answers"] ?? new JsonObject()))
                     : request.S("method") == "item/permissions/requestApproval" ? Obj(("permissions", body.S("choice") == "once" ? request["params"]?["permissions"] ?? new JsonObject() : new JsonObject()), ("scope", "turn"))
                     : Obj(("decision", body.S("choice") == "once" ? "accept" : "decline"));
-                if (state.S("owner") == "desktop") await CodexDesktopSync.Reply(state.S("session_id"), request, answer);
+                if (state.S("owner") == "desktop") await desktopSync.Reply(state.S("session_id"), request, answer);
                 else await saved.Origin.Write(Obj(("id", request["id"]), ("result", answer)));
                 lock (gate) {
                     approvals.Remove(key);
@@ -1743,7 +1752,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     }
                     try {
                         context.RequestAborted.ThrowIfCancellationRequested();
-                        if (state.S("owner") == "desktop") await CodexDesktopSync.SteerTurn(state.S("session_id"), input, key);
+                        if (state.S("owner") == "desktop") await desktopSync.SteerTurn(state.S("session_id"), input, key);
                         else try { await Runtime(state.S("session_id")).Call("turn/steer", Obj(("threadId", state.S("session_id")), ("expectedTurnId", state.S("turn_id")), ("input", input), ("clientUserMessageId", key))); }
                         catch (CodexError error) {
                             if (error.Message.Contains("thread not found", StringComparison.OrdinalIgnoreCase)) {

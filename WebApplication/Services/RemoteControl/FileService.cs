@@ -666,6 +666,7 @@ public class FileService
                 return Array.Empty<byte>();
             }
 
+            if (OperatingSystem.IsMacOS()) return MacImagePreview(fullPath, maxWidth, maxHeight, quality);
             using var originalStream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
             using var original = Image.FromStream(originalStream);
 
@@ -678,15 +679,15 @@ public class FileService
             if (ratio >= 1.0)
             {
                 var fileInfo = new System.IO.FileInfo(fullPath);
-                if (fileInfo.Length <= 2 * 1024 * 1024)
+                if (fileInfo.Length <= 2 * 1024 * 1024 && original.RawFormat.Guid == ImageFormat.Jpeg.Guid)
                 {
                     return File.ReadAllBytes(fullPath);
                 }
             }
 
             // 需要缩放
-            var newWidth = ratio < 1.0 ? (int)(original.Width * ratio) : original.Width;
-            var newHeight = ratio < 1.0 ? (int)(original.Height * ratio) : original.Height;
+            var newWidth = ratio < 1.0 ? Math.Max(1, (int)(original.Width * ratio)) : original.Width;
+            var newHeight = ratio < 1.0 ? Math.Max(1, (int)(original.Height * ratio)) : original.Height;
 
             using var resized = new Bitmap(newWidth, newHeight);
             using (var graphics = Graphics.FromImage(resized))
@@ -722,6 +723,38 @@ public class FileService
             Console.WriteLine($"GetImagePreview error: {ex.Message}");
             return Array.Empty<byte>();
         }
+    }
+
+    private static byte[] MacImagePreview(string path, int maxWidth, int maxHeight, int quality)
+    {
+        static string Sips(params string[] args) {
+            var start = new System.Diagnostics.ProcessStartInfo("/usr/bin/sips") {
+                UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true
+            };
+            foreach (var arg in args) start.ArgumentList.Add(arg);
+            using var process = System.Diagnostics.Process.Start(start)!;
+            var output = process.StandardOutput.ReadToEndAsync();
+            var errors = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(15000)) { process.Kill(true); throw new IOException("图片预览转换超时"); }
+            if (process.ExitCode != 0) throw new IOException(errors.GetAwaiter().GetResult().Trim());
+            return output.GetAwaiter().GetResult();
+        }
+        var metadata = Sips("-g", "pixelWidth", "-g", "pixelHeight", path);
+        int Dimension(string key) {
+            var value = System.Text.RegularExpressions.Regex.Match(metadata, @"(?m)^\s*" + key + @":\s*(\d+)\s*$");
+            if (!value.Success || !int.TryParse(value.Groups[1].Value, out var pixels) || pixels <= 0)
+                throw new IOException("无法读取图片尺寸");
+            return pixels;
+        }
+        var width = Dimension("pixelWidth"); var height = Dimension("pixelHeight");
+        var ratio = Math.Min(1d, Math.Min((double)maxWidth / width, (double)maxHeight / height));
+        var temporary = Directory.CreateTempSubdirectory("remotetool-preview-");
+        try {
+            var output = Path.Combine(temporary.FullName, "preview.jpg");
+            Sips("-s", "format", "jpeg", "-s", "formatOptions", Math.Clamp(quality, 10, 100).ToString(),
+                "-z", Math.Max(1, (int)(height * ratio)).ToString(), Math.Max(1, (int)(width * ratio)).ToString(), path, "--out", output);
+            return File.ReadAllBytes(output);
+        } finally { temporary.Delete(true); }
     }
 
     /// <summary>
