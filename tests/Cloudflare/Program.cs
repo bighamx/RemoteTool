@@ -90,6 +90,7 @@ try {
     Check(JsonNode.Parse(handler.LastBody)["params"].AsArray().Count==4,"SQL parameters forwarded without string concatenation");
     var tunnels=await Call("tunnels.list");Check(tunnels["items"][0]["name"].ToString()=="test","Tunnel SDK list");
     var detail=await Call("tunnels.detail",new{tunnel="tunnel"});Check(detail["tunnel"]["id"].ToString()=="tunnel"&&detail["connections"].AsArray().Count==1,"Tunnel detail and connector list");
+    Check(detail["connections"][0]["id"].ToString()=="connector"&&detail["connections"][0]["conns"][0]["colo_name"].ToString()=="HKG"&&detail["connections"][0]["version"].ToString()=="2026.10.0","Nested connector fields survive SDK and controller serialization");
     var token=await Call("tunnels.token",new{tunnel="tunnel"});Check(token["token"].ToString()=="mock-connector-token","Tunnel token endpoint");
     var created=await Call("tunnels.create",new{name="new"});Check(created["id"].ToString()=="tunnel","Tunnel create request through SDK");
     await Call("tunnels.rename",new{tunnel="tunnel",name="renamed"});Check(JsonNode.Parse(handler.LastBody)["name"].ToString()=="renamed","Tunnel rename through SDK");
@@ -117,7 +118,7 @@ sealed class MockCloudflare:HttpMessageHandler {
             :new[]{new{id=new string('b',32),name="example.com",status="active"}};
         if(LastPath.Contains("/cfd_tunnel/")) {
             if(LastPath.EndsWith("/token"))result="mock-connector-token";
-            else if(LastPath.EndsWith("/connections"))result=new[]{new{id="connection",client_id="connector",colo_name="HKG",origin_ip="192.0.2.1"}};
+            else if(LastPath.EndsWith("/connections"))result=new[]{new{id="connector",version="2026.10.0",arch="windows_amd64",conns=new[]{new{id="edge",client_id="connector",colo_name="HKG",origin_ip="192.0.2.1"}}}};
             else if(!LastPath.EndsWith("/configurations"))result=new{id="tunnel",name="test",status="healthy"};
         } else if(LastPath.EndsWith("/cfd_tunnel")&&request.Method==HttpMethod.Post)result=new{id="tunnel",name="new",status="inactive"};
         return new(HttpStatusCode.OK){Content=new StringContent(JsonSerializer.Serialize(new{success=true,result,errors=Array.Empty<object>(),messages=Array.Empty<object>(),result_info=new{page=1,per_page=100,total_pages=1,total_count=1}}),Encoding.UTF8,"application/json")};

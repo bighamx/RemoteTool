@@ -178,11 +178,16 @@ private fun CloudflareContent(api: NativeApi, cloud: CloudAccountModel, onError:
                         val connections=snapshot.optJSONArray("connections")?.objects().orEmpty()
                         item { Text("连接 · ${connections.size}",style=MaterialTheme.typography.titleSmall,modifier=Modifier.padding(8.dp)) }
                         items(connections) { connection ->
+                            val info = cloudflareTunnelConnection(connection)
                             Card(Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(12.dp)) {
-                                    Text("${connection.optString("coloName")} · ${connection.optString("originIp")}")
-                                    Text(connection.optString("clientVersion"),style=MaterialTheme.typography.bodySmall)
-                                    if(connection.optString("clientId").isNotBlank()) TextButton(onClick={confirm=CfConfirm("断开连接","断开此 connector？") { model.mutate("tunnels.disconnect",JSONObject(args.toString()).put("clientId",connection.getString("clientId"))) }},enabled=!model.busy) { Text("断开") }
+                                    Text(listOf(info.locations, info.originIps).filter { it.isNotBlank() }.joinToString(" · ").ifEmpty { "暂无边缘连接信息" })
+                                    val description = listOf(info.version.takeIf { it.isNotBlank() }?.let { "cloudflared $it" }, info.arch.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" · ")
+                                    if (description.isNotEmpty()) Text(description,style=MaterialTheme.typography.bodySmall)
+                                    if (info.clientId.isNotEmpty()) {
+                                        Text(info.clientId, style=MaterialTheme.typography.bodySmall)
+                                        TextButton(onClick={confirm=CfConfirm("断开连接","断开此 connector？") { model.mutate("tunnels.disconnect",JSONObject(args.toString()).put("clientId",info.clientId)) }},enabled=!model.busy) { Text("断开") }
+                                    }
                                 }
                             }
                         }

@@ -440,7 +440,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
             if (session?.api === current.api && identity.optString("id") == current.device.id) {
                 val latest = session ?: return
                 session = latest.copy(channels = latest.channels.map {
-                    if (it.url == current.api.base) it.copy(serverVersion = identity.serverBuildVersion()) else it
+                    if (it.url == current.api.base) it.copy(serverVersion = identity.serverVersionDescription()) else it
                 })
             }
         } catch (cancel: CancellationException) { throw cancel }
@@ -689,6 +689,6 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         val data = NativeApi(url, true).json("/api/device/identity")
         val id = data.getString("id")
         require(id.matches(Regex("[0-9a-f]{64}"))) { "设备标识格式不正确" }
-        return id to Endpoint(url, SystemClock.elapsedRealtime() - start, data.serverBuildVersion())
+        return id to Endpoint(url, SystemClock.elapsedRealtime() - start, data.serverVersionDescription())
     }
 }
