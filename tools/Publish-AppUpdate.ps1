@@ -133,6 +133,13 @@ if ($companion) {
 if ($Publish) {
     $repository = 'bighamx/RemoteTool'
     $repositoryId = 368781353
+    function Read-PublishedManifest($Asset) {
+        $assetId = [long]$Asset.id
+        if ($assetId -le 0) { throw 'Published manifest asset ID is missing.' }
+        $json = & gh api -H 'Accept: application/octet-stream' "repositories/$repositoryId/releases/assets/$assetId"
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot read a published manifest through GitHub API.' }
+        return ($json -join "`n" | ConvertFrom-Json)
+    }
     $releasesRaw = & gh api "repositories/$repositoryId/releases?per_page=30"
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read current releases; refusing to publish without version verification.' }
     foreach ($release in ($releasesRaw -join "`n" | ConvertFrom-Json)) {
@@ -141,14 +148,14 @@ if ($Publish) {
         if ($asset) {
             if (-not ($asset.browser_download_url.StartsWith("https://github.com/$repository/releases/download/") -or
                 $asset.browser_download_url.StartsWith('https://github.com/bighamx/chuckieTool/releases/download/'))) { throw 'Unexpected manifest URL.' }
-            $published = Invoke-RestMethod -Uri $asset.browser_download_url
+            $published = Read-PublishedManifest $asset
             if ($versionCode -le [long]$published.versionCode) { throw 'versionCode must exceed every published stable Android version.' }
         }
         if ($companion) {
             $phoneAsset = $release.assets | Where-Object { $_.name -eq 'remotetool-phone-update.json' } | Select-Object -First 1
             if ($phoneAsset) {
                 if (-not $phoneAsset.browser_download_url.StartsWith("https://github.com/$repository/releases/download/")) { throw 'Unexpected companion manifest URL.' }
-                $publishedPhone = Invoke-RestMethod -Uri $phoneAsset.browser_download_url
+                $publishedPhone = Read-PublishedManifest $phoneAsset
                 if ($publishedPhone.packageId -ne $companion.PackageId -or $companion.VersionCode -le [long]$publishedPhone.versionCode) { throw 'Companion version must exceed published versions of the same package.' }
                 if ($publishedPhone.signerSha256 -and $publishedPhone.signerSha256 -ne $companion.Signer) { throw 'Companion published signing certificate mismatch.' }
             }
