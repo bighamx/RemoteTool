@@ -89,7 +89,7 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
                     Text("Profile 配置", style = MaterialTheme.typography.titleSmall)
                     val entries = buildList<Pair<String, () -> Unit>> {
                         files.forEach { file -> add(file.optString("name") to { run { accept(api.json("/api/hermes/admin/files/${file.getString("id")}")) } }) }
-                        add("默认模型" to onModels); add("提供方管理" to onProviders); add("自动标题" to onTitle)
+                        add("默认模型" to onModels); add("Provider 管理" to onProviders); add("自动标题" to onTitle)
                     }
                     entries.chunked(2).forEach { row ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

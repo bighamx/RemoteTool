@@ -51,7 +51,7 @@ internal class AgentHistoryCache(private val root: File, private val scope: Stri
 }
 
 internal fun encodeHistorySnapshot(messages: List<HermesMessage>) = JSONArray(messages.map { message ->
-    obj("role" to message.role, "text" to message.text, "id" to message.serverId,
+    obj("role" to message.role, "text" to agentMessageContentText(message.text, message.attachments.isNotEmpty()), "id" to message.serverId,
         "attachments" to JSONArray(message.attachments), "timestamp" to message.timestamp,
         "narration" to message.narration, "turnId" to message.nativeTurnId, "editable" to message.editable,
         "requestKey" to message.requestKey, "messageType" to message.messageType, "interactions" to JSONArray(message.interactions))
@@ -60,7 +60,11 @@ internal fun encodeHistorySnapshot(messages: List<HermesMessage>) = JSONArray(me
 internal fun decodeHistorySnapshot(rows: JSONArray): List<HermesMessage> = rows.objects().map { row ->
     val storedTurn = row.cleanSetting("turnId").takeIf { it.isNotBlank() }
     val legacyType = storedTurn?.takeIf { row.optString("role") == "system" && it in setOf("toolSummary", "interaction") }
-    HermesMessage(row.getString("role"), row.getString("text"), row.getLong("id"),
+    val original = row.getString("text")
+    val decoded = agentMessageContentText(original, row.array("attachments").length() > 0)
+    val text = if (row.optString("role") == "user" && decoded != original)
+        agentUserMessageText("hermes", decoded, row.array("attachments").length() > 0) else decoded
+    HermesMessage(row.getString("role"), text, row.getLong("id"),
         row.array("attachments").objects(), timestamp = parseMessageTimestamp(row.opt("timestamp")),
         narration = row.optBoolean("narration"), nativeTurnId = storedTurn.takeIf { legacyType == null },
         editable = row.optBoolean("editable", true),

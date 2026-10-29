@@ -2,6 +2,10 @@ package com.chuckiehelper.mobile.nativeui
 
 import org.json.JSONObject
 
+internal fun isCcSwitchCompatibilityProvider(row: JSONObject): Boolean {
+    return row.cleanSetting("compatibility") == "cc_switch_managed_proxy"
+}
+
 internal fun JSONObject.cleanSetting(key: String): String = optString(key).takeUnless { it == "null" }.orEmpty()
 
 internal fun modelMetadata(provider: JSONObject?, model: String?): JSONObject =
@@ -31,6 +35,25 @@ internal fun providerMatches(provider: JSONObject?, id: String): Boolean = id.is
 
 internal fun providerSelectionId(provider: JSONObject, current: String): String =
     if (providerMatches(provider, current)) current else provider.cleanSetting("slug")
+
+internal fun codexCurrentProviderId(providers: JSONObject, options: JSONObject): String =
+    providers.cleanSetting("provider").ifBlank {
+        providers.array("endpoints").objects().firstOrNull { it.optBoolean("current") }?.cleanSetting("id").orEmpty()
+    }.ifBlank { options.cleanSetting("provider") }
+
+internal fun codexOfficialCredentialsMissing(provider: JSONObject): Boolean =
+    provider.optBoolean("official_provider") && provider.optBoolean("auth_known") && provider.cleanSetting("auth_kind") == "missing"
+
+internal fun codexOfficialProviderInUse(providers: JSONObject, options: JSONObject): Boolean {
+    val current = codexCurrentProviderId(providers, options)
+    if (providers.cleanSetting("provider") == current && current.isNotBlank() && providers.has("official_provider"))
+        return providers.optBoolean("official_provider")
+    val endpoint = providers.array("endpoints").objects().firstOrNull { it.cleanSetting("id") == current }
+    if (endpoint?.has("official_provider") == true) return endpoint.optBoolean("official_provider")
+    return current == "openai" || options.array("providers").objects().any {
+        providerMatches(it, current) && it.optBoolean("official_provider")
+    }
+}
 
 internal fun effortLabel(effort: String): String = when (effort) {
     "" -> "默认"

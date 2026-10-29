@@ -409,7 +409,9 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                     )
                     if (agent == "codex") DropdownMenuItem(text = { Text("账户与工作空间") }, onClick = { menu = false; accountsPanel = true; model.fetchAccounts() })
                     DropdownMenuItem(text = { Text("标题生成模型") }, onClick = { menu = false; titleModelDialog = true; model.fetchTitleModel() })
-                    listOf("模型选择" to "/model", "Provider 管理" to "/providers", "刷新与重连" to "/status")
+                    (listOf("模型选择" to "/model") +
+                        (if (list) listOf("Provider 管理" to "/providers") else emptyList()) +
+                        listOf("刷新与重连" to "/status"))
                         .forEach { (name, value) ->
                             DropdownMenuItem(
                                 text = { Text(name) },
@@ -1208,7 +1210,9 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     if (models) HermesModelPicker(model, if (agent == "hermes") globalModels else null) { models = false }
     if (providers) HermesProviderDialog(model) { providers = false }
     if (titleModelDialog) CodexTitleModelDialog(model) { titleModelDialog = false }
-    if (accountsPanel) CodexAccountsDialog(model, { accountsPanel = false }) { list = true }
+    if (accountsPanel) CodexAccountsDialog(model, { accountsPanel = false }, {
+        providers = true; model.fetchProviders()
+    }) { list = true }
     if (questionPanel && model.asyncQuestion != null && !list) AlertDialog(
         onDismissRequest = { questionPanel = false }, title = { Text("需要你的回答") },
         text = { androidx.compose.foundation.rememberScrollState().let { state ->
@@ -1566,6 +1570,10 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
     // 会话详情里的 provider 由服务端注入权威值（state.db 的 model_config.provider）；
     // 这里只做 slug → 显示名的解析，供头部文案使用。高亮按 slug 精确匹配。
     val providerCatalog = model.modelOptions.array("providers").objects()
+    LaunchedEffect(model.modelOptions) {
+        val id = provider?.cleanSetting("slug") ?: return@LaunchedEffect
+        provider = providerCatalog.firstOrNull { providerMatches(it, id) }
+    }
     val resolvedProvider = providerCatalog.firstOrNull { providerMatches(it, currentProvider) }?.cleanSetting("slug") ?: currentProvider
     val resolvedProviderName = providerCatalog.firstOrNull { it.optString("slug") == resolvedProvider }?.optString("name", displayProvider(resolvedProvider)) ?: displayProvider(resolvedProvider)
     LaunchedEffect(provider?.optString("slug"), global, resolvedProvider, currentModel) {
@@ -1586,7 +1594,14 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
     }
     AlertDialog(
         onDismissRequest = { if (provider != null) previous() else onClose() },
-        title = { Text(if (provider == null) "1 · 选择 Provider" else "2 · 选择模型") },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (provider == null) "1 · 选择 Provider" else "2 · 选择模型", Modifier.weight(1f))
+                if (model.agent == "codex") IconButton(onClick = { model.fetchModels(true) }) {
+                    Icon(Icons.Outlined.Refresh, "刷新模型目录")
+                }
+            }
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (fixedGlobal == null) Row {
@@ -1651,6 +1666,9 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                                     )
                                     // 官方目录需要官方登录态；拿不到时把原因显示出来，别只剩“0 个模型”。
                                     val warning = p.optString("models_warning")
+                                    if (codexOfficialCredentialsMissing(p))
+                                        Text("未发现官方登录凭据", style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     if (p.array("models").length() == 0 && warning.isNotBlank())
                                         Text(warning, style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant)

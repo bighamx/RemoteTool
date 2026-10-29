@@ -7,6 +7,7 @@ import android.widget.TextView
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.text.Spanned
+import android.text.Layout
 import android.text.style.ClickableSpan
 import android.util.TypedValue
 import kotlin.math.ceil
@@ -19,6 +20,15 @@ internal fun messageFooterFits(lastLineRight: Float, width: Int, footerWidth: Fl
 
 /** Draw metadata outside selectable Markdown; reserve its space using real line metrics. */
 internal class MessageTextView(context: Context) : TextView(context) {
+    init {
+        // Chat output includes long paths, URLs and machine-generated tokens.
+        // The theme's optimal paragraph breaking can spend seconds in Minikin
+        // (WordBreaker/breakLineOptimal) while measuring a selectable message.
+        // Greedy wrapping preserves the source and uses bounded line decisions.
+        breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
+        hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+    }
+
     var onBubbleTap: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
     /** 已应用到视图的链接色：recomposition 高频期跳过同值 setLinkTextColor 的无效重绘。 */
     var appliedLinkColor: Int = 0

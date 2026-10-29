@@ -21,6 +21,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.ui.unit.dp
 import org.json.JSONObject
 import java.time.Instant
@@ -80,9 +82,10 @@ private fun CodexUsageValues(usage: JSONObject?, compact: Boolean, onClick: () -
 }
 
 @Composable
-fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: () -> Unit) {
+fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders: () -> Unit, accountChanged: () -> Unit) {
     var remove by remember { mutableStateOf<JSONObject?>(null) }
     var showProviders by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { model.fetchProviders() }
     var resetWorkspace by remember { mutableStateOf<JSONObject?>(null) }
     val source = model.workspaces
     AlertDialog(
@@ -90,20 +93,24 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: (
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("切换工作空间", Modifier.weight(1f))
-                IconButton(onClick = { model.fetchWorkspaceUsages(true) }, enabled = model.workspaceUsageLoading.isEmpty() && !model.switchingAccount) { Icon(Icons.Outlined.Refresh, "刷新工作空间用量") }
+                IconButton(onClick = { model.fetchProviders(); model.fetchWorkspaceUsages(true) }, enabled = model.workspaceUsageLoading.isEmpty() && !model.switchingAccount) { Icon(Icons.Outlined.Refresh, "刷新工作空间用量") }
             }
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val identityEmail = model.accounts.optJSONObject("current_identity")?.optString("email").orEmpty()
                 val hasWorkspaces = source.array("data").objects().isNotEmpty()
-                val activeProviderName = model.providers.array("endpoints").objects().firstOrNull { it.optBoolean("current") }?.optString("name").orEmpty()
+                // 列表可能还没加载 / 未标 current：用 modelOptions 的当前 provider 兜底。
+                val providerRowsNow = model.providers.array("endpoints").objects()
+                val currentProviderId = codexCurrentProviderId(model.providers, model.modelOptions)
+                val activeProviderName = providerRowsNow.firstOrNull { it.cleanSetting("id") == currentProviderId }?.cleanSetting("name").orEmpty()
+                    .ifBlank { currentProviderId.takeUnless { it == "openai" }.orEmpty() }
+                val officialInUse = codexOfficialProviderInUse(model.providers, model.modelOptions)
                 Text(
                     when {
+                        !officialInUse && activeProviderName.isNotBlank() -> "当前使用三方 Provider（$activeProviderName）"
                         identityEmail.isNotBlank() -> "当前账户：$identityEmail"
-                        // 跑三方 provider 时 Codex 侧没有官方身份，但工作空间记录还在——不要写“尚未识别”。
-                        hasWorkspaces && activeProviderName.isNotBlank() -> "官方账户已保存，当前使用三方供应商（$activeProviderName）"
-                        hasWorkspaces -> "官方账户已保存，当前未使用"
+                        hasWorkspaces -> if (officialInUse) "当前使用官方账户" else "官方账户已保存，当前未使用"
                         else -> "当前账户：尚未识别（可点下方“同步电脑当前登录”）"
                     },
                     style = MaterialTheme.typography.bodyMedium,
@@ -111,7 +118,7 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: (
                 Text("选择同一账户的个人／团队工作空间。切换会自动重启电脑 Codex，正在执行的任务会停止。", style = MaterialTheme.typography.bodySmall)
                 LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(source.array("data").objects(), key = { it.getString("id") }) { account ->
-                        val selected = source.optString("current") == account.getString("id")
+                        val selected = officialInUse && source.optString("current") == account.getString("id")
                         OutlinedCard(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(8.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -147,19 +154,28 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: (
                     }
                 }
                 val providerRows = model.providers.array("endpoints").objects()
-                val activeProvider = providerRows.firstOrNull { it.optBoolean("current") }
-                HorizontalDivider()
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                val activeProvider = providerRows.firstOrNull { it.cleanSetting("id") == currentProviderId }
+                val providerInUse = currentProviderId.isNotBlank() && !officialInUse
+                OutlinedCard(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().clickable(enabled = !model.switchingAccount, role = Role.Button) {
+                    model.fetchProviders(); showProviders = true
+                }.padding(8.dp).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("三方供应商", style = MaterialTheme.typography.titleSmall)
+                        Text("三方 Provider", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            activeProvider?.let { "当前：${it.optString("name")} · ${it.optString("model").ifBlank { "模型未指定" }}" }
-                                ?: "当前走官方账户",
+                            activeProvider?.takeIf { providerInUse }?.let { "当前：${it.optString("name")} · ${it.optString("model").ifBlank { "模型未指定" }}" }
+                                ?: activeProviderName.takeIf { providerInUse && it.isNotBlank() }?.let { "当前：$it · ${model.sessionModel.ifBlank { model.modelOptions.optString("model") }}" }
+                                ?: "未启用",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    OutlinedButton(onClick = { model.fetchProviders(); showProviders = true }, enabled = !model.switchingAccount) { Text("选择") }
+                    if (providerInUse) Text("当前使用", color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 8.dp))
+                    Icon(Icons.Outlined.ChevronRight, "打开三方 Provider", tint =
+                        if (model.switchingAccount) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 }
                 TextButton(onClick = { model.importCurrentAccount() }, enabled = !model.switchingAccount) { Text("同步电脑当前登录") }
                 if (model.loginInfo != null && !model.loginInfo!!.optBoolean("completed")) TextButton(onClick = { model.showLogin() }) { Text("查看登录验证码") }
@@ -176,22 +192,32 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, accountChanged: (
         }
     }
     resetWorkspace?.let { account -> CodexResetCreditsDialog(model, account) { resetWorkspace = null } }
-    if (showProviders) CodexProviderPickerDialog(model) { showProviders = false }
+    if (showProviders) CodexProviderPickerDialog(model, onManageProviders = {
+        showProviders = false
+        onManageProviders()
+    }) { showProviders = false }
 }
 
 /** 二级列表：选择一个三方 provider（写 config.toml 并重启运行时/桌面 Codex）。 */
 @Composable
-private fun CodexProviderPickerDialog(model: HermesModel, close: () -> Unit) {
-    val rows = model.providers.array("endpoints").objects()
+private fun CodexProviderPickerDialog(model: HermesModel, onManageProviders: () -> Unit, close: () -> Unit) {
+    val rows = model.providers.array("endpoints").objects().sortedBy { isCcSwitchCompatibilityProvider(it) }
+    var showCompatibilityInfo by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { model.fetchModels() }
     AlertDialog(
         onDismissRequest = { if (!model.switchingAccount) close() },
-        title = { Text("三方供应商") },
+        title = { Text("三方 Provider") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (rows.isEmpty()) Text("还没有配置供应商。可在“Provider 管理”里添加。", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = onManageProviders, enabled = !model.switchingAccount) { Text("Provider 管理") }
+                if (rows.isEmpty()) Text("还没有配置 Provider。可在“Provider 管理”里添加。", style = MaterialTheme.typography.bodySmall)
                 LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(rows, key = { it.optString("id") }) { row ->
-                        val current = row.optBoolean("current")
+                        val current = row.cleanSetting("id") == codexCurrentProviderId(model.providers, model.modelOptions)
+                        val unsupported = isCcSwitchCompatibilityProvider(row)
+                        var selectedModel by remember(row.optString("id"), row.optString("model")) { mutableStateOf(row.optString("model")) }
+                        val choices = model.modelOptions.array("providers").objects().firstOrNull { it.optString("slug") == row.optString("id") }
+                            ?.array("models")?.objects().orEmpty().map { it.cleanSetting("model").ifBlank { it.cleanSetting("id") } }.filter { it.isNotBlank() }.distinct()
                         OutlinedCard(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -204,23 +230,35 @@ private fun CodexProviderPickerDialog(model: HermesModel, close: () -> Unit) {
                                             style = MaterialTheme.typography.labelSmall,
                                         )
                                     }
-                                    if (current) Text("使用中", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                                    if (unsupported) {
+                                        Text("不支持", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        IconButton(onClick = { showCompatibilityInfo = true }) {
+                                            Icon(Icons.Outlined.ErrorOutline, "查看兼容性说明", tint = MaterialTheme.colorScheme.error)
+                                        }
+                                    } else if (current) Text("使用中", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                                     else OutlinedButton(
                                         enabled = !model.switchingAccount,
-                                        onClick = { model.useProvider(row.optString("id"), row.optString("model")) { close() } },
+                                        onClick = { model.useProvider(row.optString("id"), selectedModel) { close() } },
                                     ) { Text("切换") }
                                 }
-                                if (!row.optBoolean("has_api_key")) Text("尚未配置密钥", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                                if (!unsupported) ProviderModelField(selectedModel, choices, !model.switchingAccount) { selectedModel = it }
+                                if (!unsupported && !row.optBoolean("has_api_key")) Text("尚未配置密钥", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                             }
                         }
                     }
                 }
-                Text("切换会重启电脑 Codex 和 CC Switch，正在执行的任务会停止。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("切换会重启电脑 Codex，正在执行的任务会停止。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 model.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },
-        confirmButton = { TextButton(onClick = { model.fetchProviders() }, enabled = !model.switchingAccount) { Text("刷新") } },
+        confirmButton = { TextButton(onClick = { model.fetchProviders(); model.fetchModels(true) }, enabled = !model.switchingAccount) { Text("刷新") } },
         dismissButton = { TextButton(onClick = close) { Text("关闭") } },
+    )
+    if (showCompatibilityInfo) AlertDialog(
+        onDismissRequest = { showCompatibilityInfo = false },
+        title = { Text("CC Switch 兼容条目") },
+        text = { Text("此 Provider 带有 CC Switch 的托管代理占位标记，依赖 CC Switch 的路由和凭据管理。RemoteTool 无法直接兼容并使用该条目，因此不支持选择。请添加实际 Provider 的 API 地址和凭据，或在 CC Switch 中管理此代理。") },
+        confirmButton = { TextButton(onClick = { showCompatibilityInfo = false }) { Text("知道了") } },
     )
 }
 

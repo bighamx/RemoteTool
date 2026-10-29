@@ -37,9 +37,9 @@ internal fun ExecutionActivityPreview(events: List<HermesEvent>, codex: Boolean,
     Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
         Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
             Box(Modifier.fillMaxWidth().heightIn(max = viewportHeight).clipToBounds().verticalScroll(scroll)) {
-                Text(content, style = MaterialTheme.typography.bodySmall.copy(
-                    lineHeight = 18.sp, platformStyle = PlatformTextStyle(includeFontPadding = false)),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ExecutionPreviewText(content, style = MaterialTheme.typography.bodySmall.copy(
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp, platformStyle = PlatformTextStyle(includeFontPadding = false)))
             }
         }
     }

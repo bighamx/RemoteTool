@@ -2,6 +2,7 @@ package com.chuckiehelper.mobile.nativeui
 
 import android.content.Context
 import android.text.Spanned
+import android.text.util.Linkify
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,7 +33,9 @@ import kotlinx.coroutines.withContext
 internal fun createMessageMarkwon(context: Context, onLinkTap: ((String) -> Boolean)? = null): Markwon = Markwon.builder(context)
     .usePlugin(TablePlugin.create(context))
     .usePlugin(StrikethroughPlugin.create())
-    .usePlugin(LinkifyPlugin.create())
+    // Agent output contains long numeric IDs/logs, not phone contacts. Android's
+    // libphonenumber matcher can monopolize the UI thread and trigger an ANR.
+    .usePlugin(LinkifyPlugin.create(Linkify.WEB_URLS or Linkify.EMAIL_ADDRESSES))
     .usePlugin(object : AbstractMarkwonPlugin() {
         override fun configureConfiguration(builder: MarkwonConfiguration.Builder) {
             val fallback = LinkResolverDef()

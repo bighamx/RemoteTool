@@ -4,7 +4,9 @@ import org.json.JSONObject
 
 internal fun agentHistoryMessage(agent: String, row: JSONObject): HermesMessage? {
     val role = row.optString("role")
-    val content = row.optString("content").takeUnless { it == "null" }.orEmpty()
+    val attachments = row.array("attachments").objects()
+    val content = if (agent == "hermes") agentMessageContentText(row.opt("content"), attachments.isNotEmpty())
+        else row.optString("content").takeUnless { it == "null" }.orEmpty()
     if (role == "system" && row.optString("type") == "interaction") {
         val entries = row.optJSONArray("interactions")?.objects().orEmpty()
         if (entries.isEmpty()) return null
@@ -18,7 +20,6 @@ internal fun agentHistoryMessage(agent: String, row: JSONObject): HermesMessage?
             nativeTurnId = row.cleanSetting("turn_id").takeIf { it.isNotBlank() }, messageType = row.optString("type"))
     }
     val description = if (agent == "hermes" && role == "assistant" && content.isBlank()) historyToolNarration(row) else null
-    val attachments = row.array("attachments").objects()
     val text = if (role == "user") agentUserMessageText(agent, content, attachments.isNotEmpty()) else description ?: content
     if (!visibleAgentMessage(role, text, attachments.size)) return null
     return HermesMessage(role, text, row.optLong("id"), attachments,

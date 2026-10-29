@@ -1669,6 +1669,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     /** 切到某个三方 provider（写 config.toml 的 model_provider + model，服务端会重启运行时与桌面 Codex）。 */
     fun useProvider(providerId: String, providerModel: String, onDone: () -> Unit) = launch {
         if (switchingAccount) return@launch
+        if (providerModel.isBlank()) { error = "请选择或填写模型"; return@launch }
         switchingAccount = true
         error = null
         try {
@@ -1678,6 +1679,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             providerNotice = if (saved.optBoolean("left_aggregate"))
                 "已退出聚合模式。CC Switch 里可能仍显示聚合，如需保持请在它里面切回普通供应商。" else null
             providers = api.json("$root/providers")
+            fetchModels()
             onDone()
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { error = connectionFailureMessage(failure) }
@@ -2984,8 +2986,16 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         runtime = listOf(providerDisplayName(selection.provider), selection.model).filter { it.isNotBlank() }.joinToString(" · ")
     }
 
-    fun fetchModels() = launch {
-        modelOptions = api.json("$root/model-options")
+    private fun modelOptionsPath(session: String? = selectedId): String = "$root/model-options" +
+        if (agent == "codex" && !session.isNullOrBlank()) "?session=${android.net.Uri.encode(session)}" else ""
+
+    fun fetchModels(forceRefresh: Boolean = false) = launch {
+        val connection = api; val session = selectedId
+        val path = modelOptionsPath(session)
+        val options = connection.json(path + if (forceRefresh && agent == "codex")
+            (if ('?' in path) "&" else "?") + "refresh=true" else "")
+        if (api !== connection || selectedId != session) return@launch
+        modelOptions = options
         updateRuntimeDisplay()
     }
 
@@ -3062,7 +3072,23 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
-    fun fetchProviders() = launch { providers = api.json("$root/providers") }
+    fun fetchProviders() = launch {
+        val connection = api; val requestedAgent = agent; val requestedRoot = root
+        val requestedSession = selectedId; val optionsPath = modelOptionsPath(requestedSession)
+        val result = connection.json("$requestedRoot/providers")
+        // Older services omit the built-in OpenAI row and the current provider.
+        // Refresh the fallback together instead of reusing a cached third-party route.
+        val options = if (requestedAgent == "codex" && result.cleanSetting("provider").isBlank())
+            connection.json(optionsPath) else null
+        if (api !== connection || agent != requestedAgent) return@launch
+        if (options != null) {
+            if (selectedId == requestedSession) modelOptions = options
+            result.put("provider", options.cleanSetting("provider"))
+            result.put("official_provider", codexOfficialProviderInUse(JSONObject(), options))
+            if (selectedId == requestedSession) updateRuntimeDisplay()
+        }
+        providers = result
+    }
     fun fetchTitleModel() = launch {
         titleModel = null; titleModelMessage = null; titleModelChoices = emptyList(); titleModelsMessage = null
         try { titleModel = api.json("$root/title-model") }
@@ -3134,7 +3160,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 sessionProvider = provider; sessionModel = model; sessionEffort = effort; sessionTier = tier
             }
         }
-        val options = connection.json("$root/model-options")
+        val options = connection.json(modelOptionsPath())
         if (api !== connection) return@launch
         modelOptions = options
         modelWarning = null

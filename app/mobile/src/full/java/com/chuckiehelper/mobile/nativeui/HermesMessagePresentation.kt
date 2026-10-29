@@ -36,7 +36,7 @@ private fun transformHermesMedia(text: String, remove: (String) -> Boolean): Her
 }
 
 fun presentHermesMessage(text: String, attached: List<JSONObject>, available: List<JSONObject>, role: String = "assistant"): HermesPresentation {
-    val display = codexQuestionReplyDisplay(text)
+    val display = codexQuestionReplyDisplay(agentMessageContentText(text, attached.isNotEmpty()))
     if (role != "assistant") return HermesPresentation(display, attached, emptyList())
     val files = attached.toMutableList()
     val unavailable = mutableListOf<String>()
