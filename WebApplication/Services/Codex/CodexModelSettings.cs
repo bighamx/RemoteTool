@@ -10,9 +10,9 @@ internal static class CodexModelSettings
         if (model.Length is 0 or > 256 || provider.Length is 0 or > 80) throw new CodexError("请选择 Provider 和模型");
         var detail = catalog.A("data").FirstOrDefault(row => row.S("model", row.S("id")) == model);
         // 聚合模式（cc-switch stack）下模型 slug 由代理编码，provider 的发现结果里没有它；
-        // 只要当前运行时目录里有这个模型就接受。
+        // 仅编码后的聚合 slug 可用运行时兜底；普通三方运行时也可能返回内置 GPT 目录。
         var aggregateModel = false;
-        if (detail == null && runtimeModels != null) {
+        if (detail == null && runtimeModels != null && model.StartsWith("ccs-", StringComparison.OrdinalIgnoreCase)) {
             detail = runtimeModels.FirstOrDefault(row => row.S("model", row.S("id")) == model);
             aggregateModel = detail != null;
         }

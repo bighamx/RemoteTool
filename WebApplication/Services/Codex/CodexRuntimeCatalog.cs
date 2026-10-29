@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using static RemoteTool.WebApi.Services.Codex.CodexJson;
 
@@ -28,14 +27,11 @@ internal static class CodexRuntimeCatalog
         return Obj(("models", models));
     }
 
-    public static string Write(string home, string folder, string provider, string model, JsonObject metadata, string configuredCatalog = "") {
+    public static string Write(string folder, string provider, string model, JsonObject metadata) {
         if (Window(metadata) == 0) return null; // Unknown capacity must retain Codex's conservative fallback.
-        var existing = new JsonObject();
-        foreach (var path in new[] { configuredCatalog, Path.Combine(home, "models_cache.json") }.Where(p => !string.IsNullOrWhiteSpace(p))) {
-            try { existing = Read(path); if (existing.A("models").Count > 0) break; }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException) { }
-        }
-        var catalog = Build(existing, model, metadata);
+        // A session catalog belongs to its selected provider/model. Global caches
+        // and configured catalogs may contain unrelated official or proxy models.
+        var catalog = Build(new JsonObject(), model, metadata);
         // Immutable files keep already-running clients on their original catalog generation.
         var pathName = Path.Combine(folder, "runtime-model-catalogs", Hash(provider + "\n" + catalog.ToJsonString()) + ".json");
         if (!File.Exists(pathName)) Atomic(pathName, catalog);
@@ -47,5 +43,25 @@ internal static class CodexRuntimeCatalog
         if (window == 0) return;
         config["model_context_window"] = window;
         config["model_auto_compact_token_limit"] = window * 90 / 100;
+    }
+
+    public static string WriteProvider(string folder, string provider, JsonArray models, string selected) {
+        var catalog = new JsonObject();
+        var choices = models.OfType<JsonObject>().Select(m => m.DeepClone().AsObject()).ToList();
+        if (!choices.Any(m => m.S("model", m.S("id")) == selected))
+            choices.Add(Obj(("model", selected)));
+        foreach (var metadata in choices) {
+            var model = metadata.S("model", metadata.S("id"));
+            if (model.Length == 0) continue;
+            // A catalog requires a capacity even when /models omits it. Use
+            // the conservative Codex fallback, never an unrelated GPT entry.
+            if (Window(metadata) == 0) metadata["context_window"] = 272000;
+            if (metadata.A("supportedReasoningEfforts").Count == 0)
+                metadata["supportedReasoningEfforts"] = new JsonArray(Obj(("reasoningEffort", "medium")));
+            catalog = Build(catalog, model, metadata);
+        }
+        var path = Path.Combine(folder, "runtime-model-catalogs", Hash(provider + "\n" + catalog.ToJsonString()) + ".json");
+        if (!File.Exists(path)) Atomic(path, catalog);
+        return path;
     }
 }

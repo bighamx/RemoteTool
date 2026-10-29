@@ -8,6 +8,8 @@ internal static class CodexProviderModelChecks
     public static async Task Run() {
         static void Check(bool value, string name) { if (!value) throw new Exception(name); }
         var config = Obj(("model_provider", "openai"), ("model", "gpt-default"));
+        Check(CodexSessionModelSelection.ManagedProxy(Obj(("experimental_bearer_token", "PROXY_MANAGED"), ("base_url", "http://localhost:45678/v1"))), "CC placeholder detection uses ownership marker rather than port");
+        Check(!CodexSessionModelSelection.ManagedProxy(Obj(("name", "custom"), ("base_url", "http://127.0.0.1:15721/v1"))), "ordinary custom endpoints are not classified by address alone");
         var native = Obj(("data", new JsonArray(Obj(("id", "gpt-native"), ("model", "gpt-native")))));
         var mirror = Obj(("name", "OpenAI"), ("requires_openai_auth", true));
         Check(CodexProviderModels.IsOfficial("custom", mirror), "cc-switch official mirror is native OpenAI");
@@ -47,6 +49,11 @@ internal static class CodexProviderModelChecks
         var merged = CodexProviderModels.MergeOfficialAliases(new JsonArray(
             Obj(("slug", "custom"), ("official_provider", true)), Obj(("slug", "openai"), ("official_provider", true)), Obj(("slug", "local"))), "custom");
         Check(merged.Count == 2 && merged.Last().S("slug") == "custom" && merged.Last().A("aliases").Count == 2, "one official card preserves active native provider identity");
+        var currentAliases = CodexProviderModels.MergeOfficialAliases(new JsonArray(
+            Obj(("slug", "custom"), ("id", "custom"), ("official_provider", true), ("is_current", true)),
+            Obj(("slug", "openai"), ("id", "openai"), ("official_provider", true))), "custom");
+        Check(currentAliases.Single().B("is_current") && currentAliases.Single().B("current") &&
+            currentAliases.Single().S("slug") == currentAliases.Single().S("id"), "official alias merge preserves both current/id contracts");
         var endpoint = Obj(("base_url", "http://127.0.0.1:7890/v1/"));
         var saved = Obj(("model", "glm"), ("api_key", "test-only-key"));
         var handler = new ProbeHandler(request => {
@@ -59,6 +66,29 @@ internal static class CodexProviderModelChecks
         var catalog = CodexProviderModels.Catalog("local", config, saved, native, discovered);
         Check(catalog.A("data").Count == 2, "all provider models, deduplicated");
         Check(!catalog.A("data").Any(m => m.S("model").StartsWith("gpt")), "no unrelated native catalog leakage");
+        Check(CodexProviderModels.IsOfficial("team", Obj(("name", "OpenAI (Team)"), ("requires_openai_auth", true))), "renaming a native official alias preserves routing");
+        Check(!CodexProviderModels.IsOfficial("team", Obj(("name", "OpenAI (Team)"), ("requires_openai_auth", true), ("base_url", "https://relay.example/v1"))), "renamed authenticated relay remains third-party");
+        try {
+            CodexModelSettings.Validate(Obj(("provider", "local"), ("model", "gpt-native")), catalog, native.A("data"));
+            throw new Exception("unrelated runtime model bypassed provider validation");
+        } catch (CodexError) { }
+        var aggregateNative = new JsonArray(Obj(("model", "ccs-relay/deepseek")));
+        Check(CodexModelSettings.Validate(Obj(("provider", "local"), ("model", "ccs-relay/deepseek")), catalog, aggregateNative).B("aggregateModel"), "encoded aggregate model retains runtime fallback");
+        var scoped = CodexProviderModels.Catalog("local", config, saved, native, discovered,
+            Obj(("modelProvider", "local"), ("model", "session-only")));
+        Check(scoped.A("data").Any(m => m.S("model") == "session-only"), "selected session model supplements its provider");
+        Check(!catalog.A("data").Any(m => m.S("model") == "session-only"), "session supplement never mutates shared discovery");
+        Check(!CodexProviderModels.Catalog("local", config, saved, native, discovered,
+            Obj(("modelProvider", "other"), ("model", "foreign-session"))).A("data").Any(m => m.S("model") == "foreign-session"), "session model cannot cross provider boundaries");
+        var externalSelection = CodexProviderModels.NativeSessionSelection(Obj(("id", "external-session"), ("modelProvider", "local")), Obj(("model", "desktop-only")));
+        Check(CodexProviderModels.Catalog("local", config, saved, native, discovered, externalSelection).A("data").Any(m => m.S("model") == "desktop-only"), "native session metadata supplements a model without a RemoteTool override");
+        Check(CodexProviderModels.NativeSessionSelection(Obj(("modelProvider", "local")), new()) == null, "missing native session model is never guessed from global defaults");
+        Check(CodexProviderModels.NativeSessionSelection(new JsonObject(), Obj(("model", "desktop-only"))) == null, "native model without provider evidence cannot be assigned to a provider");
+        var configuredSession = Obj(("model_provider", "local"), ("model", "config-only"));
+        Check(CodexProviderModels.Catalog("local", configuredSession, new JsonObject(), native, null).A("data").Any(m => m.S("model") == "config-only"), "external global config model is already included without a RemoteTool override");
+        Check(CodexProviderModels.AuthState(true, null, null, new()).S("auth_kind") == "missing", "catalog availability does not imply official credentials");
+        var credentialState = CodexProviderModels.AuthState(false, endpoint, saved, new());
+        Check(credentialState.S("auth_kind") == "api_key" && !credentialState.B("auth_verified") && !credentialState.ToJsonString().Contains("test-only-key"), "credential metadata never claims verified authentication or leaks keys");
         var selection = CodexModelSettings.Validate(Obj(("provider", "local"), ("model", "deepseek"), ("reasoning_effort", ""), ("service_tier", "priority")), catalog);
         Check(selection.S("reasoningEffort") == "medium" && selection.S("serviceTier") == "default", "custom reasoning has nonempty default and clears inherited fast tier");
         var resume = Obj(("config", Obj(("preserved", true))));
@@ -95,6 +125,15 @@ internal static class CodexProviderModelChecks
         Check(metadataCatalog[0].L("context_window") == 1_000_000 && metadataCatalog[0].L("max_output_tokens") == 131072 && metadataCatalog[0].B("supports_images"), "discovery retains declared model capacity and capabilities");
         Check(metadataCatalog[1].L("context_window") == 32768 && CodexRuntimeCatalog.Window(metadataCatalog[2]) == 0, "alternate capacity field and invalid capacity");
         var nativeBase = Obj(("models", new JsonArray(Obj(("slug", "official"), ("context_window", 272000)), Obj(("slug", "glm"), ("context_window", 272000)))));
+        var providerFolder = Path.Combine(Path.GetTempPath(), "provider-catalog-" + Guid.NewGuid().ToString("N"));
+        try {
+            var path = CodexRuntimeCatalog.WriteProvider(providerFolder, "local", metadataCatalog, "glm");
+            var generated = Read(path).A("models");
+            Check(generated.Count == 3 && !generated.Any(row => row.S("slug") == "official"), "desktop provider directory contains only endpoint models");
+            Check(generated.Single(row => row.S("slug") == "glm").L("context_window") == 1_000_000, "desktop catalog preserves reported capacity");
+            var manual = Read(CodexRuntimeCatalog.WriteProvider(providerFolder, "manual", new JsonArray(), "manual-model")).A("models");
+            Check(manual.Count == 1 && manual[0].S("slug") == "manual-model", "manual model is visible without leaking official cached models");
+        } finally { if (Directory.Exists(providerFolder)) Directory.Delete(providerFolder, true); }
         var combined = CodexRuntimeCatalog.Build(nativeBase, "glm", metadataCatalog[0]!.AsObject());
         var registered = combined.A("models").Single(m => m.S("slug") == "glm");
         Check(combined.A("models").Count == 2 && registered.L("context_window") == 1_000_000 && registered.L("max_context_window") == 1_000_000 && registered.L("effective_context_window_percent") == 95, "native directory replaces fallback ceiling and retains native reserve");
@@ -112,6 +151,21 @@ internal static class CodexProviderModelChecks
             Check(CodexPreviewRollout.LatestPath(directory, id, "") == normal, "context finds normal rollout when thread/read omits path");
             Check(CodexPreviewRollout.LatestPath(directory, id, "", requireAlias: true) == "", "preview alias path never substitutes normal rollout");
         } finally { Directory.Delete(directory, true); }
+        var cleanupRoot = Path.Combine(Path.GetTempPath(), "codex-probe-cleanup-" + Guid.NewGuid().ToString("N"));
+        var probeRoot = Path.Combine(cleanupRoot, "official-catalog");
+        var staleProbe = Path.Combine(probeRoot, Guid.NewGuid().ToString("N"));
+        var recentProbe = Path.Combine(probeRoot, Guid.NewGuid().ToString("N"));
+        var unrelated = Path.Combine(probeRoot, "keep-this-folder");
+        try {
+            foreach (var path in new[] { staleProbe, recentProbe, unrelated }) {
+                Directory.CreateDirectory(path); File.WriteAllText(Path.Combine(path, "fixture.txt"), "fixture");
+            }
+            Directory.SetLastWriteTimeUtc(staleProbe, DateTime.UtcNow.AddHours(-2));
+            Directory.SetLastWriteTimeUtc(unrelated, DateTime.UtcNow.AddHours(-2));
+            CodexCatalogMaintenance.Cleanup(cleanupRoot, DateTime.UtcNow);
+            Check(!Directory.Exists(staleProbe), "expired official probe directory is removed");
+            Check(Directory.Exists(recentProbe) && Directory.Exists(unrelated), "cleanup preserves recent probes and unrelated directories");
+        } finally { if (Directory.Exists(cleanupRoot)) Directory.Delete(cleanupRoot, true); }
         Console.WriteLine("Codex provider model checks passed: scoped discovery, authentication, fallback, reasoning, resume and turn");
     }
     private sealed class ProbeHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler {

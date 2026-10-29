@@ -79,7 +79,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         if (body["model_settings"] is not JsonObject requested) throw new CodexError("模型配置格式无效");
         CodexSessionModelSelection.RequireCurrentRequest(requested, await Config());
         var sessionRuntimeModels = (await rpc.Call("model/list", new(), ct)).A("data");
-        var selection = CodexModelSettings.Validate(requested, await ProviderCatalog(requested.S("provider"), ct), sessionRuntimeModels);
+        var currentConfig = await Config();
+        var selection = CodexModelSettings.Validate(requested, await ProviderCatalog(requested.S("provider"), ct, id),
+            requested.S("provider") == currentConfig.S("model_provider", "openai") ? sessionRuntimeModels : null);
         if (await NativeQueueStillOwns(id))
             throw new CodexError("此会话仍有原生队列任务，请等待队列结束后按当前模型配置发送；本次消息未写入。", 409, "session_writer_busy", "rejected");
         JsonObject current; lock (gate) loaded.TryGetValue(id, out current);
@@ -245,7 +247,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             metadata = catalog.A("data").FirstOrDefault(m => m.S("model", m.S("id")) == model) as JsonObject;
             if (CodexRuntimeCatalog.Window(metadata) > 0) selection["modelMetadata"] = metadata.DeepClone();
         }
-        var path = CodexRuntimeCatalog.Write(home, folder, provider, model, metadata, config.S("model_catalog_json"));
+        var path = CodexRuntimeCatalog.Write(folder, provider, model, metadata);
         return NewRuntime(path, metadata);
     }
     private async Task<CodexRpc> EnsureRuntime(string id, JsonObject selection = null) {
@@ -443,6 +445,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         settings = Read(config); folder = settings.S("state_folder", Path.GetDirectoryName(config)!); home = settings.S("home");
         if (string.IsNullOrWhiteSpace(home) || !Path.IsPathFullyQualified(home))
             throw new InvalidOperationException("Codex bridge home must be a non-empty absolute path; regenerate connection.json through the web service.");
+        CodexCatalogMaintenance.Cleanup(folder, DateTime.UtcNow);
         desktopSync = new CodexDesktopSync(home);
         sessionPins = new CodexSessionPins(Path.Combine(home, "remotetool-session-pins.json"));
         sessionMoves = new CodexSessionMoves(Path.Combine(home, "remotetool-session-moved.json"));
@@ -479,6 +482,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         runtimeWorkspace = CurrentWorkspace();
         rpc = new CodexRpc(settings.S("executable"), home, environment, message => Notification(message), "cli_auth_credentials_store=\"file\"");
         await rpc.Initialize(); loaded.Clear(); workspaceUsage.Clear();
+        lock (gate) { officialCatalogCache = null; officialCatalogFailure = null; officialCatalogCacheAt = 0; }
         launchedConfigStamp = ConfigStamp();
     }
     /** config.toml 的指纹：cc-switch 等外部工具切换 provider 后，桥接必须重读配置。 */
@@ -496,6 +500,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         await settingsLock.WaitAsync();
         try {
             if (ConfigStamp() == launchedConfigStamp) return;
+            lock (gate) if (active.Count > 0) return;
+            if (await QueuedWorkBlocksToolRefresh()) return;
             if (rpc != null) await rpc.DisposeAsync();
             foreach (var session in sessionRpcs.Keys.ToArray()) await ReleaseSessionCore(session);
             await Launch();
@@ -964,41 +970,100 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         lock (gate) { runs[run]!["status"] = "acceptance_unknown"; runs[run]!["error"] = "压缩结果尚未确认，请核对会话历史；不会自动重发"; active.Remove(id); Persist(); }
         Emit(run, "run.failed");
     }
-    private async Task<JsonObject> Config() => (await rpc.Call("config/read", Obj(("includeLayers", false))))["config"]!.AsObject();
+    private async Task<JsonObject> Config(CancellationToken ct = default) => (await rpc.Call("config/read", Obj(("includeLayers", false)), ct))["config"]!.AsObject();
     /** cc-switch 会把 requires_openai_auth 的三方条目标成「用官方登录凭据」，这类条目不需要单独 key。 */
     private static bool usesOpenAiAuth(JsonNode provider) => provider.B("requires_openai_auth");
 
     private string launchedConfigStamp;
     private JsonObject officialCatalogCache;
+    private CodexError officialCatalogFailure;
     private long officialCatalogCacheAt;
+    private string officialCatalogAuthStamp;
+    private readonly SemaphoreSlim officialCatalogLock = new(1, 1);
+
+    private async Task InvalidateOfficialCatalog(CancellationToken ct) {
+        await officialCatalogLock.WaitAsync(ct);
+        try { lock (gate) { officialCatalogCache = null; officialCatalogFailure = null; officialCatalogCacheAt = 0; } }
+        finally { officialCatalogLock.Release(); }
+    }
 
     /** 官方模型目录必须来自「官方端点」的运行时；用当前（可能是三方）运行时取会拿到三方的模型。 */
     private async Task<JsonObject> OfficialCatalog(CancellationToken ct) {
-        lock (gate) if (officialCatalogCache != null &&
-            DateTimeOffset.UtcNow.ToUnixTimeSeconds() - officialCatalogCacheAt < 600) return officialCatalogCache;
-        var environment = new Dictionary<string, string>();
-        foreach (var entry in providers) if (entry.Value.S("api_key").Length > 0) environment["CHUCKIE_CODEX_" + entry.Key.ToUpperInvariant() + "_KEY"] = entry.Value.S("api_key");
-        CodexRpc probe = null;
+        await officialCatalogLock.WaitAsync(ct);
         try {
-            probe = new CodexRpc(settings.S("executable"), home, environment, _ => Task.CompletedTask,
-                "cli_auth_credentials_store=\"file\"", "model_provider=\"openai\"", "model_catalog_json=\"\"");
-            await probe.Initialize();
-            var list = await probe.Call("model/list", new(), ct);
-            lock (gate) { officialCatalogCache = list; officialCatalogCacheAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(); }
+        var auth = Path.Combine(home, "auth.json");
+        var authBytes = File.Exists(auth) ? await File.ReadAllBytesAsync(auth, ct) : Array.Empty<byte>();
+        var authStamp = Hash(Convert.ToBase64String(authBytes));
+        lock (gate) if (officialCatalogAuthStamp == authStamp) {
+            var age = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - officialCatalogCacheAt;
+            if (officialCatalogFailure != null && age < 45) throw officialCatalogFailure;
+            if (officialCatalogCache != null && age < (officialCatalogCache.A("data").Count > 0 ? 600 : 45)) return officialCatalogCache;
+        }
+        var temporary = Path.Combine(folder, "official-catalog", Guid.NewGuid().ToString("N"));
+        IdentityDataDirectory.Ensure(temporary);
+        CodexRpc probe = null;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try {
+            if (authBytes.Length > 0) { await File.WriteAllBytesAsync(Path.Combine(temporary, "auth.json"), authBytes, timeout.Token); IdentityDataDirectory.EnsureFile(Path.Combine(temporary, "auth.json")); }
+            // Empty model_catalog_json is a path override, not an unset value.
+            // A separate home avoids loading any third-party catalog or defaults.
+            probe = new CodexRpc(settings.S("executable"), temporary, new Dictionary<string,string>(), _ => Task.CompletedTask,
+                "cli_auth_credentials_store=\"file\"", "model_provider=\"openai\"");
+            await probe.Initialize(timeout.Token);
+            var list = await probe.Call("model/list", new(), timeout.Token);
+            lock (gate) { officialCatalogCache = list; officialCatalogFailure = null; officialCatalogCacheAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(); officialCatalogAuthStamp = authStamp; }
             return list;
-        } finally { if (probe != null) await probe.DisposeAsync(); }
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception error) when (error is CodexError or IOException or UnauthorizedAccessException or OperationCanceledException) {
+            var failure = new CodexError("暂无法读取官方模型目录，请稍后重试或刷新", 503, "official_catalog_unavailable");
+            lock (gate) {
+                officialCatalogCache = null; officialCatalogFailure = failure;
+                officialCatalogCacheAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(); officialCatalogAuthStamp = authStamp;
+            }
+            throw failure;
+        } finally {
+            if (probe != null) await probe.DisposeAsync();
+            try { if (Directory.Exists(temporary)) Directory.Delete(temporary, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+        } finally { officialCatalogLock.Release(); }
     }
 
-    private async Task<JsonObject> ProviderCatalog(string provider, CancellationToken ct = default) {
-        var config = await Config();
+    private async Task<JsonObject> CatalogSessionSelection(string session, CancellationToken ct) {
+        if (string.IsNullOrEmpty(session)) return null;
+        var saved = await SessionSelection(session);
+        if (saved != null) return saved;
+        // External desktop/CLI sessions have no RemoteTool override. Read only
+        // persisted metadata; never resume a thread or acquire its writer here.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(3));
+        try {
+            var thread = (await ReadThread(session, false, timeout.Token))["thread"];
+            var native = CodexProviderModels.NativeSessionSelection(thread, CodexRollout.LastSettings(home, RolloutPath(thread)));
+            if (native != null) return native;
+        } catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+        catch (Exception error) when (error is CodexError or IOException or UnauthorizedAccessException) { }
+        ct.ThrowIfCancellationRequested();
+        // A new app-owned session may not have a rollout yet.
+        lock (gate) return loaded.TryGetValue(session, out var current)
+            ? CodexProviderModels.NativeSessionSelection(current, current) : null;
+    }
+
+    private async Task<JsonObject> ProviderCatalog(string provider, CancellationToken ct = default, string session = null) {
+        var config = await Config(ct);
         if (provider != "openai" && config["model_providers"]?[provider] == null) throw new CodexError("Provider 不存在，请刷新列表");
         var official = CodexProviderModels.IsOfficial(provider, config["model_providers"]?[provider]);
-        var native = official ? await rpc.Call("model/list", new(), ct) : new JsonObject();
+        var currentProvider = config.S("model_provider", "openai");
+        var native = official ? CodexProviderModels.IsOfficial(currentProvider, config["model_providers"]?[currentProvider])
+            ? await rpc.Call("model/list", new(), ct) : await OfficialCatalog(ct) : new JsonObject();
         var discovered = official ? null : await CodexProviderModels.Discover(config["model_providers"]?[provider], providers[provider], ct);
-        return CodexProviderModels.Catalog(provider, config, providers[provider], native, discovered);
+        var selection = await CatalogSessionSelection(session, ct);
+        return CodexProviderModels.Catalog(provider, config, providers[provider], native, discovered, selection);
     }
-    private async Task<JsonObject> Models() {
-        var config = await Config(); var catalog = await rpc.Call("model/list", new());
+    private async Task<JsonObject> Models(CancellationToken ct = default, string session = null) {
+        var config = await Config(ct); var catalog = await rpc.Call("model/list", new(), ct);
+        var selection = await CatalogSessionSelection(session, ct);
+        var officialAuth = accounts.CurrentAuth();
         var current = config.S("model_provider", "openai");
         var aggregate = IsAggregateCatalog(config) ||
             catalog.A("data").Any(row => row.S("model", row.S("id")).StartsWith("ccs-", StringComparison.OrdinalIgnoreCase));
@@ -1006,16 +1071,17 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         // 当前运行时可能就是三方端点：官方行绝不能复用它返回的目录。
         JsonObject officialCatalog = currentOfficial ? catalog : null;
         if (officialCatalog == null) {
-            try { officialCatalog = await OfficialCatalog(CancellationToken.None); }
-            catch (Exception error) when (error is CodexError or IOException or OperationCanceledException) { officialCatalog = null; }
+            try { officialCatalog = await OfficialCatalog(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception error) when (error is CodexError or IOException or UnauthorizedAccessException or OperationCanceledException) { officialCatalog = null; }
         }
         var known = config["model_providers"]?.DeepClone() as JsonObject ?? new();
         known["openai"] ??= Obj(("name", "OpenAI / ChatGPT"));
         var rows = new JsonArray(await Task.WhenAll(known.Select(async entry => {
             var official = CodexProviderModels.IsOfficial(entry.Key, entry.Value);
-            var discovered = official ? null : await CodexProviderModels.Discover(entry.Value, providers[entry.Key]);
-            var native = official ? officialCatalog ?? new JsonObject() : catalog;
-            var choices = CodexProviderModels.Catalog(entry.Key, config, providers[entry.Key], native, discovered);
+            var discovered = official ? null : await CodexProviderModels.Discover(entry.Value, providers[entry.Key], ct);
+            var native = official ? officialCatalog ?? new JsonObject() : new JsonObject();
+            var choices = CodexProviderModels.Catalog(entry.Key, config, providers[entry.Key], native, discovered, selection);
             if (aggregate && entry.Key == current) {
                 // 聚合目录在运行时里已经是合并后的列表（ccs-<provider>/<model>），直接透传并标注来源。
                 var merged = new JsonArray();
@@ -1027,12 +1093,15 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     merged.Add(clone);
                 }
                 choices["data"] = merged;
-                choices["aggregate"] = true;
             }
-            if (aggregate) choices["aggregate"] = true;
             if (official && officialCatalog == null && choices.S("models_warning").Length == 0)
-                choices["models_warning"] = "未登录官方账户，暂无法读取官方模型目录";
-            return (JsonNode)Obj(("slug", entry.Key), ("name", entry.Value.S("name", entry.Key)), ("authenticated", true), ("is_current", entry.Key == current),
+                choices["models_warning"] = "暂无法读取官方模型目录，请刷新重试";
+            if (official && officialCatalog != null && choices.A("data").Count == 0)
+                choices["models_warning"] = "官方模型目录为空，请刷新重试";
+            var authState = CodexProviderModels.AuthState(official, entry.Value, providers[entry.Key], officialAuth);
+            return (JsonNode)Obj(("slug", entry.Key), ("id", entry.Key), ("name", entry.Value.S("name", entry.Key)), ("authenticated", true), ("is_current", entry.Key == current), ("current", entry.Key == current),
+                ("auth_known", authState.B("auth_known")), ("auth_kind", authState.S("auth_kind")), ("auth_verified", false),
+                ("models_status", !official ? discovered.S("models_warning").Length > 0 ? "discovery_failed" : "available" : officialCatalog == null ? "probe_failed" : choices.A("data").Count == 0 ? "empty_catalog" : "available"),
                 ("is_user_defined", !official), ("supports_service_tier", official), ("official_provider", official),
                 ("uses_openai_auth", entry.Value.B("requires_openai_auth")), ("has_credential", providers[entry.Key].S("api_key").Length > 0 ||
                     entry.Value.S("env_key").Length > 0 || entry.Value.S("experimental_bearer_token").Length > 0 || usesOpenAiAuth(entry.Value)),
@@ -1060,7 +1129,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         await settingsLock.WaitAsync();
         try {
             accounts.ValidateWorkspaceSwitch(id);
-            if (accounts.List().S("current") == id) return;
+            // The saved login may already be current while routing is third-party.
+            // Explicit workspace selection must still restore direct official routing.
             if (OperatingSystem.IsMacOS() && DesktopBusy())
                 throw new CodexError("请先退出 Mac 上的 Codex 桌面和其他 Codex CLI 后再切换账号，避免桌面继续使用旧身份", 409, "desktop_running");
             // Verify the target before stopping processes; failed validation leaves the
@@ -1070,6 +1140,10 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             var target = await CodexWorkspaceUsage.Read(settings.S("executable"), folder, targetAuth, timeout.Token);
             accounts.RecoverWorkspaceAuth(id, targetAuth, target.Auth);
             var desktop = CodexDesktopRestart.Capture(OwnedProcessIds());
+            var previousConfig = await Config();
+            var previousConfigPath = Path.Combine(home, "config.toml");
+            var previousConfigText = File.Exists(previousConfigPath) ? await File.ReadAllTextAsync(previousConfigPath) : null;
+            RememberProviderModel(previousConfig);
             JsonObject previous = null;
             try {
                 lock (gate) {
@@ -1080,9 +1154,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 foreach (var session in sessionRpcs.Keys.ToArray()) await ReleaseSessionCore(session);
                 await desktop.Stop();
                 previous = accounts.CurrentAuth();
-                accounts.Use(id); await Launch();
-                // 只换 auth 不改 provider 会「登录是官方、链路仍三方」；切官方必须同时归位 provider。
-                await EditConfig(("model_provider", "openai"));
+                accounts.Use(id);
+                await CodexOfficialRouting.PrepareWorkspace(home);
+                await Launch();
                 var current = await rpc.Call("account/read", Obj(("refreshToken", false)));
                 if (current["account"] == null) throw new CodexError("目标登录已失效，请重新授权", 409);
                 var routed = current["workspaceRouting"].S("chatgptAccountId");
@@ -1090,8 +1164,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 accounts.Capture(accounts.CurrentAuth());
             } catch {
                 if (rpc != null) await rpc.DisposeAsync();
-                if (previous?.Count > 0) await CodexOfficialRouting.Restore(settings.S("executable"), home);
                 CodexDesktopRestart.RestoreOwned(desktop.targets);
+                if (previousConfigText != null) await File.WriteAllTextAsync(previousConfigPath, previousConfigText);
+                else if (File.Exists(previousConfigPath)) File.Delete(previousConfigPath);
                 if (previous?.Count > 0) accounts.Restore(previous);
                 await Launch(); throw;
             } finally { desktop.Restart(); }
@@ -1099,31 +1174,16 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     }
     /** 聚合（stack）模式的唯一可靠特征：目录里出现 cc- switch 编码的 ccs-<provider>/<model> slug。
         路由模式同样会写 model_catalog_json，只看这个键会误判。 */
-    private static bool IsAggregateCatalog(JsonObject config) {
+    private bool IsAggregateCatalog(JsonObject config) {
         var path = config.S("model_catalog_json");
         if (path.Length == 0) return false;
         try {
-            var full = Path.IsPathRooted(path) ? path : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", path);
+            var full = Path.IsPathRooted(path) ? path : Path.Combine(home, path);
             if (!File.Exists(full)) return false;
             var catalog = JsonNode.Parse(File.ReadAllText(full)) as JsonObject;
             return catalog?["models"] is JsonArray models &&
                 models.Any(row => row.S("slug", row.S("model", row.S("id"))).StartsWith("ccs-", StringComparison.OrdinalIgnoreCase));
         } catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { return false; }
-    }
-
-    /** cc-switch 会缓存 live 配置；重启它可以让它重新读取，避免之后用自己的旧快照覆盖我们刚写入的 provider。 */
-    private void RestartCcSwitch() {
-        try {
-            var running = System.Diagnostics.Process.GetProcessesByName("cc-switch").Where(p => p.Id != Environment.ProcessId).ToArray();
-            if (running.Length == 0) return;
-            string path = null;
-            foreach (var process in running) {
-                try { path ??= process.MainModule?.FileName; process.Kill(); process.WaitForExit(5000); }
-                catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
-            }
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
-        } catch (Exception) { /* 重启第三方工具失败不应影响切换本身 */ }
     }
 
     /** 切换 provider 只改 config 不重启的话，正在运行的运行时仍走旧端点；桌面端还会把旧配置写回。 */
@@ -1134,7 +1194,16 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             foreach (var session in sessionRpcs.Keys.ToArray()) await ReleaseSessionCore(session);
             await desktop.Stop();
             await Launch();
-        } finally { desktop.Restart(); RestartCcSwitch(); }
+        } finally { desktop.Restart(); }
+    }
+
+    private void RememberProviderModel(JsonObject config) {
+        var provider = config.S("model_provider", "openai");
+        var model = config.S("model");
+        if (model.Length == 0 || CodexProviderModels.IsOfficial(provider, config["model_providers"]?[provider])) return;
+        providers[provider] ??= new JsonObject();
+        providers[provider]!["model"] = model;
+        Atomic(Path.Combine(folder, "providers.json"), providers);
     }
 
     private async Task<JsonObject> BeginLogin(JsonObject body) {
@@ -1397,7 +1466,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         if (path == "title-model/test") return Obj(("title", await titles.Generate("修复手机会话的消息顺序与状态显示")));
         if (path == "title-model/generate") return Obj(("title", await titles.Generate(body.S("input"), context.RequestAborted)));
         if (path == "title-model/models") return await titles.Models(body, context.RequestAborted);
-        if (path == "model-options") return await Models();
+        if (path == "model-options") {
+            if (bool.TryParse(context.Request.Query["refresh"], out var refresh) && refresh)
+                await InvalidateOfficialCatalog(context.RequestAborted);
+            return await Models(context.RequestAborted, context.Request.Query["session"].ToString());
+        }
         if (path == "projects" && method == "GET") return Obj(("data", await CodexProjects.List(rpc)));
         if (path == "usage") {
             var current = accounts.List().S("current");
@@ -1434,11 +1507,19 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     ("base_url", entry.Value.S("base_url")), ("model", providers[entry.Key].S("model", entry.Key == currentProvider ? config.S("model") : "")),
                     ("api_mode", "codex_responses"),
                     ("current", entry.Key == currentProvider),
+                    ("official_provider", CodexProviderModels.IsOfficial(entry.Key, entry.Value)),
+                    ("compatibility", CodexSessionModelSelection.ManagedProxy(entry.Value) ? "cc_switch_managed_proxy" : ""),
                     // requires_openai_auth 的三方条目复用官方登录凭据，本身不需要单独的 key。
                     ("uses_openai_auth", usesOpenAiAuth(entry.Value)),
                     ("has_api_key", providers[entry.Key].S("api_key").Length > 0 || entry.Value.S("env_key").Length > 0 ||
                         entry.Value.S("experimental_bearer_token").Length > 0 || usesOpenAiAuth(entry.Value))));
-                return Obj(("endpoints", rows));
+                var officialAuth = accounts.CurrentAuth();
+                foreach (var row in rows) {
+                    var state = CodexProviderModels.AuthState(row.B("official_provider"), config["model_providers"]?[row.S("id")], providers[row.S("id")], officialAuth);
+                    foreach (var field in state) row[field.Key] = field.Value?.DeepClone();
+                }
+                return Obj(("endpoints", rows), ("provider", currentProvider),
+                    ("official_provider", CodexProviderModels.IsOfficial(currentProvider, config["model_providers"]?[currentProvider])));
             }
             var id = body.S("id", "mobile_" + Guid.NewGuid().ToString("N")[..8]);
             if (id is "openai" or "ollama" or "lmstudio" or "amazon-bedrock") throw new CodexError("此标识由 Codex 内置 Provider 保留，请使用其他标识");
@@ -1463,7 +1544,19 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 try {
                     context.RequestAborted.ThrowIfCancellationRequested();
                     var runtimeModels = (await rpc.Call("model/list", new(), context.RequestAborted)).A("data");
-                    var selected = CodexModelSettings.Validate(body, await ProviderCatalog(body.S("provider"), context.RequestAborted), runtimeModels);
+                    var switchConfig = await Config();
+                    var targetProvider = body.S("provider");
+                    if (CodexSessionModelSelection.ManagedProxy(switchConfig["model_providers"]?[targetProvider]))
+                        throw new CodexError("此 Provider 是 CC Switch 托管的占位代理，RemoteTool 不支持直接切换，请配置实际 Provider", 409, "unsupported_provider", "rejected");
+                    var switchCatalog = await ProviderCatalog(targetProvider, context.RequestAborted);
+                    // Explicit manual model entry is necessary for endpoints without /models.
+                    if (!CodexProviderModels.IsOfficial(targetProvider, switchConfig["model_providers"]?[targetProvider]) &&
+                        switchCatalog.S("models_warning").Length > 0 && body.S("model").Trim().Length > 0 &&
+                        !switchCatalog.A("data").Any(row => row.S("model", row.S("id")) == body.S("model").Trim()))
+                        switchCatalog.A("data").Add(CodexProviderModels.Normalize(Obj(("data", new JsonArray(body.S("model").Trim()))))[0]!.DeepClone());
+                    var selected = CodexModelSettings.Validate(body, switchCatalog,
+                        targetProvider == switchConfig.S("model_provider", "openai") ? runtimeModels : null);
+                    RememberProviderModel(switchConfig);
                     var edits = new List<(string Key, object Value)> { ("model_provider", selected.S("modelProvider")), ("model", selected.S("model")) };
                     if (selected.S("providerBaseUrl").Length > 0) edits.Add(("model_providers." + selected.S("modelProvider") + ".base_url", selected["providerBaseUrl"]));
                     if (selected.ContainsKey("reasoningEffort")) edits.Add(("model_reasoning_effort", selected["reasoningEffort"]));
@@ -1471,14 +1564,31 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     // 聚合模式下模型目录由 cc-switch 生成（含 ccs-* 编码 slug）；切到官方或普通 provider
                     // 必须同时清掉这个键，否则模型列表仍是聚合目录、选中项也没有代理解码。
                     var leavingAggregate = IsAggregateCatalog(await Config());
-                    if (leavingAggregate) edits.Add(("model_catalog_json", ""));
+                    var officialTarget = CodexProviderModels.IsOfficial(targetProvider, switchConfig["model_providers"]?[targetProvider]);
+                    if (!officialTarget) edits.Add(("model_catalog_json", CodexRuntimeCatalog.WriteProvider(folder, targetProvider, switchCatalog.A("data"), selected.S("model"))));
+                    lock (gate) if (active.Count > 0) throw new CodexError("请先停止手机 Codex 任务再修改全局配置", 409);
+                    var originalPath = Path.Combine(home, "config.toml");
+                    var originalText = File.Exists(originalPath) ? await File.ReadAllTextAsync(originalPath) : null;
+                    try {
+                    if (leavingAggregate || officialTarget && switchConfig.S("model_catalog_json").Length > 0) {
+                        lock (gate) if (active.Count > 0) throw new CodexError("请先停止手机 Codex 任务再修改全局配置", 409);
+                        await CodexOfficialRouting.PrepareWorkspace(home, context.RequestAborted);
+                    }
                     await EditConfig(edits.ToArray());
                     await RestartForProviderChange();
+                    RememberProviderModel(await Config());
+                    } catch {
+                        if (rpc != null) await rpc.DisposeAsync();
+                        if (originalText != null) await File.WriteAllTextAsync(originalPath, originalText);
+                        else if (File.Exists(originalPath)) File.Delete(originalPath);
+                        await Launch();
+                        throw;
+                    }
                     return Obj(("saved", true), ("left_aggregate", leavingAggregate));
                 }
                 finally { settingsLock.Release(); }
             }
-            return await Models();
+            return await Models(context.RequestAborted);
         }
         if (p[0] == "sessions") {
             if (p.Length == 3 && p[2] is "fork" or "rewind" && method == "POST") return await MessageAction(p[1], p[2], body, context.RequestAborted);
@@ -1675,7 +1785,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 try {
                     lock (gate) if (active.ContainsKey(session)) throw new CodexError("请先停止任务再切换模型", 409);
                     CodexSessionModelSelection.RequireCurrentRequest(body, await Config());
-                    var selection = CodexModelSettings.Validate(body, await ProviderCatalog(body.S("provider"), context.RequestAborted));
+                    var sessionCatalog = await ProviderCatalog(body.S("provider"), context.RequestAborted, session);
+                    var selection = CodexModelSettings.Validate(body, sessionCatalog,
+                        body.S("provider") == (await Config()).S("model_provider", "openai") ? (await rpc.Call("model/list", new(), context.RequestAborted)).A("data") : null);
                     var request = await ResumeSessionRequest(session, applySelection: false); CodexModelSettings.ApplyResume(request, selection);
                     try {
                         // config/batchWrite reloads its own connection only. An idle

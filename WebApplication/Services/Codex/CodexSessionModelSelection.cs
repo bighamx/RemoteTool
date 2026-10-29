@@ -5,12 +5,13 @@ namespace RemoteTool.WebApi.Services.Codex;
 
 internal static class CodexSessionModelSelection
 {
+    public static bool ManagedProxy(JsonNode definition) => definition.S("experimental_bearer_token") == "PROXY_MANAGED";
     // CC Switch leaves its managed local endpoint on disk when the user switches
     // back to official routing. A dormant table is not a session routing choice.
     public static bool DormantManagedProxy(string provider, JsonObject config) {
         var definition = config["model_providers"]?[provider];
         return provider != config.S("model_provider", "openai") &&
-            definition.S("experimental_bearer_token") == "PROXY_MANAGED" &&
+            ManagedProxy(definition) &&
             Uri.TryCreate(definition.S("base_url"), UriKind.Absolute, out var address) && address.IsLoopback;
     }
 

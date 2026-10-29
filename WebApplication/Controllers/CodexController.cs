@@ -17,7 +17,9 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
         Forward(HttpMethod.Get, $"sessions/search?query={Uri.EscapeDataString(query ?? "")}" +
             (string.IsNullOrEmpty(cursor) ? "" : $"&cursor={Uri.EscapeDataString(cursor)}"), null, ct);
     [HttpGet("projects")] public Task Projects(CancellationToken ct) => Forward(HttpMethod.Get, "projects", null, ct);
-    [HttpGet("model-options")] public Task Models(CancellationToken ct) => Forward(HttpMethod.Get, "model-options", null, ct);
+    [HttpGet("model-options")] public Task Models([FromQuery] string session, [FromQuery] bool refresh, CancellationToken ct) =>
+        Forward(HttpMethod.Get, "model-options?refresh=" + (refresh ? "true" : "false") +
+            (string.IsNullOrEmpty(session) ? "" : "&session=" + Uri.EscapeDataString(Id(session))), null, ct);
     [HttpGet("providers")] public Task Providers(CancellationToken ct) => Forward(HttpMethod.Get, "providers", null, ct);
     [HttpGet("title-model")] public Task TitleModel(CancellationToken ct) => Forward(HttpMethod.Get, "title-model", null, ct);
     [HttpPost("title-model")] public Task SaveTitleModel([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "title-model", body, ct);

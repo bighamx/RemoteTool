@@ -157,6 +157,18 @@ try {
     var restored = await File.ReadAllTextAsync(Path.Combine(tomlTest, "config.toml"));
     Check(!restored.Contains("model_provider =") && restored.Contains("model = \"m\"") && restored.Contains("[model_providers.custom]"), "official routing clears only the top-level provider selector");
     Check(Directory.GetFiles(Path.Combine(tomlTest, "backups", "chuckie-helper"), "*", SearchOption.AllDirectories).Length > 0, "routing restoration keeps a config backup");
+    var aggregateConfig = "model_provider = \"custom\"\r\nmodel = \"ccs-relay/foreign-model\"\r\nmodel_catalog_json = \"cc-catalog.json\"\r\napproval_policy = \"never\"\r\n[model_providers.custom]\r\nbase_url = \"http://127.0.0.1:9/v1\"\r\nmodel = \"nested-preserved\"\r\n";
+    File.WriteAllText(Path.Combine(tomlTest,"config.toml"),aggregateConfig);
+    File.WriteAllText(Path.Combine(tomlTest,"cc-catalog.json"),"keep-owned-catalog");
+    await CodexOfficialRouting.PrepareWorkspace(tomlTest);
+    var direct = File.ReadAllText(Path.Combine(tomlTest,"config.toml"));
+    Check(!direct.Contains("model_provider =")&&!direct.Contains("model_catalog_json =")&&!direct.Contains("ccs-relay/foreign-model"),"official workspace detaches third-party provider, aggregate catalog and incompatible model");
+    Check(direct.Contains("approval_policy = \"never\"")&&direct.Contains("base_url =")&&direct.Contains("model = \"nested-preserved\""),"official workspace keeps unrelated root settings and provider definitions");
+    Check(File.ReadAllText(Path.Combine(tomlTest,"cc-catalog.json"))=="keep-owned-catalog","official workspace never deletes another tool's model catalog");
+    var backups = Directory.GetFiles(Path.Combine(tomlTest,"backups","chuckie-helper"),"config.toml",SearchOption.AllDirectories);
+    Check(backups.Any(path=>File.ReadAllText(path)==aggregateConfig),"official workspace preserves the exact pre-switch config backup");
+    await CodexOfficialRouting.PrepareWorkspace(tomlTest);
+    Check(File.ReadAllText(Path.Combine(tomlTest,"config.toml"))==direct&&Directory.GetFiles(Path.Combine(tomlTest,"backups","chuckie-helper"),"config.toml",SearchOption.AllDirectories).Length==backups.Length,"official workspace preparation is idempotent");
 } finally { Directory.Delete(tomlTest, true); }
 var streamed = new CodexAssistantMessageStream();
 var streamTurn = JsonNode.Parse("""{"status":"inProgress","items":[{"id":"first","type":"agentMessage","phase":"commentary","text":"先检查"}]}""")!.AsObject();

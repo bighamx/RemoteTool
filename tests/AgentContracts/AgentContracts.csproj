@@ -34,6 +34,7 @@
     <Compile Include="../../WebApplication/Services/Codex/CodexModelSettings.cs" Link="CodexModelSettings.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexSessionModelSelection.cs" Link="CodexSessionModelSelection.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexProviderModels.cs" Link="CodexProviderModels.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexCatalogMaintenance.cs" Link="CodexCatalogMaintenance.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexRuntimeCatalog.cs" Link="CodexRuntimeCatalog.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexHistoryWindow.cs" Link="CodexHistoryWindow.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexPreviewRollout.cs" Link="CodexPreviewRollout.cs" />

@@ -12,7 +12,7 @@ internal static class CodexProviderModels
     private static readonly string[] efforts = ["none", "minimal", "low", "medium", "high", "xhigh"];
 
     internal static bool IsOfficial(string id, JsonNode provider) => id == "openai" ||
-        provider.S("name") == "OpenAI" && provider.B("requires_openai_auth") &&
+        provider.B("requires_openai_auth") &&
         provider.S("base_url").Length == 0 && provider.S("env_key").Length == 0 &&
         provider.S("experimental_bearer_token").Length == 0 && provider?["auth"] == null &&
         (provider?["http_headers"] as JsonObject)?.Count is not > 0 &&
@@ -24,6 +24,8 @@ internal static class CodexProviderModels
         var selected = official.FirstOrDefault(row => row.S("slug") == current) ?? official.FirstOrDefault(row => row.S("slug") == "openai") ?? official[0];
         var merged = selected.DeepClone().AsObject();
         merged["name"] = "OpenAI / ChatGPT";
+        merged["is_current"] = official.Any(row => row.B("is_current"));
+        merged["current"] = merged.B("is_current");
         merged["aliases"] = new JsonArray(official.Select(row => (JsonNode)JsonValue.Create(row.S("slug"))).ToArray());
         return new JsonArray(rows.Where(row => !row.B("official_provider")).Select(row => row.DeepClone()).Append(merged).ToArray());
     }
@@ -61,15 +63,39 @@ internal static class CodexProviderModels
         return models;
     }
 
-    internal static JsonObject Catalog(string provider, JsonObject config, JsonNode saved, JsonObject native, JsonObject discovered) {
+    internal static JsonObject Catalog(string provider, JsonObject config, JsonNode saved, JsonObject native, JsonObject discovered, JsonObject sessionSelection = null) {
         if (IsOfficial(provider, config["model_providers"]?[provider])) return Obj(("official_provider", true),
             ("data", new JsonArray(native.A("data").Where(m => !m.B("hidden")).Select(m => m.DeepClone()).ToArray())));
         var models = discovered?.A("data").DeepClone().AsArray() ?? new JsonArray();
         // Only explicitly configured models supplement this endpoint's own catalog.
-        foreach (var model in new[] { saved.S("model"), provider == config.S("model_provider") ? config.S("model") : "" })
+        foreach (var model in new[] { saved.S("model"), provider == config.S("model_provider") ? config.S("model") : "",
+            sessionSelection.S("modelProvider") == provider ? sessionSelection.S("model") : "" })
             if (model.Length > 0 && !models.Any(m => m.S("model") == model))
                 models.Add(Normalize(Obj(("data", new JsonArray(model))))[0]!.DeepClone());
         return Obj(("data", models), ("models_warning", discovered.S("models_warning")), ("base_url", discovered.S("base_url")));
+    }
+
+    // Pair the persisted thread provider with the latest model from that thread's
+    // own rollout. A global default or an entire native catalog is not session evidence.
+    internal static JsonObject NativeSessionSelection(JsonNode thread, JsonObject latestSettings) {
+        var provider = thread.S("modelProvider");
+        var model = latestSettings.S("model", thread.S("model"));
+        if (provider.Length is 0 or > 80 || model.Length is 0 or > 256) return null;
+        return Obj(("modelProvider", provider), ("model", model));
+    }
+
+    // Describes locally observable credential configuration, never its validity.
+    internal static JsonObject AuthState(bool official, JsonNode definition, JsonNode saved, JsonObject officialAuth) {
+        string kind;
+        if (definition.S("experimental_bearer_token") == "PROXY_MANAGED") kind = "managed_proxy";
+        else if (official || definition.B("requires_openai_auth"))
+            kind = officialAuth?["tokens"].S("access_token").Length > 0 ? "openai_login" :
+                officialAuth.S("OPENAI_API_KEY").Length > 0 ? "api_key" : "missing";
+        else if (saved.S("api_key").Length > 0 || definition.S("experimental_bearer_token").Length > 0 ||
+            definition.S("env_key").Length > 0 && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(definition.S("env_key")))) kind = "api_key";
+        else if ((definition?["http_headers"] as JsonObject)?.Count > 0) kind = "headers";
+        else kind = "unknown"; // Public endpoints, external stores and env headers need runtime verification.
+        return Obj(("auth_known", kind != "unknown"), ("auth_kind", kind), ("auth_verified", false));
     }
 
     internal static async Task<JsonObject> Discover(JsonNode provider, JsonNode saved, CancellationToken ct = default, HttpClient client = null) {
