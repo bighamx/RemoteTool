@@ -112,6 +112,10 @@ internal static class CodexModelSelectionChecks
             var thirdPartyModels=(await Call("model/list",new()))["data"]!.AsArray();
             Check(thirdPartyModels.Count==1 && thirdPartyModels[0]!["model"]!.ToString()=="deepseek-test",
                 "real Codex reads the provider-only catalog without GPT cache entries");
+            var officialWhileCustom=await Invoke<JsonObject>("ProviderCatalog","openai",CancellationToken.None,null!);
+            Check(officialWhileCustom["data"]!.AsArray().Count>0 &&
+                !officialWhileCustom["data"]!.AsArray().Any(row=>row!["model"]!.ToString()=="deepseek-test"),
+                "official validation uses its isolated catalog while the active runtime is third-party");
             var beforeSwitch=(await Call("config/read",new JsonObject{["includeLayers"]=false}))["config"]!.AsObject();
             type.GetMethod("RememberProviderModel",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(agent,[beforeSwitch]);
             var savedProviders=JsonNode.Parse(File.ReadAllText(Path.Combine(root,"providers.json")))!;

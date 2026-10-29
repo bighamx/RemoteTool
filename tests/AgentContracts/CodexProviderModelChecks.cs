@@ -66,6 +66,14 @@ internal static class CodexProviderModelChecks
         var catalog = CodexProviderModels.Catalog("local", config, saved, native, discovered);
         Check(catalog.A("data").Count == 2, "all provider models, deduplicated");
         Check(!catalog.A("data").Any(m => m.S("model").StartsWith("gpt")), "no unrelated native catalog leakage");
+        var sharedCatalogConfig = config.DeepClone().AsObject();
+        sharedCatalogConfig["model_provider"] = "local";
+        sharedCatalogConfig["model"] = "glm";
+        sharedCatalogConfig["model_catalog_json"] = "shared-or-stale-catalog.json";
+        var scopedDespitePath = CodexProviderModels.Catalog("local", sharedCatalogConfig, saved, native, discovered);
+        Check(scopedDespitePath.A("data").Any(row => row.S("model") == "deepseek") &&
+            !scopedDespitePath.A("data").Any(row => row.S("model") == "gpt-native"),
+            "an explicit catalog path alone cannot replace the provider's discovered models with unrelated runtime entries");
         Check(CodexProviderModels.IsOfficial("team", Obj(("name", "OpenAI (Team)"), ("requires_openai_auth", true))), "renaming a native official alias preserves routing");
         Check(!CodexProviderModels.IsOfficial("team", Obj(("name", "OpenAI (Team)"), ("requires_openai_auth", true), ("base_url", "https://relay.example/v1"))), "renamed authenticated relay remains third-party");
         try {
