@@ -3,6 +3,23 @@ import copy
 import json
 import re
 
+def _gateway_input_projection(message):
+    """Normalize only the presentation tag on gateway-authored human input."""
+    if message.get("role") != "user" or message.get("display_kind") != "internal_notification":
+        return message
+    metadata = message.get("display_metadata")
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except (ValueError, TypeError):
+            return message
+    owner = metadata.get("gateway_input_owner") if isinstance(metadata, dict) else None
+    if not isinstance(owner, str) or not owner.strip():
+        return message
+    projected = dict(message)
+    projected.pop("display_kind", None)
+    return projected
+
 def _public_session(row):
     # Match the native API's client-safe session summary. Never return system prompts,
     # provider configuration or arbitrary stored fields to the mobile UI.
@@ -14,7 +31,7 @@ def _public_session(row):
 def _native_rewind_target(target):
     from agent.context_compressor import split_user_originated_turn
     from agent.memory_manager import sanitize_context
-    handoff, live = split_user_originated_turn(target)
+    handoff, live = split_user_originated_turn(_gateway_input_projection(target))
     if live is None:
         raise ValueError("Message is not a user-originated turn")
     content = live.get("content")
@@ -49,13 +66,34 @@ def message_action(db, body):
         # Native transaction refuses live writers/compression, and rechecks the complete active
         # set and canonical target so concurrent appends cannot be silently discarded.
         preserve, content = _native_rewind_target(target)
-        result = db.rewind_to_message(session_id, message_id, preserve_compaction_handoff=preserve,
-            expected_active_ids=active_ids, expected_target_content=content)
+        # Native rewind revalidates the original database row inside its guarded
+        # transaction. Apply the identical projection there, on this DB instance
+        # and for this call only; never change the stored presentation metadata.
+        normalize_native = _gateway_input_projection(target) is not target
+        sentinel = object()
+        previous = getattr(db, "__dict__", {}).get("_split_rewind_target", sentinel)
+        native_split = getattr(db, "_split_rewind_target", None)
+        if normalize_native:
+            if not callable(native_split):
+                raise RuntimeError("Hermes rewind validation is unavailable")
+            def split_target(row, expected, preserve_handoff):
+                return native_split(_gateway_input_projection(row), expected, preserve_handoff)
+            db._split_rewind_target = split_target
+        try:
+            result = db.rewind_to_message(session_id, message_id, preserve_compaction_handoff=preserve,
+                expected_active_ids=active_ids, expected_target_content=content)
+        finally:
+            if normalize_native:
+                if previous is sentinel:
+                    del db._split_rewind_target
+                else:
+                    db._split_rewind_target = previous
         return {"rewound": True, "rewound_count": result["rewound_count"]}
     if body.get("operation") != "fork":
         raise ValueError("Unsupported message action")
     fork_id = str(body.get("fork_id") or "")
-    if not re.fullmatch(r"mobile_fork_[a-f0-9]{32}", fork_id):
+    # Web and mobile both fork with their own prefix; the id itself is a plain session id.
+    if not re.fullmatch(r"(?:mobile|web)_fork_[a-f0-9]{32}", fork_id):
         raise ValueError("Invalid fork id")
     existing = db.get_session(fork_id)
     config = source.get("model_config") or {}

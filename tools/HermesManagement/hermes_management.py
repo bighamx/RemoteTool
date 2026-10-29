@@ -159,6 +159,8 @@ def main():
                         message = "消息已变更或属于压缩历史，请刷新后选择当前消息。"
                     elif "conversation changed" in reason or "transcript changed" in reason:
                         message = "会话已有新消息，请刷新后重新编辑。"
+                    elif "invalid fork id" in reason or "belongs to another operation" in reason:
+                        message = "分叉标识无效或已被占用，请刷新后重试。"
                     elif "user" in reason:
                         message = "此消息不支持编辑，请选择自己发送的消息。"
                     else:

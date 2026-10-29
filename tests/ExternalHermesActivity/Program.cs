@@ -120,6 +120,18 @@ using (var runDb = new SQLiteConnection(nativeRuns)) {
         "native runs use the configured Hermes directory, not the credentials directory");
 }
 var absentRuns = Path.Combine(root, "absent-runs.db");
+var provenancePath = Path.Combine(root, "message-provenance.db");
+using (var provenance = new SQLiteConnection(provenancePath)) {
+    provenance.Execute("CREATE TABLE messages(id INTEGER PRIMARY KEY,role TEXT,display_kind TEXT,display_metadata TEXT)");
+    provenance.Execute("INSERT INTO messages VALUES(1,'user','internal_notification',?)", "{\"gateway_input_owner\":\"private-owner\"}");
+    provenance.Execute("INSERT INTO messages VALUES(2,'user','internal_notification','{}')");
+    provenance.Execute("INSERT INTO messages VALUES(3,'user','internal_notification',?)", "{\"gateway_input_owner\":123}");
+    provenance.Execute("INSERT INTO messages VALUES(4,'user',NULL,NULL)");
+    var flags = HermesSessionActivity.ReadMessageEditability(provenancePath, [1,2,3,4,999]);
+    Check(flags[1] && !flags[2] && !flags[3], "gateway input can be edited while synthetic and malformed notifications cannot");
+    Check(!flags.ContainsKey(4) && !flags.ContainsKey(999), "provenance hints do not guess missing or ordinary message states");
+    Check(!System.Text.Json.JsonSerializer.Serialize(flags).Contains("private-owner"), "history editability never exposes gateway ownership identifiers");
+}
 Check(HermesSessionActivity.ReadActiveRunCandidates(absentRuns, "desktop").Count == 0 && !File.Exists(absentRuns),
     "read-only discovery never creates a missing native run database");
 Check(HermesSessionActivity.ReadActiveRunCandidates(nativeRuns, "../other").Count == 0,

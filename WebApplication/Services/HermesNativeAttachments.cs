@@ -166,6 +166,12 @@ public sealed class HermesNativeAttachments(HermesProfiles profiles, HermesAttac
             var sources=Sources(session,message).ToArray();
             var cards=sources.Select(source=>TryMetadata(message,source,session)).Where(card=>card!=null).ToArray();
             row["attachments"]=JsonSerializer.SerializeToNode(cards);
+            // The upstream inline_images flag can still return image_url blocks
+            // containing data URIs. Cards already expose canonical downloads;
+            // never send their binary payload as printable message content.
+            if(Decode(message.Content) is JsonArray parts && parts.Count>0 && parts.All(part=>
+                part is JsonObject block && block["type"]?.ToString() is "text" or "input_text" or "image_url" or "input_image"))
+                row["content"]=string.Join('\n',Text(parts));
             if(message.Role=="user" && cards.Length>0 && row["content"] is JsonValue value && value.TryGetValue<string>(out var text)) {
                 var paths = sources.Where(source=>source.Path!=null).Select(source=>System.IO.Path.GetFullPath(source.Path)).ToHashSet(OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal);
                 bool Resolved(string line) {

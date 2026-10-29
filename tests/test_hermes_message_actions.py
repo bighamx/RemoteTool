@@ -1,6 +1,8 @@
 import copy
 import importlib.util
+import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -73,6 +75,75 @@ class ActionsTests(unittest.TestCase):
         self.assertNotIn("system_prompt", result["session"])
         self.assertEqual(actions.message_action(db, body)["session"]["id"], result["session"]["id"])
         self.assertEqual(len(db.sessions), 2)
+
+    def test_fork_accepts_the_web_prefix_as_well(self):
+        db = FakeDB()
+        web = {"session_id": "source", "operation": "fork", "message_id": 11, "fork_id": "web_fork_" + "b" * 32}
+        self.assertEqual(actions.message_action(db, web)["session"]["id"], web["fork_id"])
+        for bad in ("web_fork_" + "B" * 32, "fork_" + "b" * 32, "web_fork_" + "b" * 31):
+            with self.assertRaises(ValueError):
+                actions.message_action(db, {**web, "fork_id": bad})
+
+
+class NativeActionsTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="remotetool-rewind-")
+        self.addCleanup(self.temp.cleanup)
+        environment = patch.dict(os.environ, {"HERMES_HOME": self.temp.name, "HERMES_DISABLE_LAZY_INSTALLS": "1"})
+        environment.start()
+        self.addCleanup(environment.stop)
+        try:
+            from hermes_state import SessionDB
+        except ImportError as error:
+            self.skipTest("Hermes runtime required: " + str(error))
+        self.db = SessionDB(db_path=Path(self.temp.name) / "fixture.db")
+        self.addCleanup(self.db.close)
+        self.db.create_session("source", "api_server")
+
+    def request(self, mid):
+        return {"session_id": "source", "operation": "rewind", "message_id": mid, "expected_latest_user_id": mid}
+
+    def test_gateway_user_rewinds_through_both_native_guards_without_rewriting_tags(self):
+        metadata = {"gateway_input_owner": "fixture-input-owner"}
+        mid = self.db.append_message("source", "user", "real user request", display_kind="internal_notification", display_metadata=metadata)
+        self.db.append_message("source", "assistant", "answer")
+        self.assertTrue(actions.message_action(self.db, self.request(mid))["rewound"])
+        self.assertEqual(self.db.get_active_message_ids("source"), [])
+        archived = next(row for row in self.db.get_messages("source", include_inactive=True) if row["id"] == mid)
+        self.assertEqual(archived["display_kind"], "internal_notification")
+        self.assertEqual(archived["display_metadata"], metadata)
+        self.assertNotIn("_split_rewind_target", self.db.__dict__)
+
+    def test_synthetic_notifications_without_a_real_owner_never_rewind(self):
+        for metadata in ({}, {"gateway_input_owner": ""}, {"gateway_input_owner": 123}, {"gateway_input_owner": "   "}):
+            with self.subTest(metadata=metadata):
+                mid = self.db.append_message("source", "user", "synthetic status", display_kind="internal_notification", display_metadata=metadata)
+                before = self.db.get_active_message_ids("source")
+                with self.assertRaises(ValueError):
+                    actions.message_action(self.db, self.request(mid))
+                self.assertEqual(self.db.get_active_message_ids("source"), before)
+
+    def test_native_transaction_still_rejects_changed_active_set_and_restores_adapter(self):
+        mid = self.db.append_message("source", "user", "real request", display_kind="internal_notification", display_metadata={"gateway_input_owner": "owner"})
+        native_rewind = self.db.rewind_to_message
+        def race(*args, **kwargs):
+            self.db.append_message("source", "assistant", "concurrent answer")
+            return native_rewind(*args, **kwargs)
+        with patch.object(self.db, "rewind_to_message", side_effect=race), self.assertRaises(RuntimeError):
+            actions.message_action(self.db, self.request(mid))
+        self.assertEqual(len(self.db.get_active_message_ids("source")), 2)
+        self.assertNotIn("_split_rewind_target", self.db.__dict__)
+
+    def test_native_transaction_rechecks_owner_provenance_before_any_rewind(self):
+        mid = self.db.append_message("source", "user", "real request", display_kind="internal_notification", display_metadata={"gateway_input_owner": "owner"})
+        native_rewind = self.db.rewind_to_message
+        def revoke_owner(*args, **kwargs):
+            self.db._execute_write(lambda connection: connection.execute("UPDATE messages SET display_metadata='{}' WHERE id=?", (mid,)))
+            return native_rewind(*args, **kwargs)
+        with patch.object(self.db, "rewind_to_message", side_effect=revoke_owner), self.assertRaises(ValueError):
+            actions.message_action(self.db, self.request(mid))
+        self.assertEqual(self.db.get_active_message_ids("source"), [mid])
+        self.assertNotIn("_split_rewind_target", self.db.__dict__)
 
 
 if __name__ == "__main__": unittest.main()

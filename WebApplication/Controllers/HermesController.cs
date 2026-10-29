@@ -281,13 +281,13 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         var request = JsonNode.Parse(body.GetRawText())!.AsObject();
         request["session_id"] = Id(id); request["operation"] = operation;
         if (operation == "rewind" && activity.Read(id)["running"]?.GetValue<bool>() == true)
-            return Conflict(new { message = "请先等待任务结束再编辑" });
+            return Conflict(new { message = "请先等待任务结束再编辑", code = "session_running", delivery = "rejected" });
         try {
             var result = JsonNode.Parse((await management.Invoke("message_action", JsonSerializer.SerializeToElement(request), ct)).GetRawText())!.AsObject();
-            if (result["error"]?.ToString() is string failure) return Conflict(new { message = failure });
+            if (result["error"]?.ToString() is string failure) return Conflict(new { message = failure, code = "message_action_rejected", delivery = "rejected" });
             result.Remove("message_id_map");
             return Ok(result);
-        } catch (InvalidOperationException error) { return Conflict(new { message = error.Message }); }
+        } catch (InvalidOperationException error) { return StatusCode(502, new { message = error.Message, code = "message_action_unknown", delivery = "unknown" }); }
     }
     [HttpPost("sessions/{id}/pin")] public Task PinSession(string id, [FromBody] JsonElement body, CancellationToken ct) {
         if (!body.TryGetProperty("pinned", out var pinned) || pinned.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) {
@@ -333,6 +333,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             state["started_at"]?.GetValue<long>() ?? 0, id, state["revision"]?.ToString() ?? "");
         json = AgentHistoryWindow.Select(json, limit, from_id, older_before);
         json = AgentInteractiveMessages.Present(json);
+        json = activity.PresentMessageEditability(json);
         return nativeAttachments.Present(id, json?.ToJsonString() ?? "{}");
     }
     [HttpPost("sessions/{id}/messages/{messageId}/attachments")] public IActionResult BindAttachments(string id, string messageId, [FromBody] JsonElement body)

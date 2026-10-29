@@ -22,6 +22,45 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
     public IReadOnlyDictionary<string, JsonObject> ReadMany(IEnumerable<string> ids) => ReadDatabase(DatabasePath, ids, false);
     public IReadOnlyList<string> ActiveRunCandidates(string id) => ReadActiveRunCandidates(Path.Combine(Path.GetDirectoryName(DatabasePath)!, "runs_idempotency.db"), id);
 
+    public JsonNode PresentMessageEditability(JsonNode document) {
+        if (document?["data"] is not JsonArray data) return document;
+        var rows = data.OfType<JsonObject>().Where(row => row["role"]?.ToString() == "user").ToArray();
+        var flags = ReadMessageEditability(DatabasePath, rows.Select(row => long.TryParse(row["id"]?.ToString(), out var id) ? id : 0));
+        foreach (var row in rows)
+            if (long.TryParse(row["id"]?.ToString(), out var id) && flags.TryGetValue(id, out var editable) && row["editable"]?.ToString() != "false")
+                row["editable"] = editable;
+        return document;
+    }
+
+    // The native HTTP projection omits display_metadata. Return only the boolean
+    // provenance decision, never expose the gateway input owner's identifier.
+    internal static IReadOnlyDictionary<long, bool> ReadMessageEditability(string database, IEnumerable<long> ids) {
+        var result = new Dictionary<long, bool>();
+        var selected = ids.Where(id => id > 0).Distinct().Take(1000).ToArray();
+        if (selected.Length == 0 || !File.Exists(database)) return result;
+        try {
+            SQLitePCL.Batteries_V2.Init();
+            using var db = new SQLiteConnection(database, SQLiteOpenFlags.ReadOnly | SQLiteOpenFlags.FullMutex);
+            db.BusyTimeout = TimeSpan.FromMilliseconds(250);
+            var placeholders = string.Join(',', selected.Select(_ => "?"));
+            foreach (var row in db.Query<MessageProvenanceRow>($"SELECT id,display_metadata FROM messages WHERE role='user' AND display_kind='internal_notification' AND id IN ({placeholders})", selected.Cast<object>().ToArray())) {
+                var humanInput = false;
+                try {
+                    using var metadata = JsonDocument.Parse(row.Metadata ?? "{}");
+                    humanInput = metadata.RootElement.ValueKind == JsonValueKind.Object &&
+                        metadata.RootElement.TryGetProperty("gateway_input_owner", out var owner) &&
+                        owner.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(owner.GetString());
+                } catch (JsonException) { }
+                result[row.Id] = humanInput;
+            }
+        } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException or DllNotFoundException or TypeInitializationException) { }
+        return result;
+    }
+    private sealed class MessageProvenanceRow {
+        [Column("id")] public long Id { get; set; }
+        [Column("display_metadata")] public string Metadata { get; set; }
+    }
+
     public sealed record SessionModelSetting(string Provider, string Effort, string Model = "", string BaseUrl = "");
 
     /// <summary>会话当前模型设置（提供方 / 思考等级 / 模型）的权威记录，取自 state.db 的 model_config，

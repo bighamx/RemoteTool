@@ -558,8 +558,10 @@
                     this.stopEventStream();this.activeRun=null;this.approval=null;
                     const activity=activityState||await api.get(`${base}/sessions/${api.id(id)}/activity`);
                     if(!current())return;
+                    const wasExternalRunning=this.externalRunning;
                     this.externalActivity=activity;this.externalRunning=!!activity.running;this.selectedStatusKnown=activity.available!==false;
                     this.liveTools=this.externalRunning?(activity.progress||[]).map(row=>({id:row.id,tool:row.tool||row.name||'工具',preview:row.preview||'',status:row.status||'running',open:false})):[];
+                    if(wasExternalRunning&&!this.externalRunning&&this.selectedStatusKnown)await this.loadHistory(epoch);
                 }catch(error){if(current())this.error=error.message;}
             },
             async takeover() {if(this.agent!=='codex'||!this.externalRunning||!this.selectedId)return;if(!confirm('将中断其他客户端正在执行的任务，并由 Web 端接管会话。继续？'))return;try{const id=this.selectedId;const result=await api.post(`${base}/sessions/${api.id(id)}/takeover`,{expected_activity_id:this.externalActivity?.activity_id||''});if(!result.ready)throw new Error('接管尚未确认');this.externalRunning=false;this.externalActivity=null;await this.refreshAll();}catch(e){this.error=e.message;}},
@@ -697,11 +699,33 @@
             openSessionMenu(event,item) {if(!item?.id)return;this.sessionMenu={x:Math.max(8,Math.min(event.clientX,innerWidth-190)),y:Math.max(8,Math.min(event.clientY,innerHeight-(agent==='codex'?370:300))),session:item};},
             closeSessionMenu() {this.sessionMenu=null;},
             escapeMessageMenu(event) {if(event.key==='Escape'){this.closeMessageMenu();this.closeSessionMenu();this.closeSessionMenus();}},
-            canEditMessage(message) {return message?.role==='user'&&!!message.id&&message.editable!==false&&!this.activeRun&&!this.pending;},
+            editBlockedReason() {if(this.externalRunning)return '其他客户端正在执行，请在原客户端结束任务后编辑';if(this.activeRun)return '当前任务正在执行，请先停止任务再编辑';if(this.pending)return '请先核对待确认的消息';return '';},
+            canEditMessage(message) {return message?.role==='user'&&!!message.id&&message.editable!==false&&!this.activeRun&&!this.externalRunning&&!this.pending&&!this.sending;},
             async copyMessage(message) {try{await navigator.clipboard.writeText(this.messageText(message));this.$Message.success('已复制消息');}catch(e){this.error=e.message;}finally{this.closeMessageMenu();}},
             editMessage(message) {this.closeMessageMenu();if(!this.selectedId||!this.canEditMessage(message))return;this.editTarget=message;this.editText=this.messageText(message);this.editFiles=[...(message.attachments||[])];this.editError='';this.showEditDialog=true;},
             async uploadEditFiles(event) {const files=Array.from(event.target.files||[]);event.target.value='';if(!this.selectedId||!files.length)return;this.editing=true;try{for(const file of files){const body=new FormData();body.append('file',file);const result=await api.request(`${base}/sessions/${api.id(this.selectedId)}/files`,{method:'POST',body});this.editFiles.push(result.attachment||result.file||result);}}catch(error){this.editError=error.message;}finally{this.editing=false;}},
-            async submitEdit() {const message=this.editTarget;const input=this.editText.trim();if(!message||!input||this.editing||!this.canEditMessage(message))return;const id=this.selectedId;this.draft=input;this.attachments=[...this.editFiles];this.editing=true;const boundary={message_id:message.id,expected_last_turn_id:[...this.messages].reverse().find(m=>m.turn_id)?.turn_id||null,expected_latest_user_id:[...this.messages].reverse().find(m=>m.role==='user'&&m.id)?.id||null};try{const result=await api.post(`${base}/sessions/${api.id(id)}/rewind`,boundary);if(!result.rewound)throw new Error('回退未确认');this.showEditDialog=false;await this.loadHistory();await this.send();}catch(error){this.editError='结果未确认；草稿已保留，请核对会话历史。'+error.message;}finally{this.editing=false;}},
+            async submitEdit() {
+                const message=this.editTarget,input=this.editText.trim();
+                if(!message||!input||this.editing)return;
+                if(!this.canEditMessage(message)){this.editError=this.editBlockedReason()||'此消息当前不能编辑';return;}
+                const id=this.selectedId,epoch=this.epoch;
+                this.draft=input;this.attachments=[...this.editFiles];this.editing=true;this.editError='';
+                let rewound=false;
+                const boundary={message_id:message.id,expected_last_turn_id:[...this.messages].reverse().find(m=>m.turn_id)?.turn_id||null,expected_latest_user_id:[...this.messages].reverse().find(m=>m.role==='user'&&m.id)?.id||null};
+                try {
+                    const result=await api.post(`${base}/sessions/${api.id(id)}/rewind`,boundary);
+                    if(!result.rewound)throw new Error('回退未确认');
+                    rewound=true;
+                    if(this.selectedId!==id||this.epoch!==epoch)return;
+                    this.showEditDialog=false;await this.loadHistory(epoch);
+                    if(this.selectedId===id&&this.epoch===epoch)await this.send();
+                }catch(error){
+                    if(this.selectedId!==id||this.epoch!==epoch)return;
+                    this.editError=rewound?'回退已完成；后续发送未完成，草稿已保留。'+error.message:
+                        error.delivery==='rejected'||error.status===409?error.message:'结果未确认；草稿已保留，请核对会话历史。'+error.message;
+                    if(rewound)this.error=this.editError;
+                }finally{this.editing=false;}
+            },
             async compact() {if(!confirm('压缩此会话上下文？'))return;try{await api.post(`${base}/sessions/${api.id(this.selectedId)}/compact`,{}, {'Idempotency-Key':newKey()});await this.loadStatus();}catch(e){this.error=e.message;}},
             async stopRun() {if(!this.activeRun)return;try{await api.post(`${base}/runs/${api.id(this.activeRun)}/stop`);await this.loadStatus();}catch(e){this.error=e.message;}},
             async approve(choice) {if(!this.activeRun||!this.approval)return;try{await api.post(`${base}/runs/${api.id(this.activeRun)}/approval`,{choice,request_id:this.approval.request_id});this.approval=null;}catch(e){this.error=e.message;}},

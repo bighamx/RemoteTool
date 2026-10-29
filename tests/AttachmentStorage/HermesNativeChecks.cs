@@ -26,6 +26,14 @@ internal static class HermesNativeChecks {
                 db.Execute("INSERT INTO messages VALUES(1,'s','user',char(0)||'json:'||?)",parts.ToJsonString());
             }
             var inline=View(1);
+            var structured=native.Present("s",new JsonObject { ["data"]=new JsonArray(new JsonObject {
+                ["id"]=1,["role"]="user",["content"]=new JsonArray(
+                    new JsonObject{{"type","text"},{"text","caption"}},
+                    new JsonObject{{"type","image_url"},{"image_url",new JsonObject{{"url",data}}}})
+            }) }.ToJsonString())["data"][0];
+            Check(structured["content"] is JsonValue && structured["content"].ToString()=="caption" &&
+                !structured.ToJsonString().Contains("base64"),"multimodal history exposes text plus cards, never printable base64 blocks");
+            Check(structured["attachments"].AsArray().Count==1,"normalizing content preserves native image cards");
             Check(inline["attachments"].AsArray().Count==1,"inline base64 image must be restored from Hermes database alone");
             var inlineId=inline["attachments"][0]["id"].ToString();
             Check(native.Resolve("s",inlineId).Bytes.SequenceEqual(bytes),"inline picture must remain downloadable without an original file");
