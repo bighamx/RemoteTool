@@ -5,6 +5,7 @@
     <Compile Include="../../WebApplication/Services/PhoneControl/PhoneGateway.cs" Link="PhoneGateway.cs"/>
     <Compile Include="../../WebApplication/Services/PhoneControl/PhoneSessionIntegration.cs" Link="PhoneSessionIntegration.cs"/>
     <Compile Include="../../WebApplication/Services/HermesProfiles.cs" Link="HermesProfiles.cs"/>
+    <Compile Include="../../WebApplication/Services/HermesSetupRequired.cs" Link="HermesSetupRequired.cs"/>
     <Compile Include="../../WebApplication/Services/RemoteControl/InteractiveProcessLauncher.cs" Link="InteractiveProcessLauncher.cs"/>
     <Compile Include="../../WebApplication/Services/RemoteControl/AgentStartupLogger.cs" Link="AgentStartupLogger.cs"/>
     <Compile Include="../../WebApplication/Services/PhoneControl/PhoneMcpProtocol.cs" Link="PhoneMcpProtocol.cs"/>

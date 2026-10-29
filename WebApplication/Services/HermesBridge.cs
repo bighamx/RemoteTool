@@ -4,7 +4,6 @@ using System.Text.Json;
 
 namespace RemoteTool.WebApi.Services;
 
-public sealed class HermesSetupRequired(string message) : Exception(message);
 
 /// <summary>Server-only credential access. No client-supplied upstream URL or key.</summary>
 public sealed class HermesBridge(IHttpClientFactory clients, IConfiguration configuration)

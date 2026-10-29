@@ -10,6 +10,7 @@
     <Using Include="Microsoft.Extensions.Configuration" />
     <Compile Include="../../WebApplication/Services/HermesBridge.cs" Link="HermesBridge.cs" />
     <Compile Include="../../WebApplication/Services/HermesProfiles.cs" Link="HermesProfiles.cs" />
+    <Compile Include="../../WebApplication/Services/HermesSetupRequired.cs" Link="HermesSetupRequired.cs" />
     <Compile Include="../../WebApplication/Services/HermesTitleService.cs" Link="HermesTitleService.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexRpc.cs" Link="CodexRpc.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexAttachmentInput.cs" Link="CodexAttachmentInput.cs" />

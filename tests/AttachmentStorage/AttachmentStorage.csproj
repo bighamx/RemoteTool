@@ -8,6 +8,7 @@
     <Compile Include="../../WebApplication/Services/HermesNativeAttachments.cs" Link="HermesNativeAttachments.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexAttachmentAccess.cs" Link="CodexAttachmentAccess.cs" />
     <Compile Include="../../WebApplication/Services/HermesProfiles.cs" Link="HermesProfiles.cs" />
+    <Compile Include="../../WebApplication/Services/HermesSetupRequired.cs" Link="HermesSetupRequired.cs" />
     <Compile Include="../../WebApplication/Services/AssistantMediaPaths.cs" Link="AssistantMediaPaths.cs" />
     <Compile Include="../../WebApplication/Services/AgentHistoryWindow.cs" Link="AgentHistoryWindow.cs" />
     <Compile Include="../../WebApplication/Services/CompletedToolHistory.cs" Link="CompletedToolHistory.cs" />
