@@ -101,8 +101,6 @@ $destination = [IO.Path]::GetFullPath($OutputDirectory)
 $apkName = "RemoteTool-$versionName.apk"
 $targetApk = Join-Path $destination $apkName
 $manifestPath = Join-Path $destination 'remotetool-update.json'
-# Installed versions through build 43 request the legacy filename.
-$legacyManifestPath = Join-Path $destination 'chuckiehelper-update.json'
 $notesTarget = Join-Path $destination 'release-notes.txt'
 $manifest = [ordered]@{
     schemaVersion = 1
@@ -119,10 +117,9 @@ New-Item -ItemType Directory -Path $destination -Force | Out-Null
 if ($apkSource -ne $targetApk) { Copy-Item -LiteralPath $apkSource -Destination $targetApk -Force }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 5), $utf8)
-Copy-Item -LiteralPath $manifestPath -Destination $legacyManifestPath -Force
 [IO.File]::WriteAllText($notesTarget, $notes, $utf8)
 if ((Get-ApkSha256 $targetApk) -ne $manifest.sha256) { throw 'Copied APK hash mismatch.' }
-$releaseAssets = @($targetApk, $manifestPath, $legacyManifestPath)
+$releaseAssets = @($targetApk, $manifestPath)
 if ($companion) {
     $phoneName = "RemoteTool-PhoneControl-$($companion.VersionName).apk"
     $phoneTarget = Join-Path $destination $phoneName
