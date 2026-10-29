@@ -50,11 +50,17 @@ internal sealed class CodexDesktopSync(string home)
         try { return await request(); }
         catch (CodexError error) when (error.Code == "desktop_no_client" && Guid.TryParseExact(id, "D", out _)) {
             // The broker explicitly rejected routing: no owner received the operation.
-            await open(id);
-            for (var attempt = 0; ; attempt++) {
-                await Task.Delay(250);
-                try { await discover(id); break; }
-                catch (CodexError unavailable) when (unavailable.Code == "desktop_no_client" && attempt < 1) { }
+            try {
+                await open(id);
+                for (var attempt = 0; ; attempt++) {
+                    await Task.Delay(250);
+                    try { await discover(id); break; }
+                    catch (CodexError unavailable) when (unavailable.Code == "desktop_no_client" && attempt < 1) { }
+                }
+            } catch (CodexError) {
+                // Only discovery ran after the explicit rejection. Its timeout
+                // cannot make the still-unsent user operation's delivery unknown.
+                throw new CodexError("桌面会话尚未就绪，本次操作未投递。请在 Mac Codex 中打开该会话后重试。", 409, "session_owner_unavailable", "rejected");
             }
             // A timeout or disconnect must never enter this retry path.
             return await request();
