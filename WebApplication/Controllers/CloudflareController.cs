@@ -84,14 +84,20 @@ public sealed class CloudflareController(CloudflareAccounts accounts) : Controll
                 if(type==DnsRecordType.MX && (priority==null||priority<0||priority>65535))throw new ArgumentException("MX 优先级应为 0–65535");
                 if(type!=DnsRecordType.A&&type!=DnsRecordType.AAAA&&type!=DnsRecordType.CNAME)proxied=null;
                 if(record.Length==0) return await client.Dns.CreateDnsRecordAsync(zone,new CreateDnsRecordRequest(type,name,content,ttl,proxied,Comment:Text(body,"comment"),Priority:priority),ct);
+                var existing=await client.Dns.GetDnsRecordAsync(zone,record,ct);
+                RequireMutableDns(existing);
                 if(type==DnsRecordType.MX) {
-                    var old=await client.Dns.GetDnsRecordAsync(zone,record,ct);
+                    var old=existing;
                     return await client.Dns.UpdateDnsRecordAsync(zone,record,new UpdateDnsRecordRequest(type,name,content,ttl,proxied,Text(body,"comment"),old.Tags,priority??old.Priority,old.Settings),ct);
                 }
                 // Patch preserves unedited tags, settings and other type-specific fields.
                 return await client.Dns.PatchDnsRecordAsync(zone,record,new PatchDnsRecordRequest(type,name,content,ttl,proxied,Comment:Text(body,"comment")),ct);
             }
-            case "dns.delete": await client.Dns.DeleteDnsRecordAsync(Required(body,"zone"),Required(body,"record"),ct);return new {ok=true};
+            case "dns.delete": {
+                var zone=Required(body,"zone");var record=Required(body,"record");
+                RequireMutableDns(await client.Dns.GetDnsRecordAsync(zone,record,ct));
+                await client.Dns.DeleteDnsRecordAsync(zone,record,ct);return new {ok=true};
+            }
             case "r2.buckets": {
                 var result=await client.Accounts.Buckets.ListAsync(new ListR2BucketsFilters(PerPage:100,Cursor:Text(body,"cursor",null)),cancellationToken:ct);
                 return new {items=result.Items,cursor=result.CursorInfo?.Cursor};
@@ -150,6 +156,12 @@ public sealed class CloudflareController(CloudflareAccounts accounts) : Controll
         }
     }
     internal static string Quote(string name) => "\""+name.Replace("\"","\"\"")+"\"";
+    internal static void RequireMutableDns(DnsRecord row) {
+        if(row.Meta?.ReadOnly==true)
+            throw new ArgumentException(!string.IsNullOrWhiteSpace(row.Meta.OriginWorkerId)
+                ? "此 DNS 记录由 Worker 管理且为只读，请前往 Cloudflare 的 Worker → 设置 → 域和路由修改绑定"
+                : "此 DNS 记录由 Cloudflare 标记为只读，请前往对应服务的配置页面管理");
+    }
     internal static bool DnsMatches(DnsRecord row,string query) => new[]{row.Name,row.Content,row.Comment}.Any(value=>value?.Contains(query,StringComparison.OrdinalIgnoreCase)==true);
 
     [HttpPost("accounts/{id}/r2/upload"),RequestSizeLimit(100*1024*1024),RequestFormLimits(MultipartBodyLengthLimit=100*1024*1024)]

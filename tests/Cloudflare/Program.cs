@@ -63,6 +63,18 @@ try {
     Check(searched["items"].AsArray().Count==1&&searched["total"].GetValue<int>()==1,"DNS free-text search matches record contents case-insensitively");
     await Call("dns.save",new{zone=new string('b',32),record="record",type="TXT",name="test.example.com",content="a+b/#%",ttl=1,proxied=false});
     Check(handler.LastMethod=="PATCH"&&JsonNode.Parse(handler.LastBody)["content"].ToString()=="a+b/#%","DNS patch preserves untouched fields and exact content");
+    var metadataList=await Call("dns.list",new{zone=new string('b',32)});
+    Check(metadataList["items"][2]["meta"]["origin_worker_id"].ToString()=="worker-id"&&metadataList["items"][2]["meta"]["read_only"].GetValue<bool>(),"Actual Worker metadata survives existing SDK list and controller serialization");
+    Check(metadataList["items"][2]["meta"]["future_flag"].GetValue<bool>(),"Unknown DNS metadata survives SDK upgrade");
+    foreach(var recordId in new[]{"worker","readonly"})
+    foreach(var operation in new[]{"dns.save","dns.delete"}) {
+        var body=JsonSerializer.SerializeToElement(new{operation,zone=new string('b',32),record=recordId,type="AAAA",name="worker.example.com",content="100::",ttl=1});
+        Check(await controller.Execute(id,body,default) is BadRequestObjectResult && handler.LastMethod=="GET","Read-only DNS rejected before write: "+recordId+" "+operation);
+    }
+    await Call("dns.save",new{zone=new string('b',32),record="worker-writable",type="AAAA",name="worker.example.com",content="100::",ttl=1});
+    Check(handler.LastMethod=="PATCH","Worker ID alone does not invent read-only status");
+    await Call("dns.delete",new{zone=new string('b',32),record="placeholder"});
+    Check(handler.LastMethod=="DELETE","100:: placeholder alone does not prove Worker ownership");
     var db=await Call("d1.list");Check(db["items"].AsArray().Count==1,"D1 list");
     var buckets=await Call("r2.buckets");Check(buckets["items"][0]["name"].ToString()=="my-bucket","R2 bucket SDK listing");
     var listing=await Call("r2.list",new{bucket="my-bucket",prefix="dir/",cursor="cursor+#%"});
@@ -110,12 +122,15 @@ sealed class MockCloudflare:HttpMessageHandler {
     public int Calls;public string LastPath,LastBody,LastMethod;
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct) {
         Calls++;LastPath=request.RequestUri.PathAndQuery;LastBody=request.Content==null?"":await request.Content.ReadAsStringAsync(ct);LastMethod=request.Method.Method;
-        object result=LastPath.Contains("/dns_records") ? request.Method==HttpMethod.Get?(object)new[]{new{id="one",name="www.example.com",type="A",content="192.0.2.1",ttl=1},new{id="two",name="txt.example.com",type="TXT",content="verification-data",ttl=1}}:new{id="record",name="test.example.com",type="TXT",content="a+b/#%",ttl=1}
+        object result=LastPath.Contains("/dns_records") ? request.Method==HttpMethod.Get?(object)new object[]{new{id="one",name="www.example.com",type="A",content="192.0.2.1",ttl=1},new{id="two",name="txt.example.com",type="TXT",content="verification-data",ttl=1},new{id="worker",name="worker.example.com",type="AAAA",content="100::",ttl=1,meta=new{origin_worker_id="worker-id",read_only=true,future_flag=true}}}:new{id="record",name="test.example.com",type="TXT",content="a+b/#%",ttl=1}
             :LastPath.Contains("/d1/database") ? LastPath.EndsWith("/query")?new[]{new{success=true,results=new[]{new{value=1}},meta=new{duration=1.0,rows_read=1,rows_written=0}}}:(object)new[]{new{uuid="db",name="database"}}
             :LastPath.Contains("/r2/buckets") ? new{buckets=new[]{new{name="my-bucket",creation_date="2026-10-28T00:00:00Z"}}}
             :LastPath.Contains("/configurations") ? new{config=new{ingress=new[]{new{service="http_status:404"}}}}
             :LastPath.Contains("/cfd_tunnel") ? new[]{new{id="tunnel",name="test",status="healthy"}}
             :new[]{new{id=new string('b',32),name="example.com",status="active"}};
+        if(LastPath.Contains("/dns_records/")&&request.Method==HttpMethod.Get) {
+            result=new{id="record",name="test.example.com",type="AAAA",content="100::",ttl=1,meta=new{origin_worker_id=LastPath.EndsWith("/worker")||LastPath.EndsWith("/worker-writable")?"worker-id":null,read_only=LastPath.EndsWith("/worker")||LastPath.EndsWith("/readonly")}};
+        }
         if(LastPath.Contains("/cfd_tunnel/")) {
             if(LastPath.EndsWith("/token"))result="mock-connector-token";
             else if(LastPath.EndsWith("/connections"))result=new[]{new{id="connector",version="2026.10.0",arch="windows_amd64",conns=new[]{new{id="edge",client_id="connector",colo_name="HKG",origin_ip="192.0.2.1"}}}};

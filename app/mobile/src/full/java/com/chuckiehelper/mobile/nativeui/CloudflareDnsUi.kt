@@ -64,6 +64,12 @@ internal fun CfDnsRecordRow(row:JSONObject,busy:Boolean,edit:()->Unit,delete:()-
                 Text(row.optString("content"),style=MaterialTheme.typography.bodySmall,maxLines=1,overflow=TextOverflow.Ellipsis,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 val proxy=if(row.optBoolean("proxied"))"已代理" else "仅 DNS"
                 Text("$proxy · TTL ${if(row.optInt("ttl")==1)"自动" else row.optInt("ttl").toString()+"s"}",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                cloudflareDnsProtection(row)?.let { protection ->
+                    Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Outlined.Warning, null, Modifier.size(14.dp), tint=MaterialTheme.colorScheme.tertiary)
+                        Text(protection.label,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.tertiary)
+                    }
+                }
             }
             IconButton(onClick=delete,enabled=!busy,modifier=Modifier.size(32.dp)){Icon(Icons.Outlined.Delete,"删除记录",Modifier.size(18.dp))}
         }

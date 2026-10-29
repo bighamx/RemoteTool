@@ -65,7 +65,12 @@ private fun CloudflareContent(api: NativeApi, cloud: CloudAccountModel, onError:
                 { confirm=CfConfirm("移除账户",current.optString("name")) { model.removeAccount() } }
             }) { model.saveAccount(it) }
     }
-    fun dnsEditor(row: JSONObject? = null) {
+    fun dnsEditor(row: JSONObject? = null, warned: Boolean = false) {
+        val protection = row?.let(::cloudflareDnsProtection)
+        if (!warned && protection != null) {
+            confirm = CfConfirm(protection.label, protection.warning) { if (!protection.managed) dnsEditor(row, true) }
+            return
+        }
         val initial = JSONObject((row ?: JSONObject()).toString())
             .put("zone", args.getString("zone")).put("record", row?.optString("id").orEmpty())
         if (row == null) initial.put("type","A").put("ttl",1).put("proxied",false)
@@ -195,7 +200,12 @@ private fun CloudflareContent(api: NativeApi, cloud: CloudAccountModel, onError:
                 } else {
                     items(model.items) { row ->
                         if(where.operation=="dns.list") {
-                            CfDnsRecordRow(row,model.busy,edit={dnsEditor(row)},delete={confirm=CfConfirm("删除记录",row.optString("name")){model.mutate("dns.delete",JSONObject(args.toString()).put("record",row.getString("id")))}})
+                            CfDnsRecordRow(row,model.busy,edit={dnsEditor(row)},delete={
+                                val protection = cloudflareDnsProtection(row)
+                                confirm=CfConfirm(if(protection?.managed==true)protection.label else "删除记录",listOfNotNull(row.optString("name"),protection?.warning).joinToString("\n\n")) {
+                                    if(protection?.managed!=true) model.mutate("dns.delete",JSONObject(args.toString()).put("record",row.getString("id")))
+                                }
+                            })
                             return@items
                         }
                         if(where.operation=="d1.tables") {
