@@ -20,6 +20,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private readonly CodexDesktopSync desktopSync;
     private readonly CodexHandoff handoff;
     private readonly CodexTitleGenerator titles;
+    private readonly CodexSessionPermissions sessionPermissions;
     private readonly object gate = new();
     private readonly SemaphoreSlim settingsLock = new(1, 1);
     private JsonObject providers, runs;
@@ -451,6 +452,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         sessionMoves = new CodexSessionMoves(Path.Combine(home, "remotetool-session-moved.json"));
         titles = new CodexTitleGenerator(Path.GetDirectoryName(config)!);
         journal = Path.Combine(folder, "runs.json");
+        sessionPermissions = new CodexSessionPermissions(Path.Combine(folder, "session-permissions.json"));
         providers = Read(Path.Combine(folder, "providers.json")); runs = Read(journal);
         handoff = new CodexHandoff(settings["handoff"], settings.S("token"), (id, state) => {
             lock (gate) {
@@ -765,8 +767,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 key ??= "approval_" + Guid.NewGuid().ToString("N");
                 approvals[key] = new ApprovalRequest(run, session, nativeId, origin, message.DeepClone().AsObject());
             }
-            var approval = Obj(("request_id", key), ("kind", method.EndsWith("requestUserInput") ? "user_input" : "approval"),
-                ("description", p.S("reason", p.S("command", "Codex 请求你的确认"))), ("command", p.S("command")), ("questions", p.A("questions")));
+            var approval = CodexApproval.Describe(key, message);
             lock (gate) runs[run]!["approval"] = approval.DeepClone();
             if (created) Emit(run, "approval.request", approval.Select(x => (x.Key, (object)x.Value)).ToArray());
             return;
@@ -1269,6 +1270,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         ct.ThrowIfCancellationRequested();
         if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$")) throw new CodexError("缺少任务幂等标识");
         var fingerprint = Hash(body.ToJsonString()); var session = body.S("session_id"); var run = "codex_" + Guid.NewGuid().ToString("N");
+        var permissionMode = sessionPermissions.Get(session);
         lock (gate) foreach (var entry in runs) if (entry.Value.S("key") == key) {
             if (entry.Value.S("fingerprint") != fingerprint) throw new CodexError("相同任务标识内容不一致", 409);
             return Obj(("run_id", entry.Key), ("status", entry.Value.S("status")), ("delivery", RunDelivery(entry.Value)), ("replayed", true));
@@ -1325,6 +1327,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             JsonObject selection = null;
             lock (gate) if (sessionOverrides.TryGetValue(session, out var chosen)) selection = chosen.DeepClone().AsObject();
             var turnRequest = Obj(("threadId", session), ("input", inputs), ("clientUserMessageId", key));
+            CodexSessionPermissions.Apply(permissionMode, turnRequest);
             if (selection != null) {
                 // Selection already contains validated defaults. Custom endpoints need
                 // not be queried again on the latency-sensitive send path.
@@ -1429,8 +1432,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                         changed = runs[run]?["approval"].S("request_id") != requestKey;
                         approvals[requestKey] = new ApprovalRequest(run, session, nativeId, null, request.DeepClone().AsObject());
                     }
-                    var approval = Obj(("request_id", requestKey), ("kind", request.S("method").EndsWith("requestUserInput") ? "user_input" : "approval"),
-                        ("description", p.S("reason", p.S("command", "Codex 请求你的确认"))), ("command", p.S("command")), ("questions", p.A("questions")));
+                    var approval = CodexApproval.Describe(requestKey, request.AsObject());
                     lock (gate) runs[run]!["approval"] = approval.DeepClone();
                     if (changed) Emit(run, "approval.request", approval.Select(x => (x.Key, (object)x.Value)).ToArray());
                 } else lock (gate) runs[run]!.AsObject().Remove("approval");
@@ -1455,7 +1457,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
         if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", RemoteToolPaths.CodexBridgeVersion), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
-        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("native_session_search", true), ("model_settings_snapshot", true), ("phone_tools", true), ("state_version", RemoteToolPaths.CodexBridgeVersion));
+        if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("native_session_search", true), ("model_settings_snapshot", true), ("phone_tools", true), ("session_permissions", true), ("approval_choices", true), ("state_version", RemoteToolPaths.CodexBridgeVersion));
         if (path == "sessions/search" && method == "GET") {
             var query = context.Request.Query["query"].ToString().Trim();
             if (query.Length is < 1 or > 500) throw new CodexError("搜索关键词应为 1 至 500 字", 400);
@@ -1725,6 +1727,15 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 return await CreateSession(body);
             }
             var session = p[1];
+            if (p.Length == 3 && p[2] == "permissions") {
+                if (method == "POST") {
+                    context.RequestAborted.ThrowIfCancellationRequested();
+                    // Validate the target without resuming or interrupting its writer.
+                    await ReadThread(session, false, context.RequestAborted);
+                    sessionPermissions.Set(session, body.S("mode"));
+                } else if (method != "GET") throw new CodexError("不支持的请求方式", 405);
+                return Obj(("mode", sessionPermissions.Get(session)), ("applies_to", "next_turn"));
+            }
             if (p.Length == 3 && p[2] == "compact" && method == "POST") return await CompactSession(session, context.Request.Headers["Idempotency-Key"].ToString());
             if (p.Length == 3 && p[2] == "context") {
                 var rolloutPath = CodexPreviewRollout.LatestPath(home, session, "");
@@ -1785,6 +1796,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     await ReleaseSessionCore(session);
                     await rpc.Call("thread/delete", Obj(("threadId", session)));
                     sessionPins.Set(session, false);
+                    sessionPermissions.Remove(session);
                     sessionMoves.Remove(session);
                     lock (gate) { sessionOverrides.Remove(session); PersistModels(); }
                     await desktopSync.NotifyRemoved(new[] { session });
@@ -1970,9 +1982,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 }
                 try {
                 var request = saved.Message;
-                JsonObject answer = request.S("method").EndsWith("requestUserInput") ? Obj(("answers", body["answers"] ?? new JsonObject()))
-                    : request.S("method") == "item/permissions/requestApproval" ? Obj(("permissions", body.S("choice") == "once" ? request["params"]?["permissions"] ?? new JsonObject() : new JsonObject()), ("scope", "turn"))
-                    : Obj(("decision", body.S("choice") == "once" ? "accept" : "decline"));
+                var answer = CodexApproval.Answer(request, body);
                 if (state.S("owner") == "desktop") await desktopSync.Reply(state.S("session_id"), request, answer);
                 else await saved.Origin.Write(Obj(("id", request["id"]), ("result", answer)));
                 lock (gate) {

@@ -3,6 +3,8 @@
 package com.chuckiehelper.mobile.nativeui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.*
@@ -19,11 +21,13 @@ fun TextDocument(
     initial: String,
     editable: Boolean,
     close: () -> Unit,
+    preview: (@Composable (String) -> Unit)? = null,
     save: (String) -> Unit,
 ) {
     fun plain(value: String) = value.replace(Regex("\u001b\\[[0-?]*[ -/]*[@-~]"), "")
     var text by remember { mutableStateOf(if (editable) initial else plain(initial)) }
     var discard by remember { mutableStateOf(false) }
+    var showPreview by remember(title) { mutableStateOf(preview != null) }
     LaunchedEffect(initial) { if (!editable) text = plain(initial) }
     fun exit() {
         if (editable && text != initial) discard = true else close()
@@ -40,11 +44,19 @@ fun TextDocument(
                     navigationIcon = {
                         IconButton(onClick = { exit() }) { Icon(Icons.Outlined.Close, "关闭") }
                     },
-                    actions = { if (editable) TextButton(onClick = { save(text) }) { Text("保存") } },
+                    actions = {
+                        if (preview != null) TextButton(onClick = { showPreview = !showPreview }) {
+                            Text(if (showPreview) "编辑" else "预览")
+                        }
+                        if (editable) TextButton(onClick = { save(text) }) { Text("保存") }
+                    },
                 )
             }
         ) { padding ->
-            OutlinedTextField(
+            if (showPreview && preview != null) Box(
+                Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp)
+            ) { preview(text) }
+            else OutlinedTextField(
                 text,
                 { if (editable) text = it },
                 readOnly = !editable,

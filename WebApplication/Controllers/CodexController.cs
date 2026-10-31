@@ -70,6 +70,8 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     }
     [HttpPost("sessions/{id}/rewind")] public Task Rewind(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/rewind", body, ct);
     [HttpPost("sessions/{id}/model")] public Task SetModel(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/model", body, ct);
+    [HttpGet("sessions/{id}/permissions")] public Task Permissions(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"sessions/{Id(id)}/permissions", null, ct);
+    [HttpPost("sessions/{id}/permissions")] public Task SetPermissions(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"sessions/{Id(id)}/permissions", body, ct);
     [HttpGet("sessions/{id}/messages")] public async Task<IActionResult> Messages(string id, [FromQuery] int limit = 100, [FromQuery] string from_id = null, [FromQuery] string older_before = null, CancellationToken ct = default) {
         var (status, payload) = await MessagesCore(Id(id), limit, from_id, older_before, ct);
         return StatusCode(status, payload);

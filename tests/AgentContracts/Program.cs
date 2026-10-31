@@ -16,6 +16,7 @@ if (args.Length == 3 && args[0] == "--desktop-probe") {
 await CodexMacDesktopChecks.Run();
 await CodexDesktopOwnerChecks.Run();
 await HermesSetupChecks.Run();
+CodexApprovalChecks.Run();
 MacNonDesktopChecks.Run();
 await HermesHistoryPagesChecks.Run();
 await ScheduledMessageChecks.Run();

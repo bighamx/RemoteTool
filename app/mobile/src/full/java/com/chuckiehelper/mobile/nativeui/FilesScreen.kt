@@ -646,7 +646,8 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onClose: (() -> Unit)
         }
     }
     document?.let { (target, text, hex) ->
-        TextDocument(if (hex) "十六进制 · $target" else target, text, true, { document = null }) { value
+        TextDocument(if (hex) "十六进制 · $target" else target, text, true, { document = null },
+            preview = if (!hex && isMarkdownDocument(target)) { { content -> HermesMarkdown(content, Modifier.fillMaxWidth()) } } else null) { value
             ->
             task {
                 if (!hex) api.json("/api/files/write", obj("path" to target, "content" to value))
@@ -672,6 +673,9 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onClose: (() -> Unit)
     }
     media?.let { file -> MediaViewer(api, file, { media = null }) { download(file) } }
 }
+
+internal fun isMarkdownDocument(path: String): Boolean =
+    path.substringAfterLast('.').lowercase(java.util.Locale.ROOT) in setOf("md", "markdown", "mdown")
 
 fun isComposeFile(name: String) =
     name.lowercase().matches(Regex("(?:docker-)?compose(?:[.-].+)?\\.ya?ml"))

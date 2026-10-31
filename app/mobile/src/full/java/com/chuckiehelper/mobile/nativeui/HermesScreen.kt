@@ -137,6 +137,16 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     var deleteChat by remember { mutableStateOf<JSONObject?>(null) }
     var handoverSession by remember { mutableStateOf<JSONObject?>(null) }
     var models by remember { mutableStateOf(false) }
+    var permissionsDialog by remember(model.selectedId) { mutableStateOf(false) }
+    var accessMode by remember(model.selectedId, api.base) { mutableStateOf("default") }
+    LaunchedEffect(model.selectedId, list, api.base) {
+        val id = model.selectedId
+        if (agent == "codex" && !list && id != null) {
+            try { accessMode = api.json("/api/codex/sessions/${android.net.Uri.encode(id)}/permissions").optString("mode", "default") }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (_: Exception) { /* Older servers keep the existing chat usable. */ }
+        }
+    }
     var providers by remember { mutableStateOf(false) }
     var titleModelDialog by remember { mutableStateOf(false) }
     var admin by remember { mutableStateOf(false) }
@@ -407,6 +417,8 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                             handoverSession = obj("id" to model.selectedId, "title" to model.title)
                         },
                     )
+                    if (agent == "codex" && !list && model.selectedId != null) DropdownMenuItem(
+                        text = { Text("会话权限") }, onClick = { menu = false; permissionsDialog = true })
                     if (agent == "codex") DropdownMenuItem(text = { Text("账户与工作空间") }, onClick = { menu = false; accountsPanel = true; model.fetchAccounts() })
                     DropdownMenuItem(text = { Text("标题生成模型") }, onClick = { menu = false; titleModelDialog = true; model.fetchTitleModel() })
                     (listOf("模型选择" to "/model") +
@@ -428,6 +440,9 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             }
         }
         if (agent == "codex") CodexUsage(model, compact = true) { accountsPanel = true; model.fetchAccounts() }
+        if (agent == "codex" && !list && accessMode == "full") TextButton(onClick = { permissionsDialog = true }) {
+            Text("权限设置：完全访问", style = MaterialTheme.typography.labelSmall)
+        }
         if (!list && model.selectedId != null) AgentContextInfo(model.contextInfo,
             model.runtime + if (model.sessionEffort.isNotBlank()) " · ${effortLabel(model.sessionEffort)}思考" else "",
             onClick = { globalModels = false; models = true; model.fetchModels() })
@@ -845,15 +860,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                                     }
                                 if (agent == "codex" && approval.optString("kind") == "user_input") {
                                     CodexQuestions(approval) { model.answerQuestions(it) }
-                                } else Row {
-                                    FilledTonalButton(onClick = { model.approve("once") }) {
-                                        Text("仅允许本次")
-                                    }
-                                    Spacer(Modifier.width(8.dp))
-                                    OutlinedButton(onClick = { model.approve("deny") }) {
-                                        Text("拒绝")
-                                    }
-                                }
+                                } else AgentApprovalButtons(approval, model.submitting) { model.approve(it) }
                             }
                         }
                 }
@@ -1208,6 +1215,9 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
         onProviders = { providers = true; model.fetchProviders() },
         onTitle = { titleModelDialog = true; model.fetchTitleModel() }, onClose = { admin = false })
     if (models) HermesModelPicker(model, if (agent == "hermes") globalModels else null) { models = false }
+    if (permissionsDialog && agent == "codex") model.selectedId?.let { session ->
+        CodexSessionPermissionsDialog(api, session, { permissionsDialog = false }, { accessMode = it })
+    }
     if (providers) HermesProviderDialog(model) { providers = false }
     if (titleModelDialog) CodexTitleModelDialog(model) { titleModelDialog = false }
     if (accountsPanel) CodexAccountsDialog(model, { accountsPanel = false }, {

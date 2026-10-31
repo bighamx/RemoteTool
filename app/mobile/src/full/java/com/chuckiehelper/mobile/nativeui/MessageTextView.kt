@@ -25,7 +25,7 @@ internal class MessageTextView(context: Context) : TextView(context) {
         // The theme's optimal paragraph breaking can spend seconds in Minikin
         // (WordBreaker/breakLineOptimal) while measuring a selectable message.
         // Greedy wrapping preserves the source and uses bounded line decisions.
-        breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
+        breakStrategy = android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE
         hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
     }
 

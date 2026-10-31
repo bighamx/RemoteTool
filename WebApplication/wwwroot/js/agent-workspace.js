@@ -54,7 +54,7 @@
             adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminSettings:{},adminProvider:{},adminEndpoints:[],adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [], schedules: [], showSchedule: false, scheduleText: '', scheduleAt: '', scheduleError: '', scheduleBusy: false,
-            activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
+            activeRun: null, runStatus: '', approval: null, approvalBusy:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsError:'',showPermissionsDialog:false, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
             groupByProject: localStorage.getItem(`remotetool:web:groupByProject:${agent}`) === '1',
             collapsedGroups: (() => { try { return JSON.parse(localStorage.getItem(`remotetool:web:collapsedGroups:${agent}`) || '[]'); } catch { return []; } })(),
             showMoveDialog: false, moveTarget: null, moveMoving: false, moveSearch: '', moveError: '',
@@ -149,7 +149,11 @@
             effortChoices() { return this.agent==='codex'?(this.modelMetadata.supportedReasoningEfforts||[]).map(x=>x.reasoningEffort).filter(Boolean):['none','minimal','low','medium','high','xhigh','max','ultra']; },
             tierChoices() { return (this.modelMetadata.serviceTiers||[]).map(x=>x.id).filter(Boolean); },
             questionText() { const q=this.context.question; return q?.questions?.map(x=>x.question||x.title).join(' · ')||q?.question||'请回答会话中的问题'; },
-            approvalText() { const a=this.approval; return a?.reason||a?.message||a?.description||'当前任务请求确认'; }
+            approvalText() { const a=this.approval; return a?.reason||a?.message||a?.description||'当前任务请求确认'; },
+            approvalChoices() {
+                const rows=Array.isArray(this.approval?.choices)?this.approval.choices.filter(x=>typeof x.id==='string'&&x.id&&typeof x.label==='string'&&x.label):[];
+                return rows.length?rows:[{id:'once',label:'仅允许本次'},{id:'deny',label:'拒绝'}];
+            }
         },
         methods: {
             async adminAction(action) {
@@ -461,7 +465,7 @@
                 this.stopEventStream();
                 this.olderLoading=false;
                 if(this.scrollFrame!==null){cancelAnimationFrame(this.scrollFrame);this.scrollFrame=null;}
-                const current=++this.epoch; if(scrollRestoreTimer){clearTimeout(scrollRestoreTimer);scrollRestoreTimer=null;} this.selected=item; this.selectedId=item.id; this.selectedStatusKnown=false; this.sessionsOpen=false;this.dialog=null;this.showEditDialog=false;this.messages=[];this.historyLoading=true; this.historyHasMore=false; this.oldestId=null; this.followLatest=true;this.showJumpToLatest=false;this.lastTimelineTop=0; this.activeRun=null; this.externalRunning=false;this.externalActivity=null;this.approval=null; this.context={}; this.queue=[]; this.attachments=[]; this.sessionFiles=[];this.mediaSignature='';this.filesRefreshAt=0;this.error='';this.liveSegments=[];this.liveTools=[];this.streamSeq=0;this.streamGone=false;
+                const current=++this.epoch; if(scrollRestoreTimer){clearTimeout(scrollRestoreTimer);scrollRestoreTimer=null;} this.selected=item; this.selectedId=item.id;this.permissionsMode='default';this.permissionsChoice='default';this.permissionsLoaded=false;this.permissionsLoading=false;this.permissionsSaving=false;this.showPermissionsDialog=false;this.approvalBusy=false; this.selectedStatusKnown=false; this.sessionsOpen=false;this.dialog=null;this.showEditDialog=false;this.messages=[];this.historyLoading=true; this.historyHasMore=false; this.oldestId=null; this.followLatest=true;this.showJumpToLatest=false;this.lastTimelineTop=0; this.activeRun=null; this.externalRunning=false;this.externalActivity=null;this.approval=null; this.context={}; this.queue=[]; this.attachments=[]; this.sessionFiles=[];this.mediaSignature='';this.filesRefreshAt=0;this.error='';this.liveSegments=[];this.liveTools=[];this.streamSeq=0;this.streamGone=false;
                 this.pending=this.restorePending(item.id);this.delivered=this.restoreDelivered(item.id);if(this.pending?.delivery==='已发送')this.acceptPending(item.id,this.pending.key); this.draft=localStorage.getItem(draftKey(item.id))||'';
                 if (agent === 'hermes') localStorage.setItem(selectedSessionKey, item.id);
                 try { this.attachments = JSON.parse(localStorage.getItem(draftFilesKey(item.id)) || '[]'); } catch { this.attachments = []; }
@@ -469,6 +473,7 @@
                 try { await this.refreshAll(current); if(current===this.epoch){await this.$nextTick();this.scrollToLatest();} } finally { if(current===this.epoch)this.historyLoading=false; }
             },
             async refreshAll(epoch=this.epoch) { if (!this.selectedId) return;
+                if(this.agent==='codex')void this.loadPermissions(epoch);
                 if(this.agent==='hermes') {
                     // Render history as soon as it arrives. Context/model reads may
                     // launch Python helpers and must not hold the message pane open.
@@ -728,9 +733,47 @@
             },
             async compact() {if(!confirm('压缩此会话上下文？'))return;try{await api.post(`${base}/sessions/${api.id(this.selectedId)}/compact`,{}, {'Idempotency-Key':newKey()});await this.loadStatus();}catch(e){this.error=e.message;}},
             async stopRun() {if(!this.activeRun)return;try{await api.post(`${base}/runs/${api.id(this.activeRun)}/stop`);await this.loadStatus();}catch(e){this.error=e.message;}},
-            async approve(choice) {if(!this.activeRun||!this.approval)return;try{await api.post(`${base}/runs/${api.id(this.activeRun)}/approval`,{choice,request_id:this.approval.request_id});this.approval=null;}catch(e){this.error=e.message;}},
+            async loadPermissions(epoch=this.epoch) {
+                if(this.agent!=='codex'||!this.selectedId)return;
+                const current=this.startRead('permissions',epoch),id=this.selectedId;
+                this.permissionsLoading=true;this.permissionsLoaded=false;this.permissionsError='';
+                try {
+                    const result=await api.get(`${base}/sessions/${api.id(id)}/permissions`);
+                    if(!current())return;
+                    this.permissionsMode=result.mode||'default';this.permissionsChoice=this.permissionsMode;this.permissionsLoaded=true;
+                } catch(error) {if(current())this.permissionsError=error.message;}
+                finally {if(current())this.permissionsLoading=false;}
+            },
+            openPermissions() {if(this.agent!=='codex'||!this.selectedId)return;this.closeSessionMenus();this.showPermissionsDialog=true;this.loadPermissions();},
+            async savePermissions() {
+                if(!this.permissionsLoaded||this.permissionsSaving||!['workspace','full'].includes(this.permissionsChoice))return;
+                const id=this.selectedId,epoch=this.epoch,mode=this.permissionsChoice;
+                this.permissionsSaving=true;this.permissionsError='';
+                try {
+                    const result=await api.post(`${base}/sessions/${api.id(id)}/permissions`,{mode});
+                    if(this.selectedId!==id||this.epoch!==epoch)return;
+                    this.permissionsMode=result.mode;this.showPermissionsDialog=false;this.$Message.success('权限已保存，下一轮通过 RemoteTool 发送的消息开始生效');
+                } catch(error) {if(this.selectedId===id&&this.epoch===epoch)this.permissionsError=error.message;}
+                finally {if(this.epoch===epoch)this.permissionsSaving=false;}
+            },
+            async submitApproval(body) {
+                if(this.approvalBusy||!this.activeRun||!this.approval)return;
+                const run=this.activeRun,request=this.approval.request_id,epoch=this.epoch;
+                this.approvalBusy=true;
+                try {
+                    await api.post(`${base}/runs/${api.id(run)}/approval`,{...body,request_id:request});
+                    if(this.epoch===epoch&&this.activeRun===run&&this.approval?.request_id===request)this.approval=null;
+                } catch(error) {if(this.epoch===epoch)this.error=error.message;}
+                finally {if(this.epoch===epoch)this.approvalBusy=false;}
+            },
+            async approve(choice) {
+                if(this.approvalBusy)return;
+                const option=this.approvalChoices.find(row=>row.id===choice);if(!option)return;
+                if((choice==='always'||choice.startsWith('network:'))&&!confirm(`${option.label}\n${option.detail||''}\n\nCodex 将保存这条规则，用于之后匹配的请求。`))return;
+                await this.submitApproval({choice});
+            },
             answerQuestion() {const request=this.context.question;if(!request)return;const replies=[];for(const [index,question] of (request.questions||[]).entries()){const answer=prompt(`${question.question||question.title||'请回答'}${question.options?.length?'\n'+question.options.map(option=>option.label).join(' / '):''}`);if(answer===null)return;replies.push({questionItemId:JSON.stringify(['request_user_input_async',request.request_id,index]),question:question.question||'',answer});}this.draft=`<send_user_message_question_reply>\n${JSON.stringify(replies)}\n</send_user_message_question_reply>`;this.$nextTick(()=>document.querySelector('.agent-compose-wrap textarea')?.focus());},
-            async answerApprovalQuestion() {if(!this.activeRun||!this.approval)return;const answers={};for(const question of this.approval.questions||[]){const answer=prompt(question.question||question.title||'请回答');if(answer===null)return;answers[question.id]={answers:[answer]};}try{await api.post(`${base}/runs/${api.id(this.activeRun)}/approval`,{request_id:this.approval.request_id,answers});this.approval=null;}catch(e){this.error=e.message;}},
+            async answerApprovalQuestion() {if(!this.activeRun||!this.approval)return;const answers={};for(const question of this.approval.questions||[]){const answer=prompt(question.question||question.title||'请回答');if(answer===null)return;answers[question.id]={answers:[answer]};}try{await this.submitApproval({answers});}catch(e){this.error=e.message;}},
             composerKeydown(e) {if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();this.send();}},
             restorePending(id) {try{const p=JSON.parse(localStorage.getItem(receiptKey(id))||'null');return p?.key?p:null;}catch{return null;}},
             savePending() {if(this.selectedId){if(this.pending)localStorage.setItem(receiptKey(this.selectedId),JSON.stringify(this.pending));else localStorage.removeItem(receiptKey(this.selectedId));}},
