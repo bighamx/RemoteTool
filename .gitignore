@@ -170,3 +170,9 @@ aoci.meta.txt
 aoci.code.txt
 AGENTS.md
 tools/RemoteTool.MacAgent/build/
+
+# Linux publish output (tools/Deploy-Linux.ps1)
+.tmp-linux-publish/
+.tmp-linux-publish.tar.gz
+publish-linux/
+remotetool-linux.tar.gz
