@@ -38,6 +38,7 @@
     const markdownCache = new Map();
     if (markdown) {
         markdown.disable('image');
+        markdown.linkify.set({fuzzyLink:false,fuzzyEmail:false,fuzzyIP:false});
         markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
             tokens[index].attrSet('target', '_blank');
             tokens[index].attrSet('rel', 'noopener noreferrer');

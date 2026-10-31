@@ -49,3 +49,10 @@ test('permission saves are bound to the selected session and invalid mode is ign
     state.selectedId='session-b';state.epoch++;state.permissionsMode='workspace';
     finish({mode:'full'});await saving;assert.equal(state.permissionsMode,'workspace');
 });
+
+test('Markdown links require an explicit URL or Markdown link',()=>{
+    const markdown=require('../WebApplication/wwwroot/vendor/markdown-it/markdown-it.min.js')({linkify:true});
+    markdown.linkify.set({fuzzyLink:false,fuzzyEmail:false,fuzzyIP:false});
+    assert.equal(markdown.render('另一个项目 agents.md / example.com / user@example.com').includes('<a '),false);
+    assert.equal((markdown.render('[规则](https://example.com/rules) https://example.com/docs').match(/<a /g)||[]).length,2);
+});

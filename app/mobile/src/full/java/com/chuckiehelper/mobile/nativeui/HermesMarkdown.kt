@@ -2,7 +2,11 @@ package com.chuckiehelper.mobile.nativeui
 
 import android.content.Context
 import android.text.Spanned
-import android.text.util.Linkify
+import android.text.Spannable
+import android.text.style.ClickableSpan
+import android.text.style.URLSpan
+import android.view.View
+import android.widget.TextView
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -24,7 +28,8 @@ import io.noties.markwon.MarkwonConfiguration
 import io.noties.markwon.LinkResolverDef
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
-import io.noties.markwon.linkify.LinkifyPlugin
+import io.noties.markwon.core.spans.CodeSpan
+import io.noties.markwon.core.spans.CodeBlockSpan
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.Dispatchers
@@ -33,18 +38,34 @@ import kotlinx.coroutines.withContext
 internal fun createMessageMarkwon(context: Context, onLinkTap: ((String) -> Boolean)? = null): Markwon = Markwon.builder(context)
     .usePlugin(TablePlugin.create(context))
     .usePlugin(StrikethroughPlugin.create())
-    // Agent output contains long numeric IDs/logs, not phone contacts. Android's
-    // libphonenumber matcher can monopolize the UI thread and trigger an ANR.
-    .usePlugin(LinkifyPlugin.create(Linkify.WEB_URLS or Linkify.EMAIL_ADDRESSES))
     .usePlugin(object : AbstractMarkwonPlugin() {
+        private val fallback = LinkResolverDef()
         override fun configureConfiguration(builder: MarkwonConfiguration.Builder) {
-            val fallback = LinkResolverDef()
             builder.linkResolver { view, link ->
                 if (onLinkTap?.invoke(link) != true) fallback.resolve(view, link)
             }
         }
+        override fun afterSetText(textView: TextView) {
+            val text = textView.text as? Spannable ?: return
+            // Only explicit HTTP(S) URLs. Domain guessing turns filenames like
+            // agents.md and Chinese prose into bogus links; code stays literal.
+            for (match in explicitWebLinks.findAll(text)) {
+                val url = match.value.trimEnd('.', ',', ';', ':', '!', '?')
+                val start = match.range.first; val end = start + url.length
+                if (text.getSpans(start, end, ClickableSpan::class.java).isNotEmpty() ||
+                    text.getSpans(start, end, CodeSpan::class.java).isNotEmpty() ||
+                    text.getSpans(start, end, CodeBlockSpan::class.java).isNotEmpty()) continue
+                text.setSpan(object : URLSpan(url) {
+                    override fun onClick(widget: View) {
+                        if (onLinkTap?.invoke(url) != true) fallback.resolve(widget, url)
+                    }
+                }, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
     })
     .build()
+
+private val explicitWebLinks = Regex("https?://[^\\s<>`\"，。；！？、【】「」]+", RegexOption.IGNORE_CASE)
 
 private data class MarkdownFrame(val source: String, val parsed: Spanned)
 
