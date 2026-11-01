@@ -60,6 +60,15 @@ public sealed class RunRegistry
         }
     }
 
+    /// <summary>登记的 run 与发起时间（Unix 秒）；无登记返回 null。</summary>
+    public (string RunId, long UpdatedAt)? QueryEntry(string agent, string sessionId)
+    {
+        lock (gate)
+            if (entries.TryGetValue(Key(agent, sessionId), out var e))
+                return (e["run_id"]?.GetValue<string>() ?? "", e["updated_at"]?.GetValue<long>() ?? 0);
+        return null;
+    }
+
     /// <summary>返回该会话登记的活跃 run_id，无则 null。</summary>
     public string? Query(string agent, string sessionId)
     {
