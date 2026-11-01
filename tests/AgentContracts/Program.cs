@@ -13,6 +13,8 @@ if (args.Length == 3 && args[0] == "--desktop-probe") {
     Console.WriteLine($"Desktop activity: running={live.B("running")}, status={live.S("status")}");
     return;
 }
+CodexSessionPermissionsChecks.Run();
+if (args.Contains("--permissions-only")) return;
 await CodexMacDesktopChecks.Run();
 await CodexDesktopOwnerChecks.Run();
 await HermesSetupChecks.Run();

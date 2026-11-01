@@ -5,7 +5,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../../WebApplication/wwwroot/js/agent-workspace.js'), 'utf8');
 
-function createHarness(responses, agent = 'codex') {
+function createHarness(responses, agent = 'codex', historyCache = null) {
     const storage = new Map();
     const posts = [];
     const bodies = [];
@@ -20,7 +20,7 @@ function createHarness(responses, agent = 'codex') {
     const context = {
         location: { search: '' },
         FormData: class { append() {} },
-        window: { RemoteToolApi: api },
+        window: { RemoteToolApi: api, RemoteToolHistoryCache: historyCache ? {create:()=>historyCache} : undefined },
         document: { currentScript: { dataset: { agentRootId: 'test-root' } }, getElementById: () => ({ querySelector: () => ({ dataset: { agent } }) }) },
         Vue: { createApp(value) { options = value; return { use() { return this; }, mount() {} }; } },
         ViewUIPlus: {},
@@ -42,7 +42,7 @@ function createHarness(responses, agent = 'codex') {
     Object.defineProperty(state, 'displayMessages', { get: () => options.computed.displayMessages.call(state) });
     state.loadQueue = async () => {};
     state.$Message = { success() {} };
-    return { state, posts, bodies, storage, api, options, setHistory: rows => { history = rows; } };
+    return { state, posts, bodies, storage, api, options, context, setHistory: rows => { history = rows; } };
 }
 
 async function testAcceptedAndDeduped() {

@@ -189,6 +189,7 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             var dll = InteractiveProcessLauncher.GetApplicationDllPath();
             token ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new { token, executable, home, account_store = accountStore, state_folder = stateFolder, handoff,
+                new_session_full_access = configuration.GetValue<bool>("Codex:NewSessionFullAccess"),
                 working_directory = ConfiguredPath("Codex:WorkingDirectory", Path.Combine(profile, "Documents", "Codex", "Mobile")),
                 attachments = Path.Combine(Path.GetDirectoryName(folder)!, "codex-attachments") }), ct);
             var command = $"dotnet \"{dll}\" --codex-bridge \"{configPath}\"";

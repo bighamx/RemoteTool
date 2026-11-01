@@ -1,0 +1,75 @@
+@{ ViewData["Title"] = "Cloudflare"; Layout = "_Layout"; }
+@section Styles {
+    <link href="~/css/workspace-pages.css" rel="stylesheet" asp-append-version="true" />
+    <link href="~/css/cloudflare.css" rel="stylesheet" asp-append-version="true" />
+}
+@section Scripts {
+    <script src="~/js/web-api.js" asp-append-version="true"></script>
+    <script src="~/js/cloudflare.js" asp-append-version="true"></script>
+}
+<div id="cloudflare-app" class="workspace-page cf-page" v-cloak>
+    <div class="workspace-heading"><div><h1>Cloudflare</h1><p>管理域名、对象存储、数据库与隧道。</p></div><i-button @@click="editAccount()" :disabled="busy||loading">添加账户</i-button></div>
+    <div class="cf-toolbar"><label>账户<select v-model="accountId" @@change="selectAccount" :disabled="busy||loading"><option v-if="!accounts.length" value="">暂无账户</option><option v-for="row in accounts" :key="row.id" :value="row.id">{{row.name}}</option></select></label><i-button v-if="account" @@click="editAccount(account)" :disabled="busy||loading">编辑账户</i-button><i-button v-if="account" @@click="deleteAccount" :disabled="busy||loading">移除配置</i-button></div>
+    <p v-if="!accounts.length&&!loading">添加 Cloudflare 账户后开始管理。凭据保存在当前服务端，不会写入浏览器存储。</p>
+    <p v-if="error" class="workspace-alert" role="alert">{{error}}</p>
+    <section v-if="account" class="workspace-panel">
+        <div class="pill-tabs" role="tablist" aria-label="Cloudflare 资源"><button v-for="item in [['dns','DNS'],['r2','R2'],['d1','D1'],['tunnels','Tunnels']]" :key="item[0]" type="button" class="ivu-btn" :class="tab===item[0]?'ivu-btn-primary':'ivu-btn-default'" role="tab" :aria-selected="tab===item[0]" @@click="selectTab(item[0])" :disabled="busy||loading">{{item[1]}}</button></div>
+        <div class="panel-tools"><strong>{{resourceTitle}}</strong><i-button @@click="load()" :loading="loading" :disabled="busy">刷新</i-button></div>
+        <form v-if="tab==='dns'" class="cf-toolbar" v-on:submit.prevent="load(true)">
+            <label>域名<select v-model="zone" @@change="load(true)" :disabled="busy||loading"><option v-for="row in zones" :key="row.id" :value="row.id">{{row.name}}</option></select></label>
+            <label>搜索<input v-model="query" placeholder="名称、内容或备注" :disabled="busy||loading"></label>
+            <label>类型<select v-model="recordType" :disabled="busy||loading"><option value="">全部</option><option v-for="type in ['A','AAAA','CNAME','TXT','MX','NS','SRV','CAA']" :key="type">{{type}}</option></select></label>
+            <label>代理<select v-model="proxy" :disabled="busy||loading"><option value="">全部</option><option value="proxied">已代理</option><option value="dns">仅 DNS</option></select></label>
+            <label>排序<select v-model="sort" :disabled="busy||loading"><option value="name">名称</option><option value="type">类型</option><option value="content">内容</option><option value="ttl">TTL</option><option value="proxied">代理状态</option></select></label>
+            <label>顺序<select v-model="direction" :disabled="busy||loading"><option value="asc">升序</option><option value="desc">降序</option></select></label>
+            <button class="ivu-btn" type="submit" :disabled="busy||loading">筛选</button><i-button type="primary" :disabled="!zone||busy||loading" @@click="editDns()">添加记录</i-button>
+        </form>
+        <div v-if="tab==='r2'&&bucket" class="cf-toolbar"><strong>{{bucket}} / {{prefix}}</strong><i-button @@click="r2Up" :disabled="busy||loading">上级</i-button><label v-if="account.hasR2" class="ivu-btn cf-upload">上传文件<input type="file" @@change="upload" :disabled="busy||loading"></label><span v-else>编辑账户以添加 R2 Access Key 和 Secret Key。</span></div>
+        <div v-if="tab==='d1'||tab==='tunnels'" class="cf-toolbar"><i-button @@click="form={name:''};dialogError='';dialog=tab==='d1'?'d1-create':'tunnel-create'" :disabled="busy||loading">{{tab==='d1'?'新建数据库':'新建隧道'}}</i-button></div>
+        <p v-if="loading" class="empty-state" role="status">正在读取…</p><p v-else-if="!rows.length" class="empty-state">暂无资源或匹配结果</p>
+        <div v-for="(row,index) in rows" :key="row.id||row.uuid||row.key||row.name||index" class="data-row">
+            <div class="row-main" v-if="tab==='dns'"><strong>{{row.name}} · {{row.type}}</strong><small>{{row.content}}</small><small>TTL {{row.ttl===1?'自动':row.ttl}} · {{row.proxied?'已代理':'仅 DNS'}} {{row.comment?'· '+row.comment:''}}</small><small v-if="dnsReadOnly(row)">只读 · 请在 Cloudflare 对应服务中管理绑定</small></div>
+            <div class="row-main" v-else-if="tab==='r2'"><strong>{{row.directory?'📁 ':''}}{{row.name}}</strong><small v-if="!row.directory&&bucket">{{row.size}} 字节 · {{time(row.modified)}}</small></div>
+            <div class="row-main" v-else><strong>{{row.name}}</strong><small>{{row.id||row.uuid}} {{row.status?'· '+row.status:''}}</small></div>
+            <div class="row-actions" v-if="tab==='dns'"><i-button :disabled="busy||loading||dnsReadOnly(row)" @@click="editDns(row)">编辑</i-button><i-button :disabled="busy||loading||dnsReadOnly(row)" @@click="remove('dns.delete',row,{zone,record:row.id})">删除</i-button></div>
+            <div class="row-actions" v-else-if="tab==='r2'"><i-button v-if="!bucket||row.directory" :disabled="busy||loading||!account.hasR2" @@click="!bucket?openBucket(row):enterFolder(row)">打开</i-button><template v-else><i-button :disabled="busy||loading" @@click="download(row)">下载</i-button><i-button :disabled="busy||loading" @@click="remove('r2.delete',row,{bucket,key:row.key})">删除</i-button></template></div>
+            <div class="row-actions" v-else-if="tab==='d1'"><i-button :disabled="busy||loading" @@click="openDatabase(row)">查看与查询</i-button><i-button :disabled="busy||loading" @@click="remove('d1.delete',row,{database:row.uuid||row.id})">删除</i-button></div>
+            <div class="row-actions" v-else><i-button :disabled="busy||loading" @@click="openTunnel(row)">路由与连接器</i-button><i-button :disabled="busy||loading" @@click="remove('tunnels.delete',row,{tunnel:row.id})">删除</i-button></div>
+        </div>
+        <div class="list-pager"><i-button :disabled="page<=1||busy||loading" @@click="turnPage(false)">上一页</i-button><span>第 {{page}} 页</span><i-button :disabled="!hasMore||busy||loading" @@click="turnPage(true)">下一页</i-button></div>
+    </section>
+    <modal :model-value="!!dialog" :title="({account:'Cloudflare 账户',dns:'DNS 记录',d1:'D1 表与查询','d1-create':'新建数据库','tunnel-create':'新建隧道',tunnel:'隧道路由与连接器'})[dialog]||''" :mask-closable="false" :closable="!busy" :footer-hide="true" width="800" @@on-cancel="closeDialog">
+        <div class="cf-page"><p v-if="dialogError" class="workspace-alert" role="alert">{{dialogError}}</p>
+        <form v-if="dialog==='account'" class="cf-form" v-on:submit.prevent="saveAccount">
+            <label>名称<input v-model="form.name" maxlength="80" required :disabled="busy"></label><label>Account ID<input v-model="form.accountId" pattern="[a-fA-F0-9]{32}" maxlength="32" required :disabled="busy"></label>
+            <label>API Token（编辑时留空保留）<input v-model="form.apiToken" type="password" autocomplete="new-password" :required="!form.id" :disabled="busy"></label>
+            <label>R2 Access Key ID<input v-model="form.accessKeyId" type="password" autocomplete="new-password" :disabled="busy"></label><label>R2 Secret Access Key<input v-model="form.secretAccessKey" type="password" autocomplete="new-password" :disabled="busy"></label>
+            <label>默认存储桶<input v-model="form.bucket" :disabled="busy"></label><label><input type="checkbox" v-model="form.clearR2" :disabled="busy">清除已保存的 R2 凭据</label>
+            <button type="submit" class="ivu-btn ivu-btn-primary" :disabled="busy">保存账户</button>
+        </form>
+        <form v-if="dialog==='dns'" class="cf-form" v-on:submit.prevent="saveDns">
+            <label>类型<select v-model="form.type" :disabled="busy"><option v-for="type in ['A','AAAA','CNAME','TXT','MX','NS','CAA']" :key="type">{{type}}</option><option v-if="!['A','AAAA','CNAME','TXT','MX','NS','CAA'].includes(form.type)" :value="form.type">{{form.type}}</option></select></label>
+            <label>名称<input v-model="form.name" required maxlength="253" :disabled="busy"></label><label>内容<textarea v-model="form.content" required maxlength="65536" :disabled="busy"></textarea></label>
+            <label>TTL（1 为自动，或 60–86400 秒）<input type="number" v-model.number="form.ttl" min="1" max="86400" required :disabled="busy"></label>
+            <label v-if="form.type==='MX'">优先级<input type="number" v-model.number="form.priority" min="0" max="65535" required :disabled="busy"></label>
+            <label v-if="['A','AAAA','CNAME'].includes(form.type)"><input type="checkbox" v-model="form.proxied" :disabled="busy">通过 Cloudflare 代理</label><label>备注<input v-model="form.comment" :disabled="busy"></label><button class="ivu-btn ivu-btn-primary" type="submit" :disabled="busy">保存记录</button>
+        </form>
+        <form v-if="dialog==='d1-create'||dialog==='tunnel-create'" class="cf-form" v-on:submit.prevent="createResource"><label>名称<input v-model="form.name" required maxlength="100" :disabled="busy"></label><button type="submit" class="ivu-btn ivu-btn-primary" :disabled="busy">创建</button></form>
+        <div v-if="dialog==='d1'" class="cf-form">
+            <label>数据表<select v-model="table" @@change="readTable(0)" :disabled="busy"><option value="">选择数据表</option><option v-for="row in tables" :key="row.name" :value="row.name">{{row.name}}</option></select></label>
+            <div v-if="schema.length" class="cf-scroll"><table><thead><tr><th>字段</th><th>类型</th><th>主键</th></tr></thead><tbody><tr v-for="row in schema" :key="row.cid"><td>{{row.name}}</td><td>{{row.type}}</td><td>{{row.pk?'是':''}}</td></tr></tbody></table></div>
+            <div v-if="table" class="cf-toolbar"><i-button :disabled="busy||tableOffset===0" @@click="readTable(Math.max(0,tableOffset-100))">上一批</i-button><span>偏移 {{tableOffset}}</span><i-button :disabled="busy||(results[0]?.results||[]).length&lt;100" @@click="readTable(tableOffset+100)">下一批</i-button></div>
+            <label>SQL<textarea v-model="sql" rows="5" placeholder="SELECT * FROM ... LIMIT 100" :disabled="busy"></textarea></label><label>参数（按 ? 占位顺序填写 JSON 数组）<input v-model="parameters" placeholder='["value", 1]' :disabled="busy"></label><i-button @@click="runSql" :disabled="busy||!sql.trim()">执行 SQL</i-button>
+            <section v-for="(result,index) in results" :key="index"><p>{{result.success===false?'查询失败':'查询结果'}} · {{(result.results||[]).length}} 行 {{result.truncated?'· 结果已截断':''}}</p><div class="cf-scroll"><table><thead><tr><th v-for="key in columns(result)" :key="key">{{key}}</th></tr></thead><tbody><tr v-for="(row,i) in result.results||[]" :key="i"><td v-for="key in columns(result)" :key="key">{{cell(row[key])}}</td></tr></tbody></table></div></section>
+        </div>
+        <div v-if="dialog==='tunnel'" class="cf-form">
+            <h3>{{tunnel.name}}</h3><form class="cf-toolbar" v-on:submit.prevent="renameTunnel"><label>名称<input v-model="form.name" :placeholder="tunnel.name" :disabled="busy"></label><button type="submit" class="ivu-btn" :disabled="busy||!form.name">重命名</button></form>
+            <h4>连接器</h4><p v-if="!connections.length">暂无连接器</p><div v-for="(row,index) in connections" :key="row.clientId||index" class="cf-route"><strong>{{row.clientId||'未提供连接器 ID'}}</strong><p>{{row.locations}} · {{row.ips}} · {{row.version}} {{row.arch}}</p><i-button :disabled="busy||!row.clientId" @@click="disconnect(row)">断开连接器</i-button></div>
+            <i-button @@click="showToken" :disabled="busy">查看连接令牌</i-button><pre v-if="tunnelToken" class="cf-token">{{tunnelToken}}</pre>
+            <h4>路由 · 按顺序匹配</h4><div v-for="(route,index) in routes" :key="index" class="cf-route"><div class="cf-toolbar"><strong>路由 {{index+1}}</strong><i-button :disabled="busy||index===0" @@click="moveRoute(index,-1)">上移</i-button><i-button :disabled="busy||index===routes.length-1" @@click="moveRoute(index,1)">下移</i-button><i-button :disabled="busy" @@click="routes.splice(index,1)">移除</i-button></div><label>主机名<input v-model="route.hostname" placeholder="app.example.com" :disabled="busy"></label><label>路径<input v-model="route.path" placeholder="可选正则表达式" :disabled="busy"></label><label>服务<input v-model="route.service" placeholder="http://localhost:8080" :disabled="busy"></label></div>
+            <i-button @@click="routes.push({hostname:'',path:'',service:'http://localhost:8080'})" :disabled="busy">添加路由</i-button><label>兜底服务<input v-model="fallback.service" placeholder="http_status:404" :disabled="busy"></label><p>域名的 DNS 记录需单独指向此隧道；保存时保留未编辑的高级设置。</p><i-button type="primary" @@click="saveRoutes" :disabled="busy">保存路由</i-button>
+        </div>
+        <div class="cf-toolbar"><i-button @@click="closeDialog" :disabled="busy">关闭</i-button><span v-if="busy" role="status">正在处理，请勿重复提交…</span></div>
+        </div>
+    </modal>
+</div>

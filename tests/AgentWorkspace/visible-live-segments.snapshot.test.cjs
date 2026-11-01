@@ -25,7 +25,7 @@ const context = messages => ({
         { id: 'i2', text: '第二条旁白内容', createdAt: now - 990, historyIds: [] },
         { id: 'snap', text: '第一条旁白内容\n\n第二条旁白内容\n\n第三条还没落库', createdAt: now - 980, historyIds: [] },
     ],
-    ...(Object.fromEntries(['asText', 'narrationNormalized', 'narrationCovers', 'sameNarration', 'messageStamp', 'messageText', 'messageTextRaw', 'unwrapOob']
+    ...(Object.fromEntries(['asText', 'narrationNormalized', 'narrationCovers', 'sameNarration', 'messageStamp', 'messageText', 'messageTextRaw', 'unwrapOob', 'cleanRuntimeNotes']
         .map(name => [name, (options.methods && options.methods[name]) || options.computed[name]]))),
 });
 const msg = (text, ts) => ({ role: 'assistant', timestamp: ts, content: text });
@@ -65,6 +65,7 @@ const fresh = visible.call({
     messageText: helper('messageText'),
     messageTextRaw: helper('messageTextRaw'),
     unwrapOob: helper('unwrapOob'),
+    cleanRuntimeNotes: helper('cleanRuntimeNotes'),
 });
 assert.equal(fresh.map(s => s.id).join(), 'live-new', 'unrelated live segment stays visible');
 

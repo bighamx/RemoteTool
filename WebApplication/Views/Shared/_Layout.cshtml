@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="light">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <meta name="theme-color" content="#10151d">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="~/helper/lib/viewuiplus.css" asp-append-version="true" />
     @RenderSection("Styles", required: false)
     <link rel="stylesheet" href="~/css/shell.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/mobile.css" asp-append-version="true" />
     <script src="~/helper/lib/vue.global.prod.js" asp-append-version="true"></script>
     <script src="~/helper/lib/viewuiplus.min.js" asp-append-version="true"></script>
 </head>
@@ -46,6 +47,36 @@
             <main class="main-content" id="main-content">@RenderBody()</main>
         </div>
     </div>
+    <nav class="mobile-navigation" aria-label="手机主导航">
+        <a href="/#/system" data-mobile-nav="system"><img src="/icons/speed.svg" alt=""><span>系统</span></a>
+        <a href="/#/desktop" data-mobile-nav="desktop"><img src="/icons/desktop_windows.svg" alt=""><span>远程</span></a>
+        <a href="/#/codex" data-mobile-nav="codex"><img src="/icons/codex.png" alt=""><span>Codex</span></a>
+        <a href="/#/hermes" data-mobile-nav="hermes"><img src="/icons/hermes.svg" alt=""><span>Hermes</span></a>
+        <button type="button" data-mobile-nav="more" aria-haspopup="dialog" aria-controls="mobile-tools"><svg class="mobile-more-icon" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><circle cx="6" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="18" cy="12" r="1.5" fill="currentColor"/></svg><span>更多</span></button>
+    </nav>
+    <dialog id="mobile-tools" class="mobile-tools" aria-labelledby="mobile-tools-title">
+        <header><div><small>当前设备 · @Environment.MachineName</small><h2 id="mobile-tools-title">更多功能</h2></div><button type="button" data-close-tools aria-label="关闭更多功能">×</button></header>
+        <div class="mobile-tools-list">
+            <a href="/#/"><img src="/icons/home.svg" alt=""><span><strong>设备概览</strong><small>常用功能与任务概况</small></span><span aria-hidden="true">›</span></a>
+            <a href="/#/storage"><img src="/icons/folder.svg" alt=""><span><strong>空间管理</strong><small>存储占用与清理</small></span><span aria-hidden="true">›</span></a>
+            <a href="/#/files"><img src="/icons/folder.svg" alt=""><span><strong>文件管理</strong><small>浏览、上传与下载</small></span><span aria-hidden="true">›</span></a>
+            <a href="/#/terminal"><img src="/icons/terminal.svg" alt=""><span><strong>命令终端</strong><small>交互式 Shell</small></span><span aria-hidden="true">›</span></a>
+            <a href="/#/docker"><img src="/icons/layers.svg" alt=""><span><strong>Docker</strong><small>容器、镜像与 Compose</small></span><span aria-hidden="true">›</span></a>
+            <a href="/#/cloudflare"><img src="/icons/layers.svg" alt=""><span><strong>Cloudflare</strong><small>DNS、R2、D1 与隧道</small></span><span aria-hidden="true">›</span></a>
+            <a href="/#/jobs"><img src="/icons/schedule.svg" alt=""><span><strong>定时任务</strong><small>计划、队列与日志</small></span><span aria-hidden="true">›</span></a>
+            <a href="/#/processes"><img src="/icons/memory.svg" alt=""><span><strong>进程管理</strong><small>资源占用与进程操作</small></span><span aria-hidden="true">›</span></a>
+            <a href="/#/tunnels"><img src="/icons/terminal.svg" alt=""><span><strong>端口转发</strong><small>查看连接与转发规则</small></span><span aria-hidden="true">›</span></a>
+            <a href="/#/identity"><img src="/icons/shield.svg" alt=""><span><strong>身份验证</strong><small>OIDC 与 Cloudflare Access</small></span><span aria-hidden="true">›</span></a>
+            <button type="button" data-mobile-action="reload"><span aria-hidden="true">↻</span><span><strong>重新加载界面</strong><small>加载最新版本</small></span></button>
+            <button type="button" data-mobile-action="keyboard"><span aria-hidden="true">⌨</span><span><strong>键盘诊断</strong><small>keyboard-unreported-4 · 仅记录窗口尺寸</small></span></button>
+            <button type="button" data-mobile-action="theme"><span aria-hidden="true">◐</span><span><strong>切换深浅主题</strong></span></button>
+            <button type="button" data-mobile-action="logout"><span aria-hidden="true">↪</span><span><strong>退出登录</strong></span></button>
+        </div>
+    </dialog>
+    <dialog id="keyboard-diagnostics" class="mobile-tools" aria-labelledby="keyboard-diagnostics-title">
+        <header><h2 id="keyboard-diagnostics-title">键盘诊断</h2><button type="button" data-close-keyboard aria-label="关闭键盘诊断">×</button></header>
+        <div class="keyboard-diagnostics-body"><p>先在聊天框呼出键盘，再打开此页。记录不包含消息、账号或凭据。</p><textarea id="keyboard-diagnostics-text" readonly aria-label="键盘诊断记录"></textarea><button type="button" data-copy-keyboard>复制诊断</button></div>
+    </dialog>
     <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
     @RenderSection("Scripts", required: false)
     <script src="~/js/site.js" asp-append-version="true"></script>

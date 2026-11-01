@@ -1,4 +1,4 @@
-﻿document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', () => {
     const shellNav = document.getElementById('shell-nav');
     if (shellNav && window.Vue && window.ViewUIPlus) {
         const shell = Vue.createApp({ data: () => ({ groups: [
@@ -19,6 +19,7 @@
             ] },
             { title: '设置', items: [
                 { key: 'storage', href: '/#/storage', icon: '/icons/folder.svg', label: '空间管理' },
+                { key: 'cloudflare', href: '/#/cloudflare', icon: '/icons/layers.svg', label: 'Cloudflare' },
                 { key: 'identity', href: '/#/identity', icon: '/icons/shield.svg', label: '身份验证' }
             ] }
         ] }) });
@@ -32,7 +33,7 @@
             methods: {
                 sync() {
                     const route = location.hash.match(/^#\/([^?]*)/)?.[1] || 'home';
-                    this.currentTitle = ({ home:'总览', tunnels:'端口转发', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes', storage:'空间管理', identity:'身份验证' })[route] || 'RemoteTool';
+                    this.currentTitle = ({ storage:'空间管理', home:'总览', cloudflare:'Cloudflare', tunnels:'端口转发', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes', identity:'身份验证' })[route] || 'RemoteTool';
                 }
             },
             mounted() { this.sync(); window.addEventListener('hashchange', this.sync); window.addEventListener('workspace-route-change', this.sync); },
@@ -93,6 +94,78 @@
         });
     }
 
+    const mobileMedia=window.matchMedia('(max-width:760px), (max-width:1000px) and (max-height:500px) and (pointer:coarse)');
+    const tools=document.getElementById('mobile-tools');
+    const closeTools=()=>{if(tools?.open)tools.close();};
+    document.querySelector('[data-mobile-nav="more"]')?.addEventListener('click',()=>tools?.showModal());
+    tools?.querySelector('[data-close-tools]')?.addEventListener('click',closeTools);
+    tools?.querySelectorAll('a').forEach(link=>link.addEventListener('click',closeTools));
+    tools?.querySelector('[data-mobile-action="theme"]')?.addEventListener('click',()=>themeToggle?.click());
+    tools?.querySelector('[data-mobile-action="logout"]')?.addEventListener('click',()=>logoutBtn?.click());
+    const viewport=window.visualViewport;
+    const virtualKeyboard=navigator.virtualKeyboard;
+    let viewportWidth=innerWidth,viewportBaseline=innerHeight,viewportFrame=null,keyboardPoll=null,composerFocusedAt=0,composerMeasuredKeyboard=false;
+    const keyboardSamples=[];
+    const sampleKeyboard=reason=>{
+        const composer=document.querySelector('.workspace-module:not([hidden]) .agent-compose-input-row');
+        const bounds=composer?.getBoundingClientRect();
+        const rect=virtualKeyboard?.boundingRect;
+        const sample={reason,at:Date.now(),fallback:document.body.classList.contains('mobile-keyboard-unreported'),inner:[innerWidth,innerHeight],client:[document.documentElement.clientWidth,document.documentElement.clientHeight],visual:viewport?{height:viewport.height,top:viewport.offsetTop,scale:viewport.scale}:null,keyboard:rect?{y:rect.y,height:rect.height,overlays:virtualKeyboard.overlaysContent}:null,shellHeight:document.querySelector('.app-shell')?.getBoundingClientRect().height,composer:bounds?{top:bounds.top,bottom:bounds.bottom}:null,editing:!!document.activeElement?.matches('input,textarea,[contenteditable="true"]')};
+        const signature=JSON.stringify({...sample,reason:null,at:null});
+        if(reason!=='poll'||keyboardSamples.at(-1)?.signature!==signature){keyboardSamples.push({signature,sample});if(keyboardSamples.length>40)keyboardSamples.shift();}
+    };
+    const diagnostics=document.getElementById('keyboard-diagnostics');
+    tools?.querySelector('[data-mobile-action="reload"]')?.addEventListener('click',()=>location.reload());
+    tools?.querySelector('[data-mobile-action="keyboard"]')?.addEventListener('click',()=>{
+        sampleKeyboard('report');
+        document.getElementById('keyboard-diagnostics-text').value=JSON.stringify({version:'keyboard-unreported-4',browser:navigator.userAgent,standalone:matchMedia('(display-mode:standalone)').matches,samples:keyboardSamples.map(row=>row.sample)},null,2);
+        closeTools();diagnostics?.showModal();
+    });
+    diagnostics?.querySelector('[data-close-keyboard]')?.addEventListener('click',()=>diagnostics.close());
+    diagnostics?.querySelector('[data-copy-keyboard]')?.addEventListener('click',async event=>{
+        const field=document.getElementById('keyboard-diagnostics-text');
+        try{await navigator.clipboard.writeText(field.value);event.target.textContent='已复制';}catch{field.focus();field.select();}
+    });
+    const syncViewport=()=>{
+        viewportFrame=null;
+        try{if(virtualKeyboard&&virtualKeyboard.overlaysContent)virtualKeyboard.overlaysContent=false;}catch{}
+        if(!mobileMedia.matches){closeTools();document.body.classList.remove('mobile-keyboard-open','mobile-keyboard-unreported');document.documentElement.style.removeProperty('--mobile-height');document.documentElement.style.removeProperty('--mobile-top');document.documentElement.style.removeProperty('--mobile-bottom-offset');return;}
+        if(viewportWidth!==innerWidth){viewportWidth=innerWidth;viewportBaseline=innerHeight;}
+        viewportBaseline=Math.max(viewportBaseline,innerHeight);
+        const top=Math.max(0,viewport?.offsetTop||0);
+        const keyboard=virtualKeyboard?.boundingRect;
+        const keyboardTop=keyboard?.height>0?keyboard.y:Infinity;
+        // Some Android hosts resize only the layout viewport, others overlay the keyboard.
+        const height=Math.max(0,Math.min(innerHeight,document.documentElement.clientHeight||innerHeight,viewport?.height||innerHeight,keyboardTop-top));
+        const editing=!!document.activeElement?.matches('input,textarea,[contenteditable="true"]');
+        const measuredKeyboard=keyboard?.height>0||(editing&&viewportBaseline-height>120);
+        const composerFocused=document.activeElement?.matches('.agent-compose-input-row textarea')&&document.activeElement.getClientRects().length>0;
+        if(composerFocused&&measuredKeyboard)composerMeasuredKeyboard=true;
+        // Some mobile launchers report no keyboard geometry at all. Keep editing above it.
+        const continuing=document.body.classList.contains('mobile-keyboard-unreported')&&document.activeElement?.closest('.agent-compose-input-row,.mobile-finish-input');
+        const unreported=!!(!measuredKeyboard&&(continuing||(composerFocused&&composerFocusedAt&&Date.now()-composerFocusedAt>=500&&!composerMeasuredKeyboard&&matchMedia('(pointer:coarse)').matches)));
+        document.body.classList.toggle('mobile-keyboard-unreported',unreported);
+        document.body.classList.toggle('mobile-keyboard-open',measuredKeyboard||unreported);
+        document.documentElement.style.setProperty('--mobile-height',Math.round(height)+'px');
+        document.documentElement.style.setProperty('--mobile-top',Math.round(top)+'px');
+        document.documentElement.style.setProperty('--mobile-bottom-offset',Math.max(0,Math.round(innerHeight-height-top))+'px');
+    };
+    const queueViewport=()=>{if(viewportFrame===null)viewportFrame=requestAnimationFrame(syncViewport);};
+    virtualKeyboard?.addEventListener('geometrychange',queueViewport);
+    viewport?.addEventListener('resize',queueViewport);viewport?.addEventListener('scroll',queueViewport);
+    window.addEventListener('resize',queueViewport);
+    document.addEventListener('focusin',()=>{
+        composerFocusedAt=document.activeElement?.matches('.agent-compose-input-row textarea')?Date.now():0;composerMeasuredKeyboard=false;
+        queueViewport();sampleKeyboard('focus');
+        if(keyboardPoll===null&&mobileMedia.matches)keyboardPoll=setInterval(()=>{queueViewport();requestAnimationFrame(()=>sampleKeyboard('poll'));},150);
+    });
+    document.addEventListener('focusout',()=>{
+        composerFocusedAt=0;
+        queueViewport();sampleKeyboard('blur');
+        setTimeout(()=>{if(!document.activeElement?.matches('input,textarea,[contenteditable="true"]')){clearInterval(keyboardPoll);keyboardPoll=null;queueViewport();sampleKeyboard('settled');}},500);
+    });
+    mobileMedia.addEventListener('change',queueViewport);syncViewport();
+
     const sidebar = document.getElementById('app-sidebar');
     const scrim = document.getElementById('sidebar-scrim');
     const toggle = document.getElementById('sidebar-toggle');
@@ -102,6 +175,7 @@
         toggle?.setAttribute('aria-expanded', 'false');
     };
     toggle?.addEventListener('click', () => {
+        if(mobileMedia.matches){tools?.showModal();return;}
         const open = sidebar.classList.toggle('open');
         if (scrim) scrim.hidden = !open;
         toggle.setAttribute('aria-expanded', String(open));
@@ -114,13 +188,19 @@
         const path = location.pathname.toLowerCase();
         let current = 'home';
         const route = location.hash.match(/^#\/([^?]*)/)?.[1];
-        if (route) current = ({home:'home',system:'controls',processes:'processes',desktop:'screenshot',terminal:'terminal',docker:'docker','docker/images':'docker','docker/compose':'docker',files:'files',jobs:'hangfire',codex:'codex',hermes:'hermes'})[route] || 'home';
+        if (route) current = ({home:'home',storage:'storage',cloudflare:'cloudflare',identity:'identity',tunnels:'tunnels',system:'controls',processes:'processes',desktop:'screenshot',terminal:'terminal',docker:'docker','docker/images':'docker','docker/compose':'docker',files:'files',jobs:'hangfire',codex:'codex',hermes:'hermes'})[route] || 'home';
         else if (path.startsWith('/agents/')) current = path.includes('hermes') ? 'hermes' : 'codex';
         else if (path.startsWith('/hangfire')) current = 'hangfire';
         else if (path.startsWith('/remote')) {
             const tab = new URLSearchParams(location.hash.slice(1)).get('tab') || 'controls';
             current = ['docker', 'images', 'compose'].includes(tab) ? 'docker' : tab;
         }
+        const mobileRoute=['codex','hermes','desktop'].includes(route)?route:!route||route==='system'||route==='home'?'system':'more';
+        document.querySelectorAll('[data-mobile-nav]').forEach(item=>{
+            if(item.dataset.mobileNav===mobileRoute)item.setAttribute('aria-current','page');else item.removeAttribute('aria-current');
+        });
+        if(!['codex','hermes'].includes(route))document.body.classList.remove('mobile-chat-active');
+        closeTools();
         document.querySelectorAll('.side-nav a').forEach(link => {
             const active = link.dataset.nav === current;
             link.classList.toggle('active', active);

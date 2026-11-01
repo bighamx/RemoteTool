@@ -356,6 +356,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             request["runtimeWorkspaceRoots"] = new JsonArray(project.A("roots").Select(root => (JsonNode)JsonValue.Create(root.S("path"))).ToArray());
         }
         if (applySelection && await SessionSelection(id) is { } selected) CodexModelSettings.ApplyResume(request, selected);
+        sessionPermissions.ApplyResume(id, request);
         // This CLI restores dynamic tools from rollout metadata; resume has no dynamicTools field.
         return request;
     }
@@ -879,6 +880,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 Directory.CreateDirectory(cwd);
             } else throw new CodexError("请选择已有项目、新项目或无项目");
             var request = Obj(("cwd", cwd), ("projectId", project?.S("id")), ("ephemeral", false));
+            var fullAccess = settings.B("new_session_full_access");
+            if (fullAccess) CodexSessionPermissions.ApplyStart("full", request);
             var phoneBinding = body["phone_binding"] as JsonObject;
             if (phoneBinding?.S("mode") == "tools") request["dynamicTools"] = PhoneDynamicTools(phoneBinding);
             if (body.S("phone_description").Length > 0) request["developerInstructions"] = body.S("phone_description");
@@ -887,6 +890,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             try { await owner.Initialize(); result = await owner.Call("thread/start", request); }
             catch { await owner.DisposeAsync(); throw; }
             var thread = result["thread"]!;
+            if (fullAccess) sessionPermissions.Set(thread.S("id"), "full");
             if (phoneBinding != null) Atomic(Path.Combine(folder, "phone-tools", thread.S("id") + ".json"), phoneBinding);
             lock (gate) sessionRpcs[thread.S("id")] = owner;
             var title = body.S("title", "手机 Codex 对话");

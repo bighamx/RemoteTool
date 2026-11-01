@@ -5,17 +5,18 @@
         system: 'controls', processes: 'processes', desktop: 'screenshot', terminal: 'terminal',
         docker: 'docker', 'docker/images': 'images', 'docker/compose': 'compose', files: 'files'
     };
-    const sources = { storage:'/storage', home: '/', remote: '/remote/index', tunnels: '/Tunnels', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
+    const sources = { storage:'/storage', cloudflare: '/cloudflare', home: '/', remote: '/remote/index', tunnels: '/Tunnels', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
     const assets = {
         storage: {styles:['workspace-pages.css','storage.css'],scripts:['web-api.js','storage.js']},
+        cloudflare: { styles: ['workspace-pages.css', 'cloudflare.css'], scripts: ['web-api.js', 'cloudflare.js'] },
         tunnels: { styles: ['workspace-pages.css'], scripts: ['web-api.js', 'tunnels.js'] },
         remote: { styles: ['remote.css', 'performance.css', 'vendor/xterm/xterm.css'], scripts: ['remote-nav.js', 'mp4box.all.min.js', 'performance.js', 'media-preview.js', 'vendor/xterm/xterm.js', 'vendor/xterm/addon-fit.js', 'remote.js'] },
         jobs: { styles: ['workspace-pages.css'], scripts: ['web-api.js', 'jobs-page.js'] },
-        codex: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-workspace.js'] },
-        hermes: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-workspace.js'] },
+        codex: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-history-cache.js', 'agent-workspace.js'] },
+        hermes: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-history-cache.js', 'agent-workspace.js'] },
         identity: { styles: ['workspace-pages.css', 'identity-settings.css'], scripts: ['web-api.js', 'oidc-settings.js'] }
     };
-    const titles = { storage:'空间管理', home: '总览', tunnels: '端口转发', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes', identity: '身份验证' };
+    const titles = { storage:'空间管理', cloudflare: 'Cloudflare', home: '总览', tunnels: '端口转发', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes', identity: '身份验证' };
     const loadedScripts = new Set([...document.scripts].map(script => new URL(script.src, location.href).pathname));
     const loadedStyles = new Set([...document.querySelectorAll('link[rel="stylesheet"]')].map(link => new URL(link.href, location.href).pathname));
     const pendingScripts = new Map();
@@ -29,6 +30,8 @@
     const legacy = () => {
         const path = location.pathname.toLowerCase();
         if (path === '/storage') return 'storage';
+        if (path === '/cloudflare') return 'cloudflare';
+        if (path === '/settings/auth') return 'identity';
         if (path === '/tunnels') return 'tunnels';
         if (path.startsWith('/agents/')) return path.includes('hermes') ? 'hermes' : 'codex';
         if (path === '/hangfire') return 'jobs';
@@ -65,10 +68,9 @@
         if (loadedScripts.has(path) && name !== 'agent-workspace.js') return pendingScripts.get(path) || Promise.resolve();
         loadedScripts.add(path);
         const loading = new Promise((resolve, reject) => {
-            const script = document.createElement('script');
-            // agent-workspace.js 由路由按需加载、不进服务端布局，没有 asp-append-version 时间戳；
-            // 带上构建时间，避免部署后浏览器仍执行缓存的旧脚本（曾导致改了 JS 刷新无效、报错行号对不上）。
-            script.src = name === 'agent-workspace.js' ? `${path}?v=${encodeURIComponent(document.body?.dataset.build || '')}` : path;
+            const script = document.createElement('script');script.async = false;
+            // Lazy-loaded scripts need the same cache version as styles after an update.
+            script.src = `${path}?v=${encodeURIComponent(document.body?.dataset.build || '')}`;
             if (root) script.dataset.agentRootId = root.id;
             script.onload = () => { pendingScripts.delete(path); resolve(); };
             script.onerror = () => { pendingScripts.delete(path); loadedScripts.delete(path); reject(new Error(`脚本加载失败：${name}`)); };
@@ -101,8 +103,8 @@
             }
             main.append(section);
             try {
-                for (const style of assets[key]?.styles || []) await openStyle(style);
-                for (const script of assets[key]?.scripts || []) await openScript(script, section);
+                await Promise.all((assets[key]?.styles || []).map(openStyle));
+                await Promise.all((assets[key]?.scripts || []).map(script => openScript(script, section)));
             } catch (error) { section.remove(); throw error; }
             return section;
         })();
@@ -115,14 +117,32 @@
     main.append(home);
     modules.set('home', Promise.resolve(home));
 
+    const pending = document.createElement('section');
+    pending.className = 'workspace-module workspace-route-state'; pending.hidden = true;
+    const pendingTitle = document.createElement('h1');
+    const pendingStatus = document.createElement('p'); pendingStatus.setAttribute('role', 'status');
+    const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '重试'; retry.hidden = true;
+    pending.append(pendingTitle, pendingStatus, retry); main.append(pending);
     let generation = 0;
     const show = async () => {
         const current = ++generation;
         const route = selectedRoute();
         const key = moduleKey(route);
+        document.title = `${titles[route]} · RemoteTool`;
+        pendingTitle.textContent = titles[route]; pendingStatus.textContent = '正在加载…';
+        pendingStatus.setAttribute('role', 'status'); retry.hidden = true;
+        for (const element of main.querySelectorAll(':scope > .workspace-module')) element.hidden = element !== pending;
+        main.setAttribute('aria-busy', 'true');
+        document.body.classList.remove('workspace-fitted', 'workspace-agent-visible', 'mobile-chat-active');
+        if (key !== 'remote' && window.remoteControl) {
+            window.remoteControl.stopSysInfoAutoRefresh();
+            if (window.remoteControl.streamActive) window.remoteControl.stopStream();
+        }
+        window.dispatchEvent(new Event('workspace-route-change'));
         try {
             const section = await page(key);
             if (current !== generation) return;
+            main.removeAttribute('aria-busy');
             for (const element of main.querySelectorAll(':scope > .workspace-module')) element.hidden = element !== section;
             document.body.classList.toggle('workspace-fitted', route === 'terminal' || route === 'desktop');
             document.body.classList.toggle('workspace-agent-visible', key === 'codex' || key === 'hermes');
@@ -143,23 +163,19 @@
                 };
                 if (window.remoteControl?.workspaceReady) activate();
                 else window.addEventListener('remote-control-ready', activate, { once: true });
-            } else if (window.remoteControl) {
-                window.remoteControl.stopSysInfoAutoRefresh();
-                if (window.remoteControl.streamActive) window.remoteControl.stopStream();
             }
             document.title = `${titles[route]} · RemoteTool`;
             window.dispatchEvent(new Event('workspace-route-change'));
         } catch (error) {
             if (current === generation) {
-                home.hidden = false;
-                document.body.classList.remove('workspace-fitted');
-                document.body.classList.remove('workspace-agent-visible');
-                for (const element of main.querySelectorAll(':scope > .workspace-module')) if (element !== home) element.hidden = true;
-                const alert = document.createElement('p'); alert.className = 'workspace-alert'; alert.textContent = error.message;
-                home.prepend(alert); window.dispatchEvent(new Event('workspace-route-change'));
+                main.removeAttribute('aria-busy');
+                pendingStatus.setAttribute('role', 'alert'); pendingStatus.textContent = error.message;
+                retry.hidden = false;
+                window.dispatchEvent(new Event('workspace-route-change'));
             }
         }
     };
+    retry.addEventListener('click', show);
     window.RemoteToolWorkspace = {
         remote(tab, path) {
             const route = Object.keys(remoteTabs).find(key => remoteTabs[key] === tab) || 'system';
@@ -179,7 +195,7 @@
             event.preventDefault(); window.RemoteToolWorkspace.remote(params.get('tab') || 'controls', params.get('path') || params.get('composePath'));
         } else {
             const path = url.pathname.toLowerCase();
-            const route = path === '/storage' ? 'storage' : path === '/tunnels' ? 'tunnels' : path === '/hangfire' ? 'jobs' : path.startsWith('/agents/') ? (path.includes('hermes') ? 'hermes' : 'codex') : null;
+            const route = path === '/storage' ? 'storage' : path === '/cloudflare' ? 'cloudflare' : path === '/settings/auth' ? 'identity' : path === '/tunnels' ? 'tunnels' : path === '/hangfire' ? 'jobs' : path.startsWith('/agents/') ? (path.includes('hermes') ? 'hermes' : 'codex') : null;
             if (route) { event.preventDefault(); location.hash = `/${route}`; }
         }
     });
