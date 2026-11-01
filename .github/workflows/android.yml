@@ -1,0 +1,116 @@
+name: Android build and channels
+
+on:
+  push:
+    branches: [master, main]
+    paths: ['app/**', 'tools/android_ci.py', '.github/workflows/android.yml']
+    tags: ['android-v*']
+  pull_request:
+    paths: ['app/**', 'tools/android_ci.py', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Select channel
+        id: channel
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/android-v* ]]; then
+            echo 'value=stable' >> "$GITHUB_OUTPUT"
+          else
+            echo 'value=development' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Restore original signing key
+        if: github.event_name != 'pull_request'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo 'Original Android signing key is not configured'; exit 1; }
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-signing.keystore"
+          chmod 600 "$RUNNER_TEMP/android-signing.keystore"
+      - name: Validate both Apps
+        shell: bash
+        run: |
+          bash app/gradlew -p app :mobile:testFullDebugUnitTest :mobile:testPhoneDebugUnitTest :mobile:lintFullRelease :mobile:lintPhoneRelease -PbuildChannel=${{ steps.channel.outputs.value }} -Dorg.gradle.jvmargs=-Xmx4g
+      - name: Build signed release Apps
+        if: github.event_name != 'pull_request'
+        env:
+          REMOTE_TOOL_SIGNING_STORE: ${{ runner.temp }}/android-signing.keystore
+          REMOTE_TOOL_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          REMOTE_TOOL_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          REMOTE_TOOL_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          bash app/gradlew -p app :mobile:assembleFullRelease :mobile:assemblePhoneRelease -PbuildChannel=${{ steps.channel.outputs.value }} -Dorg.gradle.jvmargs=-Xmx4g
+          python tools/android_ci.py package --channel ${{ steps.channel.outputs.value }} --out "$RUNNER_TEMP/android-release"
+      - uses: actions/setup-dotnet@v4
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        with:
+          dotnet-version: '8.0.x'
+      - name: Package server from the same commit
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        shell: bash
+        run: |
+          dotnet publish WebApplication/WebApplication.csproj -c Release -o "$RUNNER_TEMP/android-server"
+          python - "$RUNNER_TEMP/android-server" "$RUNNER_TEMP/android-release/RemoteTool.zip" <<'PY'
+          import sys,zipfile
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          with zipfile.ZipFile(sys.argv[2],'w',zipfile.ZIP_DEFLATED) as archive:
+              for path in root.rglob('*'):
+                  if not path.is_file(): continue
+                  assert not path.name.startswith('appsettings') and path.name not in {'auth.json','.env'} and path.suffix not in {'.db','.sqlite','.jks','.keystore'}, 'Private file in publish output'
+                  archive.write(path,path.relative_to(root))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: android-release
+          path: ${{ runner.temp }}/android-release/
+          retention-days: 14
+          if-no-files-found: error
+      - name: Remove temporary signing key
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/android-signing.keystore"
+    outputs:
+      channel: ${{ steps.channel.outputs.value }}
+
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    concurrency:
+      group: android-channel-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-release
+          path: ${{ runner.temp }}/android-release
+      - name: Publish verified channel assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/android_ci.py publish --channel ${{ needs.build.outputs.channel }} --out "$RUNNER_TEMP/android-release"

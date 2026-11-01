@@ -3,15 +3,24 @@ package com.chuckiehelper.mobile.nativeui
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
+import com.chuckiehelper.mobile.BuildConfig
 
 internal const val UPDATE_REPOSITORY = "bighamx/RemoteTool"
 internal const val UPDATE_REPOSITORY_ID = 368781353L
 internal const val UPDATE_RELEASES_URL = "https://api.github.com/repositories/368781353/releases?per_page=30"
 private val updateRepositoryAliases = setOf(UPDATE_REPOSITORY, "bighamx/chuckieTool")
-internal const val UPDATE_MANIFEST = "remotetool-update.json"
+internal val UPDATE_MANIFEST = if (BuildConfig.PHONE_COMPANION) "phonecontrol-update.json" else "remotetool-update.json"
 internal const val LEGACY_UPDATE_MANIFEST = "chuckiehelper-update.json"
-internal const val UPDATE_LATEST_MANIFEST_URL = "https://github.com/$UPDATE_REPOSITORY/releases/latest/download/$UPDATE_MANIFEST"
-internal const val UPDATE_PACKAGE = "com.chuckiehelper.mobile"
+private val updateManifestNames get() = if (BuildConfig.PHONE_COMPANION) setOf(UPDATE_MANIFEST) else setOf(UPDATE_MANIFEST, LEGACY_UPDATE_MANIFEST)
+internal val UPDATE_LATEST_MANIFEST_URL get() = updateManifestUrl(UpdateChannel.STABLE)
+internal val UPDATE_PACKAGE = BuildConfig.APPLICATION_ID
+internal enum class UpdateChannel(val value: String, val label: String) {
+    STABLE("stable", "稳定版"), DEVELOPMENT("development", "开发版");
+    companion object { fun from(value: String?) = entries.firstOrNull { it.value == value } ?: STABLE }
+}
+internal fun updateManifestUrl(channel: UpdateChannel): String =
+    "https://github.com/$UPDATE_REPOSITORY/releases/" +
+        (if (channel == UpdateChannel.DEVELOPMENT) "download/android-development/" else "latest/download/") + UPDATE_MANIFEST
 internal const val MAX_UPDATE_SIZE = 256L * 1024 * 1024
 
 internal data class AppRelease(
@@ -45,12 +54,14 @@ internal fun isUpdateTransportUrl(url: String): Boolean = runCatching {
 }.getOrDefault(false)
 
 /** Web-only releases, drafts and previews are not Android update candidates. */
-internal fun appReleaseCandidates(releases: JSONArray): List<JSONObject> =
+internal fun appReleaseCandidates(releases: JSONArray, channel: UpdateChannel = UpdateChannel.STABLE): List<JSONObject> =
     (0 until releases.length()).mapNotNull { releases.optJSONObject(it) }
         .filter { release ->
-            !release.optBoolean("draft") && !release.optBoolean("prerelease") &&
+            !release.optBoolean("draft") &&
+                (if (channel == UpdateChannel.DEVELOPMENT) release.optBoolean("prerelease") && release.optString("tag_name") == "android-development"
+                 else !release.optBoolean("prerelease")) &&
                 release.optJSONArray("assets")?.let { assets ->
-                    (0 until assets.length()).any { assets.optJSONObject(it)?.optString("name") in setOf(UPDATE_MANIFEST, LEGACY_UPDATE_MANIFEST) }
+                    (0 until assets.length()).any { assets.optJSONObject(it)?.optString("name") in updateManifestNames }
                 } == true
         }.take(5)
 
@@ -78,11 +89,13 @@ internal fun parseAppRelease(manifest: JSONObject, release: JSONObject): AppRele
 
 /** The public latest-release asset endpoint does not consume GitHub API quota.
  * Hash, byte count, installed package identity and signer still pin the downloaded APK. */
-internal fun parseLatestAppRelease(manifest: JSONObject): AppRelease {
+internal fun parseLatestAppRelease(manifest: JSONObject, channel: UpdateChannel = UpdateChannel.STABLE): AppRelease {
+    require(if (channel == UpdateChannel.DEVELOPMENT) manifest.optString("channel") == "development"
+        else manifest.optString("channel", "stable") == "stable") { "更新清单渠道不匹配" }
     val name = manifest.getString("apkAsset")
     require(name.matches(Regex("[a-zA-Z0-9._+-]+\\.apk"))) { "更新包名称无效" }
     val asset = JSONObject().put("name", name).put("size", manifest.getLong("size"))
-        .put("browser_download_url", "https://github.com/$UPDATE_REPOSITORY/releases/latest/download/$name")
+        .put("browser_download_url", updateManifestUrl(channel).substringBeforeLast('/') + "/$name")
     return parseAppRelease(manifest, JSONObject().put("assets", JSONArray().put(asset)))
 }
 

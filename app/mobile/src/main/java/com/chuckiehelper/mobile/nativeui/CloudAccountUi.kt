@@ -6,7 +6,6 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -19,7 +18,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -31,13 +29,12 @@ internal fun CloudAccountEntry(model: CloudAccountModel) {
 }
 
 @Composable
-internal fun CloudAccountHost(model: CloudAccountModel, appearance: AppAppearance, onAppearanceChange: (AppAppearance) -> Unit) {
+internal fun CloudAccountHost(model: CloudAccountModel) {
     if (!model.panelVisible) return
     val context = LocalContext.current
     val scan = rememberCloudQrScanner(model)
     var confirmUpload by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
-    var chooseAppearance by remember { mutableStateOf(false) }
     val working = model.busy || model.qr.busy
     val actionShape = RoundedCornerShape(12.dp)
     val failure = model.qr.error ?: model.error
@@ -109,25 +106,10 @@ internal fun CloudAccountHost(model: CloudAccountModel, appearance: AppAppearanc
                 if (model.loggedIn) TextButton(modifier = Modifier.weight(1f), onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("${CloudAccountModel.BASE}/AppData/Index?appId=${CloudAccountModel.APP_ID}"))) }) {
                     Text("管理云端配置")
                 }
-                TextButton(modifier = Modifier.weight(1f), onClick = { chooseAppearance = true }) {
-                    Text("外观 · ${appearance.label}")
-                }
             }
         }
     }
     CloudQrHost(model)
-    if (chooseAppearance) AlertDialog(onDismissRequest = { chooseAppearance = false }, title = { Text("外观") },
-        text = { Column {
-            AppAppearance.entries.forEach { option ->
-                Row(Modifier.fillMaxWidth().selectable(selected = appearance == option, role = Role.RadioButton, onClick = {
-                    onAppearanceChange(option); chooseAppearance = false
-                }).padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    RadioButton(selected = appearance == option, onClick = null)
-                    Text(option.label)
-                }
-            }
-        } }, confirmButton = {}, dismissButton = { TextButton(onClick = { chooseAppearance = false }) { Text("取消") } })
     if (confirmUpload && model.loggedIn) AlertDialog(onDismissRequest = { confirmUpload = false },
         title = { Text("上传配置") }, text = { Text("上传设备、用户名密码和设置，保留云端 Cloudflare 配置。登录令牌和聊天记录不上传。") },
         confirmButton = { TextButton(onClick = { confirmUpload = false; model.upload() }) { Text("确认上传") } },

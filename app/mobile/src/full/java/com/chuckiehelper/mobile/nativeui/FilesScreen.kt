@@ -321,7 +321,9 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onClose: (() -> Unit)
         Surface(tonalElevation = 2.dp) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                if (onClose != null) IconButton(onClick = { if (selected.isNotEmpty()) selected = emptySet() else onClose() }) { Icon(Icons.Outlined.ArrowBack, "返回") }
+                if (onClose != null) IconButton(onClick = { if (selected.isNotEmpty()) selected = emptySet() else onClose() }) {
+                    Icon(Icons.Outlined.Close, if (selected.isNotEmpty()) "取消多选" else "关闭文件浏览")
+                }
                 Column(Modifier.weight(1f).clickable { inputPath = path; editingPath = true }.padding(horizontal = 8.dp, vertical = 4.dp)) {
                     Text(path.ifBlank { "服务器磁盘" }, style = MaterialTheme.typography.titleMedium,
                         maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)

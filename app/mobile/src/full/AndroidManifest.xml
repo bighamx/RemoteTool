@@ -14,8 +14,5 @@
         <provider android:name="com.chuckiehelper.mobile.nativeui.HermesFileProvider" android:authorities="${applicationId}.hermes.files" android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/hermes_file_paths" />
         </provider>
-        <provider android:name="com.chuckiehelper.mobile.nativeui.AppUpdateFileProvider" android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true">
-            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/app_update_paths" />
-        </provider>
     </application>
 </manifest>

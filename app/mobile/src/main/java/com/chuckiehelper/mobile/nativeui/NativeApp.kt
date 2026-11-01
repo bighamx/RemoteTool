@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
 import org.json.JSONObject
@@ -147,6 +148,11 @@ fun NativeApp(model: NativeModel) {
                 onDiagnostics = { diagnostics = true },
                 onStartup = { startup = true },
                 onBack = { settings = false },
+                appearance = appearance,
+                onAppearanceChange = {
+                    appearance = it
+                    appearancePrefs.edit().putString(AppAppearance.KEY, it.value).apply()
+                },
                 showUpdates = edition.showUpdates,
                 onStorage = if (edition.supportsStorage) ({ storage = true }) else null,
             )
@@ -283,10 +289,7 @@ fun NativeApp(model: NativeModel) {
         }
         model.channelDevice?.let { ChannelDialog(model, it) }
         edition.UpdateHost()
-        CloudAccountHost(cloud, appearance) {
-            appearance = it
-            appearancePrefs.edit().putString(AppAppearance.KEY, it.value).apply()
-        }
+        CloudAccountHost(cloud)
         if (startup) StartupDialog { startup = false }
     }
 }
@@ -372,7 +375,7 @@ private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTo
         if(com.chuckiehelper.mobile.BuildConfig.PHONE_COMPANION)item { TextButton(onClick=onPhoneTools){Text("打开本机手机操控") } }
         items(model.devices, key = { it.id }) { device ->
             ElevatedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             Icons.Outlined.Computer,
@@ -380,11 +383,24 @@ private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTo
                             tint = MaterialTheme.colorScheme.primary,
                         )
                         Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             val metadata=model.deviceMetadata[device.id]
-                            Text(device.name+" · "+(metadata?.platform?.takeIf{it.isNotBlank()}?:"系统未知"), style = MaterialTheme.typography.titleLarge)
-                            Text("服务端 "+(metadata?.serverVersion?.takeIf{it.isNotBlank()}?:"版本未读取"),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                            metadata?.osVersion?.takeIf{it.isNotBlank()}?.let{Text(it+(metadata.architecture.takeIf{a->a.isNotBlank()}?.let{a->" · $a"}?:""),style=MaterialTheme.typography.labelSmall,maxLines=2)}
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(device.name, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                val platform = metadata?.platform?.takeIf { it.isNotBlank() && it != "Unknown" }
+                                Surface(
+                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
+                                    color = if (platform != null) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    contentColor = if (platform != null) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                ) {
+                                    Text(platform ?: "系统未知", Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                                }
+                            }
+                            Text("服务端 "+(metadata?.serverVersion?.takeIf{it.isNotBlank()}?:"版本未读取"),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines=1,overflow=TextOverflow.Ellipsis)
+                            metadata?.osVersion?.takeIf{it.isNotBlank()}?.let{Text(it+(metadata.architecture.takeIf{a->a.isNotBlank()}?.let{a->" · $a"}?:""),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2)}
                             if (model.session?.device?.id == device.id) {
                                 Text("当前连接", color = MaterialTheme.colorScheme.primary,
                                     style = MaterialTheme.typography.labelMedium)
@@ -398,6 +414,7 @@ private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTo
                     Text(
                         "${device.endpoints.size} 个地址 · ${device.id.take(8)}",
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Button(
                         onClick = { model.connect(device) },

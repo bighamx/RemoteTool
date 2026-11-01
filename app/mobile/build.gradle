@@ -4,6 +4,26 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.compose'
 }
 
+// First-parent history is monotonic on the publishing branch. Stable tags use
+// the next slot for the same commit; later development commits advance again.
+def gitOutput = { List<String> args ->
+    def out = new ByteArrayOutputStream()
+    def result = project.exec {
+        workingDir rootProject.projectDir
+        commandLine(['git'] + args)
+        standardOutput = out
+        errorOutput = new ByteArrayOutputStream()
+        ignoreExitValue = true
+    }
+    result.exitValue == 0 ? out.toString('UTF-8').trim() : ''
+}
+def sourceHash = gitOutput(['rev-parse', '--short=12', 'HEAD'])
+def sourceCount = gitOutput(['rev-list', '--first-parent', '--count', 'HEAD'])
+def buildChannel = providers.gradleProperty('buildChannel').orElse('development').get()
+def automaticBuildCode = sourceCount.isInteger() ? 1000 + sourceCount.toInteger() * 2 + (buildChannel == 'stable' ? 1 : 0) : 149
+def appBuildCode = providers.gradleProperty('buildVersionCode').map { it.toInteger() }.orElse(automaticBuildCode).get()
+def appVersionName = { String base -> buildChannel == 'stable' ? base : "${base}-dev.${sourceHash ?: 'unknown'}" }
+
 android {
     namespace 'com.chuckiehelper.mobile'
     compileSdk 34
@@ -19,8 +39,8 @@ android {
         full {
             dimension 'edition'
             applicationId 'com.chuckiehelper.mobile'
-            versionCode 146
-            versionName '0.3.143'
+            versionCode appBuildCode
+            versionName appVersionName('0.3.146')
             buildConfigField 'boolean', 'PHONE_COMPANION', 'false'
             manifestPlaceholders = [appLabel: 'RemoteTool', appIcon: '@mipmap/ic_launcher',
                 siblingPackage: 'com.chuckiehelper.phonecontrol', accessibilityLabel: 'RemoteTool 手机操控', notificationLabel: 'RemoteTool 手机通知',
@@ -30,8 +50,8 @@ android {
         phone {
             dimension 'edition'
             applicationId 'com.chuckiehelper.phonecontrol'
-            versionCode 19
-            versionName '0.2.17'
+            versionCode appBuildCode
+            versionName appVersionName('0.2.18')
             buildConfigField 'boolean', 'PHONE_COMPANION', 'true'
             manifestPlaceholders = [appLabel: '手机操控', appIcon: '@drawable/ic_phone_control',
                 siblingPackage: 'com.chuckiehelper.mobile', accessibilityLabel: '手机操控 · 无障碍', notificationLabel: '手机操控 · 通知读取',
@@ -51,7 +71,12 @@ android {
     def projectUpdateStore = rootProject.file('signing/RemoteTool-release-signing-debug.keystore')
     def updateStore = updateStorePath ? file(updateStorePath) : (projectUpdateStore.isFile() ? projectUpdateStore : new File(System.getProperty('user.home'), '.android/debug-hermes.keystore'))
     if (updateStorePath && !updateStore.isFile()) throw new GradleException('RemoteTool signing store does not exist')
-    if (updateStore.isFile()) signingConfigs.debug.storeFile = updateStore
+    if (updateStore.isFile()) {
+        signingConfigs.debug.storeFile = updateStore
+        signingConfigs.debug.storePassword = providers.environmentVariable('REMOTE_TOOL_SIGNING_STORE_PASSWORD').orElse('android').get()
+        signingConfigs.debug.keyAlias = providers.environmentVariable('REMOTE_TOOL_SIGNING_KEY_ALIAS').orElse('androiddebugkey').get()
+        signingConfigs.debug.keyPassword = providers.environmentVariable('REMOTE_TOOL_SIGNING_KEY_PASSWORD').orElse('android').get()
+    }
     testOptions { unitTests.includeAndroidResources = true }
     // Deliverable naming follows the project name (RemoteTool), not the legacy package.
     applicationVariants.all { variant ->

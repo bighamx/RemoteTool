@@ -66,8 +66,8 @@ class FilesLayoutTest {
             compose.onNodeWithText("D:/files/").assertIsDisplayed()
             compose.onNodeWithText("文件夹 0 · 文件 100").assertIsDisplayed()
             compose.onNodeWithText("file-000.txt").performTouchInput { longClick() }
-            compose.onNodeWithContentDescription("返回").performClick()
-            assertFalse("Toolbar back must cancel selection before leaving", closed)
+            compose.onNodeWithContentDescription("取消多选").performClick()
+            assertFalse("Toolbar close must cancel selection before leaving", closed)
             compose.onNodeWithText("D:/files/").assertIsDisplayed()
             compose.onNodeWithText("文件夹 0 · 文件 100").assertIsDisplayed()
             val row = compose.onNodeWithText("file-000.txt").getUnclippedBoundsInRoot()
@@ -83,6 +83,8 @@ class FilesLayoutTest {
             compose.onAllNodesWithText("降序")[0].performClick()
             compose.onNodeWithText("完成").performClick()
             compose.onNodeWithText("file-099.txt").assertIsDisplayed()
+            compose.onNodeWithContentDescription("关闭文件浏览").performClick()
+            assertTrue("Close exits the browser instead of navigating to the parent", closed)
         } finally { server.close(); responder.join(1000) }
     }
 }

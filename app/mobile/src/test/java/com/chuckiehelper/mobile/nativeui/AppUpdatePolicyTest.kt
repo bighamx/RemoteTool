@@ -8,8 +8,8 @@ import org.junit.Test
 class AppUpdatePolicyTest {
     @Test fun acceptsOldManifestDuringRenameMigration() {
         val legacy = JSONObject().put("assets", JSONArray().put(JSONObject().put("name", LEGACY_UPDATE_MANIFEST)))
-        assertEquals(1, appReleaseCandidates(JSONArray().put(legacy)).size)
-        assertTrue(UPDATE_LATEST_MANIFEST_URL.endsWith("/remotetool-update.json"))
+        assertEquals(if (com.chuckiehelper.mobile.BuildConfig.PHONE_COMPANION) 0 else 1, appReleaseCandidates(JSONArray().put(legacy)).size)
+        assertTrue(UPDATE_LATEST_MANIFEST_URL.endsWith("/$UPDATE_MANIFEST"))
     }
     private val hash = "ab".repeat(32)
     private fun manifest() = JSONObject().put("schemaVersion", 1).put("packageId", UPDATE_PACKAGE)
@@ -45,6 +45,18 @@ class AppUpdatePolicyTest {
         val list = JSONArray().put(JSONObject().put("assets", JSONArray()))
             .put(release().put("draft", true)).put(release().put("prerelease", true)).put(release())
         assertEquals(1, appReleaseCandidates(list).size)
+    }
+    @Test fun developmentChannelOnlyAcceptsItsOwnPrereleaseAndUsesPinnedManifestPath() {
+        val development = release().put("prerelease", true).put("tag_name", "android-development")
+        val other = release().put("prerelease", true).put("tag_name", "other-preview")
+        val list = JSONArray().put(development).put(other).put(release()).put(development.toString().let(::JSONObject).put("draft",true))
+        assertEquals(1, appReleaseCandidates(list, UpdateChannel.DEVELOPMENT).size)
+        assertEquals(1, appReleaseCandidates(list, UpdateChannel.STABLE).size)
+        assertTrue(updateManifestUrl(UpdateChannel.DEVELOPMENT).contains("/download/android-development/"))
+        assertTrue(parseLatestAppRelease(manifest().put("channel", "development"), UpdateChannel.DEVELOPMENT).apkUrl.contains("/download/android-development/"))
+        assertThrows(IllegalArgumentException::class.java) { parseLatestAppRelease(manifest().put("channel", "development")) }
+        assertThrows(IllegalArgumentException::class.java) { parseLatestAppRelease(manifest(), UpdateChannel.DEVELOPMENT) }
+        assertEquals(UpdateChannel.STABLE, UpdateChannel.from("invalid"))
     }
     @Test fun bindsManifestToExactAssetAndActualSize() {
         val value = parseAppRelease(manifest(), release())

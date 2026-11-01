@@ -48,6 +48,7 @@ internal class AppUpdateModel(app: Application) : AndroidViewModel(app) {
     var automatic by mutableStateOf(prefs.getBoolean("automatic", true)); private set
     var wifiOnly by mutableStateOf(prefs.getBoolean("wifi_only", true)); private set
     var checkedAt by mutableLongStateOf(prefs.getLong("checked_at", 0)); private set
+    var channel by mutableStateOf(UpdateChannel.from(prefs.getString("channel", null))); private set
     var busy by mutableStateOf(false); private set
     val subtitle get() = when (phase) {
         UpdatePhase.Downloading -> "正在下载 ${release?.versionName.orEmpty()}"
@@ -81,6 +82,16 @@ internal class AppUpdateModel(app: Application) : AndroidViewModel(app) {
     }
     fun updateWifiOnly(value: Boolean) {
         wifiOnly = value; prefs.edit().putBoolean("wifi_only", value).apply()
+    }
+    fun updateChannel(value: UpdateChannel) {
+        if (busy || value == channel) return
+        clearCached()
+        channel = value; release = null; phase = UpdatePhase.Idle; downloaded = 0; error = null
+        prefs.edit().putString("channel", value.value).remove("attempt_at").remove("attempt_version")
+            .remove("checked_at").remove("ignored_version").apply()
+        checkedAt = 0
+        message = "已切换到${value.label}"
+        check(manual = true)
     }
     fun reloadCloudSettings() {
         automatic = prefs.getBoolean("automatic", true)
@@ -117,7 +128,8 @@ internal class AppUpdateModel(app: Application) : AndroidViewModel(app) {
                 checkedAt = System.currentTimeMillis()
                 prefs.edit().putLong("checked_at", checkedAt).apply()
                 if (latest == null || latest.versionCode <= BuildConfig.VERSION_CODE) {
-                    message = if (latest == null) "尚未发布新版 Android 更新包" else "已是最新版本"
+                    message = if (latest == null) "${channel.label}暂无更新包" else if (latest.versionCode < BuildConfig.VERSION_CODE)
+                        "当前版本高于${channel.label}最新版本；等待更高版本后可覆盖更新" else "已是${channel.label}最新版本"
                     if (previous == UpdatePhase.Ready && release?.versionCode?.let { it > BuildConfig.VERSION_CODE } == true) {
                         phase = UpdatePhase.Ready
                     } else { release = null; phase = UpdatePhase.Idle }
@@ -250,13 +262,13 @@ internal class AppUpdateModel(app: Application) : AndroidViewModel(app) {
     private suspend fun findLatest(): AppRelease? {
         // Prefer one public asset request; VPN/mobile users may share an exhausted
         // unauthenticated GitHub API quota despite checking only once.
-        val latestManifest = try { fetchText(UPDATE_LATEST_MANIFEST_URL) }
+        val latestManifest = try { fetchText(updateManifestUrl(channel)) }
             catch (cancel: CancellationException) { throw cancel }
             catch (_: IOException) { null }
-        if (latestManifest != null) return parseLatestAppRelease(JSONObject(latestManifest))
+        if (latestManifest != null) return parseLatestAppRelease(JSONObject(latestManifest), channel)
         // A newer web-only release may not contain the Android manifest.
         val releases = JSONArray(fetchText(UPDATE_RELEASES_URL))
-        return appReleaseCandidates(releases).map { candidate ->
+        return appReleaseCandidates(releases, channel).map { candidate ->
             val assets = candidate.getJSONArray("assets")
             val rows = (0 until assets.length()).map { assets.getJSONObject(it) }
             val manifest = rows.firstOrNull { it.optString("name") == UPDATE_MANIFEST }

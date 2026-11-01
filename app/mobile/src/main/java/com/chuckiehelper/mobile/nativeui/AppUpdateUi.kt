@@ -79,6 +79,16 @@ internal fun AppUpdateHost(model: AppUpdateModel) {
                 }
                 model.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
                 HorizontalDivider()
+                Text("更新渠道", style = MaterialTheme.typography.titleSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    UpdateChannel.entries.forEach { channel ->
+                        FilterChip(selected = model.channel == channel, enabled = !model.busy,
+                            onClick = { model.updateChannel(channel) }, label = { Text(channel.label) })
+                    }
+                }
+                Text(if (model.channel == UpdateChannel.DEVELOPMENT) "主线自动构建版本，可能包含尚未正式发布的改动。"
+                    else "仅接收正式发布的版本。", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                 UpdateToggle("自动检查更新", "启动和回到前台检查，间隔至少 6 小时", model.automatic, model::updateAutomatic)
                 UpdateToggle("仅 Wi-Fi 自动下载", "移动网络下可以手动下载", model.wifiOnly, model::updateWifiOnly)
                 if (model.checkedAt > 0) Text("上次检查：${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(model.checkedAt))}",
