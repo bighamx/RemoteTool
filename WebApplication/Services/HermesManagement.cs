@@ -12,6 +12,17 @@ public sealed class HermesManagement(IConfiguration configuration)
     private readonly object maintenanceGate = new();
     private bool maintenance;
     private int mutations;
+    /// <summary>当前 Profile 的 Hermes 运行时位置（安装器启动网关时复用同一套解析）。</summary>
+    public (string Python, string Source, string Home) Runtime()
+    {
+        var profiles = new HermesProfiles(configuration);
+        var home = profiles.Home;
+        var source = configuration["Hermes:SourceDirectory"] ?? Path.Combine(profiles.Root, "hermes-agent");
+        var python = configuration["Hermes:PythonExecutable"] ?? (OperatingSystem.IsWindows()
+            ? Path.Combine(source, "venv", "Scripts", "python.exe") : Path.Combine(source, "venv", "bin", "python"));
+        return (python, source, home);
+    }
+
     public Task<JsonElement> EnableApiServer(CancellationToken ct) {
         var key=new HermesProfiles(configuration).ApiKey(HermesProfileScope.Name);
         return Invoke("enable_api_server",JsonSerializer.SerializeToElement(new{restart=false,api_server_key=key}),ct);

@@ -63,17 +63,18 @@ public sealed class HermesInstaller
                 var create=await run(uv,["venv","--python","3.12",Venv],timeout.Token);
                 if(create.ExitCode!=0||!File.Exists(python))throw new IOException("创建虚拟环境失败");
                 Update(new(id,"validating","正在从官方索引安装 hermes-agent。"));
-                var install=await run(uv,["pip","install","--python",python,"hermes-agent"],timeout.Token);
+                // messaging extra 带 aiohttp：API Server 适配器缺它会拒绝启动。
+                var install=await run(uv,["pip","install","--python",python,"hermes-agent[messaging]"],timeout.Token);
                 if(install.ExitCode!=0)throw new IOException("安装未完成");
             }else{
                 var create=await run(python!,["-m","venv",Venv],timeout.Token);
                 if(create.ExitCode!=0||!File.Exists(python))throw new IOException("创建虚拟环境失败（需要 python3-venv）");
                 Update(new(id,"validating","正在从官方索引安装 hermes-agent。"));
-                var install=await run(python,["-m","pip","install","--disable-pip-version-check","--no-input","hermes-agent"],timeout.Token);
+                var install=await run(python,["-m","pip","install","--disable-pip-version-check","--no-input","hermes-agent[messaging]"],timeout.Token);
                 if(install.ExitCode!=0)throw new IOException("安装未完成");
             }
-            var verify=await run(python,["-c","import importlib.metadata as m, hermes_bootstrap; print(m.version('hermes-agent'))"],timeout.Token);
-            if(verify.ExitCode!=0)throw new IOException("安装后无法导入 hermes_bootstrap");
+            var verify=await run(python,["-c","import importlib.metadata as m, hermes_bootstrap, aiohttp; print(m.version('hermes-agent'))"],timeout.Token);
+            if(verify.ExitCode!=0)throw new IOException("安装后无法导入 hermes_bootstrap 或 aiohttp");
             var version=verify.Text.Trim().Split('\n',StringSplitOptions.RemoveEmptyEntries).LastOrDefault()??"";
             Atomic(Path.Combine(root,"install.json"),Obj(("python",python),("venv",Venv),("version",version),("source","pypi")));
             Update(new(id,"ready",$"已安装 Hermes {version}。请继续配置模型 Provider 与账号，然后重新检测。",version));

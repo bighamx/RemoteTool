@@ -21,6 +21,7 @@ public sealed class HermesGatewayAdmin(HermesManagement management)
     }
     public async Task<JsonObject> Log(long offset, string key, CancellationToken ct) => await Invoke("log", new { offset, key }, ct);
     public async Task<JsonObject> Start(bool wait, CancellationToken ct, string mode = "restart") {
+        if (!OperatingSystem.IsWindows()) return await UnixStart(ct);
         management.BeginMaintenance();
         try {
             var live = await Invoke("status", new { }, ct);
@@ -37,6 +38,20 @@ public sealed class HermesGatewayAdmin(HermesManagement management)
                 throw new InvalidOperationException(error.Message, error);
             }
             return await Invoke("job", new { }, ct);
+        } finally { management.EndMaintenance(); }
+    }
+    /// <summary>Linux/macOS：走 Hermes 自己的 systemd/launchd 用户服务，不用 Windows 计划任务。</summary>
+    private async Task<JsonObject> UnixStart(CancellationToken ct) {
+        management.BeginMaintenance();
+        try {
+            using (HermesProfileScope.Enter("default")) {
+                var (python, _, home) = management.Runtime();
+                if (!File.Exists(python)) throw new InvalidOperationException("服务端尚未安装 Hermes，请先使用一键安装。");
+                var result = await HermesUnixGateway.Restart(python, home, ct);
+                return new JsonObject {
+                    ["ok"] = result.Ok, ["message"] = result.Message, ["port"] = result.Port, ["platform"] = "unix",
+                };
+            }
         } finally { management.EndMaintenance(); }
     }
     public async Task<JsonObject> Cancel(CancellationToken ct) => await Invoke("cancel_job", new { }, ct);
