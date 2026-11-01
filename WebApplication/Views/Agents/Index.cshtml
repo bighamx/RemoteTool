@@ -117,7 +117,6 @@
             <button v-if="agent==='codex'" type="button" @@click="mobileComposerOpen=false;openWorkspaceDialog()"><span aria-hidden="true">◎</span>账户与工作空间</button>
         </div>
     </modal>
-=======
     <section v-if="adminOpen" class="agent-admin-page"><header class="agent-admin-page-head"><button type="button" :disabled="adminBusy" @@click="closeHermesAdmin">← 返回</button><div><h2>{{agentName}} 管理</h2><small>{{profile}}</small></div></header>
         <div class="hermes-admin">
             <nav><strong>Profile 配置</strong><button v-for="file in adminFiles" :key="file.id" type="button" :disabled="adminBusy" @@click="openAdminFile(file)">{{file.name}}</button><button type="button" :disabled="adminBusy" @@click="openAdminSettings('models')">模型与提供方</button><button type="button" :disabled="adminBusy" @@click="openAdminSettings('title')">自动标题</button><template v-if="agent==='hermes'"><strong>全部 Profile</strong><button type="button" :disabled="adminBusy" @@click="openAdminSettings('gateway')">网关管理</button></template></nav>
