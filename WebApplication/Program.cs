@@ -74,6 +74,22 @@ namespace RemoteTool.WebApi
             }
 
             var builder = WebApplication.CreateBuilder(args);
+            builder.Services.AddSingleton<Services.Storage.ManagedStorageService>(services=>new(
+                services.GetRequiredService<RunRegistry>(),services.GetRequiredService<IConfiguration>(),services.GetRequiredService<HermesProfiles>(),
+                (agent,profile,id)=>{
+                    System.Text.Json.Nodes.JsonObject state;
+                    if(agent=="codex")state=services.GetRequiredService<CodexSessionActivity>().Read(id);
+                    else {using var scope=HermesProfileScope.Enter(profile);state=services.GetRequiredService<HermesSessionActivity>().Read(id);}
+                    var running=state["running"] is System.Text.Json.Nodes.JsonValue value&&value.TryGetValue<bool>(out var flag)&&flag;
+                    if(!running){
+                        // 服务端观察到会话已停：清掉两分钟前登记却再没下文的 run，避免永久锁住附件。
+                        var registry=services.GetRequiredService<RunRegistry>();
+                        var key=agent=="hermes"&&profile!="default"?"hermes@"+profile:agent;
+                        var entry=registry.QueryEntry(key,id);
+                        if(entry is not null&&DateTimeOffset.UtcNow.ToUnixTimeSeconds()-entry.Value.UpdatedAt>120)registry.Clear(key,id,entry.Value.RunId);
+                    }
+                    return running;
+                }));
             builder.Services.AddSingleton<Services.PhoneControl.PhoneGateway>();
             builder.Services.AddHostedService<Services.PhoneControl.PhoneSessionReaper>();
             builder.Services.AddSingleton<Services.PhoneControl.PhoneSessionIntegration>();

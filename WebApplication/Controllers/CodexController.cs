@@ -188,8 +188,24 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     }
 
     /// <summary>多端共享：该会话当前是否有活跃 run。终态自动清除。</summary>
-    [HttpGet("sessions/{id}/active-run")] public Task ActiveRun(string id, CancellationToken ct) =>
-        Forward(HttpMethod.Get, $"sessions/{Id(id)}/active-run", null, ct);
+    [HttpGet("sessions/{id}/active-run")]
+    public async Task ActiveRun(string id, CancellationToken ct) {
+        var session = Id(id);
+        using var upstream = await bridge.SendAsync(HttpMethod.Get, $"sessions/{session}/active-run", null, ct);
+        var payload = await upstream.Content.ReadAsStringAsync(ct);
+        if (upstream.IsSuccessStatusCode) {
+            // bridge 是权威：它报无活跃 run 时顺手清掉本地登记，否则被杀的 run 会永远锁住附件。
+            string? active = null;
+            try { using var doc = JsonDocument.Parse(payload); if (doc.RootElement.TryGetProperty("run_id", out var r)) active = r.GetString(); }
+            catch (JsonException) { }
+            var registered = runs.Query("codex", session);
+            if (upstream.StatusCode == System.Net.HttpStatusCode.OK && string.IsNullOrEmpty(active) && !string.IsNullOrEmpty(registered))
+                runs.Clear("codex", session, registered);
+        }
+        Response.StatusCode = (int)upstream.StatusCode;
+        Response.ContentType = upstream.Content.Headers.ContentType?.ToString() ?? "application/json";
+        await Response.WriteAsync(payload, ct);
+    }
     [HttpGet("runs/{id}")] public Task Status(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"runs/{Id(id)}", null, ct);
     [HttpGet("runs/lookup")] public async Task Lookup([FromQuery] string key, CancellationToken ct) {
         if (!Regex.IsMatch(key ?? "", "^[a-zA-Z0-9_-]{16,120}$")) { Response.StatusCode = 400; await Response.WriteAsJsonAsync(new { message = "无效的请求标识" }, ct); return; }
@@ -277,6 +293,14 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
                 await Response.WriteAsJsonAsync(payload, ct);
             } else await upstream.Content.CopyToAsync(Response.Body, ct);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (RemoteTool.WebApi.Services.Codex.CodexError error) when (!Response.HasStarted) {
+            Response.StatusCode = error.Status;
+            await Response.WriteAsJsonAsync(new { message = error.Code == "codex_tools_missing" ? "服务端 Codex 尚未就绪，请先安装 CLI 或修正程序路径，再重新检测。" : error.Message, code = error.Code, delivery = error.Delivery }, ct);
+        }
+        catch (System.ComponentModel.Win32Exception) when (!Response.HasStarted) {
+            Response.StatusCode = 503;
+            await Response.WriteAsJsonAsync(new { message = "服务端无法启动 Codex，请检查安装、程序权限和运行环境。", code = "codex_runtime_unavailable", delivery = "rejected" }, ct);
+        }
         catch (Exception error) when (!Response.HasStarted && error is InvalidOperationException or HttpRequestException or IOException) {
             Response.StatusCode = 503;
             await Response.WriteAsJsonAsync(new { message = error is InvalidOperationException ? error.Message : "无法访问本机 Codex" }, ct);
