@@ -69,7 +69,7 @@ public sealed class AgentSetupController(IConfiguration configuration,HermesProf
     private object Guide(string agent,string state,string title,string message,bool canConfigure,bool? canInstall=null)=>new {
         agent,state,title,message,canConfigureApi=canConfigure,
         canInstall=canInstall??(agent=="codex"&&installer.CanInstall),
-        install=agent=="codex"?new{phase=installer.Current.Phase,message=installer.Current.Message,version=installer.Current.Version,busy=installer.Current.Busy}:null,
+        install=agent=="codex"?new{phase=installer.Current.Phase,message=installer.Current.Message,version=installer.Current.Version,busy=installer.Current.Busy,target=installer.Target}:null,
         installationNote=agent=="codex"&&installer.CanInstall
             ?"服务端会使用固定官方 npm 源安装到 RemoteTool 独立目录，并校验程序版本与当前应用需要的协议；不会自动登录或改动现有账号。不满足条件的平台仍按下面步骤手动安装。"
             :"当前部署未提供受验证的自动安装器；安装可能涉及系统依赖和账号登录，请在服务端完成。检测本身不会安装软件或改动配置。",

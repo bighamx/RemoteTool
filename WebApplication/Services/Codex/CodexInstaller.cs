@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -14,6 +15,7 @@ public sealed class CodexInstaller
     internal sealed record Output(int ExitCode,string Text);
     private readonly string root;
     private readonly string? npm;
+    private readonly string? prefix;
     private readonly Func<string,string[],CancellationToken,Task<Output>> run;
     private readonly CancellationToken stopping;
     private static readonly JsonSerializerOptions Json=new(){PropertyNameCaseInsensitive=true};
@@ -21,11 +23,13 @@ public sealed class CodexInstaller
     private Status status=new("","idle","");
     private Task completion=Task.CompletedTask;
     public bool CanInstall=>npm!=null;
+    /// <summary>安装目标前缀；null 表示交给 npm 的默认前缀。</summary>
+    public string? Target=>prefix;
     public Status Current {get{lock(gate)return status;}}
     internal Task Completion=>completion;
-    public CodexInstaller(IHostApplicationLifetime lifetime):this(RemoteToolPaths.CodexManagedTools,FindNpm(),RunProcess,lifetime.ApplicationStopping){}
-    internal CodexInstaller(string root,string? npm,Func<string,string[],CancellationToken,Task<Output>> run,CancellationToken stopping=default){
-        this.root=Path.GetFullPath(root);this.npm=npm;this.run=run;this.stopping=stopping;
+    public CodexInstaller(IHostApplicationLifetime lifetime,IConfiguration configuration):this(RemoteToolPaths.CodexManagedTools,FindNpm(),RunProcess,lifetime.ApplicationStopping,ResolvePrefix(configuration["Codex:InstallPrefix"])){}
+    internal CodexInstaller(string root,string? npm,Func<string,string[],CancellationToken,Task<Output>> run,CancellationToken stopping=default,string? prefix=null){
+        this.root=Path.GetFullPath(root);this.npm=npm;this.run=run;this.stopping=stopping;this.prefix=prefix;
         try{var file=Path.Combine(root,"status.json");if(File.Exists(file)){
             status=JsonSerializer.Deserialize<Status>(File.ReadAllText(file),Json)??status;
             if(status.Busy)status=status with{Phase="failed",Message="服务已重启，安装结果未确认。请重新检测后再试。"};
@@ -35,7 +39,7 @@ public sealed class CodexInstaller
         lock(gate){
             if(status.Busy)return status;
             if(npm==null)throw new InvalidOperationException("此平台未提供自动安装，或服务账户无法使用 npm。请按手动步骤安装。 ");
-            status=new(Guid.NewGuid().ToString("N"),"installing","正在用 npm 把官方 Codex CLI 安装到系统默认目录；不会更改登录凭据。 ");
+            status=new(Guid.NewGuid().ToString("N"),"installing",$"正在用 npm 把官方 Codex CLI 安装到{(prefix is null?"系统默认目录":prefix)}；不会更改登录凭据。 ");
             var job=status.Id;completion=Task.Run(()=>Install(job));return status;
         }
     }
@@ -47,11 +51,13 @@ public sealed class CodexInstaller
         var schema=Path.Combine(Path.GetTempPath(),"codex-schema-"+id);
         try{
             // 用 npm 官方默认前缀安装（不再塞进 RemoteTool 私有目录），装完 codex 即在系统 PATH 上。
-            var install=await run(npm!,["install","--global","--registry","https://registry.npmjs.org","--no-fund","--no-audit","@openai/codex@latest"],timeout.Token);
-            if(install.ExitCode!=0)throw new IOException(Permission(install.Text)?"npm 没有写入系统全局目录的权限（请用管理员身份或可写的全局前缀重试，或按手动步骤安装）":"安装未完成");
-            var rootResult=await run(npm!,["root","--global"],timeout.Token);
-            var globalRoot=Last(rootResult.Text);
-            if(rootResult.ExitCode!=0||globalRoot.Length==0)throw new IOException("无法确定 npm 全局目录");
+            var args=new List<string>{"install","--global"};
+            if(prefix is not null){args.Add("--prefix");args.Add(prefix);}
+            args.AddRange(["--registry","https://registry.npmjs.org","--no-fund","--no-audit","@openai/codex@latest"]);
+            var install=await run(npm!,[..args],timeout.Token);
+            if(install.ExitCode!=0)throw new IOException(Permission(install.Text)?"npm 没有写入目标目录的权限（目标目录属于登录用户，服务账户需要该目录的写权限；可调整权限后重试，或按手动步骤安装）":"安装未完成");
+            var globalRoot=prefix is null?Last((await run(npm!,["root","--global"],timeout.Token)).Text):Path.Combine(prefix,OperatingSystem.IsWindows()?"node_modules":"lib/node_modules");
+            if(globalRoot.Length==0)throw new IOException("无法确定 npm 全局目录");
             Update(new(id,"validating","正在验证 Codex 程序和当前应用所需协议。"));
             var binary=Locate(globalRoot)??throw new IOException("未找到可执行程序");
             var version=await run(binary,["--version"],timeout.Token);
@@ -77,7 +83,97 @@ public sealed class CodexInstaller
             .Where(CodexExecutable.Complete).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
     }
     private static string Last(string text)=>text.Split('\n',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).LastOrDefault()??"";
-    private static bool Permission(string text)=>text.Contains("EACCES",StringComparison.OrdinalIgnoreCase)||text.Contains("permission denied",StringComparison.OrdinalIgnoreCase);
+    private static bool Permission(string text)=>new[]{"EACCES","EPERM","permission denied","access is denied","拒绝访问"}.Any(x=>text.Contains(x,StringComparison.OrdinalIgnoreCase));
+    /// <summary>安装目标：显式配置优先；其余平台都装到「当前登录用户」的 npm 前缀。</summary>
+    private static string? ResolvePrefix(string? configured){
+        if(!string.IsNullOrWhiteSpace(configured))return Environment.ExpandEnvironmentVariables(configured.Trim());
+        var user=OperatingSystem.IsWindows()?ConsoleUserName():UnixConsoleUser();
+        var home=ConsoleUserHome();
+        Trace($"user={Environment.UserName} console={user ?? "(null)"} home={home ?? "(null)"}");
+        if(OperatingSystem.IsWindows())return string.IsNullOrWhiteSpace(home)?null:Path.Combine(home,"AppData","Roaming","npm");
+        if(OperatingSystem.IsWindows())return string.IsNullOrWhiteSpace(home)?null:Path.Combine(home,"AppData","Roaming","npm");
+        // 服务账户就是登录用户、且 npm 默认前缀可写时用默认前缀；否则用登录用户的 ~/.npm-global。
+        var target=home??Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var current=Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if(SamePath(target,current)){
+            var declared=DefaultPrefix();
+            if(declared is not null&&Writable(declared))return declared;
+        }
+        return string.IsNullOrWhiteSpace(target)?null:Path.Combine(target,".npm-global");
+    }
+    private static void Trace(string message){
+        try{Directory.CreateDirectory(RemoteToolPaths.CodexManagedTools);File.AppendAllText(Path.Combine(RemoteToolPaths.CodexManagedTools,"install.log"),$"{DateTime.Now:O} {message}{Environment.NewLine}");}catch(Exception e)when(e is IOException or UnauthorizedAccessException){}
+    }
+    private static bool SamePath(string a,string b)=>string.Equals(Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar),Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar),StringComparison.Ordinal);
+    private static bool Writable(string directory){
+        try{Directory.CreateDirectory(directory);var probe=Path.Combine(directory,".write-"+Guid.NewGuid().ToString("N"));File.WriteAllText(probe,"");File.Delete(probe);return true;}
+        catch(Exception e)when(e is IOException or UnauthorizedAccessException){return false;}
+    }
+    private static string? DefaultPrefix(){
+        try{
+            var start=new ProcessStartInfo(OperatingSystem.IsWindows()?"cmd.exe":"npm"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+            if(OperatingSystem.IsWindows()){start.ArgumentList.Add("/c");start.ArgumentList.Add("npm");}
+            start.ArgumentList.Add("config");start.ArgumentList.Add("get");start.ArgumentList.Add("prefix");
+            using var p=Process.Start(start);if(p is null)return null;
+            var text=p.StandardOutput.ReadToEnd();p.WaitForExit(10000);
+            var value=text.Trim();return p.ExitCode==0&&value.Length>0?value:null;
+        }catch(Exception e)when(e is IOException or System.ComponentModel.Win32Exception){return null;}
+    }
+    /// <summary>当前登录用户的主目录：Windows 取控制台会话账户的 ProfileImagePath，Unix 取 who 里的终端用户。</summary>
+    private static string? ConsoleUserHome(){
+        try{
+            if(OperatingSystem.IsWindows()){
+                var name=ConsoleUserName();if(string.IsNullOrWhiteSpace(name))return null;
+                using var list=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList");
+                foreach(var sid in list?.GetSubKeyNames()??Array.Empty<string>()){
+                    using var entry=list!.OpenSubKey(sid);
+                    if(entry?.GetValue("ProfileImagePath") is string profile&&
+                       string.Equals(Path.GetFileName(profile.TrimEnd(Path.DirectorySeparatorChar)),name,StringComparison.OrdinalIgnoreCase))
+                        return profile;
+                }
+                var fallback=Path.Combine(Directory.GetParent(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile))?.FullName??@"C:\Users",name);
+                return Directory.Exists(fallback)?fallback:null;
+            }
+            var user=UnixConsoleUser();if(string.IsNullOrWhiteSpace(user))return null;
+            if(OperatingSystem.IsMacOS()){var mac=Path.Combine("/Users",user);return Directory.Exists(mac)?mac:null;}
+            foreach(var line in File.ReadLines("/etc/passwd")){
+                var parts=line.Split(':');
+                if(parts.Length>5&&parts[0]==user)return parts[5];
+            }
+            var linux=Path.Combine("/home",user);return Directory.Exists(linux)?linux:null;
+        }catch(Exception e)when(e is IOException or UnauthorizedAccessException or System.Security.SecurityException or PlatformNotSupportedException){return null;}
+    }
+    private static string? UnixConsoleUser(){
+        try{
+            var start=new ProcessStartInfo("who"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+            using var p=Process.Start(start);if(p is null)return null;
+            var text=p.StandardOutput.ReadToEnd();p.WaitForExit(5000);
+            foreach(var line in text.Split('\n',StringSplitOptions.RemoveEmptyEntries)){
+                var name=line.Split(' ',StringSplitOptions.RemoveEmptyEntries)[0];
+                if(name.Length>0&&name!="root")return name;
+            }
+        }catch(Exception e)when(e is IOException or System.ComponentModel.Win32Exception){}
+        return null;
+    }
+    /// <summary>控制台会话的用户名（服务以别的账户运行时，Environment.UserName 指的不是登录用户）。</summary>
+    private static string? ConsoleUserName(){
+        try{
+            const int WTSUserName=5;
+            var session=WTSGetActiveConsoleSessionId();
+            if(session!=0xFFFFFFFF&&WTSQuerySessionInformation(IntPtr.Zero,session,WTSUserName,out var buffer,out _)){
+                try{var name=Marshal.PtrToStringUni(buffer);if(!string.IsNullOrWhiteSpace(name))return name;}finally{WTSFreeMemory(buffer);}
+            }
+        }catch(Exception e)when(e is EntryPointNotFoundException or DllNotFoundException){}
+        // 服务账户查不到会话时，用系统记录的最后登录用户（LogonUI）。
+        try{
+            using var key=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI");
+            if(key?.GetValue("LastLoggedOnUser") is string loggedOn&&loggedOn.Length>0)return loggedOn.Contains('\\')?loggedOn.Split('\\').Last():loggedOn;
+        }catch(Exception e)when(e is IOException or UnauthorizedAccessException or System.Security.SecurityException){}
+        return null;
+    }
+    [DllImport("kernel32.dll")]private static extern int WTSGetActiveConsoleSessionId();
+    [DllImport("wtsapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)]private static extern bool WTSQuerySessionInformation(IntPtr server,int session,int infoClass,out IntPtr buffer,out int bytes);
+    [DllImport("wtsapi32.dll")]private static extern void WTSFreeMemory(IntPtr memory);
     internal static bool Safe(string root,string file){
         root=Path.GetFullPath(root);file=Path.GetFullPath(file);
         if(!file.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar,StringComparison.Ordinal))return false;

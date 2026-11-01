@@ -47,10 +47,13 @@ internal static class CodexExecutable
             File.Exists(Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(executable)!)!, "codex-resources", "codex-command-runner.exe")))
          : OperatingSystem.IsWindows() || (File.GetUnixFileMode(executable) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0);
 
+    /// <summary>测试可指向隔离的记录文件；生产环境用 ProgramData 下的记录。</summary>
+    internal static string? ManagedRecordOverride;
+
     /// <summary>自动安装记录下来的可执行文件（npm 全局目录），存在且完整才返回。</summary>
     public static string? Installed() {
         try {
-            var file = Path.Combine(RemoteToolPaths.CodexManagedTools, "executable.json");
+            var file = ManagedRecordOverride ?? Path.Combine(RemoteToolPaths.CodexManagedTools, "executable.json");
             if (!File.Exists(file)) return null;
             var executable = JsonNode.Parse(File.ReadAllText(file))?["executable"]?.ToString() ?? "";
             return Complete(executable) ? executable : null;

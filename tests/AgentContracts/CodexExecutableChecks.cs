@@ -32,6 +32,7 @@ internal static class CodexExecutableChecks
         }
         void Check(bool value, string name) { if (!value) throw new Exception(name); Console.WriteLine("PASS: " + name); }
         Directory.CreateDirectory(home);
+        CodexExecutable.ManagedRecordOverride = Path.Combine(profile, "no-managed-record.json");
         try {
             var old = Bundle("old", true, true);
             var next = Bundle("next", true, true);
@@ -46,6 +47,6 @@ internal static class CodexExecutableChecks
             File.Delete(Path.Combine(Path.GetDirectoryName(next)!, "codex-command-runner.exe"));
             try { CodexExecutable.Resolve(old, home); throw new Exception("partial bundle accepted"); }
             catch (CodexError error) { Check(error.Code == "codex_tools_missing" && error.Delivery == "rejected", "partial updates reject before accepting a message"); }
-        } finally { Directory.Delete(profile, true); }
+        } finally { CodexExecutable.ManagedRecordOverride = null; Directory.Delete(profile, true); }
     }
 }
