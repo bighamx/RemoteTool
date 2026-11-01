@@ -39,6 +39,7 @@ public static class RemoteToolPaths
     public static string CodexAttachments => Path.Combine(ProgramData, "codex-attachments");
     /// <summary>自托管安装的 Codex 运行时（npm 前缀、状态与已验证的可执行文件）。</summary>
     public static string CodexManagedTools => Path.Combine(ProgramData, "codex-tools");
+    public static string HermesManagedTools => Path.Combine(ProgramData, "hermes-tools");
 
     /// <summary>Attachment store for the given agent ("hermes" or "codex").</summary>
     public static string Attachments(string agent) => Path.Combine(ProgramData, agent + "-attachments");

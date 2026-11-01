@@ -440,7 +440,8 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             }
         }
         if (agent == "codex") CodexUsage(model, compact = true) { accountsPanel = true; model.fetchAccounts() }
-        AgentSetupCard(api,agent,model.profile,model.capabilities.optInt("state_version"))
+        var setupVisible by remember(agent,model.profile){mutableStateOf(false) }
+        AgentSetupCard(api,agent,model.profile,model.capabilities.optInt("state_version")){ setupVisible=it }
         if (agent == "codex" && !list && accessMode == "full") TextButton(onClick = { permissionsDialog = true }) {
             Text("权限设置：完全访问", style = MaterialTheme.typography.labelSmall)
         }
@@ -454,6 +455,8 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             }
         }
         model.error?.let { rawError ->
+            // 引导卡片已经把「未安装/未接入」讲清楚，这里不再重复同一条信息。
+            if (setupVisible && setupRelatedFailure(rawError)) return@let
             val error = friendlyAgentFailure(rawError)
             Surface(color = MaterialTheme.colorScheme.errorContainer) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {

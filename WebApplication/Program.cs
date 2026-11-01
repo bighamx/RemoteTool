@@ -137,6 +137,7 @@ namespace RemoteTool.WebApi
             builder.Services.AddSingleton<HermesTitleService>();
             builder.Services.AddSingleton<RunRegistry>();
             builder.Services.AddSingleton<Services.Codex.CodexInstaller>();
+            builder.Services.AddSingleton<Services.HermesInstaller>();
 builder.Services.AddSingleton<HermesManagement>();
 builder.Services.AddSingleton<HermesSessionActivity>();
 builder.Services.AddSingleton<CodexSessionActivity>();

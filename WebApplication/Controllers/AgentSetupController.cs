@@ -9,7 +9,7 @@ using System.Text.Json.Nodes;
 namespace RemoteTool.WebApi.Controllers;
 
 [Authorize,ApiController,Route("api/agent-setup")]
-public sealed class AgentSetupController(IConfiguration configuration,HermesProfiles profiles,HermesManagement management,HermesGatewayAdmin gateway,HermesBridge bridge,CodexInstaller installer):ControllerBase
+public sealed class AgentSetupController(IConfiguration configuration,HermesProfiles profiles,HermesManagement management,HermesGatewayAdmin gateway,HermesBridge bridge,CodexInstaller installer,HermesInstaller hermesInstaller):ControllerBase
 {
     [HttpGet("{agent}")]
     public async Task<IActionResult> Status(string agent,[FromQuery]string profile="default",CancellationToken ct=default) {
@@ -36,6 +36,7 @@ public sealed class AgentSetupController(IConfiguration configuration,HermesProf
             return Ok(auth?Guide(agent,"ready","Codex 已找到","",false):Guide(agent,"sign_in","需要登录或配置模型","请在服务端登录 Codex 官方账号，或在模型设置中配置第三方 Provider。",false));
         }
         if(agent!="hermes")return NotFound();
+        if(hermesInstaller.Current.Busy)return Ok(Guide(agent,"installing","正在安装 Hermes",hermesInstaller.Current.Message,false));
         string homePath;
         try{homePath=profiles.HomeFor(profile);}catch(ArgumentException){return Ok(Guide(agent,"profile_missing","Profile 尚未配置","请先在服务端创建并配置此 Profile，或切换到默认 Profile。",false));}
         var source=configuration["Hermes:SourceDirectory"]??Path.Combine(profiles.Root,"hermes-agent");
@@ -63,24 +64,41 @@ public sealed class AgentSetupController(IConfiguration configuration,HermesProf
             var p=line.Split('=',2);if(p.Length==2&&p[0].Trim()=="API_SERVER_ENABLED")enabled=new[]{"true","1","yes","on"}.Contains(p[1].Trim().Trim('"','\'').ToLowerInvariant());
         }
         if(!hasKey||!enabled)return Ok(Guide(agent,managed?"configure":"not_installed",managed?"启用 Hermes API":"Hermes 尚未接入",
-            managed?"本地 API 尚未启用或缺少接入密钥。可写入配置并安全重启网关，现有任务结束后生效。":"服务端缺少 Hermes API 接入或管理组件。请先安装并完成初始设置。",managed&&profile=="default"));
+            managed?"本地 API 尚未启用或缺少接入密钥。可写入配置并安全重启网关，现有任务结束后生效。"
+                :hermesInstaller.CanInstall?"服务端还没有 Hermes：可在下方一键安装官方 hermes-agent 到独立虚拟环境，装完再配置模型与账号。"
+                :"服务端缺少 Hermes API 接入或管理组件。请先安装并完成初始设置。",managed&&profile=="default"));
         return Ok(Guide(agent,"not_running","Hermes API 未连接","配置已找到，但本地 API 未响应。请启动网关，或使用安全重启后重新检测。",managed&&profile=="default"));
     }
-    private object Guide(string agent,string state,string title,string message,bool canConfigure,bool? canInstall=null)=>new {
+    private object Guide(string agent,string state,string title,string message,bool canConfigure,bool? canInstall=null){
+        var installable=canInstall??(agent=="codex"?installer.CanInstall:hermesInstaller.CanInstall);
+        return new {
         agent,state,title,message,canConfigureApi=canConfigure,
-        canInstall=canInstall??(agent=="codex"&&installer.CanInstall),
-        install=agent=="codex"?new{phase=installer.Current.Phase,message=installer.Current.Message,version=installer.Current.Version,busy=installer.Current.Busy,target=installer.Target}:null,
-        installationNote=agent=="codex"&&installer.CanInstall
-            ?"服务端会使用固定官方 npm 源安装到 RemoteTool 独立目录，并校验程序版本与当前应用需要的协议；不会自动登录或改动现有账号。不满足条件的平台仍按下面步骤手动安装。"
-            :"当前部署未提供受验证的自动安装器；安装可能涉及系统依赖和账号登录，请在服务端完成。检测本身不会安装软件或改动配置。",
+        canInstall=installable,
+        install=agent=="codex"
+            ?new{phase=installer.Current.Phase,message=installer.Current.Message,version=installer.Current.Version,busy=installer.Current.Busy,target=installer.Target}
+            :new{phase=hermesInstaller.Current.Phase,message=hermesInstaller.Current.Message,version=hermesInstaller.Current.Version,busy=hermesInstaller.Current.Busy,target=hermesInstaller.Venv},
+        installationNote=!installable
+            ?"当前部署未提供受验证的自动安装器；安装可能涉及系统依赖和账号登录，请在服务端完成。检测本身不会安装软件或改动配置。"
+            :agent=="codex"
+                ?"会用固定官方 npm 源安装到登录用户的 npm 全局目录，并校验程序版本与当前应用需要的协议；不会自动登录或改动现有账号。不满足条件时仍按下面步骤手动安装。"
+                :"会用官方 PyPI 包 hermes-agent 安装到服务端独立虚拟环境，并校验可导入；不会改动账号、密钥或现有配置。安装后仍需配置模型 Provider，可用下方一键配置启用本地 API。",
         steps=agent=="codex"?new[]{"在服务端安装 Codex CLI，并确保运行 RemoteTool 的用户可执行。","在该用户下完成 Codex 登录，或配置第三方 Provider。","在服务端配置 Codex:Executable / Codex:Home；Linux systemd 服务需要单独配置网络代理。","返回这里重新检测。"}
             :new[]{"在服务端安装 Hermes，并完成模型提供方和账号设置。","配置 Hermes:HomeDirectory、Hermes:SourceDirectory 和 Hermes:PythonExecutable。","核对 Hermes:BaseUrl 与本地 API 的监听地址和端口；默认 http://127.0.0.1:8642/。","启用本地 API；可用时使用下方的一键配置。","等待网关安全重启后重新检测。"}
-    };
+        };
+    }
     [HttpPost("codex/install")]
     public IActionResult InstallCodex(){
         if(!installer.CanInstall)return Conflict(new{message="当前平台或服务账户不支持自动安装，请按步骤在服务端手动安装。"});
         try{
             var status=installer.Start();
+            return Ok(new{started=true,phase=status.Phase,message=status.Message});
+        }catch(InvalidOperationException){return Conflict(new{message="安装器不可用，请稍后重试或按步骤手动安装。"});}
+    }
+    [HttpPost("hermes/install")]
+    public IActionResult InstallHermes(){
+        if(!hermesInstaller.CanInstall)return Conflict(new{message="当前平台缺少 uv 与 python3-venv，无法自动安装，请按步骤手动安装。"});
+        try{
+            var status=hermesInstaller.Start();
             return Ok(new{started=true,phase=status.Phase,message=status.Message});
         }catch(InvalidOperationException){return Conflict(new{message="安装器不可用，请稍后重试或按步骤手动安装。"});}
     }
