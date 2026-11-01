@@ -48,10 +48,22 @@ internal fun CodexSessionPermissionsDialog(api: NativeApi, session: String, onDi
     var saving by remember(session) { mutableStateOf(false) }
     var error by remember(session) { mutableStateOf<String?>(null) }
     var loaded by remember(session) { mutableStateOf(false) }
+    var currentInfo by remember(session) { mutableStateOf("") }
+    var overrideMode by remember(session) { mutableStateOf("default") }
     val scope = rememberCoroutineScope()
     LaunchedEffect(api, session) {
         try {
-            mode = api.json("/api/codex/sessions/${android.net.Uri.encode(session)}/permissions").optString("mode", "default")
+            val result = api.json("/api/codex/sessions/${android.net.Uri.encode(session)}/permissions")
+            overrideMode = result.optString("mode", "default")
+            val actual = result.optJSONObject("current")
+            val defaults = result.optJSONObject("configuration")
+            currentInfo = when {
+                actual != null -> "${actual.optString("description")}：\n${actual.optString("label")}"
+                defaults != null -> "会话尚无可读取的实际权限记录。\n服务端配置默认：${defaults.optString("label")}"
+                else -> "尚未获取到原生会话的实际权限，请更新服务端后重试。"
+            }
+            mode = overrideMode.takeUnless { it == "default" } ?: actual?.optString("mode")
+                ?.takeIf { it in setOf("workspace", "full") } ?: "default"
             loaded = true
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { error = connectionFailureMessage(e) }
@@ -60,7 +72,14 @@ internal fun CodexSessionPermissionsDialog(api: NativeApi, session: String, onDi
     AlertDialog(onDismissRequest = { if (!saving) onDismiss() }, title = { Text("当前会话权限") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            if (mode == "default") Text("当前使用 Codex 原有配置。", style = MaterialTheme.typography.bodySmall)
+            if (loaded) {
+                Text(currentInfo, style = MaterialTheme.typography.bodySmall)
+                Text("下一轮 RemoteTool 权限设置：" + when(overrideMode) {
+                    "full" -> "完全访问 · 不再审批"
+                    "workspace" -> "工作区访问 · 按需审批"
+                    else -> "未覆盖，沿用 Codex 原有策略"
+                }, style = MaterialTheme.typography.bodySmall)
+            }
             listOf("workspace" to "工作区访问 · 按需审批", "full" to "完全访问 · 不再审批").forEach { (value, label) ->
                 Row {
                     RadioButton(selected = mode == value, enabled = loaded && !saving, onClick = { mode = value })

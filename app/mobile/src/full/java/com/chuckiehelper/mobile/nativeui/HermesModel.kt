@@ -2064,7 +2064,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         historyVersions[id] = (historyVersions[id] ?: 0L) + 1L
         historyCacheStatus = if (cacheFailure == null) null else "最新消息未保存到离线缓存"
         if (cacheFailure != null) android.util.Log.w("AgentHistoryCache", "Unable to save conversation snapshot", cacheFailure)
-        val currentSteering = steering.filter { it.session == id && it.key in currentSubmissionKeys && it.key !in confirmedSteeringKeys && !rejectedSteering(it) }
+        val currentSteering = steering.filter { it.session == id &&
+            (it.key in currentSubmissionKeys || it.delivery == "已送达" && it.attachments.isNotEmpty()) &&
+            it.key !in confirmedSteeringKeys && !rejectedSteering(it) }
         val pendingRows = steering.filter { it.session == id && it.key !in currentSubmissionKeys && it.key !in confirmedSteeringKeys && !rejectedSteering(it) && it.delivery != "已送达" }.map {
             HermesMessage("user", it.text, attachments = it.attachments, localKey = it.key,
                 delivery = it.delivery, timestamp = it.timestamp)
@@ -2075,7 +2077,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             visibleHistory = projectCurrentSubmission(visibleHistory,
                 HermesMessage("user", sent.text, attachments = sent.attachments, localKey = sent.key,
                     delivery = sent.delivery.takeUnless { it == "已送达" }, timestamp = sent.timestamp), sent.existingIds,
-                usedNativePresentationIds)
+                usedNativePresentationIds, allowAppend = sent.key in currentSubmissionKeys)
         }
         localSubmissions[id]?.takeUnless { it.pending.key in confirmedLocalKeys }?.let { local ->
             visibleHistory = projectCurrentSubmission(visibleHistory,

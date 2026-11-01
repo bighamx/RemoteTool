@@ -3,7 +3,7 @@
     const api=window.RemoteToolApi;
     let timer;
     const app=Vue.createApp({
-        data:()=>({inventory:null,rows:[],total:0,hasMore:false,category:'',kind:'',agent:'',search:'',sort:'size_desc',olderDays:'0',grouped:true,selected:[],plan:null,loading:false,scanning:false,busy:false,error:'',notice:'',epoch:0}),
+        data:()=>({inventory:null,rows:[],total:0,hasMore:false,category:'',kind:'',agent:'',search:'',sort:'size_desc',olderDays:'0',grouped:true,collapsedGroups:[],selected:[],plan:null,loading:false,scanning:false,busy:false,error:'',notice:'',epoch:0}),
         computed:{
             trashBytes(){return this.inventory?.categories.find(c=>c.id==='trash')?.bytes||0;},
             selectedBytes(){return this.rows.filter(r=>this.selected.includes(r.id)).reduce((n,r)=>n+r.bytes,0);},
@@ -14,6 +14,8 @@
             time(value){return value?new Date(value).toLocaleString('zh-CN'):'时间未知';},
             kindLabel(kind){return ({image:'图片',video:'视频',audio:'音频',document:'文档',log:'日志',package:'安装包'})[kind]||'文件';},
             groupSelected(rows){const available=rows.filter(r=>!r.protected);return available.length>0&&available.every(r=>this.selected.includes(r.id));},
+            groupCollapsed(group){return !!group.name&&group.rows.length>1&&this.collapsedGroups.includes(group.name);},
+            toggleGroup(group){if(this.busy||!group.name||group.rows.length<2)return;this.collapsedGroups=this.groupCollapsed(group)?this.collapsedGroups.filter(name=>name!==group.name):[...this.collapsedGroups,group.name];},
             selectRows(rows,checked){const ids=rows.filter(r=>!r.protected).map(r=>r.id);this.selected=checked?[...new Set([...this.selected,...ids])].slice(0,500):this.selected.filter(id=>!ids.includes(id));},
             async scan(){if(this.busy||this.scanning)return;this.scanning=true;this.error='';this.selected=[];this.epoch++;
                 try{this.inventory=await api.post('/api/storage/scan',{});await this.reload();}

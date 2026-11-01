@@ -74,6 +74,21 @@ internal static class HermesNativeChecks {
                 db.Execute("INSERT INTO messages VALUES(5,'s','user',char(0)||'json:'||?)",duplicate.ToJsonString());
             }
             Check(View(5)["attachments"].AsArray().Count==1,"inline bytes and native path hints describe one picture, not duplicate cards");
+            Check(View(5)["content"].ToString()=="caption","a deduplicated inline image also removes its resolved path hint");
+            // Real /v1/runs input -> Hermes text-only persistence -> a fresh
+            // RemoteTool process. No private attachment binding is available.
+            var request=JsonSerializer.SerializeToElement(new {session_id="s",input="reload picture",attachment_ids=new[]{upload["id"].ToString()}});
+            var sent=JsonNode.Parse(store.PrepareRun(request,"native-image-roundtrip").GetRawText());
+            var flattened=sent["input"][0]["content"][0]["text"].ToString()+"\n[screenshot]";
+            using(var db=new SQLiteConnection(Path.Combine(home,"state.db")))
+                db.Execute("INSERT INTO messages VALUES(10,'s','user',?)",flattened);
+            var reloaded=new HermesNativeAttachments(profiles,new HermesAttachments("hermes",root));
+            var recovered=reloaded.Present("s",new JsonObject { ["data"]=new JsonArray(new JsonObject {
+                ["id"]=10,["role"]="user",["content"]=flattened }) }.ToJsonString())["data"][0];
+            Check(recovered["content"].ToString()=="reload picture" && recovered["attachments"].AsArray().Count==1,
+                "text-only native persistence retains exactly one caption and picture after reload");
+            Check(File.ReadAllBytes(reloaded.Resolve("s",recovered["attachments"][0]["id"].ToString()).Path).SequenceEqual(bytes),
+                "reloaded picture card downloads the original bytes without local App state");
             var blob=Path.Combine(home,"cache","documents","native-inputs",new string('a',64));
             Directory.CreateDirectory(Path.GetDirectoryName(blob)!); File.WriteAllBytes(blob,bytes);
             using(var db=new SQLiteConnection(Path.Combine(home,"state.db")))

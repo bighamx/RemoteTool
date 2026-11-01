@@ -174,10 +174,18 @@ public sealed class HermesNativeAttachments(HermesProfiles profiles, HermesAttac
                 row["content"]=string.Join('\n',Text(parts));
             if(message.Role=="user" && cards.Length>0 && row["content"] is JsonValue value && value.TryGetValue<string>(out var text)) {
                 var paths = sources.Where(source=>source.Path!=null).Select(source=>System.IO.Path.GetFullPath(source.Path)).ToHashSet(OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal);
+                var inlineHashes = sources.Where(source=>source.ContentHash!=null).Select(source=>source.ContentHash).ToHashSet(StringComparer.Ordinal);
                 bool Resolved(string line) {
                     var path = ReferencePath(line);
-                    try { return path!=null && System.IO.Path.IsPathFullyQualified(path) && paths.Contains(System.IO.Path.GetFullPath(path)); }
-                    catch(ArgumentException) { return false; }
+                    try {
+                        if(path==null || !System.IO.Path.IsPathFullyQualified(path)) return false;
+                        if(paths.Contains(System.IO.Path.GetFullPath(path))) return true;
+                        // A native inline image and this file reference may be the
+                        // same picture. Sources de-duplicates the card, not its hint.
+                        return inlineHashes.Count>0 && Safe(session,path,false) &&
+                            inlineHashes.Contains(HermesAttachments.ImageHash(path,FileMime(path)) ?? "");
+                    }
+                    catch(Exception error) when(error is ArgumentException or IOException or UnauthorizedAccessException) { return false; }
                 }
                 row["content"]=string.Join('\n',Lines(text).Where(line=>!line.OutsideCode || !Resolved(line.Line) && line.Line.Trim() is not ("[image]" or "[screenshot]")).Select(line=>line.Line)).TrimEnd();
             }

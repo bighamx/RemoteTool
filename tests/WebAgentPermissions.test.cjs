@@ -39,6 +39,16 @@ test('late permission reads cannot overwrite another session',async()=>{
     assert.equal(state.permissionsMode,'workspace');assert.equal(state.permissionsLoading,false);
 });
 
+test('native permission display is separate from an explicit next-turn override',async()=>{
+    const {state,api,calls}=fixture();
+    api.get=async()=>({mode:'default',current:{mode:'full',description:'最近一轮实际权限',label:'完全文件访问 · 不再审批'}});
+    await state.loadPermissions();
+    assert.equal(state.permissionsMode,'default');assert.equal(state.permissionsChoice,'full');
+    assert.match(state.permissionsInfo,/最近一轮实际权限/);assert.equal(calls.length,0);
+    api.get=async()=>({mode:'workspace',current:{mode:'full',description:'最近一轮实际权限',label:'完全访问'}});
+    await state.loadPermissions();assert.equal(state.permissionsMode,'workspace');assert.equal(state.permissionsChoice,'workspace');
+});
+
 test('permission saves are bound to the selected session and invalid mode is ignored',async()=>{
     const {state,api,calls}=fixture();
     state.permissionsLoaded=true;await state.savePermissions();assert.equal(calls.length,0);

@@ -115,7 +115,8 @@
     <modal v-model="showPermissionsDialog" title="当前会话权限" :mask-closable="!permissionsSaving" :closable="!permissionsSaving" :footer-hide="true" width="520">
         <div class="agent-create-form">
             <p v-if="permissionsLoading">正在读取权限…</p>
-            <p v-if="permissionsMode==='default'">当前使用 Codex 原有配置。</p>
+            <p v-if="permissionsLoaded">{{permissionsInfo}}</p>
+            <p v-if="permissionsLoaded">下一轮 RemoteTool 权限设置：{{permissionsMode==='full'?'完全访问 · 不再审批':permissionsMode==='workspace'?'工作区访问 · 按需审批':'未覆盖，沿用 Codex 原有策略'}}</p>
             <label><input type="radio" v-model="permissionsChoice" value="workspace" :disabled="!permissionsLoaded || permissionsSaving" /> 工作区访问 · 按需审批</label>
             <label><input type="radio" v-model="permissionsChoice" value="full" :disabled="!permissionsLoaded || permissionsSaving" /> 完全访问 · 不再审批</label>
             <p>完全访问允许联网、执行命令及读写工作区外文件，并跳过审批。</p>

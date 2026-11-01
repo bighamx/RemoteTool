@@ -12,7 +12,7 @@ internal static class CodexRolloutSnapshot
         public long Offset, Modified;
         public MemoryStream Partial = new();
         public bool Oversized, Running;
-        public JsonObject Settings = new(), Context = Obj(("available", false)), Usage = new(), Question;
+        public JsonObject Settings = new(), Permissions = new(), Context = Obj(("available", false)), Usage = new(), Question;
         public Dictionary<string, JsonObject> Pending = new();
         public long StartedAt, LastResponseAt, ActivityRevision, CompactedAt, PhaseStartedAt, LastEventAt;
         public string Kind = "task", CompactionId = "";
@@ -59,7 +59,7 @@ internal static class CodexRolloutSnapshot
                 state.Modified = file.LastWriteTimeUtc.Ticks;
                 var context = state.Context.DeepClone().AsObject();
                 if (context.L("tokens") > 0) context["available"] = true;
-                return Obj(("settings", state.Settings), ("context", context), ("usage", state.Usage.Count > 0 ? state.Usage : null),
+                return Obj(("settings", state.Settings), ("permissions", state.Permissions), ("context", context), ("usage", state.Usage.Count > 0 ? state.Usage : null),
                     ("question", state.Question), ("running", state.Running), ("last_event_at", state.LastEventAt > 0 ? (object)state.LastEventAt : null),
                     ("activity", Obj(("started_at", state.StartedAt > 0 ? (object)state.StartedAt : null),
                         ("last_response_at", state.LastResponseAt > 0 ? (object)state.LastResponseAt : null), ("activity_id", state.TurnId),
@@ -77,6 +77,8 @@ internal static class CodexRolloutSnapshot
             var timestamp = DateTimeOffset.TryParse(record.S("timestamp"), out var time) ? time.ToUnixTimeMilliseconds() : 0;
             if (timestamp > 0) state.LastEventAt = timestamp;
             if (kind == "turn_context") {
+                state.Permissions=Obj(("sandbox",payload["sandbox_policy"]),("approvalPolicy",payload["approval_policy"]),
+                    ("observed_at",timestamp),("turn_id",payload["turn_id"]));
                 state.Settings = Obj(("model", payload["model"]), ("reasoningEffort", payload["effort"] ?? payload["reasoning_effort"]),
                     ("serviceTier", payload["service_tier"]), ("collaborationMode", payload["collaboration_mode"]));
             }

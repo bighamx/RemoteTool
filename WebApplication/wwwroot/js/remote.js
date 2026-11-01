@@ -1559,7 +1559,21 @@ class RemoteControl {
     }
 
     async startStream() {
-        if (this.streamActive) return;
+        if (this.streamActive || this.remoteCapabilityPending) return;
+        this.remoteCapabilityPending = true;
+
+        try {
+            const response = await fetch('/api/remote/capabilities', {headers:{'Authorization':`Bearer ${this.token}`}});
+            if(response.ok){
+                const capability=await response.json();
+                if(capability.supported!==true){this.showToast(capability.message||'当前服务端不支持远程桌面','error');return;}
+            } else if(response.status===404){
+                const info=await fetch('/api/system/info',{headers:{'Authorization':`Bearer ${this.token}`}});
+                const platform=(await info.json()).data?.platform;
+                if(!info.ok||!['Windows','macOS'].includes(platform)){this.showToast('当前服务端不支持远程桌面，或无法确认支持情况','error');return;}
+            } else {this.showToast('无法检查服务端远程桌面能力，请重新连接','error');return;}
+        } catch(e){this.showToast('无法检查服务端远程桌面能力：'+e.message,'error');return;}
+        finally{this.remoteCapabilityPending=false;}
 
         const canvas = document.getElementById('stream-canvas');
         const video = document.getElementById('stream-video');

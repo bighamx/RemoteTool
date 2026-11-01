@@ -160,6 +160,27 @@ private class FullEdition(
 @Composable
 private fun RemoteScreen(api: NativeApi) {
     val context = LocalContext.current
+    var supported by remember(api) { mutableStateOf(false) }
+    var checking by remember(api) { mutableStateOf(true) }
+    var capabilityMessage by remember(api) { mutableStateOf("") }
+    var retry by remember(api) { mutableIntStateOf(0) }
+    LaunchedEffect(api, retry) {
+        supported = false; checking = true
+        try {
+            val result = try { api.json("/api/remote/capabilities") }
+            catch(e: ApiRequestFailure) {
+                if(e.status!=404) throw e
+                val info = api.json("/api/system/info").getJSONObject("data")
+                val platform = info.optString("platform")
+                org.json.JSONObject().put("supported", platform in setOf("Windows", "macOS"))
+                    .put("message", if(platform=="Linux") "当前 Linux 服务端尚不支持远程桌面" else "无法确认此服务端是否支持远程桌面，请更新服务端")
+            }
+            supported = result.getBoolean("supported")
+            capabilityMessage = result.optString("message").ifBlank { "当前服务端不支持远程桌面" }
+        } catch(e: kotlinx.coroutines.CancellationException) { throw e }
+        catch(e: Exception) { capabilityMessage = "无法检查远程桌面能力：${e.message}" }
+        finally { checking = false }
+    }
     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         Icon(
             Icons.Outlined.DesktopWindows,
@@ -168,6 +189,14 @@ private fun RemoteScreen(api: NativeApi) {
             tint = MaterialTheme.colorScheme.primary,
         )
         Text("远程桌面", style = MaterialTheme.typography.headlineMedium)
+        if(checking) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+            Text("正在检查服务端支持情况…")
+        } else if(!supported) {
+            Text(capabilityMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(onClick={retry++}) { Text("重新检测") }
+        }
+        if(supported) {
         Text(
             "H.264 硬件解码 · 全屏控制\n直接触控与触控板 · 手机输入法\n双指缩放，放大后拖动画面",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -183,5 +212,6 @@ private fun RemoteScreen(api: NativeApi) {
             Text("连接远程桌面")
         }
         Text("点击连接后才启动视频和键鼠通道。", style = MaterialTheme.typography.bodySmall)
+        }
     }
 }

@@ -38,6 +38,7 @@
     <Compile Include="../../WebApplication/Services/RunRegistry.cs" Link="RunRegistry.cs" />
     <Compile Include="../../WebApplication/Services/RemoteControl/TerminalCapabilities.cs" Link="TerminalCapabilities.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexSessionPermissions.cs" Link="CodexSessionPermissions.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexPermissionState.cs" Link="CodexPermissionState.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexAssistantMessageStream.cs" Link="CodexAssistantMessageStream.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexModelSettings.cs" Link="CodexModelSettings.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexSessionModelSelection.cs" Link="CodexSessionModelSelection.cs" />

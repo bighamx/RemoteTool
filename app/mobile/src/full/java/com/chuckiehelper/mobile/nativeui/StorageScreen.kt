@@ -16,6 +16,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
@@ -54,6 +57,7 @@ internal fun StoragePane(backend:StorageBackend,server:Boolean,location:String,o
     var sort by remember{mutableStateOf("size_desc")}
     var age by remember{mutableStateOf("0")}
     var group by remember{mutableStateOf(true)}
+    var collapsedGroups by remember{mutableStateOf(setOf<String>())}
     var loading by remember{mutableStateOf(false)}
     var scanning by remember{mutableStateOf(false)}
     var busy by remember{mutableStateOf(false)}
@@ -128,14 +132,23 @@ internal fun StoragePane(backend:StorageBackend,server:Boolean,location:String,o
         LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(start=12.dp,end=12.dp,bottom=12.dp)){
             val groups=if(group)rows.groupBy{it.optString("group")} else mapOf("" to rows)
             groups.forEach{(title,children)->
+                val collapsible=title.isNotBlank()&&children.size>1
+                val collapsed=collapsible&&title in collapsedGroups
                 if(title.isNotBlank())item(key="group:$title"){
-                    Row(verticalAlignment=Alignment.CenterVertically){
+                    Row(Modifier.fillMaxWidth()
+                        .semantics { if(collapsible)stateDescription=if(collapsed)"已折叠" else "已展开" }
+                        .clickable(enabled=collapsible&&!busy,role=Role.Button){
+                            collapsedGroups=if(collapsed)collapsedGroups-title else collapsedGroups+title
+                        },verticalAlignment=Alignment.CenterVertically){
                         val selectable=children.filterNot{it.optBoolean("protected")}
                         Checkbox(selectable.isNotEmpty()&&selectable.all{it.optString("id") in selected},{select(children,it)},enabled=selectable.isNotEmpty()&&!busy)
-                        Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.labelMedium,maxLines=2,overflow=TextOverflow.Ellipsis);Text("${children.size} 项 · ${bytes(children.sumOf{it.optLong("bytes")}.toDouble())}",style=MaterialTheme.typography.labelSmall)}
+                        val selectedCount=children.count{it.optString("id") in selected}
+                        Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.labelMedium,maxLines=2,overflow=TextOverflow.Ellipsis);Text("${children.size} 项 · ${bytes(children.sumOf{it.optLong("bytes")}.toDouble())}"+(if(selectedCount>0)" · 已选 $selectedCount 项" else ""),style=MaterialTheme.typography.labelSmall)}
+                        if(collapsible)Icon(if(collapsed)Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
+                            if(collapsed)"展开分组" else "折叠分组",Modifier.padding(horizontal=8.dp))
                     }
                 }
-                items(children,key={it.getString("id")}){row->
+                if(!collapsed)items(children,key={it.getString("id")}){row->
                     val protected=row.optBoolean("protected");val id=row.getString("id")
                     Row(Modifier.fillMaxWidth().clickable(enabled=!protected&&!busy){select(listOf(row),id !in selected)}.padding(vertical=7.dp),verticalAlignment=Alignment.CenterVertically){
                         Checkbox(id in selected,{select(listOf(row),it)},enabled=!protected&&!busy)

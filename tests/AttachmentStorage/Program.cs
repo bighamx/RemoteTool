@@ -178,7 +178,7 @@ try {
             var imageUpload = new FormFile(imageStream,0,imageStream.Length,"file","pixel.png");
             var image = JsonSerializer.SerializeToNode(await store.Upload(session,imageUpload,default));
             var native = JsonNode.Parse(store.PrepareRun(Body(session,[image["id"].ToString()]),key).GetRawText());
-            Check(native["input"][0]["content"][0]["text"].ToString() == "测试", "Hermes image input keeps original user text");
+            Check(native["input"][0]["content"][0]["text"].ToString().StartsWith("测试\n\n@image:"), "Hermes image input keeps user text plus a durable native file reference");
             Check(native["input"][0]["content"][1]["type"].ToString() == "image_url", "Hermes uses native multimodal image input");
             Check(native["attachment_ids"] == null, "Hermes API does not receive bridge attachment IDs");
             var imageId=image["id"].ToString();

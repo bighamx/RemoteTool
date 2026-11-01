@@ -151,7 +151,10 @@
 
         <!-- Remote Control RDP Tab -->
         <div id="screenshot-tab" class="tab-content">
-            <div class="screenshot-controls">
+@if (!RemoteTool.WebApi.Services.RemoteControl.RemoteDesktopPlatform.Supported) {
+    <p role="status">@RemoteTool.WebApi.Services.RemoteControl.RemoteDesktopPlatform.Message</p>
+}
+<div class="screenshot-controls" style="@(RemoteTool.WebApi.Services.RemoteControl.RemoteDesktopPlatform.Supported ? null : "display:none")">
                 <button id="stream-toggle-btn" class="btn btn-primary btn-sm">▶ 开始</button>
                 <button id="fullscreen-btn" class="btn btn-secondary btn-sm" title="全屏 (F11/Esc退出)">⛶</button>
                 <span id="mac-zoom-controls" style="display:none">
@@ -213,7 +216,7 @@
                 <span id="stream-mode-indicator" class="mode-indicator">未连接</span>
                 <span id="stream-stats" class="stream-stats" title="实时视频速率、缓冲延迟" aria-hidden="true"></span>
             </div>
-            <div class="screenshot-container" id="screenshot-container" tabindex="0" title="点击此处后按键将发送到远程">
+            <div class="screenshot-container" id="screenshot-container" tabindex="0" title="点击此处后按键将发送到远程" style="@(RemoteTool.WebApi.Services.RemoteControl.RemoteDesktopPlatform.Supported ? null : "display:none")">
                 <canvas id="stream-canvas"
                         style="cursor: crosshair; display: none; width: 100%; height: 100%; object-fit: contain;"></canvas>
                 <video id="stream-video" alt="Remote Screen" style="cursor: crosshair; display: none;" autoplay

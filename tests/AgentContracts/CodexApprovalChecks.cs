@@ -6,6 +6,13 @@ internal static class CodexApprovalChecks
 {
     public static void Run() {
         void Check(bool ok, string name) { if (!ok) throw new Exception(name); }
+        var full=CodexPermissionState.Describe(Obj(("sandbox",Obj(("type","dangerFullAccess"))),("approvalPolicy","never")),"native_session","native");
+        Check(full.S("mode")=="full","native full access is read from the session response");
+        var custom=CodexPermissionState.Describe(Obj(("sandbox_policy",Obj(("type","workspace-write"),("network_access",true))),("approval_policy","never")),"last_turn","native");
+        Check(custom.S("mode")=="custom"&&custom.S("label").Contains("允许联网"),"workspace plus network and no approval must not become full access");
+        Check(CodexPermissionState.Describe(Obj(("sandbox",Obj(("type","dangerFullAccess")))),"last_turn","")==null,"missing approval policy remains unknown");
+        var config=CodexPermissionState.Configuration(Obj(("sandbox_mode","read-only"),("approval_policy","on-request")));
+        Check(config.S("source")=="configuration"&&config.S("label").Contains("只读"),"configuration defaults stay distinct from native session observations");
         var command = Obj(("method", "item/commandExecution/requestApproval"), ("params", Obj(
             ("proposedExecpolicyAmendment", new JsonArray("dotnet", "build")),
             ("proposedNetworkPolicyAmendments", new JsonArray(Obj(("action", "deny"), ("host", "denied.test")),
@@ -34,6 +41,13 @@ internal static class CodexApprovalChecks
         var folder = Path.Combine(Path.GetTempPath(), "codex-permissions-" + Guid.NewGuid().ToString("N"));
         try {
             var path = Path.Combine(folder, "permissions.json");
+            Directory.CreateDirectory(folder);
+            var rollout=Path.Combine(folder,"rollout.jsonl");
+            File.WriteAllText(rollout,"{\"timestamp\":\"2026-11-01T08:00:00Z\",\"type\":\"turn_context\",\"payload\":{\"approval_policy\":\"never\",\"sandbox_policy\":{\"type\":\"workspace-write\",\"network_access\":true}}}\n");
+            var observed=CodexRolloutSnapshot.Read(folder,rollout)["permissions"];
+            Check(CodexPermissionState.Describe(observed,"last_turn","").S("mode")=="custom","permissions are read from an actual canonical turn_context record");
+            File.AppendAllText(rollout,"{\"type\":\"turn_context\",\"payload\":{\"approval_policy\":\"never\",\"sandbox_policy\":{\"type\":\"danger-full-access\"}}}\n");
+            Check(CodexPermissionState.Describe(CodexRolloutSnapshot.Read(folder,rollout)["permissions"],"last_turn","").S("mode")=="full","the next persisted native policy replaces the old observation");
             var store = new CodexSessionPermissions(path);
             var original = Obj(("model", "test")); store.ApplyTurn("a", original);
             Check(!File.Exists(path) && original.Count == 1, "unspecified permissions do not mutate existing host policy");

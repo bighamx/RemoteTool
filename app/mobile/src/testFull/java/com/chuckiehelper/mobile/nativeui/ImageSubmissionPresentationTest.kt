@@ -7,6 +7,31 @@ import org.junit.Test
 class ImageSubmissionPresentationTest {
     private val image = JSONObject().put("id", "image-1").put("mime", "image/jpeg").put("name", "photo.jpg")
 
+    @Test fun acceptedImageWithLegacyTextOnlyHistoryUsesOneBubbleWithoutChangingReceipt() {
+        val sent = HermesMessage("user", "ubuntu 配置无效", attachments = listOf(image), localKey = "live-send", timestamp = 100_000L)
+        val native = HermesMessage("user", sent.text, 201, timestamp = 101_000L)
+        val history = listOf(HermesMessage("assistant", "previous", 200), native)
+        val visible = projectCurrentSubmission(history, sent, setOf(200L))
+        assertEquals(listOf(200L, 201L), visible.map { it.serverId })
+        assertEquals("image-1", visible.last().attachments.single().getString("id"))
+        assertNull(visible.last().requestKey)
+        assertNull(visible.last().localKey)
+        assertTrue(native.attachments.isEmpty())
+        assertEquals(visible, projectCurrentSubmission(history, sent, setOf(200L), allowAppend = false))
+        assertEquals(emptyList<HermesMessage>(), projectCurrentSubmission(emptyList(), sent, setOf(200L), allowAppend = false))
+        assertEquals(listOf(200L, 0L, 201L), projectCurrentSubmission(history,
+            sent.copy(delivery = "发送状态待核对"), setOf(200L)).map { it.serverId })
+    }
+
+    @Test fun legacyImagePreviewCannotAttachToOldDelayedOrAmbiguousSameText() {
+        val sent = HermesMessage("user", "看图", attachments = listOf(image), localKey = "live-send", timestamp = 100_000L)
+        val native = HermesMessage("user", "看图", 201, timestamp = 101_000L)
+        assertEquals(3, projectCurrentSubmission(listOf(native, native.copy(serverId = 202)), sent, emptySet()).size)
+        assertEquals(2, projectCurrentSubmission(listOf(native.copy(timestamp = 120_000L)), sent, emptySet()).size)
+        assertEquals(2, projectCurrentSubmission(listOf(native), sent, setOf(201L)).size)
+        assertEquals(2, projectCurrentSubmission(listOf(native.copy(requestKey = "other")), sent, emptySet()).size)
+    }
+
     @Test fun replyBeforeUserHistoryDoesNotHideSendingImage() {
         val old = HermesMessage("assistant", "上一轮", 90, timestamp = 100L)
         val reply = HermesMessage("assistant", "正在看图片", 2, timestamp = 300L)

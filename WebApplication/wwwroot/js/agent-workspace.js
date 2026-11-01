@@ -55,7 +55,7 @@
             adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminSettings:{},adminProvider:{},adminEndpoints:[],adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [], schedules: [], showSchedule: false, scheduleText: '', scheduleAt: '', scheduleError: '', scheduleBusy: false,
-            activeRun: null, runStatus: '', approval: null, approvalBusy:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsError:'',showPermissionsDialog:false, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
+            activeRun: null, runStatus: '', approval: null, approvalBusy:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsInfo:'',permissionsError:'',showPermissionsDialog:false, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
             groupByProject: localStorage.getItem(`remotetool:web:groupByProject:${agent}`) === '1',
             collapsedGroups: (() => { try { return JSON.parse(localStorage.getItem(`remotetool:web:collapsedGroups:${agent}`) || '[]'); } catch { return []; } })(),
             showMoveDialog: false, moveTarget: null, moveMoving: false, moveSearch: '', moveError: '',
@@ -104,7 +104,16 @@
             filteredCreateProjects() { const q=(this.createProjectSearch||'').trim().toLowerCase(); const rows=this.projects||[]; return q?rows.filter(p=>`${p.name||''} ${this.projectRootsOf(p).join(' ')}`.toLowerCase().includes(q)):rows; },
             createProjectRoots() { return this.projectRootsOf((this.projects||[]).find(p=>p.id===this.createProjectId)); },
             createValid() { if(this.agent!=='codex'||this.createMode==='none')return true; if(this.createMode==='existing')return !!this.createProjectId&&!!this.createRoot; if(this.createMode==='new')return this.createRoots.length>0&&!!this.createRoot&&!!this.createProjectName.trim(); return true; },
-            displayMessages() {const rows=this.messages.filter(m=>this.hasRenderableContent(m));const echoes=this.delivered.filter(row=>!row.canonicalId).map(row=>this.localMessage(row));if(this.pending&&Date.now()-(this.pending.createdAt||0)<=120000)echoes.push(this.localMessage(this.pending));for(const echo of echoes){const next=rows.findIndex(row=>this.messageStamp(row)>echo.timestamp);if(next<0)rows.push(echo);else rows.splice(next,0,echo);}return rows;},
+            displayMessages() {
+                const rows=this.messages.filter(m=>this.hasRenderableContent(m)), echoes=[], used=new Set();
+                for(const row of this.delivered.filter(row=>!row.canonicalId)){
+                    const match=this.legacyImageDisplayMatch(row,rows,used);
+                    if(match){const index=rows.indexOf(match);rows[index]={...match,attachments:row.attachments};used.add(String(match.id));}
+                    else echoes.push(this.localMessage(row));
+                }
+                if(this.pending&&Date.now()-(this.pending.createdAt||0)<=120000)echoes.push(this.localMessage(this.pending));
+                for(const echo of echoes){const next=rows.findIndex(row=>this.messageStamp(row)>echo.timestamp);if(next<0)rows.push(echo);else rows.splice(next,0,echo);}return rows;
+            },
             timeline() {
                 // 历史消息与实时旁白按时间合并成单一时间线，插话气泡落在旁白之间的正确位置。
                 const items=[];
@@ -772,7 +781,10 @@
                 try {
                     const result=await api.get(`${base}/sessions/${api.id(id)}/permissions`);
                     if(!current())return;
-                    this.permissionsMode=result.mode||'default';this.permissionsChoice=this.permissionsMode;this.permissionsLoaded=true;
+                    this.permissionsMode=result.mode||'default';
+                    const actual=result.current,defaults=result.configuration;
+                    this.permissionsInfo=actual?`${actual.description}：${actual.label}`:defaults?`会话尚无实际权限记录。服务端配置默认：${defaults.label}`:'尚未获取到原生会话的实际权限，请更新服务端后重试。';
+                    this.permissionsChoice=this.permissionsMode==='default'&&['workspace','full'].includes(actual?.mode)?actual.mode:this.permissionsMode;this.permissionsLoaded=true;
                 } catch(error) {if(current())this.permissionsError=error.message;}
                 finally {if(current())this.permissionsLoading=false;}
             },
@@ -812,6 +824,19 @@
             restoreDelivered(id) {try{const rows=JSON.parse(localStorage.getItem(echoKey(id))||'[]');return Array.isArray(rows)?rows.filter(row=>row.key&&Date.now()-(row.createdAt||0)<1800000).slice(-20):[];}catch{return[];}},
             saveDelivered() {if(!this.selectedId)return;if(this.delivered.length)localStorage.setItem(echoKey(this.selectedId),JSON.stringify(this.delivered));else localStorage.removeItem(echoKey(this.selectedId));},
             localMessage(row) {return {role:'user',content:row.input,attachments:row.attachments||[],localKey:row.key,delivery:row.delivery,timestamp:row.createdAt};},
+            legacyImageDisplayMatch(row,messages,used) {
+                if(this.agent!=='hermes'||row.delivery!=='已送达'||!row.attachments?.length||!Array.isArray(row.historyIds)||!Number.isFinite(row.createdAt))return null;
+                const known=row.historyIds.map(Number).filter(id=>id>0&&id<1e12),boundary=known.length?Math.max(...known):0;
+                const matches=messages.filter(m=>{
+                    const key=m.client_request_id||m.clientUserMessageId||m.requestKey;
+                    return m.role==='user'&&Number(m.id)>boundary&&!row.historyIds.includes(String(m.id))&&!used.has(String(m.id))&&!(m.attachments||[]).length&&
+                        this.sameText(this.messageText(m),this.asText(row.input))&&
+                        (key?key===row.key:Math.abs(this.messageStamp(m)-row.createdAt)<=10000);
+                });
+                // Presentation only. Do not confirm a receipt or bind an attachment
+                // from text/time, and leave ambiguous resends as separate messages.
+                return matches.length===1?matches[0]:null;
+            },
             localMessageMatched(row,messages,used=new Set()) {return messages.find(m=>{
                 if(m.role!=='user')return false;
                 const key=m.client_request_id||m.clientUserMessageId||m.requestKey;

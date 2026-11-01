@@ -22,13 +22,18 @@ class StorageUiTest {
         val backend=object:StorageBackend{
             override suspend fun scan()=obj("snapshot" to "s","totalBytes" to 20,"categories" to JSONArray())
             override suspend fun items(snapshot:String,filter:Map<String,String>,offset:Int)=obj("data" to JSONArray(listOf(
-                obj("id" to "a","name" to "可清理.pdf","bytes" to 10,"protected" to false),obj("id" to "b","name" to "正在使用.pdf","bytes" to 10,"protected" to true,"reason" to "会话正在使用"))),"total" to 2,"hasMore" to false)
+                obj("id" to "a","name" to "可清理.pdf","group" to "测试会话","bytes" to 10,"protected" to false),obj("id" to "b","name" to "正在使用.pdf","group" to "测试会话","bytes" to 10,"protected" to true,"reason" to "会话正在使用"))),"total" to 2,"hasMore" to false)
             override suspend fun prepare(snapshot:String,ids:Set<String>,action:String):JSONObject{prepared=ids;return obj("plan" to "p","count" to ids.size,"bytes" to 10,"warning" to "可恢复的回收站操作","action" to action)}
             override suspend fun execute(plan:String):JSONObject{executed++;return obj("processed" to 1,"freedBytes" to 0,"failed" to 0)}
         }
         compose.setContent{MaterialTheme{StoragePane(backend,true,"测试服务端") {}}}
         compose.waitUntil(5000){compose.onAllNodesWithText("可清理.pdf").fetchSemanticsNodes().isNotEmpty()}
         compose.onNodeWithText("全选已显示").performClick()
+        compose.onNodeWithText("测试会话").performClick()
+        compose.onNodeWithText("可清理.pdf").assertDoesNotExist()
+        compose.onNodeWithText("测试会话").performClick()
+        compose.onNodeWithText("可清理.pdf").assertIsDisplayed()
+        compose.onNodeWithText("测试会话").performClick()
         compose.onNodeWithText("移入回收站").performClick()
         compose.onNodeWithText("可恢复的回收站操作",substring=true).assertIsDisplayed()
         assertEquals(setOf("a"),prepared);assertEquals(0,executed)

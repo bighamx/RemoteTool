@@ -349,6 +349,12 @@ builder.Services.AddSingleton<HermesCompaction>();
                 }
 
                 var systemService = context.RequestServices.GetRequiredService<ISystemControlService>();
+                if (!RemoteDesktopPlatform.Supported)
+                {
+                    context.Response.StatusCode = 501;
+                    await context.Response.WriteAsJsonAsync(RemoteDesktopPlatform.Rejection());
+                    return;
+                }
                 context.Response.Headers["X-Chuckie-Input-Ack"] = "1";
                 var webSocket = await context.WebSockets.AcceptWebSocketAsync();
                 await InputWebSocketHandler.RunAsync(webSocket, systemService, context.RequestAborted);

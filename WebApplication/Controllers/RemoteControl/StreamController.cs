@@ -11,6 +11,7 @@ namespace RemoteTool.WebApi.Controllers.RemoteControl;
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
+[RemoteDesktopOnly]
 public class StreamController : ControllerBase
 
 {

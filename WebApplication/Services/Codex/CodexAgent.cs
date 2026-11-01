@@ -1733,8 +1733,18 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     // Validate the target without resuming or interrupting its writer.
                     await ReadThread(session, false, context.RequestAborted);
                     sessionPermissions.Set(session, body.S("mode"));
+                    return Obj(("mode",sessionPermissions.Get(session)),("applies_to","next_turn"));
                 } else if (method != "GET") throw new CodexError("不支持的请求方式", 405);
-                return Obj(("mode", sessionPermissions.Get(session)), ("applies_to", "next_turn"));
+                var info=await ReadThread(session,false,context.RequestAborted);
+                var rollout=CodexRolloutSnapshot.Read(home,RolloutPath(info["thread"]));
+                var actual=CodexPermissionState.Describe(rollout["permissions"],"last_turn",
+                    rollout.B("running")?"本轮实际权限（原生会话记录）":"最近一轮实际权限（原生会话记录）");
+                JsonObject initial;lock(gate)loaded.TryGetValue(session,out initial);
+                actual??=CodexPermissionState.Describe(initial,"native_session","会话创建或恢复时的原生权限");
+                JsonObject defaults=null;
+                if(actual==null)defaults=CodexPermissionState.Configuration(await Config(context.RequestAborted));
+                return Obj(("mode", sessionPermissions.Get(session)), ("applies_to", "next_turn"),
+                    ("current",actual),("configuration",defaults));
             }
             if (p.Length == 3 && p[2] == "compact" && method == "POST") return await CompactSession(session, context.Request.Headers["Idempotency-Key"].ToString());
             if (p.Length == 3 && p[2] == "context") {

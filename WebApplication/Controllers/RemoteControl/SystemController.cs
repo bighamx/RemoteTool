@@ -150,6 +150,7 @@ public class SystemController : ControllerBase
     }
 
     [HttpGet("screenshot")]
+    [RemoteDesktopOnly]
     public async Task<IActionResult> GetScreenshot()
     {
         try

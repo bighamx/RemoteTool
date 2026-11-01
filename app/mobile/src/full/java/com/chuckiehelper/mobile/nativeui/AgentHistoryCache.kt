@@ -88,7 +88,7 @@ internal fun appendPendingHistory(history: List<HermesMessage>, pending: List<He
 
 /** A current send remains visible until its native row arrives, even if an assistant row arrives first. */
 internal fun projectCurrentSubmission(history: List<HermesMessage>, message: HermesMessage, existingIds: Set<Long>,
-    usedNativeIds: MutableSet<Long> = mutableSetOf()): List<HermesMessage> {
+    usedNativeIds: MutableSet<Long> = mutableSetOf(), allowAppend: Boolean = true): List<HermesMessage> {
     if (history.any { it.localKey == message.localKey }) return history
     val equivalent = history.firstOrNull { row ->
         if (row.role != "user" || row.serverId <= 0 || row.serverId in existingIds || row.serverId in usedNativeIds) return@firstOrNull false
@@ -102,6 +102,25 @@ internal fun projectCurrentSubmission(history: List<HermesMessage>, message: Her
         message.delivery == null && saved in (sent - 2000L)..(sent + 10 * 60_000L)
     }
     if (equivalent != null) { usedNativeIds += equivalent.serverId; return history }
+    // Older Hermes stored [screenshot] without attachment references. An accepted
+    // live send can supply the missing preview on its one new, nearby text row.
+    // This affects display only: it does not acknowledge delivery, bind files on
+    // the server, or consume the durable local receipt.
+    if (message.delivery == null && message.attachments.isNotEmpty() && message.timestamp != null) {
+        val boundary = existingIds.filter { it in 1 until 1_000_000_000_000L }.maxOrNull() ?: 0L
+        val missingPicture = history.filter { row ->
+            row.role == "user" && row.serverId > boundary && row.serverId !in existingIds &&
+                row.serverId !in usedNativeIds && row.attachments.isEmpty() &&
+                row.text.replace("\r\n", "\n").trim() == message.text.replace("\r\n", "\n").trim() &&
+                (row.requestKey == message.localKey && row.requestKey != null || row.requestKey == null &&
+                    row.timestamp?.let { it in (message.timestamp - 10_000L)..(message.timestamp + 10_000L) } == true)
+        }.singleOrNull()
+        if (missingPicture != null) {
+            usedNativeIds += missingPicture.serverId
+            return history.map { row -> if (row === missingPicture) row.copy(attachments = message.attachments) else row }
+        }
+    }
+    if (!allowAppend) return history
     // A row absent from the pre-send snapshot can have been written *before* the
     // user tapped Send (for example the preceding streamed assistant reply).
     // Native order stays intact. Use a timestamp only when both sides have one;
