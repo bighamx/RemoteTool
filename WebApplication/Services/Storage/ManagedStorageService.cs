@@ -68,15 +68,18 @@ public sealed class ManagedStorageService
         ? value : throw new ArgumentException("列表已过期，请重新扫描");
     private static long Ms(DateTime value) => new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
     // 注册表只记「发起时间」，不保证收到终态（客户端被杀/服务重启会漏 Clear）。
-    // 因此：登记超过静默窗口、且两端都说不在跑时，视为残留登记，不再锁文件。
-    private const long BusyWindowSeconds = 600;
-    private bool Busy(StorageRow row) {
-        if (row.Agent.Length == 0) return false;
+    // 会话自身报告的运行状态是权威信号；登记只有短暂的「刚提交还没开始」窗口。
+    private const long BusyWindowSeconds = 90;
+    private string? BusyReason(StorageRow row) {
+        if (row.Agent.Length == 0) return null;
         long? age;
         try { age = activeAge(row.Agent, row.Profile, row.Session); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
-        return age is not null && (age <= BusyWindowSeconds || NativeBusy(row));
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return null; }
+        if (age is null) return null;
+        if (NativeBusy(row)) return "会话正在执行任务，结束后可清理";
+        return age <= BusyWindowSeconds ? "任务刚刚提交，稍后可清理" : null;
     }
+    private bool Busy(StorageRow row) => BusyReason(row) is not null;
     private bool NativeBusy(StorageRow row) {
         if(row.Agent.Length==0)return false;
         try{return nativeActive(row.Agent,row.Profile,row.Session);}catch(Exception e)when(e is IOException or UnauthorizedAccessException or ArgumentException){return false;}
@@ -106,7 +109,7 @@ public sealed class ManagedStorageService
                     var row = new StorageRow(Guid.NewGuid().ToString("N"), key == "logs" ? "logs" : "attachments", StorageFiles.Kind(name), key == "logs" ? "" : key,
                         profile, session, name, key == "logs" ? "服务端日志" : $"{key} · {profile} · {sessionLabel}", source, info.Length, Ms(info.LastWriteTimeUtc), protectedItem,
                         protectedItem ? "最近写入，稍后可清理" : "");
-                    if (Busy(row)) row = row with { Protected = true, Reason = "会话有未核对的任务，暂不清理" };
+                    if (BusyReason(row) is { } reason) row = row with { Protected = true, Reason = reason };
                     files[row.Id] = new(row, root, path, info.LastWriteTimeUtc.Ticks);
                 } catch (IOException) { partial = true; } catch (UnauthorizedAccessException) { partial = true; }
             }

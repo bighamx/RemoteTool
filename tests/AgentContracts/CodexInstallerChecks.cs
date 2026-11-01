@@ -1,7 +1,8 @@
 using RemoteTool.WebApi.Services.Codex;
 
-/// <summary>The managed installer must only run where it can succeed, and must
-/// finish with a verified executable instead of a half-populated directory.</summary>
+/// <summary>The managed installer must only run where it can succeed, install
+/// into the official npm prefix, and only report ready after the downloaded
+/// CLI passes the protocol check this app depends on.</summary>
 internal static class CodexInstallerChecks
 {
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
@@ -9,6 +10,7 @@ internal static class CodexInstallerChecks
     public static async Task Run()
     {
         var root = Path.Combine(Path.GetTempPath(), "codex-installer-" + Guid.NewGuid().ToString("N"));
+        var globalRoot = Path.Combine(root, "npm-global");
         Directory.CreateDirectory(root);
         try
         {
@@ -18,18 +20,31 @@ internal static class CodexInstallerChecks
             catch (InvalidOperationException) { }
 
             var calls = new List<string>();
+            var binaryName = OperatingSystem.IsWindows() ? "codex.exe" : "codex";
+            var vendor = Path.Combine(globalRoot, "@openai", "codex", "node_modules", "@openai",
+                OperatingSystem.IsWindows() ? "codex-win32-x64" : "codex-linux-x64", "vendor", "target", "bin");
             Func<string, string[], CancellationToken, Task<CodexInstaller.Output>> run = (file, args, _) =>
             {
                 calls.Add(file + " " + string.Join(' ', args));
                 if (args.Length > 0 && args[0] == "install")
                 {
-                    var prefix = args[Array.IndexOf(args, "--prefix") + 1];
+                    Check(args.Contains("--global"), "installer uses the official global prefix instead of a private one");
                     Check(args[Array.IndexOf(args, "--registry") + 1] == "https://registry.npmjs.org", "installer pins the official registry");
-                    var binary = Path.Combine(prefix, "node_modules", ".bin", "codex");
-                    Directory.CreateDirectory(Path.GetDirectoryName(binary)!);
+                    Directory.CreateDirectory(vendor);
+                    var binary = Path.Combine(vendor, binaryName);
                     File.WriteAllBytes(binary, new byte[1_100_000]);
-                    return Task.FromResult(new CodexInstaller.Output(0, ""));
+                    if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(binary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                    if (OperatingSystem.IsWindows())
+                    {
+                        File.WriteAllText(Path.Combine(vendor, "codex-code-mode-host.exe"), "");
+                        var resources = Path.Combine(Path.GetDirectoryName(vendor)!, "codex-resources");
+                        Directory.CreateDirectory(resources);
+                        File.WriteAllText(Path.Combine(resources, "codex-command-runner.exe"), "");
+                    }
+                    return Task.FromResult(new CodexInstaller.Output(0, "added 1 package"));
                 }
+                if (args.Length == 2 && args[0] == "root" && args[1] == "--global")
+                    return Task.FromResult(new CodexInstaller.Output(0, globalRoot + Environment.NewLine));
                 if (args.Length == 1 && args[0] == "--version")
                     return Task.FromResult(new CodexInstaller.Output(0, "codex-cli 0.166.0"));
                 if (args.Length >= 3 && args[0] == "app-server" && args[1] == "generate-json-schema")
@@ -56,8 +71,10 @@ internal static class CodexInstallerChecks
             Check(done.Phase == "ready", "successful install reaches ready, got " + done.Phase + ": " + done.Message);
             Check(done.Version == "0.166.0", "installer records the verified CLI version");
             Check(calls.Any(x => x.Contains("generate-json-schema")), "installer verifies the app-server protocol before promoting");
-            Check(File.Exists(Path.Combine(root, "executable.json")), "installer records the promoted executable");
-            Check(Directory.GetDirectories(root, "runtime-*").Length == 1, "installer promotes exactly one runtime directory");
+            var record = File.ReadAllText(Path.Combine(root, "executable.json"));
+            Check(record.Contains("\"source\":\"npm-global\""), "installer records the official npm source");
+            Check(record.Contains(vendor.Replace("\\", "\\\\")), "installer records the executable inside the global prefix");
+            Check(!Directory.Exists(Path.Combine(root, "runtime-" + done.Id)), "no private runtime directory is created any more");
 
             var reopened = new CodexInstaller(root, "/usr/bin/npm", run, default);
             Check(reopened.Current.Phase == "ready" && reopened.Current.Version == "0.166.0", "status survives a restart with its fields intact");
@@ -67,10 +84,14 @@ internal static class CodexInstallerChecks
             failing.Start();
             await failing.Completion;
             Check(failing.Current.Phase == "failed", "a failed install reports failure");
-            Check(!Directory.Exists(Path.Combine(broken, "runtime-" + failing.Current.Id)) && Directory.GetDirectories(broken, "runtime-*").Length == 0,
-                "a failed install leaves no partial runtime behind");
 
-            Console.WriteLine("Codex installer checks passed: gated start, pinned registry, protocol verification, restart-safe status, clean failure");
+            var denied = new CodexInstaller(Path.Combine(root, "denied"), "/usr/bin/npm",
+                (file, args, _) => Task.FromResult(new CodexInstaller.Output(1, "npm ERR! code EACCES")), default);
+            denied.Start();
+            await denied.Completion;
+            Check(denied.Current.Message.Contains("权限"), "permission failures explain the global-prefix write problem");
+
+            Console.WriteLine("Codex installer checks passed: gated start, official global prefix, pinned registry, protocol verification, restart-safe status, honest failures");
         }
         finally
         {

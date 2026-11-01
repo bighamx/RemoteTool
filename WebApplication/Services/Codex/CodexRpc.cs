@@ -43,11 +43,23 @@ internal static class CodexExecutable
     public static bool Complete(string executable) => !string.IsNullOrWhiteSpace(executable) && File.Exists(executable) &&
         (executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
          ? File.Exists(Path.Combine(Path.GetDirectoryName(executable)!, "codex-code-mode-host.exe")) &&
-           File.Exists(Path.Combine(Path.GetDirectoryName(executable)!, "codex-command-runner.exe"))
+           (File.Exists(Path.Combine(Path.GetDirectoryName(executable)!, "codex-command-runner.exe")) ||
+            File.Exists(Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(executable)!)!, "codex-resources", "codex-command-runner.exe")))
          : OperatingSystem.IsWindows() || (File.GetUnixFileMode(executable) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0);
+
+    /// <summary>自动安装记录下来的可执行文件（npm 全局目录），存在且完整才返回。</summary>
+    public static string? Installed() {
+        try {
+            var file = Path.Combine(RemoteToolPaths.CodexManagedTools, "executable.json");
+            if (!File.Exists(file)) return null;
+            var executable = JsonNode.Parse(File.ReadAllText(file))?["executable"]?.ToString() ?? "";
+            return Complete(executable) ? executable : null;
+        } catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException) { return null; }
+    }
 
     public static string Resolve(string executable, string home) {
         if (Complete(executable)) return executable;
+        if (Installed() is { } managed) return managed;
         if (!OperatingSystem.IsWindows() && (string.IsNullOrWhiteSpace(executable) || !executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))) {
             if (!string.IsNullOrWhiteSpace(executable) && Path.IsPathFullyQualified(executable))
                 throw new CodexError("配置的 Codex 程序不存在或不可执行，请检查 Codex:Executable", 503, "codex_tools_missing", "rejected");
