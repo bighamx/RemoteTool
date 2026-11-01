@@ -2552,9 +2552,19 @@
 .agent-session-contextbar i.hot {
     background: #e5484d
 }
-.agent-profile-picker{padding:10px 14px 0;display:grid;gap:4px}
-.agent-profile-picker select{width:100%;padding:7px 10px;border:1px solid #dce2e8;border-radius:8px;background:transparent;color:inherit;font:inherit}
-.agent-profile-picker small{color:#b42318;font-size:12px}
+.agent-pane-tools{display:flex;align-items:center;gap:6px;flex:none;margin-left:auto}
+.agent-pane-tools .ivu-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;height:32px;padding:0 8px;border-radius:10px;font-size:12px;line-height:1}
+.agent-pane-tools .ivu-btn-icon-only{width:32px;padding:0;font-size:15px}
+.agent-pane-tools .ivu-btn-primary{padding:0 13px;font-weight:700}
+.agent-pane-tools .ivu-btn-primary.ivu-btn-icon-only{width:32px;min-width:32px;padding:0}
+.agent-pane-tools .ivu-btn>.ivu-icon{font-size:15px;line-height:1}
+.agent-pane-menu{position:relative}
+.agent-pane-menu>summary{display:grid;place-items:center;width:32px;height:32px;border:1px solid var(--border-color);border-radius:10px;background:var(--bg-tertiary);color:var(--text-secondary);font-size:15px;line-height:1;cursor:pointer;list-style:none}
+.agent-pane-menu>summary:hover{color:var(--accent-primary);border-color:var(--accent-primary)}
+.agent-profile-row{display:flex;align-items:center;gap:8px;padding:0 16px 12px}
+.agent-profile-row>span{flex:none;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)}
+.agent-profile-row select{flex:1;min-width:0;height:32px;padding:0 10px;border:1px solid var(--border-color);border-radius:9px;background:var(--bg-tertiary);color:var(--text-primary);font:inherit;font-size:12px;cursor:pointer}
+.agent-profile-error{display:block;padding:0 16px 10px;color:var(--accent-danger);font-size:11px}
 .agent-session-detail{max-height:65vh;overflow:auto}
 .agent-session-detail-actions{display:flex;gap:8px;margin-bottom:12px}
 .agent-session-detail section+section{margin-top:16px;padding-top:12px;border-top:1px solid var(--border-color)}
@@ -2563,7 +2573,7 @@
 .agent-session-detail dt{color:var(--text-secondary)}
 .agent-session-detail dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
 
-.agent-profile-picker>.agent-session-actions{justify-self:end}
+
 .hermes-maintenance-log{height:300px;overflow:auto;margin-top:10px;padding:12px;background:var(--bg-primary);border:1px solid var(--border-color);border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 monospace;user-select:text}
 @media(max-width:600px){.hermes-admin{grid-template-columns:1fr;gap:12px}.hermes-admin nav{flex-direction:row;flex-wrap:wrap}.hermes-admin nav strong{width:100%}}
 

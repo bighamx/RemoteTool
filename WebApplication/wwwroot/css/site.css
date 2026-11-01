@@ -259,3 +259,40 @@ body {
         min-height: unset !important;
     }
 }
+
+/* 全局细滚动条：窄、无两端箭头、圆角胶囊，跟随主题 */
+html * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--text-muted) 45%, transparent) transparent;
+}
+
+html *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+html *::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+html *::-webkit-scrollbar-thumb {
+    border: 0;
+    border-radius: 99px;
+    background: color-mix(in srgb, var(--text-muted) 42%, transparent);
+}
+
+html *::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--text-muted) 68%, transparent);
+}
+
+html *::-webkit-scrollbar-button,
+html *::-webkit-scrollbar-button:start,
+html *::-webkit-scrollbar-button:end {
+    display: none;
+    width: 0;
+    height: 0;
+}
+
+html *::-webkit-scrollbar-corner {
+    background: transparent;
+}

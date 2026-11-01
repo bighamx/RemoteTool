@@ -17,15 +17,15 @@
 <div id="agent-app" class="agent-workspace" :class="{'admin-active':adminOpen}" data-agent="@ViewBag.Agent" v-cloak>
     <div v-if="sessionsOpen" class="agent-sessions-backdrop" @@click="sessionsOpen=false"></div>
     <aside class="agent-sessions" :class="{'mobile-open':sessionsOpen}">
-        <div v-if="agent==='hermes'" class="agent-profile-picker">
-            <details class="agent-session-actions"><summary aria-label="Hermes 全局管理">⋮</summary><div><button type="button" @@click="openHermesAdmin">Hermes 管理</button><button type="button" @@click="refreshSessions()">刷新列表</button></div></details>
+        <div class="agent-pane-head"><div class="agent-pane-identity"><span class="agent-brand-icon"><img :src="agent==='codex'?'/icons/codex.png':'/icons/hermes.svg'" :alt="agentName"></span><div><small>会话列表</small><h2>{{agentName}}</h2></div></div><i-button v-if="agent==='codex'" size="small" :icon="groupByProject?'md-list':'md-folder'" :title="groupByProject?'按最近会话显示':'按项目分组'" @@click="toggleGroupMode"></i-button><span class="agent-pane-tools"><i-button size="small" icon="md-refresh" title="刷新会话列表" aria-label="刷新会话列表" :loading="loadingList" @@click="refreshSessions"></i-button><details v-if="agent==='hermes'" class="agent-session-actions agent-pane-menu"><summary aria-label="Hermes 全局管理">⋮</summary><div><button type="button" @@click="openHermesAdmin">Hermes 管理</button><button type="button" @@click="refreshSessions()">刷新列表</button></div></details><i-button type="primary" size="small" icon="md-add" title="新建会话" aria-label="新建会话" @@click="openCreateDialog"></i-button></span><button class="agent-sessions-close" type="button" @@click="closeSessionList" aria-label="收起会话列表">×</button></div>
+        <div v-if="agent==='hermes'" class="agent-profile-row">
+            <span>Profile</span>
             <select :value="profile" aria-label="切换 Profile" :disabled="sending || uploading" @@focus="loadProfiles" @@change="switchProfile($event.target.value)">
                 <option v-if="!profiles.some(row=>row.id===profile)" :value="profile">{{profile}}</option>
                 <option v-for="row in profiles" :key="row.id" :value="row.id" :disabled="!row.available">{{row.name}}{{row.reason?' · '+row.reason:''}}</option>
             </select>
-            <small v-if="profileError">{{profileError}}</small>
         </div>
-        <div class="agent-pane-head"><div class="agent-pane-identity"><span class="agent-brand-icon"><img :src="agent==='codex'?'/icons/codex.png':'/icons/hermes.svg'" :alt="agentName"></span><div><small>会话列表</small><h2>{{agentName}}</h2></div></div><i-button v-if="agent==='codex'" size="small" :icon="groupByProject?'md-list':'md-folder'" :title="groupByProject?'按最近会话显示':'按项目分组'" @@click="toggleGroupMode"></i-button><i-button size="small" icon="md-refresh" title="刷新会话列表" aria-label="刷新会话列表" :loading="loadingList" @@click="refreshSessions"></i-button><i-button type="primary" size="small" icon="md-add" @@click="openCreateDialog">新建</i-button><button class="agent-sessions-close" type="button" @@click="closeSessionList" aria-label="收起会话列表">×</button></div>
+        <small v-if="agent==='hermes' && profileError" class="agent-profile-error">{{profileError}}</small>
         <div class="agent-search"><i-input v-model="search" search placeholder="搜索会话名称、目录或 ID" clearable></i-input></div>
         <div v-if="listError" class="agent-inline-error">{{readableAgentError(listError)}} <i-button size="small" @@click="refreshSessions">重试</i-button></div>
         <div class="agent-session-list">
