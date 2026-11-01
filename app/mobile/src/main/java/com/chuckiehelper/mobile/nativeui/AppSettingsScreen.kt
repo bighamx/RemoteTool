@@ -17,6 +17,7 @@ import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.SystemUpdate
+import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Icon
@@ -36,6 +37,7 @@ internal fun AppSettingsScreen(
     onStartup: () -> Unit,
     onBack: () -> Unit,
     showUpdates: Boolean = true,
+    onStorage: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
@@ -55,6 +57,7 @@ internal fun AppSettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (showUpdates) ToolRow("应用更新", updateSubtitle, Icons.Outlined.SystemUpdate, onUpdate)
+                onStorage?.let { ToolRow("空间管理", "会话与附件 · 本机和服务端", androidx.compose.material.icons.Icons.Outlined.Storage, it) }
                 ToolRow("诊断日志", "查看与导出崩溃记录", Icons.Outlined.BugReport, onDiagnostics)
                 ToolRow("开机自启", "恢复手机操控与转发通道", Icons.Outlined.PowerSettingsNew, onStartup)
                 ToolRow("项目主页", "GitHub · RemoteTool", Icons.Outlined.OpenInNew) {

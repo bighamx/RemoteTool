@@ -105,6 +105,7 @@ fun NativeApp(model: NativeModel) {
         var phoneTools by rememberSaveable { mutableStateOf(false) }
         var startup by remember { mutableStateOf(false) }
         var settings by rememberSaveable { mutableStateOf(false) }
+        var storage by rememberSaveable { mutableStateOf(false) }
         val backDispatcher =
             androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current
                 ?.onBackPressedDispatcher
@@ -135,6 +136,10 @@ fun NativeApp(model: NativeModel) {
             CrashLogsScreen { diagnostics = false }
             return@MaterialTheme
         }
+        if (storage) {
+            edition.StorageHost(session?.api, session?.device?.id) { storage = false }
+            return@MaterialTheme
+        }
         if (settings) {
             AppSettingsScreen(
                 updateSubtitle = edition.updateSubtitle,
@@ -143,6 +148,7 @@ fun NativeApp(model: NativeModel) {
                 onStartup = { startup = true },
                 onBack = { settings = false },
                 showUpdates = edition.showUpdates,
+                onStorage = if (edition.supportsStorage) ({ storage = true }) else null,
             )
             edition.UpdateHost()
             if (startup) StartupDialog { startup = false }
@@ -348,7 +354,7 @@ fun SelectionContainerCompat(value: String) {
 }
 
 @Composable
-private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTools: () -> Unit) {
+private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTools:()->Unit) {
     LaunchedEffect(model.session?.api) { model.refreshServerVersion() }
     var addTo by remember { mutableStateOf<Device?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -362,12 +368,7 @@ private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTo
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item { CloudAccountEntry(cloud) }
-        item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onPhoneTools, modifier = Modifier.weight(1f).height(40.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) { Text("手机操控") }
-            }
-        }
-        item { Text("优先连接上次通道，不可达时尝试其他地址；可在设备内手动切换。", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if(com.chuckiehelper.mobile.BuildConfig.PHONE_COMPANION)item { TextButton(onClick=onPhoneTools){Text("打开本机手机操控") } }
         items(model.devices, key = { it.id }) { device ->
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -417,6 +418,7 @@ private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTo
                 Text("添加设备", Modifier.padding(start = 8.dp))
             }
         }
+        item { Text("优先连接上次通道，不可达时尝试其他地址；可在设备内手动切换。", color = MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodySmall) }
     }
     if (adding) AddDeviceDialog(model, addTo) { adding = false }
     editingAddress?.let { (device, url) -> AddDeviceDialog(model, device, url) { editingAddress = null; manage = model.devices.find { it.id == device.id } } }

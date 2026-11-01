@@ -46,12 +46,14 @@ private class FullEdition(
 ) : AppEdition() {
     override val initialRoute = "系统"
     override val showUpdates = true
+    override val supportsStorage = true
+    @Composable override fun StorageHost(api: NativeApi?, deviceId: String?, onClose: () -> Unit) { StorageScreen(api,deviceId,onClose) }
     override val updateSubtitle get() = updates.subtitle
     private var composeTarget by mutableStateOf<String?>(null)
     override fun reloadSettings() = updates.reloadCloudSettings()
     override fun openUpdates() = updates.open()
     override fun normalizeRoute(route: String) = if (route == "文件") "Codex" else route
-    override fun ownsToolbar(route: String) = route in listOf("Codex", "Hermes", "文件", "Cloudflare")
+    override fun ownsToolbar(route: String) = route in listOf("Codex", "Hermes", "文件", "Cloudflare", "空间管理")
     private fun draft(deviceId: String?) = shares.ready?.takeIf { it.deviceId == deviceId }
     override fun shareId(deviceId: String?) = draft(deviceId)?.id
     override fun shareRoute(deviceId: String?) = draft(deviceId)?.let { if (it.agent == "codex") "Codex" else "Hermes" }
@@ -96,6 +98,7 @@ private class FullEdition(
         }
     }
     @Composable override fun MoreItems(onDetail: (String) -> Unit) {
+        ToolRow("空间管理", "本机缓存 · 会话附件 · 服务端回收站", Icons.Outlined.Storage) { onDetail("空间管理") }
         ToolRow("Cloudflare", "DNS · R2 · D1 · Tunnel", icon = {
             androidx.compose.foundation.Image(painterResource(R.drawable.ic_cloudflare), null, Modifier.size(24.dp))
         }) { onDetail("Cloudflare") }
@@ -130,6 +133,7 @@ private class FullEdition(
         onDetail: (String) -> Unit, onClose: () -> Unit): Boolean {
         val sharedDraft = draft(deviceId)
         when (route) {
+            "空间管理" -> StorageScreen(api,deviceId,onClose)
             "Cloudflare" -> CloudflareScreen(api, error, onClose)
             "系统" -> SystemScreen(api, onProcesses = { onDetail("进程") }, onTerminal = { onDetail("终端") }, onError = error)
             "进程" -> ProcessScreen(api, error)

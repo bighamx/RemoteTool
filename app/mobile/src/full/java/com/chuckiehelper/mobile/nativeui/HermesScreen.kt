@@ -440,6 +440,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             }
         }
         if (agent == "codex") CodexUsage(model, compact = true) { accountsPanel = true; model.fetchAccounts() }
+        AgentSetupCard(api,agent,model.profile,model.capabilities.optInt("state_version"))
         if (agent == "codex" && !list && accessMode == "full") TextButton(onClick = { permissionsDialog = true }) {
             Text("权限设置：完全访问", style = MaterialTheme.typography.labelSmall)
         }
@@ -452,7 +453,8 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                 TextButton(onClick = { takeover = true }) { Text("中断并接管") }
             }
         }
-        model.error?.let { error ->
+        model.error?.let { rawError ->
+            val error = friendlyAgentFailure(rawError)
             Surface(color = MaterialTheme.colorScheme.errorContainer) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
                     Text(error, style = MaterialTheme.typography.bodySmall)

@@ -272,7 +272,7 @@ private fun CodexResetCreditsDialog(model: HermesModel, workspace: JSONObject, c
     val applicableCount = summary?.let { if (it.has("applicableCount")) it.optLong("applicableCount") else count } ?: 0
     val loading = id in model.workspaceResetLoading
     val using = id in model.workspaceResetUsing
-    val error = model.workspaceResetErrors[id]
+    val error = model.workspaceResetActionErrors[id] ?: model.workspaceResetErrors[id]
     var confirm by remember(id) { mutableStateOf<ResetCreditChoice?>(null) }
     AlertDialog(
         onDismissRequest = { if (!using) close() },
@@ -288,7 +288,17 @@ private fun CodexResetCreditsDialog(model: HermesModel, workspace: JSONObject, c
             }
         },
         text = {
-            Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                error?.let { message ->
+                    Surface(color=MaterialTheme.colorScheme.errorContainer,shape=MaterialTheme.shapes.medium) {
+                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                            Text(if(model.workspaceResetActionErrors.containsKey(id))"上次操作未完成：$message" else message,color=MaterialTheme.colorScheme.onErrorContainer,style=MaterialTheme.typography.bodySmall)
+                            if(model.workspaceResetActionErrors.containsKey(id))TextButton(onClick={model.dismissWorkspaceResetFeedback(id)}){Text("关闭提示")}
+                        }
+                    }
+                }
+                model.workspaceResetActionNotices[id]?.let { Text(it,color=MaterialTheme.colorScheme.primary,style=MaterialTheme.typography.bodySmall) }
+                Column(Modifier.weight(1f,false).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)) {
                 when {
                     loading && result == null -> {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -297,7 +307,6 @@ private fun CodexResetCreditsDialog(model: HermesModel, workspace: JSONObject, c
                         }
                     }
                     error != null && result == null -> {
-                        Text(error, color = MaterialTheme.colorScheme.error)
                         TextButton(onClick = { model.fetchWorkspaceResetCredits(id) }, enabled = !loading) { Text("重试") }
                     }
                     summary == null -> Text("Codex 没有返回额度重置数据。", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -336,7 +345,7 @@ private fun CodexResetCreditsDialog(model: HermesModel, workspace: JSONObject, c
                         else if (applicableCount == 0L) Text("当前额度窗口暂不符合重置条件。", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                if (error != null && result != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
             }
         },
         confirmButton = {},

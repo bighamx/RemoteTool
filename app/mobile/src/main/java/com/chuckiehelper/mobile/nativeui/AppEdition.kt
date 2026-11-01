@@ -6,6 +6,8 @@ import androidx.compose.runtime.Composable
 internal abstract class AppEdition {
     abstract val initialRoute: String
     open val showUpdates: Boolean = false
+    open val supportsStorage: Boolean = false
+    @Composable open fun StorageHost(api: NativeApi?, deviceId: String?, onClose: () -> Unit) = Unit
     open val updateSubtitle: String = ""
     open fun reloadSettings() = Unit
     open fun openUpdates() = Unit

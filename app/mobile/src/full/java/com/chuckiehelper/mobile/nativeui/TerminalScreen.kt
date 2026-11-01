@@ -15,7 +15,9 @@ import okhttp3.*
 
 @Composable
 fun TerminalScreen(api: NativeApi, onError: (String) -> Unit) {
-    var type by rememberSaveable { mutableStateOf("powershell") }
+    var type by rememberSaveable(api.base) { mutableStateOf("") }
+    var types by remember(api.base) { mutableStateOf(listOf<Pair<String,String>>()) }
+    var capabilitiesReady by remember(api.base){mutableStateOf(false)}
     var input by rememberSaveable { mutableStateOf("") }
     var output by remember { mutableStateOf("") }
     var state by remember { mutableStateOf("连接中") }
@@ -24,7 +26,22 @@ fun TerminalScreen(api: NativeApi, onError: (String) -> Unit) {
     val scroll = rememberScrollState()
     val scope = rememberCoroutineScope()
     val buffer = remember(api, type, attempt) { TerminalBuffer() }
-    DisposableEffect(api, type, attempt) {
+    LaunchedEffect(api,attempt) {
+        capabilitiesReady=false
+        try {
+            val result=api.json("/api/terminal/capabilities")
+            types=terminalChoices(result)
+            if(types.none{it.first==type})type=result.optString("defaultType").takeIf{v->types.any{it.first==v}}?:types.firstOrNull()?.first.orEmpty()
+            if(types.isEmpty())state="服务端未找到可用终端"
+            capabilitiesReady=types.isNotEmpty()
+        } catch(e:CancellationException){throw e}
+        catch(e:ApiRequestFailure){
+            if(e.status==404){types=listOf("shell" to "Shell");type="shell";capabilitiesReady=true}
+            else {state="无法读取终端能力，请重试";onError(state)}
+        } catch(e:Exception){state="无法读取终端能力，请检查连接";onError(state)}
+    }
+    DisposableEffect(api, type, attempt,capabilitiesReady) {
+        if(!capabilitiesReady||type.isBlank())return@DisposableEffect onDispose{}
         val live = java.util.concurrent.atomic.AtomicBoolean(true)
         output = ""
         state = "连接中"
@@ -79,7 +96,7 @@ fun TerminalScreen(api: NativeApi, onError: (String) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         FlowRowCompat {
-            listOf("shell" to "Shell", "powershell" to "PowerShell", "cmd" to "CMD").forEach {
+            types.forEach {
                 (kind, label) ->
                 FilterChip(type == kind, { type = kind }, label = { Text(label) })
             }
@@ -133,6 +150,10 @@ fun TerminalScreen(api: NativeApi, onError: (String) -> Unit) {
         }
     }
 }
+
+internal fun terminalChoices(data:org.json.JSONObject):List<Pair<String,String>> = data.array("types").objects()
+    .filter{it.optString("id") in (if(data.optString("platform")=="Windows")setOf("shell","powershell","cmd") else setOf("shell"))}
+    .map{it.getString("id") to it.optString("name",it.getString("id"))}.distinctBy{it.first}
 
 /**
  * Incremental terminal text handling, including split ANSI sequences and carriage-return progress

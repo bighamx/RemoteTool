@@ -594,8 +594,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     var workspaceResetLoading by mutableStateOf<Set<String>>(emptySet())
         private set
-    var workspaceResetUsing by mutableStateOf<Set<String>>(emptySet())
-        private set
+    private val workspaceResetActions = WorkspaceActionFeedback()
+    val workspaceResetUsing get() = workspaceResetActions.busy
+    val workspaceResetActionErrors get() = workspaceResetActions.errors
+    val workspaceResetActionNotices get() = workspaceResetActions.notices
+    fun dismissWorkspaceResetFeedback(id:String)=workspaceResetActions.dismiss(id)
     var workspaceResetErrors by mutableStateOf<Map<String, String>>(emptyMap())
         private set
     private var workspaceReadEpoch = 0L
@@ -653,6 +656,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     // 每会话最近一次成功加载的消息列表（内存级，进程内有效），用于 select() 时先回放再刷新。
     private val cachedHistory = mutableMapOf<String, List<HermesMessage>>()
+    init {
+        viewModelScope.launch {
+            StorageCleanupSignals.history.collect { cleared ->
+                cachedHistory.keys.filter { StorageCleanupSignals.key(identity,it) in cleared }.forEach { cachedHistory.remove(it) }
+                val session=selectedId
+                if(session!=null&&StorageCleanupSignals.key(identity,session) in cleared&&!hasExecution&&!hasPendingSubmission&&!finalSyncPending){
+                    messages=emptyList();historyCacheStatus="本机离线缓存已清理，联网后可重新读取"
+                }
+            }
+        }
+    }
     private val historyVersions = mutableMapOf<String, Long>()
     private val confirmedMessageKeys = LinkedHashMap<String, String>().apply {
         runCatching { org.json.JSONArray(prefs.getString("confirmedMessageKeys", "[]")).objects() }.getOrDefault(emptyList())
@@ -1156,7 +1170,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         filesReadEpoch++; filesReadJob?.cancel(); filesReadJob = null; filesRefreshPending = false
         loginJob?.cancel(); loginJob = null; loginInfo = null; loginVisible = false; loginStarting = false; loginError = null
         workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
-        workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetUsing = emptySet(); workspaceResetErrors = emptyMap()
+        workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetActions.clear(); workspaceResetErrors = emptyMap()
         openingGeneration++; openingSession = null; contextPrefetchedSession = null; activeRunCheckSession = null
         api = value.withReadPolicy(noRetry = true, onReadSuccess = {
             if (api.base == value.base) {
@@ -1537,7 +1551,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (api !== connection || epoch != accountReadEpoch) return
         if (workspaces.optString("current") != loadedWorkspaces.optString("current")) {
             workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
-            workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetUsing = emptySet(); workspaceResetErrors = emptyMap()
+            workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetErrors = emptyMap()
         }
         accounts = loadedAccounts; workspaces = loadedWorkspaces
         workspaceUsages = workspaceUsages.filterKeys { id -> workspaces.array("data").objects().any { it.optString("id") == id } }
@@ -1603,7 +1617,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     fun consumeWorkspaceResetCredit(id: String, creditId: String?) {
         if (agent != "codex" || id.isBlank() || id in workspaceResetUsing || id in workspaceResetLoading) return
-        workspaceResetUsing = workspaceResetUsing + id
+        val operation = workspaceResetActions.begin(id) ?: return
         workspaceResetErrors = workspaceResetErrors - id
         val connection = api
         val epoch = workspaceReadEpoch
@@ -1614,8 +1628,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     if (!creditId.isNullOrBlank()) put("creditId", creditId) else put("useNextAvailable", true)
                 }
                 val request = connection.request("$root/workspaces/${q(id)}/rate-limit-resets/consume", body).newBuilder()
-                    .header("Idempotency-Key", UUID.randomUUID().toString()).build()
+                    .header("Idempotency-Key", "reset-${operation.serial}-${UUID.randomUUID()}").build()
                 val result = connection.json(request)
+                if(api===connection && (!result.optBoolean("available") || expectedWorkspace.isBlank() || result.optString("chatgpt_account_id")!=expectedWorkspace))
+                    throw java.io.IOException("操作结果的工作空间无法确认，请刷新用量核对；不会自动重试。")
+                if(api === connection)workspaceResetActions.succeed(operation,when(result.optString("outcome")){
+                    "reset"->"额度已重置，请核对最新用量。"
+                    "nothingToReset"->"当前没有符合条件的额度窗口，未执行重置。"
+                    "noCredit"->"没有可用的额度重置。"
+                    "alreadyRedeemed"->"该请求已成功处理，没有重复消耗。"
+                    else->"操作已完成，请刷新用量核对结果。"
+                })
                 if (api === connection && epoch == workspaceReadEpoch) {
                     val receivedWorkspace = result.optString("chatgpt_account_id")
                     if (!result.optBoolean("available") || expectedWorkspace.isBlank() || receivedWorkspace != expectedWorkspace)
@@ -1630,9 +1653,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                if (api === connection && epoch == workspaceReadEpoch) workspaceResetErrors = workspaceResetErrors + (id to connectionFailureMessage(e))
+                if (api === connection) workspaceResetActions.fail(operation, connectionFailureMessage(e))
             } finally {
-                if (api === connection && epoch == workspaceReadEpoch) workspaceResetUsing = workspaceResetUsing - id
+                if (api === connection) workspaceResetActions.finish(operation)
             }
         }
     }
@@ -1716,7 +1739,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             backgroundRuns.clear(); saveRuns() // Preserve drafts, attachments and uncertain receipts across account changes.
             runNarrationUsers.clear()
             workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
-            workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetUsing = emptySet(); workspaceResetErrors = emptyMap()
+            workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetErrors = emptyMap()
             prefs.edit().remove("run").remove("runSession").remove("pendingKey").remove("pendingInput").remove("pendingSession").apply()
             resetAccountView(id)
             fetchUsage()
