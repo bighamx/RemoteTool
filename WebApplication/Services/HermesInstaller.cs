@@ -18,19 +18,22 @@ public sealed class HermesInstaller
     private static readonly TimeSpan Limit=TimeSpan.FromMinutes(20);
     private readonly string root,source;
     private readonly string? uv;
+    private readonly string? python;
     private readonly Func<string,string[],CancellationToken,Task<Output>> run;
     private readonly CancellationToken stopping;
     private readonly object gate=new();
     private Status status=new("","idle","");
     private Task completion=Task.CompletedTask;
-    public bool CanInstall=>uv!=null||OperatingSystem.IsLinux()||OperatingSystem.IsMacOS();
+    public bool CanInstall=>uv!=null||python!=null;
     public string Venv=>Path.Combine(source,"venv");
     public Status Current {get{lock(gate)return status;}}
     internal Task Completion=>completion;
     public HermesInstaller(IHostApplicationLifetime lifetime,IConfiguration configuration,HermesProfiles profiles)
-        :this(RemoteToolPaths.HermesManagedTools,SourceDirectory(configuration,profiles),FindUv(),RunProcess,lifetime.ApplicationStopping){}
-    internal HermesInstaller(string root,string source,string? uv,Func<string,string[],CancellationToken,Task<Output>> run,CancellationToken stopping=default){
-        this.root=Path.GetFullPath(root);this.source=Path.GetFullPath(source);this.uv=uv;this.run=run;this.stopping=stopping;
+        :this(RemoteToolPaths.HermesManagedTools,SourceDirectory(configuration,profiles),FindUv(),FindPython(),RunProcess,lifetime.ApplicationStopping){}
+    internal HermesInstaller(string root,string source,string? uv,Func<string,string[],CancellationToken,Task<Output>> run,CancellationToken stopping=default)
+        :this(root,source,uv,null,run,stopping){}
+    internal HermesInstaller(string root,string source,string? uv,string? python,Func<string,string[],CancellationToken,Task<Output>> run,CancellationToken stopping=default){
+        this.root=Path.GetFullPath(root);this.source=Path.GetFullPath(source);this.uv=uv;this.python=python;this.run=run;this.stopping=stopping;
         try{var file=Path.Combine(root,"status.json");if(File.Exists(file)){
             status=JsonSerializer.Deserialize<Status>(File.ReadAllText(file),Json)??status;
             if(status.Busy)status=status with{Phase="failed",Message="服务已重启，安装结果未确认。请重新检测后再试。"};
@@ -43,7 +46,7 @@ public sealed class HermesInstaller
     public Status Start(){
         lock(gate){
             if(status.Busy)return status;
-            if(!CanInstall)throw new InvalidOperationException("当前平台缺少 uv 与可用的 python3-venv，无法自动安装。");
+            if(!CanInstall)throw new InvalidOperationException("当前平台缺少 uv 与可用的 Python，无法自动安装。");
             status=new(Guid.NewGuid().ToString("N"),"installing",$"正在安装官方 Hermes 到 {Venv}；不会改动账号或密钥。 ");
             var job=status.Id;completion=Task.Run(()=>Install(job));return status;
         }
@@ -63,7 +66,7 @@ public sealed class HermesInstaller
                 var install=await run(uv,["pip","install","--python",python,"hermes-agent"],timeout.Token);
                 if(install.ExitCode!=0)throw new IOException("安装未完成");
             }else{
-                var create=await run("python3",["-m","venv",Venv],timeout.Token);
+                var create=await run(python!,["-m","venv",Venv],timeout.Token);
                 if(create.ExitCode!=0||!File.Exists(python))throw new IOException("创建虚拟环境失败（需要 python3-venv）");
                 Update(new(id,"validating","正在从官方索引安装 hermes-agent。"));
                 var install=await run(python,["-m","pip","install","--disable-pip-version-check","--no-input","hermes-agent"],timeout.Token);
@@ -78,6 +81,18 @@ public sealed class HermesInstaller
             var hint=e.Message.Contains("python3-venv")?"缺少 python3-venv：请安装 uv 或执行 sudo apt install python3.12-venv，然后重试。":"安装未完成。请检查服务端联网与目录权限后重试，或按手动步骤安装。";
             Update(new(id,"failed",hint));
         }
+    }
+    /// <summary>没有 uv 时的回退启动器：Unix 用 python3，Windows 用 python/py。</summary>
+    private static string? FindPython(){
+        var names=OperatingSystem.IsWindows()?new[]{"python.exe","py.exe","python3.exe"}:new[]{"python3","python"};
+        foreach(var directory in (Environment.GetEnvironmentVariable("PATH")??"").Split(Path.PathSeparator).Where(p=>p.Length>0))
+            foreach(var name in names){var candidate=Path.Combine(directory,name);if(File.Exists(candidate))return candidate;}
+        var fixedPaths=OperatingSystem.IsWindows()
+            ?new[]{Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","Python"),@"C:\Python312",@"C:\Python313"}
+            :new[]{"/usr/bin","/usr/local/bin","/opt/homebrew/bin"};
+        foreach(var directory in fixedPaths)foreach(var name in names){
+            var candidate=Path.Combine(directory,name);if(File.Exists(candidate))return candidate;}
+        return null;
     }
     private static string? FindUv(){
         var candidates=new List<string>{
