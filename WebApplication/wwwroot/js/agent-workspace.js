@@ -59,7 +59,7 @@
     const readVersions = new Map();
     const app = Vue.createApp({
         data: () => ({ agent, profile, agentSetup:null,setupBusy:false,setupDetails:false,setupNotice:'',profiles: [], profileError: '', sessionDetails: null, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: isMobile()&&!requestedSession(), mobileViewport: isMobile(), mobileComposerOpen: false,
-            adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminSettings:{},adminProvider:{},adminEndpoints:[],adminProviders:[],adminShowDisabled:false,adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
+            adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminSettings:{},adminProvider:{},adminProviderDialog:false,adminEndpoints:[],adminProviders:[],adminShowDisabled:false,adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyCacheState: '', historyLoadedEpoch: -1, historyFailedEpoch: -1, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [], schedules: [], showSchedule: false, scheduleText: '', scheduleAt: '', scheduleError: '', scheduleBusy: false, scheduleSession: '', scheduleClientKey: '', scheduleRequest: null,
             approvalBusy:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsInfo:'',permissionsError:'',showPermissionsDialog:false, activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelDefaults: {}, modelsError: '', modelSessionSupported: true, providersState: {}, globalModelOptions: {}, providerSwitch: {provider:'',model:'',effort:'',tier:''}, codexProviderEdit: null, modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
@@ -68,7 +68,7 @@
             showMoveDialog: false, moveTarget: null, moveMoving: false, moveSearch: '', moveError: '',
             showCreateDialog: false, createTitle: '', createProjectId: '', createMode: 'existing', createRoot: '', createRoots: [], createProjectName: '', createProjectSearch: '', createBrowser: false, createBrowserPath: '', createBrowserDirs: [], createBrowserLoading: false, createBrowserError: '', createBrowserNew: '', createBrowserMkdir: false, creating: false, createError: '', showEditDialog: false, editText: '', editTarget: null, editFiles: [], editing: false, editError: '', messageMenu: null, sessionMenu: null,
             liveSegments: [], liveTools: [], streamRun: null, streamSeq: 0, streamConnected: false, streamGone: false, toolTimer: null, externalRunning: false, externalActivity: null, toolsCollapsed: true, apiServer: null, enablingApiServer: false }),
-        computed: {
+        computed: {adminProviderEditing() { return !!(this.adminProvider?.slug || this.adminProvider?.id); }, 
             adminGatewayStatus() {
                 const live=this.adminGateway.gateway;
                 if(this.adminGateway.read_error || !live)return '状态不可用';
@@ -212,6 +212,7 @@
                 if (this.adminBusy || this.adminProviderOriginal && JSON.stringify(this.adminProvider)!==this.adminProviderOriginal && !confirm('放弃提供方未保存的修改？')) return;
                 this.adminProvider=endpoint?{...endpoint,api_key:''}:{name:'',base_url:'',model:'',api_key:'',api_mode:''};
                 this.adminProviderOriginal=JSON.stringify(this.adminProvider);
+                this.adminProviderDialog=true;
             },
             adminDirty() { return this.adminText !== this.adminOriginal || !!this.adminSettingsOriginal && JSON.stringify(this.adminSettings)!==this.adminSettingsOriginal || !!this.adminProviderOriginal && JSON.stringify(this.adminProvider)!==this.adminProviderOriginal; },
             adminMayLeave() { return !this.adminBusy && (!this.adminDirty() || confirm('放弃未保存的修改？')); },
@@ -220,7 +221,6 @@
                 this.closeSessionMenu(); this.closeSessionMenus(); this.adminOpen = true;
                 window.addEventListener('beforeunload', this.guardAdminUnload);
                 await this.adminAction(async () => { this.adminFiles = (await api.get(`${base}/admin/files`)).data || []; });
-                this.pollAdminGateway();
             },
             closeHermesAdmin() { if (!this.adminMayLeave()) return; this.adminOpen=false;this.adminDoc=null;this.adminText='';this.adminOriginal='';this.adminSettings={};this.adminProvider={};this.adminSettingsOriginal='';this.adminProviderOriginal='';clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
             async pollAdminGateway() {
@@ -233,7 +233,7 @@
                     this.adminLogText=(this.adminLogText+(chunk.text||'')).slice(-120000);this.adminLogOffset=chunk.offset||0;
                     await this.$nextTick();if(this.adminLogFollow&&this.$refs.adminLog)this.$refs.adminLog.scrollTop=this.$refs.adminLog.scrollHeight;
                 } catch(error) { this.adminGateway = {...this.adminGateway,read_error:error.message}; }
-                if (this.adminOpen) adminTimer = setTimeout(()=>this.pollAdminGateway(),2000);
+                if (this.adminOpen && this.adminMode==='gateway') adminTimer = setTimeout(()=>this.pollAdminGateway(),3000);
             },
             acceptAdminDoc(doc) { this.adminDoc=doc;this.adminText=doc.content||'';this.adminOriginal=this.adminText;this.adminConflict=false;this.adminPreview=false; },
             async openAdminFile(file) { if(!this.adminMayLeave())return;await this.adminAction(async()=>{this.acceptAdminDoc(await api.get(`${base}/admin/files/${api.id(file.id)}`));this.adminMode='files';this.adminSettingsOriginal='';this.adminProviderOriginal='';this.adminSettings={};this.adminProvider={};}); },
@@ -249,15 +249,16 @@
                     if(mode==='models') {const data=await api.get(`${base}/default-model`);this.adminSettings={provider:data.provider||'',model:data.model||'',reasoning_effort:data.reasoning_effort||''};await this.reloadAdminProviders();this.adminProvider={name:'',base_url:'',model:'',api_key:'',api_mode:''};}
                     if(mode==='title') {this.adminSettings={...await api.get(`${base}/title-model`),api_key:''};}
                     this.adminMode=mode;
+                    if(mode==='gateway') void this.pollAdminGateway();
                     this.adminSettingsOriginal=mode==='models'||mode==='title'?JSON.stringify(this.adminSettings):'';this.adminProviderOriginal=mode==='models'?JSON.stringify(this.adminProvider):'';
                 });
             },
             async saveAdminSettings() { await this.adminAction(async()=>{const result=await api.post(`${base}/${this.adminMode==='models'?'default-model':'title-model'}`,this.adminSettings);if(result.confirm_required){this.adminError='模型配置需要额外确认，请在电脑上完成。';return;}this.adminSettings.api_key='';this.adminSettingsOriginal=JSON.stringify(this.adminSettings);this.$Message.success('已保存');}); },
             async reloadAdminProviders() {
-                const result=await api.get(`${base}/providers?include_disabled=${this.adminShowDisabled}`);
+                const [result,catalog]=await Promise.all([api.get(`${base}/providers?include_disabled=${this.adminShowDisabled}`),api.get(`${base}/model-options`)]);
                 this.adminEndpoints=result.endpoints||[];
                 this.adminProviders=result.providers||this.adminEndpoints.filter(e=>e.compatibility!=='cc_switch_managed_proxy').map(e=>({slug:e.id,name:e.name,enabled:e.enabled!==false,editable:!e.official_provider,endpoint:e}));
-                const catalog=await api.get(`${base}/model-options`);this.models=catalog.providers||[];this.modelSessionSupported=catalog.session_model_supported!==false;
+                this.models=catalog.providers||[];this.modelSessionSupported=catalog.session_model_supported!==false;
             },
             async openProviderManagement() {
                 this.adminOpen=true;window.addEventListener('beforeunload',this.guardAdminUnload);
@@ -270,7 +271,7 @@
                     await this.reloadAdminProviders();this.$Message.success(remove?'供应商已删除':'供应商状态已更新');
                 });
             },
-            async saveAdminProvider() {await this.adminAction(async()=>{const result=await api.post(`${base}/providers`,Object.fromEntries(Object.entries({...this.adminProvider,make_default:false}).filter(([key,value])=>key!=='api_key'||!!value)));if(result.confirm_required){this.adminError='配置需要额外确认，请在电脑上完成。';return;}this.adminProvider.api_key='';this.adminProviderOriginal=JSON.stringify(this.adminProvider);await this.reloadAdminProviders();this.$Message.success('已保存');});},
+            async saveAdminProvider() {await this.adminAction(async()=>{const result=await api.post(`${base}/providers`,Object.fromEntries(Object.entries({...this.adminProvider,make_default:false}).filter(([key,value])=>key!=='api_key'||!!value)));if(result.confirm_required){this.adminError='配置需要额外确认，请在电脑上完成。';return;}this.adminProvider.api_key='';this.adminProviderOriginal=JSON.stringify(this.adminProvider);this.adminProviderDialog=false;await this.reloadAdminProviders();this.$Message.success('已保存');});},
             async restartAdminGateway(wait) { if(!confirm(wait?'暂停接收新任务，等待全部 Profile 空闲后重启？':'重启当前设备的网关？将影响全部 Profile。'))return;await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/restart`,{wait});}); },
             async cancelAdminGateway() {await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/cancel`,{});});},
             async updateAdminHermes() {if(!confirm('等待全部 Profile 空闲后按官方流程更新并重启？将自动确认恢复本地修改。'))return;await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/update`,{});});},

@@ -1,4 +1,55 @@
-.agent-workspace.admin-active{display:block;overflow:auto}.agent-workspace.admin-active>.agent-sessions,.agent-workspace.admin-active>.agent-conversation,.agent-workspace.admin-active>.agent-inspector{display:none!important}.agent-admin-page{min-height:100%;padding:18px 22px}.agent-admin-page{color:var(--text-primary,inherit)}.agent-admin-page-head{display:flex;align-items:center;gap:18px;margin-bottom:18px;position:sticky;top:0;background:var(--bg-primary,#fff);color:var(--text-primary,inherit);z-index:5;padding:10px 0}.agent-admin-page-head h2{margin:0;font-size:22px}.agent-provider-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--border-color,#ddd)}.agent-provider-row small{display:block;margin-top:4px}.agent-provider-row button{margin:3px}
+.agent-workspace.admin-active{display:block;overflow:auto;background:var(--bg-primary)}
+.agent-workspace.admin-active>.agent-sessions,.agent-workspace.admin-active>.agent-conversation,.agent-workspace.admin-active>.agent-inspector{display:none!important}
+.agent-admin-page{max-width:none;padding:26px 30px 44px;color:var(--text-primary)}
+.agent-admin-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:22px}
+.agent-admin-heading .eyebrow{display:block;color:var(--accent-primary);font-size:10px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;margin-bottom:4px}
+.agent-admin-heading h1{margin:0;font-size:26px;letter-spacing:-.02em}
+.agent-admin-heading p{margin:5px 0 0;color:var(--text-secondary);font-size:12px}
+.agent-admin-back{padding:9px 16px;border:1px solid var(--border-color);border-radius:100px;background:var(--bg-tertiary);color:var(--text-primary);font:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.agent-admin-back:hover{border-color:var(--accent-primary);color:var(--accent-primary)}
+.agent-admin-layout{display:grid;grid-template-columns:216px minmax(0,1fr);gap:20px;align-items:start}
+.agent-admin-nav{display:flex;flex-direction:column;gap:3px;padding:10px;position:sticky;top:16px}
+.agent-admin-nav .panel-tools{padding:10px 10px 5px;border:0;color:var(--text-muted);font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
+.agent-admin-nav button{display:block;width:100%;padding:9px 11px;text-align:left;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--text-primary);font:inherit;font-size:13px;cursor:pointer}
+.agent-admin-nav button:hover:not(:disabled){background:color-mix(in srgb,var(--accent-primary) 9%,transparent)}
+.agent-admin-nav button.active{background:color-mix(in srgb,var(--accent-primary) 15%,transparent);border-color:color-mix(in srgb,var(--accent-primary) 32%,transparent);color:var(--accent-primary);font-weight:600}
+.agent-admin-content{display:flex;flex-direction:column;gap:16px;min-width:0}
+.agent-admin-card{border-radius:16px}
+.agent-admin-card .panel-tools{gap:14px;flex-wrap:wrap;font-weight:600;color:var(--text-primary);font-size:13px}
+.agent-admin-body{padding:16px 20px 20px}
+.agent-admin-hint{margin:0 0 12px;color:var(--text-secondary);font-size:12px}
+.agent-admin-loading{display:inline-flex;align-items:center;gap:9px;align-self:flex-start;padding:9px 14px;border:1px solid var(--border-color);border-radius:100px;background:var(--bg-card);color:var(--text-secondary);font-size:12px}
+.agent-admin-spinner{width:13px;height:13px;border-radius:50%;border:2px solid color-mix(in srgb,var(--accent-primary) 25%,transparent);border-top-color:var(--accent-primary);animation:agent-admin-spin .8s linear infinite}
+@keyframes agent-admin-spin{to{transform:rotate(360deg)}}
+.agent-admin-path{font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;color:var(--text-secondary);overflow-wrap:anywhere;min-width:0}
+.agent-admin-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.agent-admin-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid var(--border-color)}
+.agent-form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px 16px}
+.agent-field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.agent-field>span{font-size:12px;font-weight:600;color:var(--text-secondary)}
+.agent-field-wide{grid-column:1/-1}
+.agent-admin-page input:not([type=checkbox]),.agent-admin-page select,.agent-admin-page textarea,.agent-admin-dialog input:not([type=checkbox]),.agent-admin-dialog select,.agent-admin-dialog textarea{width:100%;box-sizing:border-box;height:38px;padding:8px 11px;border:1px solid var(--border-color);border-radius:10px;background:var(--bg-tertiary);color:var(--text-primary);font:inherit;font-size:13px;line-height:20px;outline:none}
+.agent-admin-page input:not([type=checkbox]):focus,.agent-admin-page select:focus,.agent-admin-page textarea:focus,.agent-admin-dialog input:not([type=checkbox]):focus,.agent-admin-dialog select:focus,.agent-admin-dialog textarea:focus{border-color:var(--accent-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent-primary) 18%,transparent)}
+.agent-admin-page input:disabled,.agent-admin-page select:disabled,.agent-admin-page textarea:disabled{opacity:.6}
+.agent-admin-editor{height:auto;min-height:46vh;resize:vertical;font:13px/1.65 ui-monospace,Menlo,Consolas,monospace!important}
+.agent-admin-prompt{height:auto;min-height:120px;resize:vertical}
+.agent-check{display:inline-flex;align-items:center;gap:7px;color:var(--text-secondary);font-size:12px;font-weight:600;cursor:pointer}
+.agent-check input{accent-color:var(--accent-primary)}
+.agent-switch{display:inline-flex;align-items:center;gap:8px;margin-bottom:16px;font-size:13px;font-weight:600;cursor:pointer}
+.agent-switch input{width:16px;height:16px;accent-color:var(--accent-primary)}
+.agent-link-btn{padding:5px 9px;border:1px solid var(--border-color);border-radius:8px;background:transparent;color:var(--text-primary);font:inherit;font-size:12px;cursor:pointer}
+.agent-link-btn:hover:not(:disabled){border-color:var(--accent-primary);color:var(--accent-primary)}
+.agent-admin-dialog{color:var(--text-primary)}
+.agent-admin-dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border-color)}
+.agent-admin-backups{margin-top:16px;padding-top:14px;border-top:1px solid var(--border-color)}
+.agent-admin-backups summary{cursor:pointer;color:var(--text-secondary);font-size:12px;font-weight:600}
+.agent-admin-backups p{margin:10px 0 0;color:var(--text-muted);font-size:12px}
+.agent-admin-backups button{margin-top:8px}
+.agent-admin-meta{display:flex;flex-wrap:wrap;gap:18px 34px;margin:0 0 16px}
+.agent-admin-meta dt{font-size:11px;color:var(--text-muted);font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.agent-admin-meta dd{margin:4px 0 0;font-size:13px;color:var(--text-primary)}
+.agent-admin-logtoggle{margin:14px 0 8px}
+@media(max-width:900px){.agent-admin-page{padding:18px 14px 32px}.agent-admin-layout{grid-template-columns:1fr}.agent-admin-nav{position:static;flex-direction:row;flex-wrap:wrap}.agent-admin-nav .panel-tools{width:100%}.agent-admin-heading h1{font-size:22px}}
 .agent-workspace {
     display: grid;
     grid-template-columns: 270px minmax(0, 1fr);
@@ -2511,11 +2562,7 @@
 .agent-session-detail dl{display:grid;grid-template-columns:minmax(80px,110px) minmax(0,1fr);gap:8px 14px;margin:0;font-size:13px}
 .agent-session-detail dt{color:var(--text-secondary)}
 .agent-session-detail dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
-.hermes-admin{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;min-height:65vh}
-.hermes-admin nav{display:flex;flex-direction:column;gap:8px}.hermes-admin nav strong{margin-top:10px;font-size:12px;color:var(--text-secondary)}
-.hermes-admin button{cursor:pointer}.hermes-admin nav button{padding:8px;text-align:left;background:transparent;border:1px solid var(--border-color);border-radius:7px;color:inherit}
-.hermes-admin main{min-width:0}.hermes-admin main>textarea{width:100%;height:38vh;resize:vertical;margin:10px 0;padding:10px;font:13px/1.6 monospace;background:var(--bg-secondary,#fff);color:var(--text-primary,inherit);border:1px solid var(--border-color);border-radius:8px}
-.hermes-admin-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.hermes-admin details button{display:block;margin-top:6px}
+
 .agent-profile-picker>.agent-session-actions{justify-self:end}
 .hermes-maintenance-log{height:300px;overflow:auto;margin-top:10px;padding:12px;background:var(--bg-primary);border:1px solid var(--border-color);border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 monospace;user-select:text}
 @media(max-width:600px){.hermes-admin{grid-template-columns:1fr;gap:12px}.hermes-admin nav{flex-direction:row;flex-wrap:wrap}.hermes-admin nav strong{width:100%}}
