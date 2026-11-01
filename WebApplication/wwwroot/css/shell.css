@@ -825,3 +825,8 @@
         box-shadow: var(--shadow)
     }
 }
+.workspace-route-state{padding:28px 20px;color:var(--text-primary)}
+.workspace-route-state h1{font-size:22px;margin:0 0 12px}
+.workspace-route-state p{color:var(--text-secondary);font-size:14px}
+.workspace-route-state button{margin-top:16px;min-height:44px;padding:8px 20px;border:1px solid var(--border-color);border-radius:12px;background:var(--bg-secondary);color:var(--text-primary);font:inherit}
+.workspace-route-state button[hidden]{display:none}

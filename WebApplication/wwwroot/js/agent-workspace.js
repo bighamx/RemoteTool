@@ -8,6 +8,13 @@
     const profile = agent === 'hermes' && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(requestedProfile) ? requestedProfile : 'default';
     const storageAgent = agent === 'hermes' && profile !== 'default' ? `${agent}:profile:${profile}` : agent;
     const base = agent === 'hermes' && profile !== 'default' ? `/api/hermes/profiles/${encodeURIComponent(profile)}` : `/api/${agent}`;
+    const historyCache=window.RemoteToolHistoryCache?.create(agent,profile);
+    const mobileMedia='(max-width:760px), (max-width:1000px) and (max-height:500px) and (pointer:coarse)';
+    const isMobile=()=>window.matchMedia?.(mobileMedia)?.matches===true;
+    const requestedSession=()=>window.RemoteToolWorkspace
+        ? location.hash?.match(/^#\/(codex|hermes)(?=\?|$)/)?.[1]===agent?new URLSearchParams(location.hash.split('?')[1]||'').get('session'):null
+        : new URLSearchParams(location.search).get('session');
+    let mobileQuery=null;
     const receiptKey = id => `remotetool:web:pending:${storageAgent}:${id}`;
     const echoKey = id => `remotetool:web:delivered:${storageAgent}:${id}`;
     const draftKey = id => `remotetool:web:draft:${storageAgent}:${id}`;
@@ -51,11 +58,11 @@
     let adminTimer = null;
     const readVersions = new Map();
     const app = Vue.createApp({
-        data: () => ({ agent, profile, agentSetup:null,setupBusy:false,setupDetails:false,setupNotice:'',profiles: [], profileError: '', sessionDetails: null, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
+        data: () => ({ agent, profile, agentSetup:null,setupBusy:false,setupDetails:false,setupNotice:'',profiles: [], profileError: '', sessionDetails: null, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: isMobile()&&!requestedSession(), mobileViewport: isMobile(), mobileComposerOpen: false,
             adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminSettings:{},adminProvider:{},adminEndpoints:[],adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
-            messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [], schedules: [], showSchedule: false, scheduleText: '', scheduleAt: '', scheduleError: '', scheduleBusy: false,
-            activeRun: null, runStatus: '', approval: null, approvalBusy:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsInfo:'',permissionsError:'',showPermissionsDialog:false, context: {}, queue: [], models: [], modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
+            messages: [], historyLoading: false, historyCacheState: '', historyLoadedEpoch: -1, historyFailedEpoch: -1, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [], schedules: [], showSchedule: false, scheduleText: '', scheduleAt: '', scheduleError: '', scheduleBusy: false, scheduleSession: '', scheduleClientKey: '', scheduleRequest: null,
+            approvalBusy:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsInfo:'',permissionsError:'',showPermissionsDialog:false, activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelDefaults: {}, modelsError: '', providersState: {}, globalModelOptions: {}, providerSwitch: {provider:'',model:'',effort:'',tier:''}, codexProviderEdit: null, modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
             groupByProject: localStorage.getItem(`remotetool:web:groupByProject:${agent}`) === '1',
             collapsedGroups: (() => { try { return JSON.parse(localStorage.getItem(`remotetool:web:collapsedGroups:${agent}`) || '[]'); } catch { return []; } })(),
             showMoveDialog: false, moveTarget: null, moveMoving: false, moveSearch: '', moveError: '',
@@ -70,19 +77,26 @@
                 return ({running:'运行中',draining:'排空中',starting:'启动中',stopping:'停止中'}[live.state] || live.state || '状态未知') + ` · 活跃任务 ${live.active} · PID ${live.pid}`;
             },
             headerQuotaWindows() {const windows=this.quotaGroups(this.codexUsage).flatMap(group=>group.windows);return [[300,'5 小时'],[10080,'周额度']].map(([minutes,label])=>({minutes,label,remaining:windows.find(w=>w.minutes===minutes)?.remaining??null}));},
-            currentWorkspaceName() {return this.workspaceName((this.workspaces.data||[]).find(row=>row.id===this.workspaces.current)||(this.accounts.data||[]).find(row=>row.id===this.accounts.current)||this.accounts.current_identity);},
+            currentWorkspaceName() {if(!this.officialProviderInUse)return this.activeProvider?.name||this.providersState.provider||'三方 Provider';return this.workspaceName((this.workspaces.data||[]).find(row=>row.id===this.workspaces.current)||(this.accounts.data||[]).find(row=>row.id===this.accounts.current)||this.accounts.current_identity);},
             agentName() { return this.agent==='codex'?'Codex':'Hermes'; },
             // 上下文条上的模型徽标：像 App 一样显示当前模型 + 推理强度，点击打开会话信息侧栏。
             modelChipLabel() {
-                const model=this.selected?.model||this.modelSelection.model||'默认模型';
-                const effort=this.modelSelection.effort||this.selected?.reasoning_effort||'';
+                const model=this.readModelSelection(this.selected).model||'默认模型';
+                const effort=this.readModelSelection(this.selected).effort;
                 return effort?`${model} · ${effort}`:model;
+            },
+            mobileModelSummary() {
+                const selection=this.readModelSelection(this.selected);
+                const provider=this.models.find(row=>this.providerMatches(row,selection.provider));
+                const name=provider?.name||(this.officialProviderInUse&&(!selection.provider||selection.provider===this.providersState.provider)?'OpenAI':selection.provider||this.activeProvider?.name||this.agentName);
+                const effort=({low:'低思考',medium:'中思考',high:'高思考',xhigh:'超高思考',minimal:'极低思考',none:'无思考'})[selection.effort]||selection.effort;
+                return [name,selection.model||'默认模型',effort].filter(Boolean).join(' · ');
             },
             modelChipTitle() {
                 const provider=(this.providerChoices.find(item=>item.id===this.modelSelection.provider)||{}).name;
                 return `提供方：${provider||'默认'}（点击修改模型）`;
             },
-            filteredSessions() { const q=this.search.trim().toLowerCase(); return q?this.sessions.filter(s=>`${s.title||''} ${s.preview||''} ${s.cwd||''}`.toLowerCase().includes(q)):this.sessions; },
+            filteredSessions() { const q=this.search.trim().toLowerCase(); return q?this.sessions.filter(s=>`${s.title||''} ${s.preview||''} ${s.cwd||''} ${s.id||''}`.toLowerCase().includes(q)):this.sessions; },
             displayedGroups() {
                 const rows=this.filteredSessions;
                 if(!(this.groupByProject&&this.agent==='codex')) return [{key:'__all__',name:'',rows}];
@@ -153,9 +167,14 @@
             },
             statusText() { if (this.activeRun) return this.runStatus || '正在执行'; if(this.externalRunning)return this.externalActivity?.kind==='compact'?'其他客户端正在压缩上下文':'其他客户端正在执行'; const value=this.selected?.status; return (typeof value==='object'?value?.type:value) || '空闲'; },
             contextPercent() { const tokens=Number(this.context.context?.tokens||0);const limit=Number(this.context.context?.limit||0);return limit>0?Math.min(100,Math.max(0,Math.round(tokens/limit*100))):0; },
-            providerChoices() { return this.models.map(p=>({id:p.slug||p.id||'',name:p.name||p.slug||p.id})); },
-            modelChoices() { const found=this.models.find(p=>(p.slug||p.id)===this.modelSelection.provider); return (found?.models||[]).map(m=>typeof m==='string'?{id:m,name:m}:{id:m.model||m.id,name:m.displayName||m.name||m.model||m.id}); },
-            modelMetadata() { const provider=this.models.find(p=>(p.slug||p.id)===this.modelSelection.provider); return (provider?.models||[]).find(m=>typeof m==='object'&&(m.model||m.id)===this.modelSelection.model)||{}; },
+            activeProvider() {return (this.providersState.endpoints||[]).find(row=>row.id===this.providersState.provider);},
+            officialProviderInUse() {return this.providersState.official_provider ?? (this.providersState.provider ? this.providersState.provider==='openai' : true);},
+            thirdPartyProviders() {return (this.providersState.endpoints||[]).filter(row=>!row.official_provider);},
+            switchProviderMetadata() {return (this.globalModelOptions.providers||[]).find(row=>this.providerMatches(row,this.providerSwitch.provider))||{};},
+            selectedProviderMetadata() {return this.models.find(row=>this.providerMatches(row,this.modelSelection.provider))||{};},
+            providerChoices() { return this.models.map(p=>({id:this.providerMatches(p,this.modelSelection.provider)?this.modelSelection.provider:p.slug||p.id||'',name:p.name||p.slug||p.id})); },
+            modelChoices() { const found=this.selectedProviderMetadata; return (found?.models||[]).map(m=>typeof m==='string'?{id:m,name:m}:{id:m.model||m.id,name:m.displayName||m.name||m.model||m.id}); },
+            modelMetadata() { const provider=this.selectedProviderMetadata; return (provider?.models||[]).find(m=>typeof m==='object'&&(m.model||m.id)===this.modelSelection.model)||{}; },
             effortChoices() { return this.agent==='codex'?(this.modelMetadata.supportedReasoningEfforts||[]).map(x=>x.reasoningEffort).filter(Boolean):['none','minimal','low','medium','high','xhigh','max','ultra']; },
             tierChoices() { return (this.modelMetadata.serviceTiers||[]).map(x=>x.id).filter(Boolean); },
             questionText() { const q=this.context.question; return q?.questions?.map(x=>x.question||x.title).join(' · ')||q?.question||'请回答会话中的问题'; },
@@ -366,13 +385,14 @@
             },
             hasRenderableContent(m) { return m.type==='interaction' || !!m.tool_summary_id || (m.attachments||[]).length>0 || !!this.messageBody(m).trim() || this.mediaFiles(m).length>0 || this.unresolvedMedia(m).length>0; },
             time: api.time,
+            messageClock(value) {if(value==null||value==='')return '';const n=Number(value);const date=new Date(Number.isFinite(n)&&n>0?(n<1e12?n*1000:n):value);return Number.isNaN(date.getTime())?'':date.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false});},
             quotaGroups(usage) { const all=usage?.rateLimitsByLimitId;const entries=all&&Object.keys(all).length?Object.entries(all):usage?.rateLimits?[['codex',usage.rateLimits]]:[];return entries.map(([key,limit])=>({name:limit.limitName||limit.limitId||key,windows:['primary','secondary'].filter(k=>limit[k]).map(k=>{const w=limit[k],mins=Number(w.windowDurationMins);const used=w.usedPercent==null?NaN:Number(w.usedPercent);return {label:mins===300?'5 小时':mins===10080?'周额度':mins>0?`${mins/60} 小时`:k==='primary'?'短期额度':'长期额度',minutes:mins,remaining:Number.isFinite(used)?Math.floor(Math.min(100,Math.max(0,100-used))):null,resetsAt:w.resetsAt};})})); },
             quotaSummary(usage) { const windows=this.quotaGroups(usage).flatMap(group=>group.windows);return [[300,'5 小时'],[10080,'周额度']].map(([mins,label])=>{const w=windows.find(x=>x.minutes===mins);return `${label} · ${w?.remaining!=null?'剩余 '+w.remaining+'%':'暂无数据'}`;}).join(' / '); },
             workspaceName(row) {return row?.workspace_name||row?.name||row?.email||row?.id||'当前工作空间';},
-            async loadCurrentUsage() {if(this.agent!=='codex'||this.usageLoading||this.switchingWorkspace)return;const epoch=this.usageEpoch;this.usageLoading=true;try{const spaces=await api.get(`${base}/workspaces`);if(epoch!==this.usageEpoch)return;this.workspaces=spaces;const usage=await api.get(`${base}/usage`);if(epoch===this.usageEpoch){this.codexUsage=usage;this.usageError='';}}catch(e){if(epoch===this.usageEpoch){this.codexUsage=null;this.usageError=e.message;}}finally{if(epoch===this.usageEpoch)this.usageLoading=false;}},
+            async loadCurrentUsage() {if(this.agent!=='codex'||this.usageLoading||this.switchingWorkspace)return;const epoch=this.usageEpoch;this.usageLoading=true;try{const spaces=await api.get(`${base}/workspaces`);if(epoch!==this.usageEpoch)return;const providers=await api.get(`${base}/providers`);if(epoch!==this.usageEpoch)return;this.workspaces=spaces;this.providersState=providers;if(!this.officialProviderInUse){this.codexUsage=null;this.usageError='当前使用三方 Provider，官方用量请在工作空间中查看';return;}const usage=await api.get(`${base}/usage`);if(epoch===this.usageEpoch){this.codexUsage=usage;this.usageError='';}}catch(e){if(epoch===this.usageEpoch){this.codexUsage=null;this.usageError=e.message;}}finally{if(epoch===this.usageEpoch)this.usageLoading=false;}},
             async openWorkspaceDialog() {this.showWorkspaceDialog=true;await this.refreshWorkspaces();},
-            async refreshWorkspaces(force=false) {if(this.workspaceLoading||this.switchingWorkspace)return;this.workspaceLoading=true;this.workspaceError='';const epoch=++this.workspaceEpoch;try{this.workspaces=await api.get(`${base}/workspaces`);this.workspaceUsages={};await Promise.all((this.workspaces.data||[]).map(async row=>{try{const result=await api.get(`${base}/workspaces/${api.id(row.id)}/usage${force?'?refresh=true':''}`);if(epoch!==this.workspaceEpoch)return;if(result.workspace_id!==row.id||(result.available&&result.chatgpt_account_id&&result.chatgpt_account_id!==row.workspace_id))throw new Error('返回的工作空间身份不匹配，请刷新');this.workspaceUsages[row.id]=result;if(row.id===this.workspaces.current&&result.available){this.codexUsage=result.usage;this.usageError='';}}catch(e){if(epoch===this.workspaceEpoch)this.workspaceUsages[row.id]={available:false,error:e.message};}}));}catch(e){if(epoch===this.workspaceEpoch)this.workspaceError=e.message;}finally{if(epoch===this.workspaceEpoch)this.workspaceLoading=false;}},
-            async useWorkspace(row) {if(this.switchingWorkspace||row.id===this.workspaces.current)return;if(this.activeRun||this.externalRunning||this.sending||this.pending){this.workspaceError='请等待当前任务和消息发送结束后再切换工作空间';return;}if(!confirm(`切换到 ${this.workspaceName(row)}？桌面 Codex 也会同步切换。`))return;this.switchingWorkspace=row.id;this.workspaceError='';++this.usageEpoch;++this.workspaceEpoch;this.usageLoading=false;this.workspaceLoading=false;this.codexUsage=null;this.workspaceUsages={};try{await api.post(`${base}/workspaces/${api.id(row.id)}/use`);await this.loadCodexAdmin();this.workspaces=await api.get(`${base}/workspaces`);this.$Message.success('工作空间已切换');await this.refreshSessions();await this.loadModels();}catch(e){this.workspaceError=e.message;}finally{const switchError=this.workspaceError;this.switchingWorkspace='';await this.loadCurrentUsage();await this.refreshWorkspaces();if(switchError)this.workspaceError=switchError;}},
+            async refreshWorkspaces(force=false) {if(this.workspaceLoading||this.switchingWorkspace)return;this.workspaceLoading=true;this.workspaceError='';const epoch=++this.workspaceEpoch;try{const [spaces,providers,options]=await Promise.all([api.get(`${base}/workspaces`),api.get(`${base}/providers`),api.get(`${base}/model-options?refresh=${force}`)]);if(epoch!==this.workspaceEpoch)return;this.workspaces=spaces;this.providersState=providers;this.globalModelOptions=options;this.workspaceUsages={};await Promise.all((this.workspaces.data||[]).map(async row=>{try{const result=await api.get(`${base}/workspaces/${api.id(row.id)}/usage${force?'?refresh=true':''}`);if(epoch!==this.workspaceEpoch)return;if(result.workspace_id!==row.id||(result.available&&result.chatgpt_account_id&&result.chatgpt_account_id!==row.workspace_id))throw new Error('返回的工作空间身份不匹配，请刷新');this.workspaceUsages[row.id]=result;if(this.officialProviderInUse&&row.id===this.workspaces.current&&result.available){this.codexUsage=result.usage;this.usageError='';}}catch(e){if(epoch===this.workspaceEpoch)this.workspaceUsages[row.id]={available:false,error:e.message};}}));}catch(e){if(epoch===this.workspaceEpoch)this.workspaceError=e.message;}finally{if(epoch===this.workspaceEpoch)this.workspaceLoading=false;}},
+            async useWorkspace(row) {if(this.switchingWorkspace||(this.officialProviderInUse&&row.id===this.workspaces.current))return;if(this.activeRun||this.externalRunning||this.sending||this.pending){this.workspaceError='请等待当前任务和消息发送结束后再切换工作空间';return;}if(!confirm(`切换到 ${this.workspaceName(row)}？桌面 Codex 也会同步切换。`))return;this.switchingWorkspace=row.id;this.workspaceError='';++this.usageEpoch;++this.workspaceEpoch;this.usageLoading=false;this.workspaceLoading=false;this.codexUsage=null;this.workspaceUsages={};try{await api.post(`${base}/workspaces/${api.id(row.id)}/use`);await this.loadCodexAdmin();this.workspaces=await api.get(`${base}/workspaces`);this.$Message.success('工作空间已切换');await this.refreshSessions();await this.loadModels();}catch(e){this.workspaceError=e.message;}finally{const switchError=this.workspaceError;this.switchingWorkspace='';await this.loadCurrentUsage();await this.refreshWorkspaces();if(switchError)this.workspaceError=switchError;}},
             contextTokens(value) { const n=(value!==null&&typeof value==='object')?NaN:Number(value); if(value==null||!Number.isFinite(n)||n<0)return '—'; if(n>=1e6)return `${(n/1e6).toFixed(2).replace(/\.?0+$/,'')}M`; if(n>=1e3)return `${(n/1e3).toFixed(1).replace(/\.0$/,'')}K`; return String(Math.round(n)); },
             closeSessionMenus(event) { document.querySelectorAll('.agent-session-actions[open]').forEach(menu=>{if(!event||!menu.contains(event.target)||event.target.closest('button'))menu.open=false;}); },
             messageStamp(m) {const raw=m.timestamp||0;const value=(raw!==null&&typeof raw==='object')?NaN:Number(raw);if(Number.isFinite(value)&&value>0)return value<1e12?value*1000:value;return typeof raw==='string'?Date.parse(raw)||0:0;}, sameText(a,b) { const norm=v=>this.asText(v).replace(/\s+/g,' ').trim(); return norm(a)===norm(b); },
@@ -455,8 +475,18 @@
                 this.sessionStatusRefreshing=true; this.sessionStatusRefreshAt=Date.now();
                 try {
                     const result=await api.get(`${base}/sessions`);
-                    const statuses=new Map((result.data||[]).filter(row=>row?.id).map(row=>[String(row.id),row.status]));
-                    for (const row of this.sessions) if (statuses.has(String(row.id)) && !(row.id===this.selectedId && this.selectedStatusKnown)) row.status=statuses.get(String(row.id));
+                    const fresh=(result.data||[]).filter(row=>row?.id);
+                    const updates=new Map(fresh.map(row=>[String(row.id),row]));
+                    const existing=new Set(this.sessions.map(row=>String(row.id)));
+                    for (const row of this.sessions) {
+                        const update=updates.get(String(row.id));if(!update)continue;
+                        const status=row.status;Object.assign(row,update);
+                        if(row.id===this.selectedId&&this.selectedStatusKnown)row.status=status;
+                    }
+                    this.sessions.unshift(...fresh.filter(row=>!existing.has(String(row.id))));
+                    const selected=updates.get(String(this.selectedId));
+                    if(selected&&this.selected)this.selected.title=selected.title;
+                    if(this.agent==='hermes')this.offset=this.sessions.length;
                 } catch (_) { /* Keep the last known status; the main list reports explicit refresh errors. */ }
                 finally { this.sessionStatusRefreshing=false; }
             },
@@ -469,12 +499,25 @@
                         ? (location.hash.startsWith(`#/${agent}?`) ? new URLSearchParams(location.hash.split('?')[1]||'').get('session') : null)
                         : new URLSearchParams(location.search).get('session');
                     const remembered=agent==='hermes'?localStorage.getItem(selectedSessionKey):null;
+                    if(this.mobileViewport&&this.sessionsOpen&&!fromUrl&&!this.selectedId){void this.fetchMissingContext();return;}
                     const wanted=keepSelection?this.selectedId||fromUrl||remembered:fromUrl||remembered;
-                    const selected=this.sessions.find(s=>s.id===wanted)||this.sessions[0];
+                    let selected=this.sessions.find(s=>s.id===wanted);
+                    if(wanted&&!selected){
+                        const epoch=this.epoch;selected=await this.readSession(wanted);
+                        if(epoch!==this.epoch)return;
+                        this.sessions.unshift(selected);
+                    }
+                    selected=selected||this.sessions[0];
                     if (selected && selected.id!==this.selectedId) await this.select(selected);
                     else if (selected) this.selected=selected;
                     void this.fetchMissingContext();
                 } catch(e) { this.listError=e.message; } finally { this.loadingList=false; }
+            },
+            async readSession(id) {
+                const result=await api.get(`${base}/sessions/${api.id(id)}`);
+                const session=result.session||result;
+                if(String(session.id)!==String(id))throw new Error('指定会话读取失败，请刷新列表后重试');
+                return session;
             },
             // 会话列表的上下文进度条（与 App 同源字段）：codex 行由服务端 rollout 扫描自带；
             // hermes 缺数据的行走 context-bulk 批量补齐（40/块，服务端有 TTL 缓存与预算控制）。
@@ -503,51 +546,61 @@
                     localStorage.setItem(draftKey(this.selectedId), this.draft);
                     localStorage.setItem(draftFilesKey(this.selectedId), JSON.stringify(this.attachments));
                 }
+                const fromList=this.mobileViewport&&this.sessionsOpen;
+                this.mobileComposerOpen=false;this.inspectorOpen=false;
                 this.stopEventStream();
                 this.olderLoading=false;
                 if(this.scrollFrame!==null){cancelAnimationFrame(this.scrollFrame);this.scrollFrame=null;}
-                const current=++this.epoch; if(scrollRestoreTimer){clearTimeout(scrollRestoreTimer);scrollRestoreTimer=null;} this.selected=item; this.selectedId=item.id;this.permissionsMode='default';this.permissionsChoice='default';this.permissionsLoaded=false;this.permissionsLoading=false;this.permissionsSaving=false;this.showPermissionsDialog=false;this.approvalBusy=false; this.selectedStatusKnown=false; this.sessionsOpen=false;this.dialog=null;this.showEditDialog=false;this.messages=[];this.historyLoading=true; this.historyHasMore=false; this.oldestId=null; this.followLatest=true;this.showJumpToLatest=false;this.lastTimelineTop=0; this.activeRun=null; this.externalRunning=false;this.externalActivity=null;this.approval=null; this.context={}; this.queue=[]; this.attachments=[]; this.sessionFiles=[];this.mediaSignature='';this.filesRefreshAt=0;this.error='';this.liveSegments=[];this.liveTools=[];this.streamSeq=0;this.streamGone=false;
+                const current=++this.epoch; if(scrollRestoreTimer){clearTimeout(scrollRestoreTimer);scrollRestoreTimer=null;} this.selected=item; this.selectedId=item.id;this.permissionsMode='default';this.permissionsChoice='default';this.permissionsLoaded=false;this.permissionsLoading=false;this.permissionsSaving=false;this.showPermissionsDialog=false;this.approvalBusy=false; this.selectedStatusKnown=false; this.sessionsOpen=false;this.dialog=null;this.showEditDialog=false;this.messages=[];this.historyLoading=true; this.historyHasMore=false; this.oldestId=null; this.followLatest=true;this.showJumpToLatest=false;this.lastTimelineTop=0; this.activeRun=null; this.externalRunning=false;this.externalActivity=null;this.approval=null; this.context={}; this.queue=[];this.schedules=[]; this.attachments=[]; this.sessionFiles=[];this.mediaSignature='';this.filesRefreshAt=0;this.error='';this.liveSegments=[];this.liveTools=[];this.streamSeq=0;this.streamGone=false;
+                this.modelSelection=this.readModelSelection(item);this.historyCacheState='';this.historyLoadedEpoch=-1;this.historyFailedEpoch=-1;
+                const cached=historyCache?.peek(item.id);if(cached)this.showCachedHistory(cached);
                 this.pending=this.restorePending(item.id);this.delivered=this.restoreDelivered(item.id);if(this.pending?.delivery==='已发送')this.acceptPending(item.id,this.pending.key); this.draft=localStorage.getItem(draftKey(item.id))||'';
                 if (agent === 'hermes') localStorage.setItem(selectedSessionKey, item.id);
                 try { this.attachments = JSON.parse(localStorage.getItem(draftFilesKey(item.id)) || '[]'); } catch { this.attachments = []; }
-                if (window.RemoteToolWorkspace) { const route=location.hash.match(/^#\/(codex|hermes)(?=\?|$)/)?.[1]; if(route===agent){const query=new URLSearchParams(location.hash.split('?')[1]||'');query.set('session',item.id);history.replaceState(null,'',`${location.pathname}${location.search}#/${agent}?${query}`);} } else {const url=new URL(location.href);url.searchParams.set('session',item.id);if(agent==='hermes')url.searchParams.set('profile',profile);history.replaceState(null,'',url.href);}
-                try { await this.refreshAll(current); if(current===this.epoch){await this.$nextTick();this.scrollToLatest();} } finally { if(current===this.epoch)this.historyLoading=false; }
+                if (window.RemoteToolWorkspace) { const route=location.hash.match(/^#\/(codex|hermes)(?=\?|$)/)?.[1]; if(route===agent){const query=new URLSearchParams(location.hash.split('?')[1]||'');const newEntry=fromList&&query.get('session')!==item.id;query.set('session',item.id);const target=`${location.pathname}${location.search}#/${agent}?${query}`;if(newEntry)history.pushState({remoteToolSession:item.id},'',target);else history.replaceState(null,'',target);} } else {const url=new URL(location.href);url.searchParams.set('session',item.id);if(agent==='hermes')url.searchParams.set('profile',profile);history.replaceState(null,'',url.href);}
+                this.syncMobileShell();this.$nextTick(()=>this.resizeComposer());
+                const loading=this.refreshAll(current);
+                if(!cached&&historyCache)void historyCache.read(item.id).then(snapshot=>{
+                    if(snapshot&&current===this.epoch&&this.historyLoadedEpoch!==current)this.showCachedHistory(snapshot);
+                });
+                try {await loading;if(current===this.epoch){await this.$nextTick();this.scrollToLatest();}}
+                finally{if(current===this.epoch)this.historyLoading=false;}
             },
-            async refreshAll(epoch=this.epoch) { if (!this.selectedId) return;
+            showCachedHistory(snapshot) {
+                this.messages=snapshot.data;this.historyHasMore=!!snapshot.has_more;this.oldestId=snapshot.oldest_id||snapshot.data[0]?.id;
+                this.historyCacheState=this.historyFailedEpoch===this.epoch?'failed':'syncing';this.historyLoading=false;this.queueFollowLatest();
+            },
+            async refreshAll(epoch=this.epoch) {
+                if(!this.selectedId)return;
                 if(this.agent==='codex')void this.loadPermissions(epoch);
-                if(this.agent==='hermes') {
-                    // Render history as soon as it arrives. Context/model reads may
-                    // launch Python helpers and must not hold the message pane open.
-                    const history=this.loadHistory(epoch);
-                    void Promise.allSettled([this.loadStatus(epoch),this.loadContext(epoch),this.loadSessionDetail(epoch)]);
-                    await history;
-                    return;
-                }
-                const current=this.startRead('overview',epoch);
-                const versions=new Map(readVersions);
-                const unchanged=kind=>current()&&readVersions.get(kind)===versions.get(kind);
-                // Overview 一次往返取齐历史/状态/上下文/详情，替代 5 个并行请求；
-                // 服务端单项失败返回 null，此处按需回退到单独请求。
-                try {
-                    const overview=await api.get(`${base}/sessions/${api.id(this.selectedId)}/overview`);
-                    if(!current())return;
-                    await Promise.all([
-                        unchanged('history')&&this.loadHistory(epoch,overview.history,overview.files),
-                        unchanged('status')&&this.loadStatus(epoch,overview.active_run,overview.run,overview.activity),
-                        unchanged('context')&&this.loadContext(epoch,overview.context),
-                        unchanged('queue')&&this.loadQueue(epoch,overview.queue),
-                        unchanged('detail')&&this.loadSessionDetail(epoch,overview.detail)]);
-                } catch (error) { if(!current())return;
-                    await Promise.all([unchanged('history')&&this.loadHistory(epoch),unchanged('status')&&this.loadStatus(epoch),unchanged('context')&&this.loadContext(epoch),unchanged('queue')&&this.loadQueue(epoch),unchanged('detail')&&this.loadSessionDetail(epoch)]); }
+                await this.loadHistory(epoch);
+                if(epoch!==this.epoch)return;
+                // History paints first; slow context and desktop probes run in the background.
+                void Promise.allSettled([this.loadStatus(epoch),this.loadContext(epoch),this.loadSessionDetail(epoch),this.loadQueue(epoch),this.loadSchedules()]);
             },
-            async loadSessionDetail(epoch=this.epoch, result=null) {const current=this.startRead('detail',epoch);try{result=result||await api.get(`${base}/sessions/${api.id(this.selectedId)}`);if(!current())return;const detail=result.session||result;this.selected={...this.selected,...detail};let config=detail.model_config||{};if(typeof config==='string'){try{config=JSON.parse(config);}catch{config={};}}const lock=config.browser_model_lock||{};this.modelSelection={provider:lock.provider||detail.modelProvider||detail.provider||this.modelSelection.provider,model:lock.model||detail.model||this.modelSelection.model,effort:lock.model_options?.reasoning?.effort||detail.reasoning_effort||this.modelSelection.effort,tier:detail.service_tier||this.modelSelection.tier};}catch{}},
+            providerMatches(provider,id) {return !!id&&(provider?.slug===id||provider?.id===id||(provider?.aliases||[]).includes(id));},
+            readModelSelection(detail, defaults=this.modelDefaults) {
+                let config=detail?.model_config||{};
+                if(typeof config==='string'){try{config=JSON.parse(config);}catch{config={};}}
+                const lock=config.browser_model_lock, reasoning=lock?.model_options?.reasoning;
+                const reported=detail?.provider||detail?.modelProvider||config.requested_provider||'';
+                const provider=lock?.provider==='custom'&&reported&&reported!=='custom'?reported:lock?.provider||reported||defaults.provider||'';
+                const model=lock?.model||config.requested_model||detail?.model||'';
+                return {provider,model:model||defaults.model||'',effort:lock?(reasoning?.enabled===false?'none':reasoning?.effort||''):model?detail?.reasoning_effort||'':defaults.reasoning_effort||'',tier:model?detail?.service_tier||'':defaults.service_tier||''};
+            },
+            async loadSessionDetail(epoch=this.epoch, result=null) {
+                const current=this.startRead('detail',epoch);
+                try {result=result||await api.get(`${base}/sessions/${api.id(this.selectedId)}`);if(!current())return;const detail=result.session||result;this.selected={...this.selected,...detail};this.modelSelection=this.readModelSelection(this.selected);}catch{}
+            },
             async loadHistory(epoch=this.epoch, result=null, files=null) {
                 const id=this.selectedId, current=this.startRead('history',epoch);
                 try {
                     result=result||await api.get(`${base}/sessions/${api.id(id)}/messages?limit=80`);
                     if(!current())return;
                     if(!Array.isArray(result.data))throw new Error('会话历史格式无效，请重试');
-                    const recent=result.data, previous=this.messages, tail=previous.at(-1)?.id;
+                    const recent=result.data, previous=this.historyCacheState?[]:this.messages, tail=previous.at(-1)?.id;
+                    this.historyLoadedEpoch=epoch;this.historyCacheState='';
+                    void historyCache?.write(id,result);
                     const continuous=tail!=null&&recent.some(row=>String(row.id)===String(tail));
                     const ids=new Set(recent.map(row=>String(row.id)));
                     const earlier=continuous?previous.filter(row=>row.id!=null&&!ids.has(String(row.id))):[];
@@ -563,7 +616,7 @@
                         this.mediaSignature=signature;this.filesRefreshAt=Date.now();this.loadFiles(epoch);
                     }
                     this.queueFollowLatest();this.scheduleScrollRestore(id);
-                }catch(e){if(current())this.error=e.message;}
+                }catch(e){if(current()){this.error=e.message;this.historyFailedEpoch=epoch;if(this.historyCacheState)this.historyCacheState='failed';}}
             },
             async loadFiles(epoch=this.epoch) {const current=this.startRead('files',epoch);try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/files`);if(current())this.sessionFiles=result.data||[];return result.data||[];}catch{return[];}},
             async loadOlder() {if(!this.oldestId||this.olderLoading)return;this.olderLoading=true;this.followLatest=false;this.showJumpToLatest=true;const epoch=this.epoch;const el=this.$refs.timeline;const oldHeight=el?.scrollHeight||0;const oldTop=el?.scrollTop||0;try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/messages?limit=80&older_before=${api.id(this.oldestId)}`);if(epoch!==this.epoch)return;const ids=new Set(this.messages.map(m=>String(m.id)));this.messages=[...(result.data||[]).filter(m=>!ids.has(String(m.id))),...this.messages];this.historyHasMore=!!result.has_more;this.oldestId=result.oldest_id||this.messages[0]?.id;await this.$nextTick();if(el)el.scrollTop=oldTop+el.scrollHeight-oldHeight;}catch(e){if(epoch===this.epoch)this.error=e.message;}finally{if(epoch===this.epoch)this.olderLoading=false;}},
@@ -572,7 +625,51 @@
             scheduleScrollRestore(id) {if(!this.followLatest)return;if(scrollRestoreTimer)clearTimeout(scrollRestoreTimer);const started=Date.now();const tick=()=>{if(this.selectedId!==id||!this.followLatest){scrollRestoreTimer=null;return;}this.scrollToLatest();scrollRestoreTimer=Date.now()-started<1800?setTimeout(tick,250):null;};scrollRestoreTimer=setTimeout(tick,150);},
             jumpToLatest() {this.followLatest=true;this.showJumpToLatest=false;this.$nextTick(()=>this.scrollToLatest());},
             queueFollowLatest() {if(!this.followLatest||this.scrollFrame!==null)return;this.$nextTick(()=>{if(!this.followLatest||this.scrollFrame!==null)return;this.scrollFrame=requestAnimationFrame(()=>{this.scrollFrame=null;if(this.followLatest)this.scrollToLatest();});});},
-            onWorkspaceRouteChange() {const host=this.$el?.nodeType===1?this.$el:this.$el?.parentElement;const module=host?.closest?.('.workspace-module');if((!module||!module.hidden)&&this.followLatest)this.queueFollowLatest();},
+            syncMobileShell() {
+                root?.classList?.toggle('mobile-list-view',this.sessionsOpen);
+                if(!this.workspaceVisible())return;
+                if(window.RemoteToolWorkspace&&location.hash?.match(/^#\/(codex|hermes)(?=\?|$)/)?.[1]!==agent)return;
+                document.body?.classList?.toggle('mobile-chat-active',this.mobileViewport&&!this.sessionsOpen&&!!this.selectedId);
+            },
+            onMobileLayoutChange() {
+                this.mobileViewport=isMobile();this.sessionsOpen=this.mobileViewport&&!requestedSession();
+                this.syncMobileShell();this.$nextTick(()=>this.resizeComposer());
+                if(!this.mobileViewport&&!this.selectedId&&this.sessions[0])void this.select(this.sessions[0]);
+            },
+            openSessionList() {
+                this.sessionsOpen=true;this.mobileComposerOpen=false;this.inspectorOpen=false;
+                if(this.mobileViewport&&window.RemoteToolWorkspace){
+                    if(history.state?.remoteToolSession===this.selectedId){history.back();}
+                    else {history.replaceState(null,'',`${location.pathname}${location.search}#/${agent}`);}
+                }
+                this.syncMobileShell();void this.refreshSessionStatuses();
+            },
+            closeSessionList() {if(this.mobileViewport&&this.selected)void this.select(this.selected);else this.sessionsOpen=false;},
+            resizeComposer(event) {
+                const input=event?.target||this.$refs?.composer;if(!input?.style)return;
+                input.style.height=this.mobileViewport?'auto':'';
+                if(this.mobileViewport)input.style.height=Math.min(126,Math.max(42,input.scrollHeight))+'px';
+            },
+            workspaceVisible() {const host=this.$el?.nodeType===1?this.$el:this.$el?.parentElement;return !host?.closest?.('.workspace-module')?.hidden;},
+            async onWorkspaceRouteChange() {
+                const host=this.$el?.nodeType===1?this.$el:this.$el?.parentElement;
+                const module=host?.closest?.('.workspace-module');if(module?.hidden)return;
+                if(window.RemoteToolWorkspace&&location.hash.match(/^#\/(codex|hermes)(?=\?|$)/)?.[1]!==agent)return;
+                const id=new URLSearchParams(location.hash?.split('?')[1]||'').get('session');
+                if(this.mobileViewport){this.sessionsOpen=!id;this.mobileComposerOpen=false;this.inspectorOpen=false;}
+                this.syncMobileShell();
+                if(id&&id!==this.selectedId&&!this.loadingList){
+                    const current=this.startRead('linked-session');
+                    try {
+                        const row=this.sessions.find(row=>row.id===id)||await this.readSession(id);
+                        if(!current())return;
+                        if(!this.sessions.some(row=>row.id===id))this.sessions.unshift(row);
+                        this.search='';await this.select(row);
+                    }catch(error){if(current())this.listError=error.message;}
+                }
+                if(!this.loadingList)void this.refreshSessionStatuses();
+                if(this.followLatest)this.queueFollowLatest();
+            },
             async loadCapabilities() {if(this.agent!=='hermes')return;try{const result=await api.get(`${base}/capabilities`);this.apiServer=result.api_server||null;}catch{this.apiServer=null;}},
             async enableApiServer(restart=false) {if(this.agent!=='hermes'||this.enablingApiServer)return;
                 if(restart&&!confirm('将修改本机 Hermes 的 .env 并重启 Hermes 网关。正在运行的 Hermes 会话会被中断。继续？'))return;
@@ -630,7 +727,39 @@
                 const id=this.selectedId,current=this.startRead('queue',epoch);
                 try{result=result||await api.get(`${base}/sessions/${api.id(id)}/queue`);if(current())this.queue=result.data||[];}catch{}
             },
-            async loadModels() { try { const result=await api.get(`${base}/model-options`); this.models=result.providers||[]; this.modelSelection={provider:result.provider||'',model:result.model||'',effort:result.reasoning_effort||'',tier:result.service_tier||''}; } catch {} },
+            async loadModels(refresh=false) {
+                const id=this.selectedId,current=this.startRead('models'),selection=JSON.stringify(this.modelSelection);
+                try {
+                    const query=new URLSearchParams({refresh:String(refresh)});
+                    if(this.agent==='codex'&&id)query.set('session',id);
+                    const result=await api.get(`${base}/model-options?${query}`);
+                    if(!current()||id!==this.selectedId)return;
+                    this.models=result.providers||[];this.modelDefaults=result;this.modelsError='';
+                    if(JSON.stringify(this.modelSelection)===selection)this.modelSelection=this.readModelSelection(this.selected,result);
+                }catch(error){if(current())this.modelsError=error.message;}
+            },
+            providerAuthText(row) {return ({managed_proxy:'由 CC Switch 管理，不支持直接切换',openai_login:'使用已保存的官方登录（尚未验证）',api_key:'已配置 API Key（尚未验证）',headers:'已配置请求头（尚未验证）',missing:'缺少登录凭据',unknown:'认证由外部配置，尚未验证'})[row?.auth_kind]||'认证状态未知';},
+            chooseSwitchProvider() {const row=this.thirdPartyProviders.find(row=>row.id===this.providerSwitch.provider);this.providerSwitch.model=row?.model||'';this.providerSwitch.effort='';this.providerSwitch.tier='';},
+            async switchProvider() {
+                const choice={...this.providerSwitch};
+                if(this.switchingWorkspace||!choice.provider||!choice.model.trim())return;
+                if(this.activeRun||this.externalRunning||this.sending||this.pending){this.workspaceError='请等待当前任务和消息发送结束后再切换提供方';return;}
+                if(!confirm('切换默认提供方并重启电脑 Codex？现有会话仍保留自己的模型设置。'))return;
+                this.switchingWorkspace='provider:'+choice.provider;this.workspaceError='';++this.usageEpoch;this.usageLoading=false;this.codexUsage=null;
+                try {await api.post(`${base}/default-model`,{provider:choice.provider,model:choice.model.trim(),reasoning_effort:choice.effort,service_tier:choice.tier});await this.loadModels(true);this.$Message.success('提供方已切换');}
+                catch(error){this.workspaceError=error.message;}
+                finally{this.switchingWorkspace='';const error=this.workspaceError;await this.refreshWorkspaces();await this.loadCurrentUsage();if(error)this.workspaceError=error;}
+            },
+            editCodexProvider(row=null) {this.codexProviderEdit=row?{...row,api_key:''}:{id:'',name:'',base_url:'',model:'',api_key:''};},
+            async saveCodexProvider() {
+                if(this.switchingWorkspace||!this.codexProviderEdit)return;
+                this.switchingWorkspace='save-provider';this.workspaceError='';
+                const body={...this.codexProviderEdit,api_mode:'codex_responses'};
+                if(!body.id)delete body.id;if(!body.api_key)delete body.api_key;
+                try{await api.post(`${base}/providers`,body);this.codexProviderEdit=null;this.$Message.success('提供方已保存');}
+                catch(error){this.workspaceError=error.message;}
+                finally{this.switchingWorkspace='';const error=this.workspaceError;await this.refreshWorkspaces(true);if(error)this.workspaceError=error;}
+            },
             async loadCodexAdmin() { if(this.agent!=='codex')return; const results=await Promise.allSettled([api.get(`${base}/projects`),api.get(`${base}/accounts`)]); if(results[0].status==='fulfilled')this.projects=results[0].value.data||[]; if(results[1].status==='fulfilled'){this.accounts=results[1].value;this.selectedAccount=this.accounts.current||'';} },
             async useAccount() {if(!this.selectedAccount||this.selectedAccount===this.accounts.current)return;const row=(this.accounts.data||[]).find(item=>item.id===this.selectedAccount);if(row)await this.useWorkspace(row);},
             providerChanged() { this.modelSelection.model='';this.modelSelection.effort='';this.modelSelection.tier=''; },
@@ -659,6 +788,7 @@
             },
             openSchedule() {
                 this.scheduleError = '';
+                this.scheduleSession=this.selectedId;this.scheduleClientKey=newKey();this.scheduleRequest=null;
                 this.scheduleText = this.draft;
                 this.scheduleAt = this.localDateTimeInput(new Date(Date.now() + 3600 * 1000));
                 this.showSchedule = true;
@@ -670,25 +800,26 @@
                 this.scheduleAt = this.localDateTimeInput(target);
             },
             async createSchedule() {
-                if (!this.selectedId || !this.scheduleText.trim() || !this.scheduleAt) return;
+                if (this.scheduleBusy||!this.scheduleSession || !this.scheduleText.trim() || !this.scheduleAt) return;
                 const at = new Date(this.scheduleAt);
                 if (Number.isNaN(at.getTime())) { this.scheduleError = '请选择有效的发送时间'; return; }
-                if (at.getTime() <= Date.now()) { this.scheduleError = '请选择将来的时间'; return; }
+                if (!this.scheduleRequest && at.getTime() <= Date.now()) { this.scheduleError = '请选择将来的时间'; return; }
                 this.scheduleBusy = true;
                 this.scheduleError = '';
                 try {
-                    await api.post(`${base}/schedules`, {
-                        sessionId: this.selectedId,
+                    this.scheduleRequest=this.scheduleRequest||{
+                        sessionId: this.scheduleSession,
                         text: this.scheduleText,
                         sendAt: at.toISOString(),
                         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                        clientKey: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)),
-                    });
+                        clientKey: this.scheduleClientKey,
+                    };
+                    await api.post(`${base}/schedules`,this.scheduleRequest);
                     this.showSchedule = false;
                     this.scheduleText = '';
                     await this.loadSchedules();
                     this.$Message.success('定时消息已提交，由服务端到点发送');
-                } catch (error) { this.scheduleError = error.message; }
+                } catch (error) {if(error.status===400){this.scheduleRequest=null;this.scheduleError=error.message;}else this.scheduleError=error.message+'。重试会核对同一条定时消息，不会重复创建。';}
                 finally { this.scheduleBusy = false; }
             },
             async cancelSchedule(id) {
@@ -725,7 +856,7 @@
                 try { await api.post(`${base}/sessions/${api.id(session.id)}/archive`, { archived: archived }); this.sessions = this.sessions.map(s => s.id === session.id ? { ...s, archived: archived } : s); this.$Message.success(archived ? '已存档' : '已取消存档'); }
                 catch (e) { this.error = e.message; }
             },
-            async saveModel() { if(!this.selectedId||!this.modelSelection.model)return; try {const choice=this.modelSelection;const body={provider:choice.provider,model:choice.model,reasoning_effort:choice.effort};if(this.agent==='codex')body.service_tier=choice.tier;else body.model_options={reasoning:choice.effort==='none'?{enabled:false}:choice.effort?{enabled:true,effort:choice.effort}:{}};await api.post(`${base}/sessions/${api.id(this.selectedId)}/model`,body); this.$Message.success('模型设置已更新'); await this.refreshSessions(); } catch(e) { this.error=e.message; } },
+            async saveModel() { if(!this.selectedId||!this.modelSelection.model)return; try {const choice=this.modelSelection;const body={provider:choice.provider,model:choice.model,reasoning_effort:choice.effort};if(this.agent==='codex')body.service_tier=choice.tier;else body.model_options={reasoning:choice.effort==='none'?{enabled:false}:choice.effort?{enabled:true,effort:choice.effort}:{}};await api.post(`${base}/sessions/${api.id(this.selectedId)}/model`,body); this.$Message.success('模型设置已更新'); await this.refreshSessions();await this.loadSessionDetail();await this.loadModels(); } catch(e) { this.error=e.message; } },
             openCreateDialog() {this.createTitle='';this.createProjectId='';this.createRoot='';this.createRoots=[];this.createProjectName='';this.createProjectSearch='';this.createMode='existing';this.createBrowser=false;this.createBrowserError='';this.createError='';this.showCreateDialog=true;if(this.agent==='codex')this.loadCodexAdmin();},
             pickCreateProject(project) {this.createProjectId=project?.id||'';const roots=this.projectRootsOf(project);this.createRoot=roots[0]||'';},
             toggleCreateRoot(path) {const rows=this.createRoots.slice();const at=rows.indexOf(path);if(at<0){if(rows.length>=16)return;rows.push(path);}else rows.splice(at,1);this.createRoots=rows;if(!rows.includes(this.createRoot))this.createRoot=rows[0]||'';},
@@ -738,15 +869,15 @@
             async newSession() {if(this.creating)return;if(!this.createValid){this.createError=this.agent==='codex'?'请选择项目与工作目录（新项目需填写名称并至少选择一个文件夹）':'请检查输入';return;}const title=this.createTitle.trim();const body={title:title||`新${this.agentName}会话`};if(this.agent==='codex'){body.project_mode=this.createMode;if(this.createMode==='existing'){body.project_id=this.createProjectId;body.cwd=this.createRoot;}else if(this.createMode==='new'){body.project_name=this.createProjectName.trim();body.cwd=this.createRoot;body.roots=this.createRoots.map(path=>({path}));}}else body.auto_title=!title;this.creating=true;try{const result=await api.post(`${base}/sessions`,body);const session=result.session||result;this.showCreateDialog=false;await this.refreshSessions(false);if(session.id)await this.select(this.sessions.find(s=>s.id===session.id)||session);}catch(e){this.createError=e.message;this.error=e.message;}finally{this.creating=false;}},
             async renameSession(target=null) {const session=(target&&target.id)?target:this.selected;this.closeSessionMenu();if(!session?.id)return;const title=prompt('重命名会话',session.title||'');if(!title?.trim())return;try{await api.patch(`${base}/sessions/${api.id(session.id)}`,{title:title.trim()});session.title=title.trim();await this.refreshSessions();}catch(e){this.error=e.message;}},
             async togglePin(target=null) {const session=(target&&target.id)?target:this.selected;this.closeSessionMenu();if(!session?.id)return;try{await api.post(`${base}/sessions/${api.id(session.id)}/pin`,{pinned:!session.pinned});session.pinned=!session.pinned;await this.refreshSessions();}catch(e){this.error=e.message;}},
-            async deleteSession(target=null) {const session=(target&&target.id)?target:this.selected;this.closeSessionMenu();if(!session?.id)return;if(!confirm(`删除“${session.title||'此会话'}”？`))return;try{const id=session.id;await api.post(`${base}/sessions/${api.id(id)}/delete`);localStorage.removeItem(receiptKey(id));if(this.selectedId===id){this.selected=null;this.selectedId='';}await this.refreshSessions(false);}catch(e){this.error=e.message;}},
+            async deleteSession(target=null) {const session=(target&&target.id)?target:this.selected;this.closeSessionMenu();if(!session?.id)return;if(!confirm(`删除“${session.title||'此会话'}”？`))return;try{const id=session.id;await api.post(`${base}/sessions/${api.id(id)}/delete`);void historyCache?.remove(id);localStorage.removeItem(receiptKey(id));if(this.selectedId===id){this.selected=null;this.selectedId='';}await this.refreshSessions(false);}catch(e){this.error=e.message;}},
             async forkMessage(message) {if(!this.selectedId||!message.id)return;try{const result=await api.post(`${base}/sessions/${api.id(this.selectedId)}/fork`,{message_id:message.id,fork_id:`web_fork_${newKey().replaceAll('-','')}`});const session=result.session||result;await this.refreshSessions();if(session.id)await this.select(this.sessions.find(s=>s.id===session.id)||session);}catch(e){this.error='分叉结果尚未确认，请先刷新会话列表核对。'+e.message;}},
             openMessageMenu(event,message) {if(!message?.id)return;this.messageMenu={x:Math.max(8,Math.min(event.clientX,innerWidth-190)),y:Math.max(8,Math.min(event.clientY,innerHeight-145)),message};},
             closeMessageMenu() {this.messageMenu=null;},
             openSessionMenu(event,item) {if(!item?.id)return;this.sessionMenu={x:Math.max(8,Math.min(event.clientX,innerWidth-190)),y:Math.max(8,Math.min(event.clientY,innerHeight-(agent==='codex'?370:300))),session:item};},
             closeSessionMenu() {this.sessionMenu=null;},
-            escapeMessageMenu(event) {if(event.key==='Escape'){this.closeMessageMenu();this.closeSessionMenu();this.closeSessionMenus();}},
+            escapeMessageMenu(event) {if(event.key==='Escape'){this.closeMessageMenu();this.closeSessionMenu();this.closeSessionMenus();if(this.inspectorOpen)this.inspectorOpen=false;else if(this.mobileComposerOpen)this.mobileComposerOpen=false;}},
             editBlockedReason() {if(this.externalRunning)return '其他客户端正在执行，请在原客户端结束任务后编辑';if(this.activeRun)return '当前任务正在执行，请先停止任务再编辑';if(this.pending)return '请先核对待确认的消息';return '';},
-            canEditMessage(message) {return message?.role==='user'&&!!message.id&&message.editable!==false&&!this.activeRun&&!this.externalRunning&&!this.pending&&!this.sending;},
+            canEditMessage(message) {return message?.role==='user'&&!!message.id&&message.editable!==false&&!(this.historyCacheState&&!this.selectedStatusKnown)&&!this.activeRun&&!this.externalRunning&&!this.pending&&!this.sending;},
             async copyMessage(message) {try{if(!await this.copyPlainText(this.messageText(message)))throw new Error('复制失败，请选择消息文字后手动复制');this.$Message.success('已复制消息');}catch(e){this.error=e.message;}finally{this.closeMessageMenu();}},
             editMessage(message) {this.closeMessageMenu();if(!this.selectedId||!this.canEditMessage(message))return;this.editTarget=message;this.editText=this.messageText(message);this.editFiles=[...(message.attachments||[])];this.editError='';this.showEditDialog=true;},
             async uploadEditFiles(event) {const files=Array.from(event.target.files||[]);event.target.value='';if(!this.selectedId||!files.length)return;this.editing=true;try{for(const file of files){const body=new FormData();body.append('file',file);const result=await api.request(`${base}/sessions/${api.id(this.selectedId)}/files`,{method:'POST',body});this.editFiles.push(result.attachment||result.file||result);}}catch(error){this.editError=error.message;}finally{this.editing=false;}},
@@ -755,7 +886,7 @@
                 if(!message||!input||this.editing)return;
                 if(!this.canEditMessage(message)){this.editError=this.editBlockedReason()||'此消息当前不能编辑';return;}
                 const id=this.selectedId,epoch=this.epoch;
-                this.draft=input;this.attachments=[...this.editFiles];this.editing=true;this.editError='';
+                this.draft=input;this.attachments=[...this.editFiles];this.editing=true;this.editError='';void historyCache?.remove(id);this.startRead('history');
                 let rewound=false;
                 const boundary={message_id:message.id,expected_last_turn_id:[...this.messages].reverse().find(m=>m.turn_id)?.turn_id||null,expected_latest_user_id:[...this.messages].reverse().find(m=>m.role==='user'&&m.id)?.id||null};
                 try {
@@ -818,7 +949,7 @@
             },
             answerQuestion() {const request=this.context.question;if(!request)return;const replies=[];for(const [index,question] of (request.questions||[]).entries()){const answer=prompt(`${question.question||question.title||'请回答'}${question.options?.length?'\n'+question.options.map(option=>option.label).join(' / '):''}`);if(answer===null)return;replies.push({questionItemId:JSON.stringify(['request_user_input_async',request.request_id,index]),question:question.question||'',answer});}this.draft=`<send_user_message_question_reply>\n${JSON.stringify(replies)}\n</send_user_message_question_reply>`;this.$nextTick(()=>document.querySelector('.agent-compose-wrap textarea')?.focus());},
             async answerApprovalQuestion() {if(!this.activeRun||!this.approval)return;const answers={};for(const question of this.approval.questions||[]){const answer=prompt(question.question||question.title||'请回答');if(answer===null)return;answers[question.id]={answers:[answer]};}try{await this.submitApproval({answers});}catch(e){this.error=e.message;}},
-            composerKeydown(e) {if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();this.send();}},
+            composerKeydown(e) {if(e.isComposing||e.keyCode===229)return;if(this.mobileViewport&&!e.ctrlKey&&!e.metaKey)return;if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();this.send();}},
             restorePending(id) {try{const p=JSON.parse(localStorage.getItem(receiptKey(id))||'null');return p?.key?p:null;}catch{return null;}},
             savePending() {if(this.selectedId){if(this.pending)localStorage.setItem(receiptKey(this.selectedId),JSON.stringify(this.pending));else localStorage.removeItem(receiptKey(this.selectedId));}},
             restoreDelivered(id) {try{const rows=JSON.parse(localStorage.getItem(echoKey(id))||'[]');return Array.isArray(rows)?rows.filter(row=>row.key&&Date.now()-(row.createdAt||0)<1800000).slice(-20):[];}catch{return[];}},
@@ -892,7 +1023,7 @@
             },
             async enqueue() {
                 const id=this.selectedId,input=this.draft.trim();
-                if(this.agent!=='codex'||!id||!input||this.sending||this.uploading||this.pending||this.externalRunning)return;
+                if(this.agent!=='codex'||!id||!input||this.sending||this.uploading||this.pending||this.externalRunning||(this.historyCacheState&&!this.selectedStatusKnown))return;
                 const key=newKey(),files=[...this.attachments];
                 this.pending={key,input,attachments:files,createdAt:Date.now(),delivery:'正在入队',kind:'queue'};this.savePending();
                 this.sending=true;this.draft='';this.attachments=[];
@@ -912,7 +1043,7 @@
                 }finally{this.sending=false;}
             },
             async removeQueued(item) {if(!confirm('从队列移除此消息？'))return;try{await api.post(`${base}/sessions/${api.id(this.selectedId)}/queue`,{action:'delete',id:item.id});await this.loadQueue();}catch(e){this.error=e.message;}},
-            async send() {const input=this.draft.trim();if(!this.selectedId||!input||this.sending||this.pending||(this.externalRunning&&this.agent==='codex'))return;const id=this.selectedId;const key=newKey();const files=[...this.attachments];const modelSettings=this.agent==='codex'?{provider:this.selected?.provider||this.selected?.modelProvider||this.modelSelection.provider,model:this.selected?.model||this.modelSelection.model,reasoning_effort:this.selected?.reasoning_effort??this.modelSelection.effort,service_tier:this.selected?.service_tier??this.modelSelection.tier}:null;const submission={key,input,attachments:files,createdAt:Date.now(),delivery:'正在发送',modelSettings,historyIds:this.messages.map(m=>String(m.id)).filter(id=>id!=='undefined')};this.pending=submission;this.savePending();this.draft='';this.attachments=[];localStorage.removeItem(`remotetool:web:draft:${agent}:${id}`);this.sending=true;this.queueFollowLatest();try{const body={input,session_id:id,attachment_ids:files.map(f=>f.id)};if(this.agent==='codex'&&modelSettings?.provider&&modelSettings?.model)body.model_settings=modelSettings;if(this.agent==='codex'&&this.context.question?.request_id)body.question_reply_id=this.context.question.request_id;if(this.agent==='hermes'){if(this.modelSelection.provider)body.provider=this.modelSelection.provider;if(this.modelSelection.model)body.model=this.modelSelection.model;}const steering=!!this.activeRun;const route=steering?`${base}/runs/${api.id(this.activeRun)}/steer`:`${base}/runs`;const response=await api.post(route,body,{'Idempotency-Key':key});const accepted=response.delivery!=='unknown'&&response.delivery!=='rejected'&&response.status!=='acceptance_unknown'&&(response.delivery==='accepted'||response.accepted===true||(steering?response.accepted!==false:!!response.run_id));if(this.selectedId!==id){if(accepted){const rows=this.restoreDelivered(id);rows.push({...submission,delivery:'已送达'});localStorage.setItem(echoKey(id),JSON.stringify(rows.slice(-20)));localStorage.removeItem(receiptKey(id));}return;}if(this.pending?.key!==key)return;if(accepted){this.acceptPending(id,key);if(response.run_id){this.activeRun=response.run_id;this.ensureEventStream(response.run_id);}}else{this.pending.delivery='发送状态待核对';this.savePending();}this.loadStatus();this.loadHistory();for(const delay of [800,2500])setTimeout(()=>{if(this.selectedId===id&&(this.pending?.key===key||this.delivered.some(row=>row.key===key)))this.loadHistory();},delay);}catch(error){if(this.selectedId!==id||this.pending?.key!==key)return;if(error.delivery==='rejected'){this.draft=input;this.attachments=files;this.pending=null;this.savePending();this.error=`${error.message}。消息未写入，草稿已恢复。`;}else{this.pending.delivery='发送状态待核对';this.savePending();this.error=`${error.message}。请先核对发送状态，避免重复发送。`;}}finally{this.sending=false;}},
+            async send() {const input=this.draft.trim();if(!this.selectedId||!input||this.sending||this.pending||(this.historyCacheState&&!this.selectedStatusKnown)||(this.externalRunning&&this.agent==='codex'))return;const id=this.selectedId;const key=newKey();const files=[...this.attachments];const selection=this.readModelSelection(this.selected);const modelSettings=this.agent==='codex'?{provider:selection.provider,model:selection.model,reasoning_effort:selection.effort,service_tier:selection.tier}:null;const submission={key,input,attachments:files,createdAt:Date.now(),delivery:'正在发送',modelSettings,historyIds:this.messages.map(m=>String(m.id)).filter(id=>id!=='undefined')};this.pending=submission;this.savePending();this.draft='';this.attachments=[];localStorage.removeItem(`remotetool:web:draft:${agent}:${id}`);this.sending=true;this.queueFollowLatest();try{const body={input,session_id:id,attachment_ids:files.map(f=>f.id)};if(this.agent==='codex'&&modelSettings?.provider&&modelSettings?.model)body.model_settings=modelSettings;if(this.agent==='codex'&&this.context.question?.request_id)body.question_reply_id=this.context.question.request_id;if(this.agent==='hermes'){if(this.modelSelection.provider)body.provider=this.modelSelection.provider;if(this.modelSelection.model)body.model=this.modelSelection.model;}const steering=!!this.activeRun;const route=steering?`${base}/runs/${api.id(this.activeRun)}/steer`:`${base}/runs`;const response=await api.post(route,body,{'Idempotency-Key':key});const accepted=response.delivery!=='unknown'&&response.delivery!=='rejected'&&response.status!=='acceptance_unknown'&&(response.delivery==='accepted'||response.accepted===true||(steering?response.accepted!==false:!!response.run_id));if(this.selectedId!==id){if(accepted){const rows=this.restoreDelivered(id);rows.push({...submission,delivery:'已送达'});localStorage.setItem(echoKey(id),JSON.stringify(rows.slice(-20)));localStorage.removeItem(receiptKey(id));}return;}if(this.pending?.key!==key)return;if(accepted){this.acceptPending(id,key);if(response.run_id){this.activeRun=response.run_id;this.ensureEventStream(response.run_id);}}else{this.pending.delivery='发送状态待核对';this.savePending();}this.loadStatus();this.loadHistory();for(const delay of [800,2500])setTimeout(()=>{if(this.selectedId===id&&(this.pending?.key===key||this.delivered.some(row=>row.key===key)))this.loadHistory();},delay);}catch(error){if(this.selectedId!==id||this.pending?.key!==key)return;if(error.delivery==='rejected'){this.draft=input;this.attachments=files;this.pending=null;this.savePending();this.error=`${error.message}。消息未写入，草稿已恢复。`;}else{this.pending.delivery='发送状态待核对';this.savePending();this.error=`${error.message}。请先核对发送状态，避免重复发送。`;}}finally{this.sending=false;}},
             async showFiles() {try{const files=await this.loadFiles();this.dialog={title:'会话文件',files,text:'',more:false};}catch(e){this.error=e.message;}},
             async showActiveTools(tool=null) {if(!this.selectedId)return;this.dialog={title:'工具调用详情',tools:[],files:[],text:'',more:false,activeTools:true,selectedTool:tool?.id||null,running:!!(this.activeRun||this.externalRunning)};await this.refreshActiveTools();if(this.toolTimer)clearInterval(this.toolTimer);this.toolTimer=setInterval(()=>{if(this.dialog?.activeTools&&(this.dialog.running||this.externalRunning))this.refreshActiveTools();},2000);},
             async refreshActiveTools(offset=0) {if(!this.dialog?.activeTools||!this.selectedId)return;try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/tools/active?offset=${offset}`);if(!this.dialog?.activeTools)return;const rows=result.data||[];const current=offset?this.dialog.tools||[]:[];const ids=new Set(current.map(row=>row.id));this.dialog.tools=[...current,...rows.filter(row=>!ids.has(row.id))];if(this.dialog.selectedTool){const index=this.dialog.tools.findIndex(row=>row.id===this.dialog.selectedTool);if(index>0)this.dialog.tools.unshift(...this.dialog.tools.splice(index,1));}this.dialog.running=!!result.running;this.dialog.more=!!result.has_more;this.toolOffset=offset+rows.length;this.dialog.title=`工具 ${result.tools??this.dialog.tools.length} 次 · 文件修改 ${result.file_changes??0} 次`;}catch(error){if(error.status!==404)this.error=error.message;}},
@@ -924,9 +1055,9 @@
         },
         created() { this.loadProfiles(); },
         unmounted() { clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
-        watch: { selectedId() { this.loadSchedules(); }, draft(value) {if(this.selectedId)localStorage.setItem(draftKey(this.selectedId),value);}, attachments: {deep:true,handler(value){if(agent==='hermes'&&this.selectedId)localStorage.setItem(draftFilesKey(this.selectedId),JSON.stringify(value));}}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
-        mounted() {this.loadAgentSetup();this.refreshSessions();this.loadCapabilities();this.loadModels();this.loadCodexAdmin();this.loadCurrentUsage();this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible')this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible')return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
-        beforeUnmount() {this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}
+        watch: {sessionsOpen() {this.syncMobileShell();}, inspectorOpen(value) {if(value)this.loadModels();}, selectedId() { this.schedules=[]; }, draft(value) {if(this.selectedId)localStorage.setItem(draftKey(this.selectedId),value);this.$nextTick(()=>this.resizeComposer());}, attachments: {deep:true,handler(value){if(agent==='hermes'&&this.selectedId)localStorage.setItem(draftFilesKey(this.selectedId),JSON.stringify(value));}}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
+        mounted() {this.loadAgentSetup();mobileQuery=window.matchMedia?.(mobileMedia);mobileQuery?.addEventListener('change',this.onMobileLayoutChange);this.syncMobileShell();void this.refreshSessions().finally(()=>{this.loadCapabilities();this.loadCurrentUsage();});this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible'&&this.workspaceVisible())this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible'||!this.workspaceVisible())return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadSchedules();this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
+        beforeUnmount() {mobileQuery?.removeEventListener('change',this.onMobileLayoutChange);this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}
     });
     app.use(ViewUIPlus);
     app.mount(root);

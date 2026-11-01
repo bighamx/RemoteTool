@@ -23,6 +23,12 @@ internal sealed class CodexSessionPermissions(string path)
             Atomic(path, updated); modes = updated;
         }
     }
+    public static void ApplyStart(string mode, JsonObject request) {
+        if (mode == "default") return;
+        request["approvalPolicy"] = mode == "full" ? "never" : "on-request";
+        request["sandbox"] = mode == "full" ? "danger-full-access" : "workspace-write";
+    }
+    public void ApplyResume(string id, JsonObject request) => ApplyStart(Get(id), request);
     public void ApplyTurn(string id, JsonObject request) {
         Apply(Get(id), request);
     }

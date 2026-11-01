@@ -18,11 +18,12 @@ function deferred() {
     h.api.get = async route => { throw new Error(`Unexpected extra request: ${route}`); };
     let displayed = false;
     const loading = h.state.refreshAll().then(() => { displayed = true; });
-    assert.deepEqual(calls, ['history', 'status', 'context', 'detail']);
+    assert.deepEqual(calls, ['history'], 'auxiliary requests wait until history is ready');
     await Promise.resolve();
     assert.equal(displayed, false, 'history must finish before opening completes');
     history.resolve();
     await loading;
+    assert.deepEqual(calls, ['history', 'status', 'context', 'detail']);
     assert.equal(displayed, true, 'slow metadata must not delay the message pane');
     context.resolve(); detail.resolve();
     await Promise.resolve();
