@@ -49,7 +49,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         Response.Headers.CacheControl = "no-store";
         try {
             var restart = body.ValueKind == JsonValueKind.Object && body.TryGetProperty("restart", out var flag) && flag.ValueKind == JsonValueKind.True;
-            var result = await management.Invoke("enable_api_server", JsonSerializer.SerializeToElement(new { restart = false }), ct);
+            var result = await management.EnableApiServer(ct);
             if (!restart) return Ok(result);
             var response = JsonNode.Parse(result.GetRawText())!.AsObject();
             response["maintenance"] = await gateway.Start(true, ct);

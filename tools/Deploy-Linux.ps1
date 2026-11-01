@@ -35,11 +35,16 @@ param(
     [string]$SourceConfig   = '',
     [string]$CodexExecutable= '/usr/bin/codex',
     [string]$CodexHome      = '/home/chuckie/.codex',
+    [string]$ProxyUrl       = '',
     [switch]$SkipPull,
     [switch]$SkipPublish
 )
 
 $ErrorActionPreference = 'Stop'
+foreach ($pathValue in @($RemotePath,$DataPath,$CodexHome)) {
+    if (!$pathValue.StartsWith('/') -or $pathValue.Contains('\') -or $pathValue.Contains("'") -or $pathValue.Contains("`r") -or $pathValue.Contains("`n") -or $pathValue -match '/\.\.?(/|$)') { throw 'Remote paths must be absolute POSIX paths without shell delimiters or traversal' }
+}
+if ($RemotePath.TrimEnd('/') -in @('','/home','/usr','/var','/etc','/opt','/tmp')) { throw 'RemotePath must identify a dedicated application directory' }
 $repo   = Split-Path -Parent $PSScriptRoot
 $staging = Join-Path $repo '.tmp-linux-publish'
 $archive = Join-Path $repo '.tmp-linux-publish.tar.gz'
@@ -81,10 +86,14 @@ if (-not (Test-Path $SourceConfig)) {
 }
 $cfg = Get-Content $SourceConfig -Raw -Encoding UTF8 | ConvertFrom-Json
 # Keep auth credentials; rewrite everything that is Windows-specific.
+if (!$CodexHome.StartsWith('/') -or $CodexHome.Contains('\')) { throw 'CodexHome must be an absolute POSIX path' }
+$remoteParent = $CodexHome.TrimEnd('/')
+$remoteParent = $remoteParent.Substring(0,$remoteParent.LastIndexOf('/'))
+if (!$remoteParent) { $remoteParent = '/' }
 $cfg | Add-Member -Force -NotePropertyName Codex -NotePropertyValue ([pscustomobject]@{
     Executable       = $CodexExecutable
     Home             = $CodexHome
-    WorkingDirectory = Split-Path -Parent $CodexHome
+    WorkingDirectory = $remoteParent
 })
 $cfg | Add-Member -Force -NotePropertyName Hermes -NotePropertyValue ([pscustomobject]@{
     BaseUrl       = 'http://127.0.0.1:8642/'
@@ -103,14 +112,19 @@ $json = $cfg | ConvertTo-Json -Depth 20
 
 Step 'package'
 if (Test-Path $archive) { Remove-Item $archive -Force }
-# GNU tar on Windows reads "D:\..." as host:path; --force-local keeps it a plain path.
-& tar --force-local -czf $archive -C $staging .
-if ($LASTEXITCODE -ne 0) { throw 'tar failed' }
+# A relative archive name works with both Windows BSD tar and GNU tar.
+Push-Location $repo
+try {
+    & tar -czf (Split-Path -Leaf $archive) -C $staging .
+    if ($LASTEXITCODE -ne 0) { throw 'tar failed' }
+} finally { Pop-Location }
 $sizeMb = [math]::Round((Get-Item $archive).Length / 1MB, 1)
 Write-Host "   $archive ($sizeMb MB)"
 
 Step 'upload'
-& scp -q -o BatchMode=yes $archive "${target}:/tmp/remotetool-deploy.tar.gz"
+$remoteUpload = "$DataPath/.deployment-$([Guid]::NewGuid().ToString('N'))"
+RunRemote "mkdir -p '$remoteUpload'; chmod 700 '$remoteUpload'"
+& scp -q -o BatchMode=yes $archive "${target}:$remoteUpload/package.tar.gz"
 if ($LASTEXITCODE -ne 0) { throw 'scp failed' }
 
 Step 'verify host prerequisites'
@@ -120,14 +134,50 @@ if ($hasDotnet -ne 'yes') {
 }
 
 Step 'install and restart service'
+$activeGuard = @"
+import json,pathlib
+root=pathlib.Path('$DataPath')
+for journal in (root/'codex-bridge').glob('state-*/runs.json'):
+    runs=json.loads(journal.read_text())
+    if any(r.get('status') in ['started','submitting','queued','running'] for r in runs.values()):
+        raise SystemExit('Active Codex tasks exist; finish them before deployment. No process was stopped.')
+"@
+$guardEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($activeGuard))
+RunRemote "python3 -c `"import base64;exec(base64.b64decode('$guardEncoded'))`""
+$previousRelease = "$RemotePath.prev-$(Get-Date -Format 'yyyyMMdd-HHmmss')-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+$preserveSettings = if ($PSBoundParameters.ContainsKey('SourceConfig')) { '0' } else { '1' }
+$proxySetup = ''
+if ($ProxyUrl) {
+    $proxy = [Uri]$ProxyUrl
+    if (!$proxy.IsAbsoluteUri -or $proxy.Scheme -notin @('http','https') -or $ProxyUrl.Contains("`n") -or $ProxyUrl.Contains("`r")) { throw 'ProxyUrl must be an HTTP(S) proxy URL' }
+    $proxyText = "HTTP_PROXY=$($proxy.AbsoluteUri)`nHTTPS_PROXY=$($proxy.AbsoluteUri)`nALL_PROXY=$($proxy.AbsoluteUri)`nNO_PROXY=localhost,127.0.0.1,::1`n"
+    $encodedProxy = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($proxyText))
+    $proxySetup = "printf '%s' '$encodedProxy' | base64 -d > '$DataPath/service-proxy.env'; chmod 600 '$DataPath/service-proxy.env'"
+}
 $remote = @"
 set -e
 mkdir -p '$DataPath' '$RemotePath'
+$proxySetup
 if systemctl is-active --quiet '$ServiceName'; then sudo systemctl stop '$ServiceName'; fi
-rm -rf '$RemotePath.prev'
-if [ -d '$RemotePath' ]; then mv '$RemotePath' '$RemotePath.prev'; fi
+if [ -d '$RemotePath' ]; then mv '$RemotePath' '$previousRelease'; fi
 mkdir -p '$RemotePath'
-tar xzf /tmp/remotetool-deploy.tar.gz -C '$RemotePath'
+tar xzf '$remoteUpload/package.tar.gz' -C '$RemotePath'
+if [ '$preserveSettings' = 1 ] && [ -f '$previousRelease/appsettings.json' ]; then cp -p '$previousRelease/appsettings.json' '$RemotePath/appsettings.json'; fi
+python3 - <<'PRESERVE_WORKSPACES'
+from pathlib import Path
+import shutil
+old=Path('$previousRelease');new=Path('$RemotePath')
+for item in old.iterdir():
+    if item.is_file() and not item.is_symlink() and item.name.endswith(('.db','.sqlite','.db-wal','.db-shm','.sqlite-wal','.sqlite-shm')):
+        destination=new/item.name
+        if not destination.exists():
+            shutil.copy2(item,destination)
+for folder in old.iterdir():
+    if chr(92) in folder.name and folder.is_dir():
+        target=new/folder.name
+        if not target.exists() and not target.is_symlink():
+            target.symlink_to(folder.resolve(),target_is_directory=True)
+PRESERVE_WORKSPACES
 chmod +x '$RemotePath/WebApplication'
 sudo tee /etc/systemd/system/$ServiceName.service >/dev/null <<UNIT
 [Unit]
@@ -144,6 +194,7 @@ Environment=ASPNETCORE_ENVIRONMENT=Production
 Environment=REMOTETOOL_DATA_DIR=$DataPath
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=DOTNET_HOST_PATH=/usr/bin/dotnet
+EnvironmentFile=-$DataPath/service-proxy.env
 ExecStart=$RemotePath/WebApplication
 Restart=always
 RestartSec=3
@@ -154,7 +205,8 @@ UNIT
 sudo systemctl daemon-reload
 sudo systemctl enable '$ServiceName' >/dev/null 2>&1 || true
 sudo systemctl restart '$ServiceName'
-rm -f /tmp/remotetool-deploy.tar.gz
+rm -f '$remoteUpload/package.tar.gz'
+rmdir '$remoteUpload'
 for i in `$(seq 1 30); do
   if systemctl is-active --quiet '$ServiceName'; then break; fi
   sleep 1
@@ -179,4 +231,4 @@ for ($i = 0; $i -lt 30; $i++) {
 if ($code -ne 200) { throw "health check failed: $url/Account/Login -> $code" }
 Write-Host "OK  $url  (login page 200)" -ForegroundColor Green
 Write-Host "    logs:   ssh $target 'sudo journalctl -u $ServiceName -f'"
-Write-Host "    rollback: ssh $target 'sudo systemctl stop $ServiceName; rm -rf $RemotePath; mv $RemotePath.prev $RemotePath; sudo systemctl start $ServiceName'"
+Write-Host "    rollback release preserved: $previousRelease (stop service, preserve the current directory, restore this release, then start service)"

@@ -51,7 +51,7 @@
     let adminTimer = null;
     const readVersions = new Map();
     const app = Vue.createApp({
-        data: () => ({ agent, profile, profiles: [], profileError: '', sessionDetails: null, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
+        data: () => ({ agent, profile, agentSetup:null,setupBusy:false,setupDetails:false,setupNotice:'',profiles: [], profileError: '', sessionDetails: null, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: false,
             adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminSettings:{},adminProvider:{},adminEndpoints:[],adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [], schedules: [], showSchedule: false, scheduleText: '', scheduleAt: '', scheduleError: '', scheduleBusy: false,
@@ -157,6 +157,22 @@
             }
         },
         methods: {
+            readableAgentError(message) {
+                if(/workspace routing discovery/i.test(message))return '服务端无法连接 Codex 工作空间路由，请检查服务端网络和代理。';
+                if(/usage limit/i.test(message))return 'Codex 账号用量已达上限，请切换工作空间、等待额度恢复或查看可用重置。';
+                if(/API_SERVER_KEY|尚未安装 Hermes|Hermes 尚未接入/.test(message))return 'Hermes 尚未完成接入，请按安装与配置指引启用本地 API。';
+                return message;
+            },
+            async loadAgentSetup() {
+                try{this.agentSetup=await api.get(`/api/agent-setup/${this.agent}?profile=${api.id(this.profile)}`);}catch{this.agentSetup=null;}
+            },
+            async configureAgentApi() {
+                if(this.setupBusy||!confirm('启用 Hermes 本地 API 并安全重启网关？当前任务结束后生效。'))return;
+                this.setupBusy=true;
+                try{const result=await api.post('/api/agent-setup/hermes/configure',{});this.setupNotice=result.message;await this.loadAgentSetup();this.loadCapabilities();}
+                catch(e){this.setupNotice='自动配置未完成，请查看步骤并检查服务端运行环境。';}
+                finally{this.setupBusy=false;}
+            },
             async adminAction(action) {
                 if (this.adminBusy) return;
                 this.adminBusy = true; this.adminError = '';
@@ -213,23 +229,38 @@
             async restartAdminGateway(wait) { if(!confirm(wait?'暂停接收新任务，等待全部 Profile 空闲后重启？':'重启当前设备的网关？将影响全部 Profile。'))return;await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/restart`,{wait});}); },
             async cancelAdminGateway() {await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/cancel`,{});});},
             async updateAdminHermes() {if(!confirm('等待全部 Profile 空闲后按官方流程更新并重启？将自动确认恢复本地修改。'))return;await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/update`,{});});},
+            async copyPlainText(value) {
+                const text = String(value ?? '');
+                try {
+                    if (navigator.clipboard?.writeText) {
+                        await navigator.clipboard.writeText(text);
+                        return true;
+                    }
+                } catch {}
+                const focused = document.activeElement;
+                const selection = window.getSelection?.();
+                const ranges = selection ? Array.from({length: selection.rangeCount}, (_, index) => selection.getRangeAt(index).cloneRange()) : [];
+                const input = document.createElement('textarea');
+                input.value = text; input.readOnly = true;
+                input.style.cssText = 'position:fixed;left:0;top:0;opacity:0;pointer-events:none';
+                document.body.appendChild(input);
+                try {
+                    input.focus(); input.select(); input.setSelectionRange(0, text.length);
+                    return !!document.execCommand('copy');
+                } finally {
+                    input.remove(); focused?.focus?.({preventScroll:true});
+                    if (selection && ranges.length) {
+                        selection.removeAllRanges();
+                        for (const range of ranges) selection.addRange(range);
+                    }
+                }
+            },
             async copySessionId(target = null) {
                 const session = target?.id ? target : this.selected;
                 this.closeSessionMenu(); this.closeSessionMenus();
                 if (!session?.id) return;
                 try {
-                    const text = String(session.id);
-                    let copied = false;
-                    try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); copied = true; } } catch {}
-                    if (!copied) {
-                        const focused = document.activeElement;
-                        const input = document.createElement('textarea');
-                        input.value = text; input.readOnly = true;
-                        input.style.cssText = 'position:fixed;left:0;top:0;opacity:0;pointer-events:none';
-                        document.body.appendChild(input);
-                        try { input.focus(); input.select(); input.setSelectionRange(0, text.length); copied = document.execCommand('copy'); }
-                        finally { input.remove(); focused?.focus?.({preventScroll:true}); }
-                    }
+                    const copied = await this.copyPlainText(session.id);
                     if (!copied) throw new Error('复制失败，请在会话详情中选择 ID 复制');
                     this.$Message.success('已复制会话 ID');
                 } catch (error) { this.$Message.error(error.message || '复制失败'); }
@@ -707,7 +738,7 @@
             escapeMessageMenu(event) {if(event.key==='Escape'){this.closeMessageMenu();this.closeSessionMenu();this.closeSessionMenus();}},
             editBlockedReason() {if(this.externalRunning)return '其他客户端正在执行，请在原客户端结束任务后编辑';if(this.activeRun)return '当前任务正在执行，请先停止任务再编辑';if(this.pending)return '请先核对待确认的消息';return '';},
             canEditMessage(message) {return message?.role==='user'&&!!message.id&&message.editable!==false&&!this.activeRun&&!this.externalRunning&&!this.pending&&!this.sending;},
-            async copyMessage(message) {try{await navigator.clipboard.writeText(this.messageText(message));this.$Message.success('已复制消息');}catch(e){this.error=e.message;}finally{this.closeMessageMenu();}},
+            async copyMessage(message) {try{if(!await this.copyPlainText(this.messageText(message)))throw new Error('复制失败，请选择消息文字后手动复制');this.$Message.success('已复制消息');}catch(e){this.error=e.message;}finally{this.closeMessageMenu();}},
             editMessage(message) {this.closeMessageMenu();if(!this.selectedId||!this.canEditMessage(message))return;this.editTarget=message;this.editText=this.messageText(message);this.editFiles=[...(message.attachments||[])];this.editError='';this.showEditDialog=true;},
             async uploadEditFiles(event) {const files=Array.from(event.target.files||[]);event.target.value='';if(!this.selectedId||!files.length)return;this.editing=true;try{for(const file of files){const body=new FormData();body.append('file',file);const result=await api.request(`${base}/sessions/${api.id(this.selectedId)}/files`,{method:'POST',body});this.editFiles.push(result.attachment||result.file||result);}}catch(error){this.editError=error.message;}finally{this.editing=false;}},
             async submitEdit() {
@@ -869,7 +900,7 @@
         created() { this.loadProfiles(); },
         unmounted() { clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
         watch: { selectedId() { this.loadSchedules(); }, draft(value) {if(this.selectedId)localStorage.setItem(draftKey(this.selectedId),value);}, attachments: {deep:true,handler(value){if(agent==='hermes'&&this.selectedId)localStorage.setItem(draftFilesKey(this.selectedId),JSON.stringify(value));}}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
-        mounted() {this.refreshSessions();this.loadCapabilities();this.loadModels();this.loadCodexAdmin();this.loadCurrentUsage();this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible')this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible')return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
+        mounted() {this.loadAgentSetup();this.refreshSessions();this.loadCapabilities();this.loadModels();this.loadCodexAdmin();this.loadCurrentUsage();this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible')this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible')return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
         beforeUnmount() {this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}
     });
     app.use(ViewUIPlus);

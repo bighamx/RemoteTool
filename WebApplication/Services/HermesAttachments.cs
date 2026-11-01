@@ -271,6 +271,7 @@ public sealed class HermesAttachments
                             // Snapshot explicit delivery markers; never change or serve the project original directly.
                             var version = Identifier(source + "|" + info.LastWriteTimeUtc.Ticks + "|" + info.Length)[..32];
                             target = Path.Combine(folder, "media", version + "_" + info.Name);
+                            if (Storage.AttachmentDeletionLedger.IsSuppressed(storageRoot, target)) continue;
                             lock (bindingLock) {
                                 if (!File.Exists(target)) {
                                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);

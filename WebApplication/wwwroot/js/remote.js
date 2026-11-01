@@ -2843,14 +2843,9 @@ class RemoteControl {
         const terminalSelect = document.getElementById('terminal-type');
         if (terminalSelect) {
             const isLinux = info.platform !== 'Windows';
-            Array.from(terminalSelect.options).forEach(opt => {
-                if (isLinux) {
-                    opt.style.display = opt.value === 'shell' ? '' : 'none';
-                } else {
-                    opt.style.display = opt.value === 'shell' ? 'none' : '';
-                }
-            });
-            terminalSelect.value = isLinux ? 'shell' : 'powershell';
+            Array.from(terminalSelect.options).filter(opt => isLinux ? opt.value !== 'shell' : opt.value === 'shell').forEach(opt => opt.remove());
+            if (!Array.from(terminalSelect.options).some(opt => opt.value === terminalSelect.value))
+                terminalSelect.value = terminalSelect.options[0]?.value || '';
             terminalSelect.style.display = '';
         }
     }

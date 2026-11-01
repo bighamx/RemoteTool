@@ -1,0 +1,36 @@
+@{ Layout = "_Layout"; }
+@section Styles {
+    <link rel="stylesheet" href="~/css/workspace-pages.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/storage.css" asp-append-version="true" />
+}
+@section Scripts {
+    <script src="~/js/web-api.js" asp-append-version="true"></script>
+    <script src="~/js/storage.js" asp-append-version="true"></script>
+}
+<div id="storage-app" class="storage-page" v-cloak>
+    <header class="storage-head"><div><small>当前服务端 · @Environment.MachineName</small><h1>空间管理</h1><p>按会话、附件类型和时间选择数据，确认后再处理。</p></div><button class="btn btn-primary" :disabled="busy || scanning" @@click="scan">{{scanning?'正在扫描…':'重新扫描'}}</button></header>
+    <div v-if="error" class="storage-error" role="alert">{{error}}</div>
+    <div v-if="notice" class="storage-notice" role="status">{{notice}}</div>
+    <section class="storage-summary"><div><small>可管理文件大小</small><strong>{{bytes(inventory?.totalBytes || 0)}}</strong></div><div><small>回收站仍占用</small><strong>{{bytes(trashBytes)}}</strong></div><div><small>当前结果</small><strong>{{total}} 项</strong></div></section>
+    <p class="storage-scope">{{inventory?.note || '仅管理 RemoteTool 自身的附件和诊断日志；原生 Codex/Hermes 会话、数据库、配置和登录凭据保留。'}}</p>
+    <p v-if="inventory?.partial" class="storage-error">部分文件无法读取或超过扫描上限，当前统计为已扫描部分。</p>
+    <nav class="storage-categories" aria-label="数据分类"><button :class="{active:!category}" :disabled="busy" @@click="changeCategory('')">全部文件</button><button v-for="c in inventory?.categories || []" :key="c.id" :class="{active:category===c.id}" :disabled="busy" @@click="changeCategory(c.id)"><strong>{{c.name}}</strong><span>{{bytes(c.bytes)}} · {{c.count}} 项<span v-if="c.protectedCount"> · {{c.protectedCount}} 项受保护</span></span></button></nav>
+    <div class="storage-filters">
+        <input v-model="search" type="search" placeholder="搜索文件名、会话、Agent" aria-label="搜索文件或会话" :disabled="busy" @@input="scheduleSearch" />
+        <select v-model="kind" aria-label="附件类型" :disabled="busy" @@change="reload"><option value="">全部类型</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频</option><option value="document">文档</option><option value="other">其他</option></select>
+        <select v-model="agent" aria-label="Agent" :disabled="busy" @@change="reload"><option value="">全部 Agent</option><option value="codex">Codex</option><option value="hermes">Hermes</option></select>
+        <select v-model="olderDays" aria-label="时间范围" :disabled="busy" @@change="reload"><option value="0">不限时间</option><option value="7">7 天前</option><option value="30">30 天前</option></select>
+        <select v-model="sort" aria-label="排序方式" :disabled="busy" @@change="reload"><option value="size_desc">大文件优先</option><option value="newest">最近写入优先</option><option value="oldest">最早写入优先</option><option value="name">名称</option></select>
+        <label><input v-model="grouped" type="checkbox" /> 按会话分组</label>
+    </div>
+    <div class="storage-list-head"><span>{{loading?'正在读取…':`${rows.length} / ${total} 项`}}</span><div><button class="btn btn-secondary btn-sm" :disabled="busy || !rows.length" @@click="selectRows(rows,true)">全选已显示</button><button v-if="selected.length" class="btn btn-secondary btn-sm" :disabled="busy" @@click="selected=[]">取消选择</button></div></div>
+    <section class="storage-list" aria-label="文件明细">
+        <template v-for="g in groups" :key="g.name"><div v-if="g.name" class="storage-group"><label><input type="checkbox" :checked="groupSelected(g.rows)" :disabled="busy || !g.rows.some(r=>!r.protected)" @@change="selectRows(g.rows,$event.target.checked)" /><strong>{{g.name}}</strong></label><small>{{g.rows.length}} 项 · {{bytes(g.rows.reduce((n,r)=>n+r.bytes,0))}}</small></div>
+            <label v-for="r in g.rows" :key="r.id" class="storage-row" :class="{protected:r.protected}"><input type="checkbox" :value="r.id" v-model="selected" :disabled="busy || r.protected || (selected.length>=500 && !selected.includes(r.id))" /><span class="storage-type">{{kindLabel(r.kind)}}</span><span class="storage-name"><strong>{{r.name}}</strong><small>{{r.source}} · {{time(r.modifiedAt)}}<span v-if="r.protected"> · {{r.reason}}</span></small></span><span class="storage-size">{{bytes(r.bytes)}}</span></label>
+        </template>
+        <p v-if="!rows.length && !loading" class="storage-empty">{{inventory?'没有符合条件的数据':'扫描后显示可管理数据'}}</p>
+        <button v-if="hasMore" class="btn btn-secondary" :disabled="loading || busy" @@click="loadMore">加载更多</button>
+    </section>
+    <footer v-if="selected.length" class="storage-selection"><div><strong>已选 {{selected.length}} 项 · {{bytes(selectedBytes)}}</strong><small>{{category==='trash'?'恢复到原位置，或永久删除以释放空间':'移入回收站可撤销；回收站仍占用空间'}}</small></div><div><button v-if="category==='trash'" class="btn btn-secondary" :disabled="busy" @@click="prepare('restore')">恢复所选</button><button class="btn btn-primary" :disabled="busy" @@click="prepare(category==='trash'?'purge':'trash')">{{category==='trash'?'永久删除':'移入回收站'}}</button></div></footer>
+    <div v-if="plan" class="workspace-modal-backdrop" @@click.self="!busy && (plan=null)"><section class="workspace-modal storage-confirm" role="dialog" aria-modal="true" aria-labelledby="storage-confirm-title"><div class="workspace-modal-head"><h2 id="storage-confirm-title">{{plan.action==='restore'?'恢复所选数据':'确认清理所选数据'}}</h2></div><div class="workspace-modal-body"><p><strong>{{plan.count}} 项 · {{bytes(plan.bytes)}}</strong></p><p>{{plan.warning}}</p><p v-if="error" class="storage-error">{{error}}</p><div class="storage-confirm-actions"><button class="btn btn-secondary" :disabled="busy" @@click="plan=null">取消</button><button class="btn btn-primary" :disabled="busy" @@click="execute">{{busy?'处理中…':plan.action==='purge'?'永久删除':'确认'}}</button></div></div></section></div>
+</div>

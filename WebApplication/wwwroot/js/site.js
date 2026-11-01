@@ -18,6 +18,7 @@
                 { key: 'hermes', href: '/#/hermes', icon: '/icons/hermes.svg', label: 'Hermes' }
             ] },
             { title: '设置', items: [
+                { key: 'storage', href: '/#/storage', icon: '/icons/folder.svg', label: '空间管理' },
                 { key: 'identity', href: '/#/identity', icon: '/icons/shield.svg', label: '身份验证' }
             ] }
         ] }) });
@@ -31,7 +32,7 @@
             methods: {
                 sync() {
                     const route = location.hash.match(/^#\/([^?]*)/)?.[1] || 'home';
-                    this.currentTitle = ({ home:'总览', tunnels:'端口转发', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes', identity:'身份验证' })[route] || 'RemoteTool';
+                    this.currentTitle = ({ home:'总览', tunnels:'端口转发', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes', storage:'空间管理', identity:'身份验证' })[route] || 'RemoteTool';
                 }
             },
             mounted() { this.sync(); window.addEventListener('hashchange', this.sync); window.addEventListener('workspace-route-change', this.sync); },

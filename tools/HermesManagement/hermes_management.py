@@ -74,7 +74,7 @@ def api_server_action(action, body):
             env_path.parent.mkdir(parents=True, exist_ok=True)
             lines = []
         for field, value in wanted.items():
-            if field in current:
+            if field in current and (field != "API_SERVER_ENABLED" or api["enabled"]):
                 continue
             existing = [i for i, line in enumerate(lines) if line.strip().startswith(field + "=")]
             if existing:
@@ -82,7 +82,7 @@ def api_server_action(action, body):
             else:
                 lines.append(f"{field}={value}")
         if not api["key_set"]:
-            generated = "hk-" + uuid.uuid4().hex + uuid.uuid4().hex
+            generated = body.get("api_server_key") or "hk-" + uuid.uuid4().hex + uuid.uuid4().hex
             existing = [i for i, line in enumerate(lines) if line.strip().startswith("API_SERVER_KEY=")]
             if existing:
                 lines[existing[0]] = f"API_SERVER_KEY={generated}"

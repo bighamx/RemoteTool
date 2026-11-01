@@ -13,6 +13,7 @@
     <Compile Include="../../WebApplication/Services/HermesSetupRequired.cs" Link="HermesSetupRequired.cs" />
     <Compile Include="../../WebApplication/Services/HermesTitleService.cs" Link="HermesTitleService.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexRpc.cs" Link="CodexRpc.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexInstaller.cs" Link="CodexInstaller.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexAttachmentInput.cs" Link="CodexAttachmentInput.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexRunAttachments.cs" Link="CodexRunAttachments.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexProjects.cs" Link="CodexProjects.cs" />
@@ -32,6 +33,10 @@
     <Compile Include="../../WebApplication/Services/Codex/CodexDesktopActivity.cs" Link="CodexDesktopActivity.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexCompactionEvent.cs" Link="CodexCompactionEvent.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexApproval.cs" Link="CodexApproval.cs" />
+    <Compile Include="../../WebApplication/Services/Storage/StorageFiles.cs" Link="StorageFiles.cs" />
+    <Compile Include="../../WebApplication/Services/Storage/ManagedStorageService.cs" Link="ManagedStorageService.cs" />
+    <Compile Include="../../WebApplication/Services/RunRegistry.cs" Link="RunRegistry.cs" />
+    <Compile Include="../../WebApplication/Services/RemoteControl/TerminalCapabilities.cs" Link="TerminalCapabilities.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexSessionPermissions.cs" Link="CodexSessionPermissions.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexAssistantMessageStream.cs" Link="CodexAssistantMessageStream.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexModelSettings.cs" Link="CodexModelSettings.cs" />

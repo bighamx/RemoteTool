@@ -59,7 +59,7 @@ internal static class CodexWorkspaceUsage
             await client.Initialize(ct);
             var account = await client.Call("account/read", Obj(("refreshToken", true)), ct);
             if (account["account"] == null)
-                throw new CodexError("工作空间登录已失效，请重新登录", 409);
+                throw new CodexError("工作空间登录已失效，请重新登录该工作空间，或同步电脑当前登录后重试", 409, "workspace_login_expired", "rejected");
             var refreshed = CodexJson.Read(Path.Combine(probe, "auth.json"));
             if (CodexAccountStore.Identity(refreshed).S("workspace_id") != identity.S("workspace_id"))
                 throw new CodexError("用量查询的工作空间不匹配", 409);

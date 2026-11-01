@@ -19,6 +19,10 @@ public class TerminalService(IConfiguration configuration)
 {
     public async Task HandleWebSocketAsync(WebSocket webSocket, TerminalType terminalType = TerminalType.Shell)
     {
+        if (!TerminalCapabilities.Supports(terminalType.ToString().ToLowerInvariant())) {
+            await webSocket.CloseAsync(WebSocketCloseStatus.PolicyViolation,"当前服务端不支持所选终端类型",CancellationToken.None);
+            return;
+        }
         if (OperatingSystem.IsMacOS())
         {
             await MacPtySession.RunAsync(webSocket, configuration);
@@ -248,7 +252,7 @@ public class TerminalSession : IDisposable
             // The Web terminal sends complete lines over pipes, not a PTY. On macOS,
             // an interactive zsh loads prompt plugins that cannot run with TERM=dumb.
             var utf8 = new UTF8Encoding(false);
-            startInfo.FileName = OperatingSystem.IsMacOS() ? "/bin/zsh" : OperatingSystem.IsLinux() ? "/bin/bash" : "cmd.exe";
+            startInfo.FileName = OperatingSystem.IsWindows() ? TerminalCapabilities.WindowsExecutable("cmd") : TerminalCapabilities.UnixExecutable(TerminalCapabilities.Platform) ?? "/bin/sh";
             startInfo.Arguments = OperatingSystem.IsMacOS() ? "-s" : OperatingSystem.IsLinux() ? "-i" : "/Q /K";
             startInfo.StandardInputEncoding = utf8;
             startInfo.StandardOutputEncoding = utf8;
@@ -258,7 +262,7 @@ public class TerminalSession : IDisposable
         }
         else if (_terminalType == TerminalType.PowerShell)
         {
-            startInfo.FileName = "powershell.exe";
+            startInfo.FileName = TerminalCapabilities.WindowsExecutable("powershell");
             startInfo.Arguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass";
             if (_useUtf8)
             {
@@ -277,7 +281,7 @@ public class TerminalSession : IDisposable
         }
         else
         {
-            startInfo.FileName = "cmd.exe";
+            startInfo.FileName = TerminalCapabilities.WindowsExecutable("cmd");
             if (_useUtf8)
             {
                 var utf8NoBom = new UTF8Encoding(false);

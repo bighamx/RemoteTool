@@ -12,6 +12,10 @@ public sealed class HermesManagement(IConfiguration configuration)
     private readonly object maintenanceGate = new();
     private bool maintenance;
     private int mutations;
+    public Task<JsonElement> EnableApiServer(CancellationToken ct) {
+        var key=new HermesProfiles(configuration).ApiKey(HermesProfileScope.Name);
+        return Invoke("enable_api_server",JsonSerializer.SerializeToElement(new{restart=false,api_server_key=key}),ct);
+    }
     public void BeginMaintenance() { lock (maintenanceGate) { if (maintenance || mutations != 0) throw new InvalidOperationException("有 Hermes 管理操作进行中，请稍后重试"); maintenance = true; } }
     public void EndMaintenance() { lock (maintenanceGate) maintenance = false; }
     public async Task<JsonElement> Invoke(string action, JsonElement? body, CancellationToken ct)

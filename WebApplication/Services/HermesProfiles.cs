@@ -38,6 +38,8 @@ public sealed class HermesProfiles(IConfiguration configuration)
         var path = name == "default"
             ? configuration["Hermes:KeyFile"] ?? Environment.GetEnvironmentVariable("HERMES_API_KEY_FILE") ?? (OperatingSystem.IsMacOS() && !File.Exists(RemoteToolPaths.HermesKeyFile) ? Path.Combine(Root, ".env") : RemoteToolPaths.HermesKeyFile)
             : Path.Combine(HomeFor(name), ".env");
+        if (!File.Exists(path) && !string.IsNullOrWhiteSpace(path) && path.Equals(RemoteToolPaths.HermesKeyFile,OperatingSystem.IsWindows()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal))
+            path = Path.Combine(HomeFor(name), ".env");
         if (!File.Exists(path)) return null;
         foreach (var line in File.ReadLines(path)) {
             var parts = line.Split('=', 2);

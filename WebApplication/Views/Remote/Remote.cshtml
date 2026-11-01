@@ -241,9 +241,9 @@
             </div>
             <div class="terminal-status">
                 <select id="terminal-type" class="terminal-select" style="display: none;">
-                    <option value="shell">Shell</option>
-                    <option value="powershell">PowerShell</option>
-                    <option value="cmd">CMD</option>
+                    @foreach (var terminal in RemoteTool.WebApi.Services.RemoteControl.TerminalCapabilities.Choices(RemoteTool.WebApi.Services.RemoteControl.TerminalCapabilities.Platform)) {
+                        <option value="@terminal.Id">@terminal.Name</option>
+                    }
                 </select>
 
                 <button id="terminal-toggle-btn" class="btn btn-primary">连接终端</button>
