@@ -7,7 +7,14 @@ window.RemoteToolApi = {
         const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store', ...options, headers });
         if (response.status === 401) { location.href = '/Account/Login?ReturnUrl=' + encodeURIComponent(location.pathname + location.search + location.hash); throw new Error('登录已过期'); }
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw Object.assign(new Error(payload.message || payload.error || `请求失败 (${response.status})`), { status: response.status, code: payload.code, delivery: payload.delivery });
+        if (!response.ok) {
+            // 网关/服务端的错误体有三种形态：{message}、{error:{message,type}}、{error:"..."}；
+            // 直接取 payload.error 会把对象塞进 Error.message，界面显示成 [object Object]。
+            const detail = payload.message ?? payload.error?.message ?? payload.error ?? payload.title;
+            const text = typeof detail === 'string' ? detail
+                : detail && typeof detail === 'object' && typeof detail.message === 'string' ? detail.message : '';
+            throw Object.assign(new Error(text || `请求失败 (${response.status})`), { status: response.status, code: payload.code ?? payload.error?.code, delivery: payload.delivery });
+        }
         return payload;
     },
     get(path) { return this.request(path); },

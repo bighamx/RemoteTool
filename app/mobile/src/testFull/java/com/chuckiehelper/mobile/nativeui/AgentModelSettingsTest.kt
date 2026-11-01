@@ -5,6 +5,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AgentModelSettingsTest {
+    @Test fun thirdPartyPickerExcludesOfficialAliasesAndDisabledProviders() {
+        val providers = JSONObject("""{"endpoints":[{"id":"openai","official_provider":true},{"id":"company-login","official_provider":true},{"id":"disabled","enabled":false},{"id":"local","name":"OpenAI compatible","official_provider":false},{"id":"legacy-local"}]}""")
+        assertEquals(listOf("local", "legacy-local"), codexThirdPartyProviders(providers).map { it.getString("id") })
+        assertEquals(5, providers.getJSONArray("endpoints").length())
+        assertTrue(codexThirdPartyProviders(JSONObject("""{"endpoints":[{"id":"openai"}]}""")).isEmpty())
+    }
     @Test fun codexActualProviderIsNotHiddenByGlobalDefault() {
         val defaults = JSONObject("""{"provider":"openai","model":"gpt-default","reasoning_effort":"low"}""")
         val shown = effectiveAgentSelection("codex", AgentSelection("custom","gpt-chosen","high","priority"), defaults)

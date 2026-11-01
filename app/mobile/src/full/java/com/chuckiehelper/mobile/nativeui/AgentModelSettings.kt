@@ -8,6 +8,11 @@ internal fun isCcSwitchCompatibilityProvider(row: JSONObject): Boolean {
 
 internal fun JSONObject.cleanSetting(key: String): String = optString(key).takeUnless { it == "null" }.orEmpty()
 
+internal fun codexThirdPartyProviders(providers: JSONObject): List<JSONObject> =
+    providers.array("endpoints").objects().filter {
+        !it.optBoolean("official_provider", it.cleanSetting("id") == "openai") && it.optBoolean("enabled", true)
+    }
+
 internal fun modelMetadata(provider: JSONObject?, model: String?): JSONObject =
     provider?.array("models")?.objects()?.firstOrNull {
         it.cleanSetting("model").ifBlank { it.cleanSetting("id") } == model

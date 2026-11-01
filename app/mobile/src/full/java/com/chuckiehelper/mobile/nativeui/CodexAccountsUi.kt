@@ -201,7 +201,7 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders
 /** 二级列表：选择一个三方 provider（写 config.toml 并重启运行时/桌面 Codex）。 */
 @Composable
 private fun CodexProviderPickerDialog(model: HermesModel, onManageProviders: () -> Unit, close: () -> Unit) {
-    val rows = model.providers.array("endpoints").objects().sortedBy { isCcSwitchCompatibilityProvider(it) }
+    val rows = codexThirdPartyProviders(model.providers).sortedBy { isCcSwitchCompatibilityProvider(it) }
     var showCompatibilityInfo by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { model.fetchModels() }
     AlertDialog(

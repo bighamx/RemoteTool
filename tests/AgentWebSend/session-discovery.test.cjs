@@ -37,6 +37,15 @@ test('changing an already-mounted workspace URL opens the requested session',asy
     await state.onWorkspaceRouteChange();assert.equal(state.selectedId,'target');assert.equal(state.sessions[0].id,'target');assert.equal(state.search,'');
 });
 
+test('a deleted remembered Hermes session is cleared while the list remains usable',async()=>{
+    const {state,api,context}=createHarness([],'hermes');state.selectedId='';
+    const saved='remotetool:web:selected:hermes';context.localStorage.setItem(saved,'missing');
+    api.get=async route=>{if(route.endsWith('/sessions'))return {data:[{id:'available'}]};throw Object.assign(new Error('deleted'),{status:404});};
+    state.select=async row=>{state.selectedId=row.id;};
+    await state.refreshSessions();assert.equal(state.listError,'');assert.equal(state.selectedId,'available');
+    assert.equal(context.localStorage.getItem(saved),null);
+});
+
 test('an older linked-session response cannot replace a newer manual selection',async()=>{
     const {state,api,context}=createHarness([]);context.window.RemoteToolWorkspace={};context.location.hash='#/codex?session=target';
     let finish;api.get=()=>new Promise(resolve=>finish=resolve);state.refreshSessionStatuses=async()=>{};

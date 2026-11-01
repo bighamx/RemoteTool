@@ -329,6 +329,26 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             payload = node.ToJsonString();
         }
         Response.StatusCode = (int)upstream.StatusCode;
+        if (!upstream.IsSuccessStatusCode)
+        {
+            // 网关 404 返回 {"error":{"message":...,"code":...}}；原样透传会让客户端把对象当消息（显示 [object Object]）。
+            var message = upstream.StatusCode == System.Net.HttpStatusCode.NotFound ? $"会话不存在或已被删除：{id}" : "读取 Hermes 会话失败";
+            var code = upstream.StatusCode == System.Net.HttpStatusCode.NotFound ? "session_not_found" : "session_read_failed";
+            try
+            {
+                if (JsonNode.Parse(payload) is JsonObject error)
+                {
+                    var detail = error["error"] ?? error;
+                    var text = detail is JsonObject inner ? inner["message"]?.ToString() : detail?.ToString();
+                    if (!string.IsNullOrWhiteSpace(text)) message = text!;
+                    code = (detail as JsonObject)?["code"]?.ToString() ?? code;
+                }
+            }
+            catch (JsonException) { }
+            Response.ContentType = "application/json";
+            await Response.WriteAsJsonAsync(new { message, code, delivery = "unknown" }, ct);
+            return;
+        }
         Response.ContentType = upstream.Content.Headers.ContentType?.ToString() ?? "application/json";
         await Response.WriteAsync(payload, ct);
     }

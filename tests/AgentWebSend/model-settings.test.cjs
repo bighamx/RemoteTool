@@ -43,6 +43,13 @@ test('model catalog is scoped to the selected session and late responses cannot 
     assert.equal(state.modelSelection.model,'new-model');assert.equal(state.models[0].slug,'third');
 });
 
+test('third-party switching excludes official aliases and disabled rows without changing the management catalog', () => {
+    const {state} = setup();
+    state.providersState={endpoints:[{id:'openai'},{id:'company-login',official_provider:true},{id:'disabled',enabled:false},{id:'local',name:'OpenAI compatible',official_provider:false},{id:'legacy-local'}]};
+    assert.deepEqual(Array.from(state.thirdPartyProviders,row=>row.id),['local','legacy-local']);
+    assert.equal(state.providersState.endpoints.length,5);
+});
+
 test('saved official login is not shown as active when third-party routing is selected', () => {
     const {state} = setup();
     state.providersState={provider:'third',official_provider:false,endpoints:[{id:'third',name:'Private',auth_kind:'api_key'}]};
