@@ -29,8 +29,11 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'androidx.compose.ui:ui-test-junit4'
     testImplementation('org.robolectric:robolectric:4.14.1') {
-        // These tests exercise Android text/scroll behaviour with legacy graphics.
-        exclude group: 'org.robolectric', module: 'nativeruntime-dist-compat'
+        // The native runtime is unavailable on Windows. Linux CI needs it for
+        // Robolectric's native SQLite/Android bindings, even with legacy graphics.
+        if (System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')) {
+            exclude group: 'org.robolectric', module: 'nativeruntime-dist-compat'
+        }
     }
     testImplementation 'org.json:json:20240303'
 }

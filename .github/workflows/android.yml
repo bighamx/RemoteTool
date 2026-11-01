@@ -62,6 +62,13 @@ jobs:
         run: |
           bash app/gradlew -p app :mobile:assembleFullRelease :mobile:assemblePhoneRelease -PbuildChannel=${{ steps.channel.outputs.value }} -Dorg.gradle.jvmargs=-Xmx4g
           python tools/android_ci.py package --channel ${{ steps.channel.outputs.value }} --out "$RUNNER_TEMP/android-release"
+      - name: Save test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-results
+          path: app/mobile/build/test-results/
+          retention-days: 7
       - uses: actions/setup-dotnet@v4
         if: startsWith(github.ref, 'refs/tags/android-v')
         with:
