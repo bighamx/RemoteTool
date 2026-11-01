@@ -14,6 +14,7 @@ if (args.Length == 3 && args[0] == "--desktop-probe") {
     return;
 }
 CodexSessionPermissionsChecks.Run();
+ServerBuildChecks.Run();
 if (args.Contains("--permissions-only")) return;
 await CodexMacDesktopChecks.Run();
 await CodexDesktopOwnerChecks.Run();

@@ -13,7 +13,6 @@
     <SatelliteResourceLanguages>en;zh</SatelliteResourceLanguages>
     <Version>1.2.0</Version>
     <!-- UTC build timestamp, with minute precision shared by the API and Web UI. -->
-    <InformationalVersion>$([System.DateTime]::UtcNow.ToString("yyyyMMdd.HHmm"))</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
@@ -73,4 +72,14 @@
     <Content Include="..\tools\PhoneTools\hermes_plugin\*.yaml" Link="phone-tools\hermes_plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\PhoneTools\**\*.md" Link="phone-tools\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <Target Name="StampSourceVersion" BeforeTargets="GetAssemblyVersion" DependsOnTargets="InitializeSourceControlInformation">
+    <Exec Command="git status --porcelain --untracked-files=normal" WorkingDirectory="$(MSBuildProjectDirectory)" ConsoleToMSBuild="true" StandardOutputImportance="Low" IgnoreExitCode="true" Condition="'$(SourceRevisionId)' != ''">
+      <Output TaskParameter="ConsoleOutput" ItemName="SourceWorktreeChanges" />
+    </Exec>
+    <PropertyGroup>
+      <InformationalVersion Condition="'$(SourceRevisionId)' != ''">$(SourceRevisionId)</InformationalVersion>
+      <InformationalVersion Condition="'$(SourceRevisionId)' == ''">unknown</InformationalVersion>
+      <InformationalVersion Condition="'@(SourceWorktreeChanges)' != ''">$(InformationalVersion)-dirty</InformationalVersion>
+    </PropertyGroup>
+  </Target>
 </Project>

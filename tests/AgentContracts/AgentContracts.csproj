@@ -38,6 +38,7 @@
     <Compile Include="../../WebApplication/Services/RunRegistry.cs" Link="RunRegistry.cs" />
     <Compile Include="../../WebApplication/Services/RemoteControl/TerminalCapabilities.cs" Link="TerminalCapabilities.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexSessionPermissions.cs" Link="CodexSessionPermissions.cs" />
+    <Compile Include="../../WebApplication/Services/ServerBuild.cs" Link="ServerBuild.cs" />
     <Compile Include="../../WebApplication/Services/AgentProviderPolicy.cs" Link="AgentProviderPolicy.cs" />
     <Compile Include="../../WebApplication/Services/HermesProviderCatalog.cs" Link="HermesProviderCatalog.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexPermissionState.cs" Link="CodexPermissionState.cs" />
