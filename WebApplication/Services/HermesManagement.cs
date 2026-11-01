@@ -4,6 +4,8 @@ using System.Text.Json;
 
 namespace RemoteTool.WebApi.Services;
 
+public sealed class HermesProviderConfigException(string message) : InvalidOperationException(message);
+
 public sealed class HermesManagement(IConfiguration configuration)
 {
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -31,7 +33,7 @@ public sealed class HermesManagement(IConfiguration configuration)
     public void EndMaintenance() { lock (maintenanceGate) maintenance = false; }
     public async Task<JsonElement> Invoke(string action, JsonElement? body, CancellationToken ct)
     {
-        var mutation = !action.StartsWith("admin_") && action is not ("session_search" or "session_context" or "run_lookup" or "providers" or "model_info" or "model_reasoning" or "api_server_status");
+        var mutation = !action.StartsWith("admin_") && action is not ("session_search" or "session_context" or "run_lookup" or "providers" or "model_info" or "model_options" or "model_reasoning" or "api_server_status");
         lock (maintenanceGate) { if (mutation) { if (maintenance) throw new InvalidOperationException("网关正在维护，请完成或取消维护后再修改配置"); mutations++; } }
         try {
         var profiles = new HermesProfiles(configuration);
@@ -74,6 +76,11 @@ public sealed class HermesManagement(IConfiguration configuration)
             catch { if (!process.HasExited) process.Kill(entireProcessTree: true); throw; }
             var errorText = await errors;
             var json = (await output).Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim() ?? "";
+            if(json.StartsWith('{')) {
+                using var providerFailure=JsonDocument.Parse(json);
+                if(providerFailure.RootElement.TryGetProperty("code",out var code)&&code.GetString()=="provider_config")
+                    throw new HermesProviderConfigException(providerFailure.RootElement.GetProperty("message").GetString());
+            }
             if (process.ExitCode != 0 || string.IsNullOrEmpty(json) || json[0] != '{')
                 throw new InvalidOperationException(action == "session_context" ? "上下文读取失败，请检查 Hermes 运行环境" : "Hermes 管理操作失败，请检查安装版本与配置");
             using var result = JsonDocument.Parse(json);

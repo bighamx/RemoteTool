@@ -20,12 +20,14 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
     [HttpGet("model-options")] public Task Models([FromQuery] string session, [FromQuery] bool refresh, CancellationToken ct) =>
         Forward(HttpMethod.Get, "model-options?refresh=" + (refresh ? "true" : "false") +
             (string.IsNullOrEmpty(session) ? "" : "&session=" + Uri.EscapeDataString(Id(session))), null, ct);
-    [HttpGet("providers")] public Task Providers(CancellationToken ct) => Forward(HttpMethod.Get, "providers", null, ct);
+    [HttpGet("providers")] public Task Providers(CancellationToken ct,[FromQuery]bool include_disabled=false) => Forward(HttpMethod.Get, "providers?include_disabled="+include_disabled, null, ct);
     [HttpGet("title-model")] public Task TitleModel(CancellationToken ct) => Forward(HttpMethod.Get, "title-model", null, ct);
     [HttpPost("title-model")] public Task SaveTitleModel([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "title-model", body, ct);
     [HttpPost("title-model/test")] public Task TestTitleModel(CancellationToken ct) => Forward(HttpMethod.Post, "title-model/test", JsonSerializer.SerializeToElement(new { }), ct);
     [HttpPost("title-model/models")] public Task TitleModels([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "title-model/models", body, ct);
     [HttpPost("providers")] public Task SaveProvider([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "providers", body, ct);
+    [HttpPost("providers/state")] public Task ProviderState([FromBody]JsonElement body,CancellationToken ct)=>Forward(HttpMethod.Post,"providers/state",body,ct);
+    [HttpPost("providers/delete")] public Task DeleteProvider([FromBody]JsonElement body,CancellationToken ct)=>Forward(HttpMethod.Post,"providers/delete",body,ct);
     [HttpGet("default-model")] public Task Default(CancellationToken ct) => Forward(HttpMethod.Get, "default-model", null, ct);
     [HttpPost("default-model")] public Task SetDefault([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "default-model", body, ct);
     [HttpGet("sessions")] public Task Sessions([FromQuery] string cursor, CancellationToken ct) => Forward(HttpMethod.Get, "sessions" + (cursor == null ? "" : "?cursor=" + Uri.EscapeDataString(cursor)), null, ct);

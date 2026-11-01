@@ -59,10 +59,10 @@
     const readVersions = new Map();
     const app = Vue.createApp({
         data: () => ({ agent, profile, agentSetup:null,setupBusy:false,setupDetails:false,setupNotice:'',profiles: [], profileError: '', sessionDetails: null, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: isMobile()&&!requestedSession(), mobileViewport: isMobile(), mobileComposerOpen: false,
-            adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminSettings:{},adminProvider:{},adminEndpoints:[],adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
+            adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminSettings:{},adminProvider:{},adminEndpoints:[],adminProviders:[],adminShowDisabled:false,adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyCacheState: '', historyLoadedEpoch: -1, historyFailedEpoch: -1, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [], schedules: [], showSchedule: false, scheduleText: '', scheduleAt: '', scheduleError: '', scheduleBusy: false, scheduleSession: '', scheduleClientKey: '', scheduleRequest: null,
-            approvalBusy:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsInfo:'',permissionsError:'',showPermissionsDialog:false, activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelDefaults: {}, modelsError: '', providersState: {}, globalModelOptions: {}, providerSwitch: {provider:'',model:'',effort:'',tier:''}, codexProviderEdit: null, modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
+            approvalBusy:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsInfo:'',permissionsError:'',showPermissionsDialog:false, activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelDefaults: {}, modelsError: '', modelSessionSupported: true, providersState: {}, globalModelOptions: {}, providerSwitch: {provider:'',model:'',effort:'',tier:''}, codexProviderEdit: null, modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
             groupByProject: localStorage.getItem(`remotetool:web:groupByProject:${agent}`) === '1',
             collapsedGroups: (() => { try { return JSON.parse(localStorage.getItem(`remotetool:web:collapsedGroups:${agent}`) || '[]'); } catch { return []; } })(),
             showMoveDialog: false, moveTarget: null, moveMoving: false, moveSearch: '', moveError: '',
@@ -246,14 +246,31 @@
                 if (!this.adminMayLeave()) return;
                 await this.adminAction(async()=>{
                     this.adminDoc=null;this.adminText='';this.adminOriginal='';
-                    if(mode==='models') {const data=await api.get(`${base}/default-model`);this.adminSettings={provider:data.provider||'',model:data.model||'',reasoning_effort:data.reasoning_effort||''};this.models=(await api.get(`${base}/model-options`)).providers||[];const endpoints=await api.get(`${base}/providers`);this.adminEndpoints=endpoints.endpoints||[];this.adminProvider={name:'',base_url:'',model:'',api_key:'',api_mode:''};}
+                    if(mode==='models') {const data=await api.get(`${base}/default-model`);this.adminSettings={provider:data.provider||'',model:data.model||'',reasoning_effort:data.reasoning_effort||''};await this.reloadAdminProviders();this.adminProvider={name:'',base_url:'',model:'',api_key:'',api_mode:''};}
                     if(mode==='title') {this.adminSettings={...await api.get(`${base}/title-model`),api_key:''};}
                     this.adminMode=mode;
                     this.adminSettingsOriginal=mode==='models'||mode==='title'?JSON.stringify(this.adminSettings):'';this.adminProviderOriginal=mode==='models'?JSON.stringify(this.adminProvider):'';
                 });
             },
             async saveAdminSettings() { await this.adminAction(async()=>{const result=await api.post(`${base}/${this.adminMode==='models'?'default-model':'title-model'}`,this.adminSettings);if(result.confirm_required){this.adminError='模型配置需要额外确认，请在电脑上完成。';return;}this.adminSettings.api_key='';this.adminSettingsOriginal=JSON.stringify(this.adminSettings);this.$Message.success('已保存');}); },
-            async saveAdminProvider() {await this.adminAction(async()=>{const result=await api.post(`${base}/providers`,Object.fromEntries(Object.entries({...this.adminProvider,make_default:false}).filter(([key,value])=>key!=='api_key'||!!value)));if(result.confirm_required){this.adminError='配置需要额外确认，请在电脑上完成。';return;}this.adminProvider.api_key='';this.adminProviderOriginal=JSON.stringify(this.adminProvider);this.adminEndpoints=(await api.get(`${base}/providers`)).endpoints||[];this.models=(await api.get(`${base}/model-options`)).providers||[];this.$Message.success('已保存');});},
+            async reloadAdminProviders() {
+                const result=await api.get(`${base}/providers?include_disabled=${this.adminShowDisabled}`);
+                this.adminEndpoints=result.endpoints||[];
+                this.adminProviders=result.providers||this.adminEndpoints.filter(e=>e.compatibility!=='cc_switch_managed_proxy').map(e=>({slug:e.id,name:e.name,enabled:e.enabled!==false,editable:!e.official_provider,endpoint:e}));
+                const catalog=await api.get(`${base}/model-options`);this.models=catalog.providers||[];this.modelSessionSupported=catalog.session_model_supported!==false;
+            },
+            async openProviderManagement() {
+                this.adminOpen=true;window.addEventListener('beforeunload',this.guardAdminUnload);
+                await this.openAdminSettings('models');
+            },
+            async providerAdminAction(provider,remove=false) {
+                if(remove&&!confirm(`删除 ${provider.name} 的原生自定义配置？配置将先备份；已有会话保留，后续需要切换其他供应商。`))return;
+                await this.adminAction(async()=>{
+                    await api.post(`${base}/providers/${remove?'delete':'state'}`,{id:provider.slug,enabled:provider.enabled===false});
+                    await this.reloadAdminProviders();this.$Message.success(remove?'供应商已删除':'供应商状态已更新');
+                });
+            },
+            async saveAdminProvider() {await this.adminAction(async()=>{const result=await api.post(`${base}/providers`,Object.fromEntries(Object.entries({...this.adminProvider,make_default:false}).filter(([key,value])=>key!=='api_key'||!!value)));if(result.confirm_required){this.adminError='配置需要额外确认，请在电脑上完成。';return;}this.adminProvider.api_key='';this.adminProviderOriginal=JSON.stringify(this.adminProvider);await this.reloadAdminProviders();this.$Message.success('已保存');});},
             async restartAdminGateway(wait) { if(!confirm(wait?'暂停接收新任务，等待全部 Profile 空闲后重启？':'重启当前设备的网关？将影响全部 Profile。'))return;await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/restart`,{wait});}); },
             async cancelAdminGateway() {await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/cancel`,{});});},
             async updateAdminHermes() {if(!confirm('等待全部 Profile 空闲后按官方流程更新并重启？将自动确认恢复本地修改。'))return;await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/update`,{});});},
@@ -734,7 +751,7 @@
                     if(this.agent==='codex'&&id)query.set('session',id);
                     const result=await api.get(`${base}/model-options?${query}`);
                     if(!current()||id!==this.selectedId)return;
-                    this.models=result.providers||[];this.modelDefaults=result;this.modelsError='';
+                    this.models=result.providers||[];this.modelDefaults=result;this.modelsError='';this.modelSessionSupported=result.session_model_supported!==false;
                     if(JSON.stringify(this.modelSelection)===selection)this.modelSelection=this.readModelSelection(this.selected,result);
                 }catch(error){if(current())this.modelsError=error.message;}
             },
@@ -856,7 +873,7 @@
                 try { await api.post(`${base}/sessions/${api.id(session.id)}/archive`, { archived: archived }); this.sessions = this.sessions.map(s => s.id === session.id ? { ...s, archived: archived } : s); this.$Message.success(archived ? '已存档' : '已取消存档'); }
                 catch (e) { this.error = e.message; }
             },
-            async saveModel() { if(!this.selectedId||!this.modelSelection.model)return; try {const choice=this.modelSelection;const body={provider:choice.provider,model:choice.model,reasoning_effort:choice.effort};if(this.agent==='codex')body.service_tier=choice.tier;else body.model_options={reasoning:choice.effort==='none'?{enabled:false}:choice.effort?{enabled:true,effort:choice.effort}:{}};await api.post(`${base}/sessions/${api.id(this.selectedId)}/model`,body); this.$Message.success('模型设置已更新'); await this.refreshSessions();await this.loadSessionDetail();await this.loadModels(); } catch(e) { this.error=e.message; } },
+            async saveModel() { if(!this.selectedId||!this.modelSelection.model)return;if(this.agent==='hermes'&&!this.modelSessionSupported){this.error='当前 Hermes 版本仅支持全局模型设置，请打开 Hermes 管理';return;} try {const choice=this.modelSelection;const body={provider:choice.provider,model:choice.model,reasoning_effort:choice.effort};if(this.agent==='codex')body.service_tier=choice.tier;else body.model_options={reasoning:choice.effort==='none'?{enabled:false}:choice.effort?{enabled:true,effort:choice.effort}:{}};await api.post(`${base}/sessions/${api.id(this.selectedId)}/model`,body); this.$Message.success('模型设置已更新'); await this.refreshSessions();await this.loadSessionDetail();await this.loadModels(); } catch(e) { this.error=e.message; } },
             openCreateDialog() {this.createTitle='';this.createProjectId='';this.createRoot='';this.createRoots=[];this.createProjectName='';this.createProjectSearch='';this.createMode='existing';this.createBrowser=false;this.createBrowserError='';this.createError='';this.showCreateDialog=true;if(this.agent==='codex')this.loadCodexAdmin();},
             pickCreateProject(project) {this.createProjectId=project?.id||'';const roots=this.projectRootsOf(project);this.createRoot=roots[0]||'';},
             toggleCreateRoot(path) {const rows=this.createRoots.slice();const at=rows.indexOf(path);if(at<0){if(rows.length>=16)return;rows.push(path);}else rows.splice(at,1);this.createRoots=rows;if(!rows.includes(this.createRoot))this.createRoot=rows[0]||'';},

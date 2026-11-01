@@ -19,6 +19,7 @@ await CodexMacDesktopChecks.Run();
 await CodexDesktopOwnerChecks.Run();
 await HermesSetupChecks.Run();
 CodexApprovalChecks.Run();
+ProviderPolicyChecks.Run();
 await StorageChecks.Run();
 MacNonDesktopChecks.Run();
 await HermesHistoryPagesChecks.Run();

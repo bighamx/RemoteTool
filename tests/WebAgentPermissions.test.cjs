@@ -49,6 +49,20 @@ test('native permission display is separate from an explicit next-turn override'
     await state.loadPermissions();assert.equal(state.permissionsMode,'workspace');assert.equal(state.permissionsChoice,'workspace');
 });
 
+test('provider failures stay on the management page and retain unsaved input',async()=>{
+    const {state,api}=fixture();state.adminOpen=true;state.adminProvider={name:'Local fixture',base_url:'http://localhost:9/v1',model:'m',api_key:'fixture'};
+    api.post=async()=>{throw new Error('Provider 配置无效')};await state.saveAdminProvider();
+    assert.equal(state.adminError,'Provider 配置无效');assert.equal(state.adminProvider.name,'Local fixture');assert.equal(state.adminBusy,false);
+});
+
+test('disabled provider management and delete confirmation use canonical ids',async()=>{
+    const {state,api,calls,context}=fixture();state.adminShowDisabled=true;
+    api.get=async path=>path.includes('/providers?')?{providers:[{slug:'custom:demo',name:'Demo',enabled:false,editable:true,endpoint:{id:'demo'}}]}:{providers:[]};
+    state.$Message={success(){}};await state.reloadAdminProviders();assert.equal(state.adminProviders[0].slug,'custom:demo');
+    await state.providerAdminAction(state.adminProviders[0]);assert.equal(calls.at(-1).body.id,'custom:demo');assert.equal(calls.at(-1).body.enabled,true);
+    const before=calls.length;context.confirm=()=>false;await state.providerAdminAction(state.adminProviders[0],true);assert.equal(calls.length,before);
+});
+
 test('permission saves are bound to the selected session and invalid mode is ignored',async()=>{
     const {state,api,calls}=fixture();
     state.permissionsLoaded=true;await state.savePermissions();assert.equal(calls.length,0);

@@ -21,6 +21,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private readonly CodexHandoff handoff;
     private readonly CodexTitleGenerator titles;
     private readonly CodexSessionPermissions sessionPermissions;
+    private readonly AgentProviderPolicy providerAvailability = new("codex","default");
     private readonly object gate = new();
     private readonly SemaphoreSlim settingsLock = new(1, 1);
     private JsonObject providers, runs;
@@ -1067,6 +1068,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
 
     private async Task<JsonObject> ProviderCatalog(string provider, CancellationToken ct = default, string session = null) {
         var config = await Config(ct);
+        if(!providerAvailability.Enabled(CodexProviderModels.IsOfficial(provider,config["model_providers"]?[provider])?"openai":provider))throw new CodexError("此供应商已禁用，请在 Provider 管理中启用或切换其他供应商",409,"provider_disabled","rejected");
         if (provider != "openai" && config["model_providers"]?[provider] == null) throw new CodexError("Provider 不存在，请刷新列表");
         var official = CodexProviderModels.IsOfficial(provider, config["model_providers"]?[provider]);
         var currentProvider = config.S("model_provider", "openai");
@@ -1093,7 +1095,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         }
         var known = config["model_providers"]?.DeepClone() as JsonObject ?? new();
         known["openai"] ??= Obj(("name", "OpenAI / ChatGPT"));
-        var rows = new JsonArray(await Task.WhenAll(known.Select(async entry => {
+        var rows = new JsonArray(await Task.WhenAll(known.Where(entry=>providerAvailability.Enabled(CodexProviderModels.IsOfficial(entry.Key,entry.Value)?"openai":entry.Key)).Select(async entry => {
             var official = CodexProviderModels.IsOfficial(entry.Key, entry.Value);
             var discovered = official ? null : await CodexProviderModels.Discover(entry.Value, providers[entry.Key], ct);
             var native = official ? officialCatalog ?? new JsonObject() : new JsonObject();
@@ -1330,6 +1332,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             var inputs = CodexAttachmentInput.Build(body.S("input", "请查看附件"), body.A("attachment_paths"), settings.S("attachments"), session);
             JsonObject selection = null;
             lock (gate) if (sessionOverrides.TryGetValue(session, out var chosen)) selection = chosen.DeepClone().AsObject();
+            if(providerAvailability.HasDisabled){var availabilityConfig=await Config(ct);var availabilityId=resumed.S("modelProvider");
+                if(!providerAvailability.Enabled(CodexProviderModels.IsOfficial(availabilityId,availabilityConfig["model_providers"]?[availabilityId])?"openai":availabilityId))throw new CodexError("此会话的供应商已禁用或删除，请先切换供应商",409,"provider_disabled","rejected");}
             var turnRequest = Obj(("threadId", session), ("input", inputs), ("clientUserMessageId", key));
             CodexSessionPermissions.Apply(permissionMode, turnRequest);
             if (selection != null) {
@@ -1515,6 +1519,37 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             var result = accounts.List(); var email = result["current_identity"].S("email");
             result["data"] = new JsonArray(result.A("data").Where(row => email.Length == 0 || row.S("email") == email).Select(row => row!.DeepClone()).ToArray()); return result;
         }
+        if(path is "providers/state" or "providers/delete") {
+            if(method!="POST")throw new CodexError("不支持的操作",405);
+            var config=await Config(context.RequestAborted);var id=body.S("id");
+            if(id!="openai"&&config["model_providers"]?[id]==null)throw new CodexError("供应商不存在，请刷新列表",404);
+            if(path=="providers/state"){
+                if(body["enabled"] is not JsonValue flag||!flag.TryGetValue<bool>(out var enabled))throw new CodexError("请提供有效的启用状态",400);
+                providerAvailability.Set(CodexProviderModels.IsOfficial(id,config["model_providers"]?[id])?"openai":id,enabled);return Obj(("success",true));
+            }
+            if(id=="openai"||CodexProviderModels.IsOfficial(id,config["model_providers"]?[id]))throw new CodexError("内置供应商仅支持禁用",400);
+            if(id==config.S("model_provider","openai"))throw new CodexError("请先切换全局默认供应商后再删除",409);
+            await settingsLock.WaitAsync(context.RequestAborted);
+            try {
+                var latest=await Config(context.RequestAborted);
+                if(id==latest.S("model_provider","openai"))throw new CodexError("此供应商已变为全局默认，请刷新并切换后再删除",409);
+                if(CodexProviderModels.IsOfficial(id,latest["model_providers"]?[id]))throw new CodexError("内置供应商仅支持禁用",400);
+                lock(gate)if(active.Count>0)throw new CodexError("请等待正在运行的 Codex 任务结束后再删除供应商",409);
+                if(DesktopBusy())throw new CodexError("桌面 Codex 正在执行任务，请结束后再删除供应商",409);
+                var backup=Path.Combine(folder,"provider-backups",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(backup);
+                if(!OperatingSystem.IsWindows())File.SetUnixFileMode(backup,UnixFileMode.UserRead|UnixFileMode.UserWrite|UnixFileMode.UserExecute);
+                var providerFile=Path.Combine(folder,"providers.json");if(providers[id]!=null)Atomic(Path.Combine(backup,"provider.json"),Obj((id,providers[id])));
+                await EditConfig(("model_providers."+JsonValue.Create(id)!.ToJsonString(),null));
+                if((await Config())["model_providers"]?[id]!=null)throw new CodexError("Codex 未确认删除供应商配置，请刷新核对",409);
+                providers.Remove(id);Atomic(providerFile,providers);providerAvailability.Set(id,false);
+                // Idle RPC processes inherited provider keys at launch. Recreate
+                // only our own idle clients so later turns cannot reuse a removed key.
+                string[] idleSessions;lock(gate)idleSessions=sessionRpcs.Keys.ToArray();
+                foreach(var sessionId in idleSessions)await ReleaseSessionCore(sessionId);
+                await rpc.DisposeAsync();await Launch();
+                return Obj(("success",true));
+            }finally{settingsLock.Release();}
+        }
         if (path == "providers") {
             var config = await Config();
             if (method == "GET") {
@@ -1531,10 +1566,17 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     ("has_api_key", providers[entry.Key].S("api_key").Length > 0 || entry.Value.S("env_key").Length > 0 ||
                         entry.Value.S("experimental_bearer_token").Length > 0 || usesOpenAiAuth(entry.Value))));
                 var officialAuth = accounts.CurrentAuth();
+                if(!rows.Any(r=>r.S("id")=="openai")&&(officialAuth.Count>0||currentProvider=="openai"))
+                    rows.Add(Obj(("id","openai"),("name","OpenAI / ChatGPT"),("official_provider",true),("current",currentProvider=="openai"),("model",currentProvider=="openai"?config.S("model"):"")));
                 foreach (var row in rows) {
                     var state = CodexProviderModels.AuthState(row.B("official_provider"), config["model_providers"]?[row.S("id")], providers[row.S("id")], officialAuth);
                     foreach (var field in state) row[field.Key] = field.Value?.DeepClone();
                 }
+                foreach(var row in rows){row["slug"]=row.S("id");row["is_current"]=row.B("current");}
+                rows=CodexProviderModels.MergeOfficialAliases(rows,currentProvider);
+                foreach(var row in rows){if(row.B("official_provider"))row["id"]="openai";row["enabled"]=providerAvailability.Enabled(row.S("id"));}
+                if(!bool.TryParse(context.Request.Query["include_disabled"],out var includeDisabled)||!includeDisabled)
+                    rows=new JsonArray(rows.Where(r=>r.B("enabled")).Select(r=>r.DeepClone()).ToArray());
                 return Obj(("endpoints", rows), ("provider", currentProvider),
                     ("official_provider", CodexProviderModels.IsOfficial(currentProvider, config["model_providers"]?[currentProvider])));
             }
@@ -1544,13 +1586,14 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             if (body.S("api_mode") is not ("" or "codex_responses")) throw new CodexError("Codex Provider 需要 Responses API 兼容端点");
             await settingsLock.WaitAsync();
             try {
+                var existed=config["model_providers"]?[id]!=null;
                 var value = config["model_providers"]?[id]?.DeepClone() as JsonObject ?? new();
                 value["name"] = body.S("name"); value["base_url"] = CodexProviderModels.BaseUri(body.S("base_url")).AbsoluteUri.TrimEnd('/'); value["wire_api"] = "responses";
                 var saved = providers[id]?.DeepClone() as JsonObject ?? new(); saved["model"] = body.S("model");
                 if (body.S("api_key").Length > 0) { saved["api_key"] = body.S("api_key"); value.Remove("experimental_bearer_token"); value["env_key"] = "CHUCKIE_CODEX_" + id.ToUpperInvariant() + "_KEY"; value["requires_openai_auth"] = false; }
                 var discovered = await CodexProviderModels.Discover(value, saved, context.RequestAborted);
                 if (discovered.S("base_url").Length > 0) value["base_url"] = discovered.S("base_url");
-                await EditConfig(("model_providers." + id, value)); providers[id] = saved; Atomic(Path.Combine(folder, "providers.json"), providers);
+                await EditConfig(("model_providers." + id, value)); providers[id] = saved; Atomic(Path.Combine(folder, "providers.json"), providers);if(!existed)providerAvailability.Set(id,true);
                 if (body.S("api_key").Length > 0) { await rpc.DisposeAsync(); await Launch(); }
                 return Obj(("saved", true));
             } finally { settingsLock.Release(); }

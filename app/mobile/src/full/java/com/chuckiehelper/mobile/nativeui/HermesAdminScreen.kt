@@ -5,12 +5,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -21,9 +24,9 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
     onProviders: () -> Unit, onTitle: () -> Unit, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     var files by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
-    var document by remember { mutableStateOf<JSONObject?>(null) }
-    var content by remember { mutableStateOf("") }
-    var saved by remember { mutableStateOf("") }
+    var document by rememberSaveable(stateSaver=Saver<JSONObject?,String>(save={it?.toString().orEmpty()},restore={it.takeIf{it.isNotEmpty()}?.let(::JSONObject)})) { mutableStateOf<JSONObject?>(null) }
+    var content by rememberSaveable { mutableStateOf("") }
+    var saved by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf(false) }
@@ -76,13 +79,10 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
         }
     }
     LaunchedEffect(logText, logScroll.maxValue, followLog) { if (followLog) logScroll.scrollTo(logScroll.maxValue) }
-    Dialog(onDismissRequest = ::goBack, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (document == null) "Hermes 管理" else files.firstOrNull { it.optString("id") == document?.optString("id") }?.optString("name") ?: "文件编辑", style = MaterialTheme.typography.titleLarge)
-                    TextButton(onClick = ::goBack, enabled = !busy) { Text(if (document != null) "返回" else "关闭") }
-                }
+    BackHandler { goBack() }
+    Scaffold(topBar={TopAppBar(title={Text(if(document==null)"Hermes 管理" else files.firstOrNull{it.optString("id")==document?.optString("id")}?.optString("name")?:"文件编辑")},
+        navigationIcon={IconButton(onClick=::goBack,enabled=!busy){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"返回")}})}) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).padding(horizontal=16.dp,vertical=8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("$device · $profile", style = MaterialTheme.typography.labelMedium)
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 if (document == null) Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -164,7 +164,6 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
                 }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
-        }
     }
     confirm?.let { pending -> AlertDialog(onDismissRequest = { confirm = null }, text = { Text(pending.first) }, confirmButton = { TextButton(onClick = { confirm = null; pending.second() }) { Text("确定") } }, dismissButton = { TextButton(onClick = { confirm = null }) { Text("取消") } }) }
     if (backups) AlertDialog(onDismissRequest = { backups = false }, title = { Text("文件备份") }, text = {

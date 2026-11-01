@@ -307,6 +307,16 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             else -> model.error = "支持 /new /model /sessions /stop /status /providers" + if (agent == "codex") " /compact" else ""
         }
     }
+    if(admin) {
+        HermesAdminScreen(api,api.base,profile,
+            onModels={globalModels=true;models=true;model.fetchModels()},
+            onProviders={providers=true;model.fetchProviders()},
+            onTitle={titleModelDialog=true;model.fetchTitleModel()},onClose={admin=false})
+        if(models)HermesModelPicker(model,if(agent=="hermes")globalModels else null){models=false}
+        if(providers)HermesProviderDialog(model){providers=false}
+        if(titleModelDialog)CodexTitleModelDialog(model){titleModelDialog=false}
+        return
+    }
     Column(Modifier.fillMaxSize().imePadding()
         .onGloballyPositioned { composerCoordinates = it }
         .pointerInput(commands, attachMenu) {
@@ -1215,10 +1225,6 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     if (takeover) ConfirmDialog("中断并接管当前会话", "请求中断此会话在其他端的任务，已执行的操作不会撤销。确认原任务结束且会话可写入后，再由你发送保留的草稿。其他端已启动新任务时会取消接管。", { takeover = false }) {
         takeover = false; model.takeover()
     }
-    if (admin) HermesAdminScreen(api, api.base, profile,
-        onModels = { globalModels = true; models = true; model.fetchModels() },
-        onProviders = { providers = true; model.fetchProviders() },
-        onTitle = { titleModelDialog = true; model.fetchTitleModel() }, onClose = { admin = false })
     if (models) HermesModelPicker(model, if (agent == "hermes") globalModels else null) { models = false }
     if (permissionsDialog && agent == "codex") model.selectedId?.let { session ->
         CodexSessionPermissionsDialog(api, session, { permissionsDialog = false }, { accessMode = it })
@@ -1573,6 +1579,7 @@ private fun MessageBubble(
 @Composable
 private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, onClose: () -> Unit) {
     var global by remember { mutableStateOf(fixedGlobal ?: (model.selectedId == null)) }
+    val sessionModelSupported=model.agent!="hermes"||model.modelOptions.optBoolean("session_model_supported",true)
     var provider by remember { mutableStateOf<JSONObject?>(null) }
     var selected by remember { mutableStateOf<String?>(null) }
     var filter by remember { mutableStateOf("") }
@@ -1623,11 +1630,11 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                     FilterChip(
                         !global,
                         {
-                            global = false
+                            if(sessionModelSupported)global = false
                             model.modelWarning = null
                         },
                         label = { Text("当前会话") },
-                        enabled = model.selectedId != null,
+                        enabled = model.selectedId != null && sessionModelSupported,
                     )
                     Spacer(Modifier.width(8.dp))
                     FilterChip(
@@ -1645,6 +1652,10 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                     label = { Text(if (provider == null) "搜索 Provider" else "搜索模型") },
                     singleLine = true,
                 )
+                if(!sessionModelSupported) {
+                    Text("当前 Hermes 版本仅支持修改全局默认模型；此设置影响该 Profile 后续的新任务。升级 Hermes 后可使用按会话切换。",style=MaterialTheme.typography.bodySmall)
+                    if(!global)TextButton(onClick={global=true;previous()}){Text("改为设置全局默认模型")}
+                }
                 Text(
                     "${if (global) "全局默认" else "当前会话"}：$resolvedProviderName · $currentModel",
                     style = MaterialTheme.typography.labelSmall,
@@ -1653,7 +1664,7 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                     if (provider == null) {
                         items(
                             model.modelOptions.array("providers").objects().filter {
-                                (it.optBoolean("authenticated") ||
+                                (it.optBoolean("authenticated") || it.optBoolean("configured") || it.optBoolean("enabled") || it.optBoolean("is_current") ||
                                     it.optBoolean("is_user_defined")) &&
                                     it.optString("name").contains(filter, true)
                             }
@@ -1813,7 +1824,7 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                             )
                         }
                     },
-                    enabled = selected != null && !model.modelSaving,
+                    enabled = selected != null && !model.modelSaving && (global || sessionModelSupported),
                 ) {
                     Text(
                         if (model.modelWarning != null) "确认并继续"
@@ -1833,8 +1844,13 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
 private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
     var editing by remember { mutableStateOf<JSONObject?>(null) }
     var adding by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<JSONObject?>(null) }
+    val entries=if(model.agent=="hermes"&&model.providers.has("providers"))model.providers.array("providers").objects()
+        else model.providers.array("endpoints").objects().filterNot(::isCcSwitchCompatibilityProvider).map{entry->
+            obj("slug" to entry.optString("id"),"name" to entry.optString("name"),"enabled" to entry.optBoolean("enabled",true),
+                "editable" to !entry.optBoolean("official_provider"),"endpoint" to entry,"is_user_defined" to !entry.optBoolean("official_provider"))}
     AlertDialog(
-        onDismissRequest = onClose,
+        onDismissRequest = {if(!model.providerBusy)onClose()},
         title = { Text("Provider 管理") },
         text = {
             LazyColumn(Modifier.heightIn(max = 420.dp)) {
@@ -1844,13 +1860,17 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
                         else "新增或编辑 OpenAI / Responses / Anthropic 兼容端点。已有密钥不会返回手机。",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    FilterChip(model.showDisabledProviders,{model.toggleDisabledProviders()},enabled=!model.providerBusy,label={Text("显示已禁用")})
+                    if(model.providerLoading||model.providerBusy)LinearProgressIndicator(Modifier.fillMaxWidth())
+                    model.providerError?.let{Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}
+                    model.providerOperationNotice?.let{Text(it,style=MaterialTheme.typography.bodySmall)}
+                    if(!model.providerLoading&&entries.isEmpty())Text("暂无已启用或已添加的供应商",style=MaterialTheme.typography.bodySmall)
                 }
-                items(model.providers.array("endpoints").objects()) { provider ->
+                items(entries,key={it.optString("slug")}) { provider ->
+                    val endpoint=provider.optJSONObject("endpoint")
+                    val editable=provider.optBoolean("editable")&&endpoint!=null
+                    val enabled=provider.optBoolean("enabled",true)
                     Card(
-                        onClick = {
-                            editing = provider
-                            adding = true
-                        },
                         modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
                     ) {
                         Column(Modifier.padding(12.dp)) {
@@ -1859,13 +1879,18 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
                                 style = MaterialTheme.typography.titleSmall,
                             )
                             Text(
-                                provider.optString("base_url"),
+                                endpoint?.optString("base_url")?.takeIf{it.isNotBlank()} ?: "Hermes / Codex 原生供应商 · 认证由原生程序管理",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                             Text(
-                                provider.optString("model"),
+                                (if(enabled)"已启用" else "已禁用")+" · "+(endpoint?.optString("model")?.takeIf{it.isNotBlank()}?:"${provider.array("models").length()} 个模型"),
                                 style = MaterialTheme.typography.labelSmall,
                             )
+                            Row {
+                                if(editable)TextButton(enabled=!model.providerBusy,onClick={editing=endpoint;adding=true}){Text("编辑")}
+                                TextButton(enabled=!model.providerBusy,onClick={model.providerAction(provider.getString("slug"),enabled=!enabled)}){Text(if(enabled)"禁用" else "启用")}
+                                if(editable)TextButton(enabled=!model.providerBusy,onClick={deleting=provider}){Text("删除",color=MaterialTheme.colorScheme.error)}
+                            }
                         }
                     }
                 }
@@ -1873,6 +1898,7 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
         },
         confirmButton = {
             TextButton(
+                enabled=!model.providerBusy,
                 onClick = {
                     editing = null
                     adding = true
@@ -1881,8 +1907,11 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
                 Text("新增 Provider")
             }
         },
-        dismissButton = { TextButton(onClick = onClose) { Text("关闭") } },
+        dismissButton = { TextButton(enabled=!model.providerBusy,onClick = onClose) { Text("关闭") } },
     )
+    deleting?.let{provider->ConfirmDialog("删除供应商","删除 ${provider.optString("name")} 的原生自定义配置？配置会先备份；已有会话保留，后续需要切换其他供应商。",{deleting=null}){
+        deleting=null;model.providerAction(provider.getString("slug"),delete=true)
+    }}
     if (adding) {
         val original = editing
         var name by remember(original) { mutableStateOf(original?.optString("name").orEmpty()) }
@@ -1894,8 +1923,7 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
             remember(original) { mutableStateOf(original?.optString("api_mode").orEmpty()) }
         AlertDialog(
             onDismissRequest = {
-                adding = false
-                key = ""
+                if(!model.providerBusy){adding = false;key = ""}
             },
             title = { Text(if (original == null) "新增 Provider" else "编辑 Provider") },
             text = {
@@ -1948,6 +1976,8 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if(model.providerBusy)LinearProgressIndicator(Modifier.fillMaxWidth())
+                    model.providerError?.let{Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}
                 }
             },
             confirmButton = {
@@ -1968,13 +1998,14 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
                             key = ""
                         }
                     },
-                    enabled = name.isNotBlank() && url.isNotBlank() && selectedModel.isNotBlank(),
+                    enabled = !model.providerBusy && name.isNotBlank() && url.isNotBlank() && selectedModel.isNotBlank(),
                 ) {
-                    Text("保存")
+                    Text(if(model.providerBusy)"保存中…" else "保存")
                 }
             },
             dismissButton = {
                 TextButton(
+                    enabled=!model.providerBusy,
                     onClick = {
                         adding = false
                         key = ""

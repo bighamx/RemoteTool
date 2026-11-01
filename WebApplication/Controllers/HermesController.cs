@@ -141,22 +141,94 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         catch (InvalidOperationException error) { return Conflict(new { message = error.Message }); }
     }
     [HttpGet("model-options")] public async Task<IActionResult> ModelOptions(CancellationToken ct) {
-        using var upstream = await bridge.SendAsync(HttpMethod.Get, "api/model/options", null, null, ct);
-        if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 模型目录" });
-        var result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
+        var result=await ProviderCatalog(ct,false);
         var info = await management.Invoke("model_reasoning", null, ct);
         if (info.TryGetProperty("reasoning_effort", out var effort)) result["reasoning_effort"] = System.Text.Json.Nodes.JsonValue.Create(effort.ToString());
         return Ok(result);
     }
-    [HttpPost("sessions/{id}/model")] public Task SessionModel(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"api/sessions/{Id(id)}/model", body, null, ct);
-    [HttpGet("providers")] public Task<IActionResult> Providers(CancellationToken ct) => Settings("providers", null, ct);
+    [HttpPost("sessions/{id}/model")] public async Task SessionModel(string id, [FromBody] JsonElement body, CancellationToken ct) {
+        if(body.TryGetProperty("provider",out var provider)&&!await ProviderAllowed(provider.GetString()??"",ct)){
+            Response.StatusCode=409;await Response.WriteAsJsonAsync(new{message="此供应商已禁用，请启用或选择其他供应商",code="provider_disabled",delivery="rejected"},ct);return;
+        }
+        await Forward(HttpMethod.Post,$"api/sessions/{Id(id)}/model",body,null,ct);
+    }
+    private AgentProviderPolicy ProviderPolicy()=>new("hermes",HermesProfileScope.Name);
+    private async Task<bool> ProviderAllowed(string id,CancellationToken ct) {
+        if(!ProviderPolicy().HasDisabled)return true;
+        var canonical=await ProviderCanonical(id,ct);
+        return canonical!=null&&ProviderPolicy().Enabled(canonical);
+    }
+    private async Task<string?> ProviderCanonical(string id,CancellationToken ct) {
+        if(string.IsNullOrEmpty(id)||id=="custom"||id=="auto")return null;
+        var catalog=await ProviderCatalog(ct,true);var rows=catalog["providers"]!.AsArray().OfType<JsonObject>().ToArray();
+        var exact=rows.Where(p=>p["slug"]?.ToString()==id).ToArray();
+        if(exact.Length==1)return id;
+        var aliases=rows.Where(p=>(p["aliases"] as JsonArray??new()).Any(a=>a?.ToString()==id)||p["endpoint"]?["id"]?.ToString()==id).ToArray();
+        return aliases.Length==1?aliases[0]["slug"]!.ToString():null;
+    }
+    private async Task<JsonObject> ProviderCatalog(CancellationToken ct,bool includeDisabled) {
+        JsonObject options=null;
+        try {
+            using var upstream=await bridge.SendAsync(HttpMethod.Get,"api/model/options",null,null,ct);
+            if(upstream.IsSuccessStatusCode)options=JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!.AsObject();
+            else if(upstream.StatusCode!=System.Net.HttpStatusCode.NotFound)throw new InvalidOperationException("无法读取 Hermes 供应商目录，请确认 API 已启用");
+        }catch(HttpRequestException){}
+        var legacy=options==null;
+        options??=JsonNode.Parse((await management.Invoke("model_options",null,ct)).GetRawText())!.AsObject();
+        var endpoints=JsonNode.Parse((await management.Invoke("providers",null,ct)).GetRawText())!.AsObject();
+        var result=HermesProviderCatalog.Merge(options,endpoints,ProviderPolicy(),includeDisabled);
+        result["session_model_supported"]=!legacy;
+        result["endpoints"]=new JsonArray(result["providers"]!.AsArray().OfType<JsonObject>().Where(p=>p["endpoint"] is JsonObject).Select(p=>{
+            var e=p["endpoint"]!.DeepClone().AsObject();e["enabled"]=p["enabled"]!.DeepClone();e["provider_slug"]=p["slug"]!.DeepClone();return (JsonNode)e;
+        }).ToArray());
+        return result;
+    }
+    [HttpGet("providers")] public async Task<IActionResult> Providers(CancellationToken ct,[FromQuery]bool include_disabled=false) {
+        try{return Ok(await ProviderCatalog(ct,include_disabled));}
+        catch(InvalidOperationException e){return StatusCode(503,new{message=e.Message});}
+    }
+    [HttpPost("providers/state")] public async Task<IActionResult> ProviderState([FromBody]JsonObject body,CancellationToken ct) {
+        try {
+            var id=body["id"]?.ToString()??"";var catalog=await ProviderCatalog(ct,true);
+            if(!catalog["providers"]!.AsArray().Any(p=>p?["slug"]?.ToString()==id))return NotFound(new{message="供应商不存在，请刷新列表"});
+            ProviderPolicy().Set(id,body["enabled"]?.GetValue<bool>()==true);
+            return Ok(new{success=true});
+        }catch(Exception e)when(e is InvalidOperationException or ArgumentException){return BadRequest(new{message=e.Message});}
+    }
+    [HttpPost("providers/delete")] public async Task<IActionResult> DeleteProvider([FromBody]JsonObject body,CancellationToken ct) {
+        try {
+            var id=body["id"]?.ToString()??"";var catalog=await ProviderCatalog(ct,true);
+            var row=catalog["providers"]!.AsArray().OfType<JsonObject>().SingleOrDefault(p=>p["slug"]?.ToString()==id);
+            if(row?["endpoint"] is not JsonObject endpoint)return BadRequest(new{message="内置供应商仅支持禁用；自定义供应商可删除"});
+            if(row["is_current"]?.GetValue<bool>()==true)return Conflict(new{message="此供应商是全局默认，请先切换默认供应商后再删除"});
+            var result=await management.Invoke("delete_provider",JsonSerializer.SerializeToElement(new{id=endpoint["id"]!.ToString()}),ct);
+            ProviderPolicy().Set(id,false);return Ok(result);
+        }catch(InvalidOperationException e){return Conflict(new{message=e.Message});}
+    }
     [HttpGet("default-model")] public Task<IActionResult> DefaultModel(CancellationToken ct) => Settings("model_info", null, ct);
-    [HttpPost("providers")] public Task<IActionResult> SaveProvider([FromBody] JsonElement body, CancellationToken ct) => Settings("save_provider", body, ct);
-    [HttpPost("default-model")] public Task<IActionResult> SetDefault([FromBody] JsonElement body, CancellationToken ct) => Settings("default_model", body, ct);
+    [HttpPost("providers")] public async Task<IActionResult> SaveProvider([FromBody] JsonElement body, CancellationToken ct) {
+        try {
+            var previous=JsonNode.Parse((await management.Invoke("providers",null,ct)).GetRawText())!;
+            var id=body.TryGetProperty("id",out var givenId)?givenId.GetString()??"":"";
+            var name=body.TryGetProperty("name",out var givenName)?givenName.GetString()??"":"";
+            var existed=(previous["endpoints"] as JsonArray??new()).Any(e=>id.Length>0?e?["id"]?.ToString()==id:e?["name"]?.ToString()==name);
+            var result=await management.Invoke("save_provider",body,ct);
+            if(!existed) {
+                var saved=JsonNode.Parse(result.GetRawText())!;
+                var endpoint=(saved["endpoints"] as JsonArray??new()).FirstOrDefault(e=>e?["name"]?.ToString()==name);
+                if(endpoint!=null){var slug=endpoint["provider_slug"]?.ToString()??(endpoint["source"]?.ToString()=="custom_providers"?"custom:"+name.ToLowerInvariant():endpoint["id"]!.ToString());ProviderPolicy().Set(slug,true);}
+            }
+            return Ok(result);
+        }catch(InvalidOperationException e){return StatusCode(e is HermesProviderConfigException?400:503,new{message=e.Message});}
+    }
+    [HttpPost("default-model")] public async Task<IActionResult> SetDefault([FromBody] JsonElement body, CancellationToken ct) {
+        if(body.TryGetProperty("provider",out var p)&&!await ProviderAllowed(p.GetString()??"",ct))return Conflict(new{message="此供应商已禁用或无法确认，请刷新后重新选择"});
+        return await Settings("default_model",body,ct);
+    }
     private async Task<IActionResult> Settings(string action, JsonElement? body, CancellationToken ct)
     {
         try { return Ok(await management.Invoke(action, body, ct)); }
-        catch (InvalidOperationException error) { return StatusCode(503, new { message = error.Message }); }
+        catch (InvalidOperationException error) { return StatusCode(error is HermesProviderConfigException?400:503, new { message = error.Message }); }
     }
     /** 会话上下文占用缓存：网关 session_context 单次约 0.5-0.8s，列表不能逐个实时拉。
         运行中的会话 30s 过期，空闲 10min；每次列表请求用 1.2s 总预算补齐最旧的一批。 */
@@ -384,6 +456,17 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 }
             }
             catch (System.Text.Json.JsonException) { }
+            if(ProviderPolicy().HasDisabled) {
+                var provider=body.TryGetProperty("provider",out var chosen)?chosen.GetString()??"":"";
+                if(provider.Length==0){var defaults=await management.Invoke("model_info",null,ct);provider=defaults.TryGetProperty("provider",out var selected)?selected.GetString()??"":"";}
+                try{provider=await ProviderCanonical(provider,ct)??"";}
+                catch(Exception e)when(e is InvalidOperationException or IOException or HttpRequestException){
+                    Response.StatusCode=503;await Response.WriteAsJsonAsync(new{message="无法核对供应商状态，本次消息未发送，请刷新后重试",code="provider_state_unavailable",delivery="rejected"},ct);return;
+                }
+                if(provider.Length==0||!ProviderPolicy().Enabled(provider)){
+                    Response.StatusCode=409;await Response.WriteAsJsonAsync(new{message="此会话的供应商已禁用、已删除或无法确认，请重新选择供应商和模型",code="provider_disabled",delivery="rejected"},ct);return;
+                }
+            }
             using var upstream = await bridge.SendAsync(HttpMethod.Post, "v1/runs", nativeAttachments.PrepareRun(body, key), key, ct, Request.Headers["Last-Event-ID"].ToString());
             Response.Headers.CacheControl = "no-store";
             var payload = await upstream.Content.ReadAsStringAsync(ct);
@@ -598,6 +681,10 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             Response.Headers.CacheControl = "no-store";
             if (!upstream.IsSuccessStatusCode)
             {
+                if(upstream.StatusCode==System.Net.HttpStatusCode.NotFound && path.StartsWith("api/sessions/") && path.EndsWith("/model") &&
+                    upstream.Content.Headers.ContentType?.MediaType=="text/plain") {
+                    Response.StatusCode=501;await Response.WriteAsJsonAsync(new{message="当前 Hermes 版本不支持按会话切换模型，请在 Hermes 管理中设置全局默认模型或升级 Hermes",code="session_model_unsupported",delivery="rejected"},ct);return;
+                }
                 Response.StatusCode = upstream.StatusCode == System.Net.HttpStatusCode.Unauthorized ? 502 : (int)upstream.StatusCode;
                 await WriteUpstreamError(await upstream.Content.ReadAsStringAsync(ct), upstream.StatusCode, ct);
                 return;

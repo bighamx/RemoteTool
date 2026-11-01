@@ -21,6 +21,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 data class Device(val id: String, val name: String, val endpoints: List<String>)
+data class DeviceMetadata(val platform:String="",val osVersion:String="",val serverVersion:String="",val architecture:String="",val observedAt:Long=0L)
 
 data class Endpoint(val url: String, val ms: Long, val serverVersion: String? = null)
 
@@ -288,6 +289,35 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
     private var connectingDeviceId: String? = null
     var devices by mutableStateOf(readDevices())
         private set
+    var deviceMetadata by mutableStateOf(runCatching {
+        val data=JSONObject(prefs.getString("deviceMetadata","{}")?:"{}");data.keys().asSequence().associateWith {id->
+            val row=data.getJSONObject(id);DeviceMetadata(row.optString("platform"),row.optString("osVersion"),row.optString("serverVersion"),row.optString("architecture"),row.optLong("observedAt"))
+        }
+    }.getOrDefault(emptyMap()))
+        private set
+    private suspend fun rememberIdentity(data:JSONObject) = withContext(Dispatchers.Main) {
+        val id=data.optString("id");if(devices.none{it.id==id})return@withContext
+        val old=deviceMetadata[id]?:DeviceMetadata()
+        fun text(key:String)=data.optString(key).takeUnless{it=="null"}.orEmpty()
+        val updated=DeviceMetadata(text("platform").ifBlank{old.platform},text("osVersion").ifBlank{old.osVersion},
+            (if(data.has("serverVersion"))data.serverVersionDescription() else null)?.takeIf{it.isNotBlank()}?:old.serverVersion,text("architecture").ifBlank{old.architecture},System.currentTimeMillis())
+        deviceMetadata=deviceMetadata+(id to updated)
+        saveDeviceMetadata()
+    }
+    private fun saveDeviceMetadata() {
+        val rows=JSONObject();deviceMetadata.forEach{(key,m)->rows.put(key,obj("platform" to m.platform,"osVersion" to m.osVersion,"serverVersion" to m.serverVersion,"architecture" to m.architecture,"observedAt" to m.observedAt))}
+        prefs.edit().putString("deviceMetadata",rows.toString()).apply()
+    }
+    fun refreshDeviceMetadata()=viewModelScope.launch {
+        for(device in devices.toList()) {
+            for(url in device.endpoints) {
+                try {
+                    val data=NativeApi(url,probing=true).json("/api/device/identity")
+                    if(data.optString("id")==device.id){rememberIdentity(data);break}
+                }catch(e:CancellationException){throw e}catch(_:Exception){}
+            }
+        }
+    }
 
     var session by mutableStateOf<Session?>(null)
         private set
@@ -423,6 +453,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         device.endpoints.forEach { CookieManager.getInstance().setCookie(it, "access_token=; Max-Age=0; Path=/") }
         CookieManager.getInstance().flush()
         devices = devices.filter { it.id != device.id }
+        deviceMetadata=deviceMetadata-device.id;saveDeviceMetadata()
         save()
         if (session?.device?.id == device.id || connectingDeviceId == device.id) disconnect()
     }
@@ -437,6 +468,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         val current = session ?: return
         try {
             val identity = current.api.json("/api/device/identity")
+            if(identity.optString("id")==current.device.id)rememberIdentity(identity)
             if (session?.api === current.api && identity.optString("id") == current.device.id) {
                 val latest = session ?: return
                 session = latest.copy(channels = latest.channels.map {
@@ -689,6 +721,7 @@ class NativeModel(application: Application) : AndroidViewModel(application) {
         val data = NativeApi(url, true).json("/api/device/identity")
         val id = data.getString("id")
         require(id.matches(Regex("[0-9a-f]{64}"))) { "设备标识格式不正确" }
+        rememberIdentity(data)
         return id to Endpoint(url, SystemClock.elapsedRealtime() - start, data.serverVersionDescription())
     }
 }

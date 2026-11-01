@@ -355,6 +355,7 @@ fun SelectionContainerCompat(value: String) {
 
 @Composable
 private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTools:()->Unit) {
+    LaunchedEffect(model.devices.map{it.id}){model.refreshDeviceMetadata().join()}
     LaunchedEffect(model.session?.api) { model.refreshServerVersion() }
     var addTo by remember { mutableStateOf<Device?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -380,13 +381,15 @@ private fun DeviceScreen(model: NativeModel, cloud: CloudAccountModel, onPhoneTo
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(device.name, style = MaterialTheme.typography.titleLarge)
+                            val metadata=model.deviceMetadata[device.id]
+                            Text(device.name+" · "+(metadata?.platform?.takeIf{it.isNotBlank()}?:"系统未知"), style = MaterialTheme.typography.titleLarge)
+                            Text("服务端 "+(metadata?.serverVersion?.takeIf{it.isNotBlank()}?:"版本未读取"),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                            metadata?.osVersion?.takeIf{it.isNotBlank()}?.let{Text(it+(metadata.architecture.takeIf{a->a.isNotBlank()}?.let{a->" · $a"}?:""),style=MaterialTheme.typography.labelSmall,maxLines=2)}
                             if (model.session?.device?.id == device.id) {
                                 Text("当前连接", color = MaterialTheme.colorScheme.primary,
                                     style = MaterialTheme.typography.labelMedium)
-                                Text("服务端 ${model.session?.serverVersion ?: "版本未提供"}",
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
+                            else if(metadata?.observedAt?.let{it>0}==true)Text("上次读取："+java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT,java.text.DateFormat.SHORT).format(java.util.Date(metadata.observedAt)),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         IconButton(onClick = { manage = device }) {
                             Icon(Icons.Outlined.Settings, "管理设备")

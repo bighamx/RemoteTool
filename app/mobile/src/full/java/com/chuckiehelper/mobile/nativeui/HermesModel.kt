@@ -3098,14 +3098,17 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     fun fetchProviders() = launch {
+        val request=++providerReadEpoch
+        providerLoading=true;providerError=null
+        try {
         val connection = api; val requestedAgent = agent; val requestedRoot = root
         val requestedSession = selectedId; val optionsPath = modelOptionsPath(requestedSession)
-        val result = connection.json("$requestedRoot/providers")
+        val result = connection.json("$requestedRoot/providers?include_disabled=$showDisabledProviders")
         // Older services omit the built-in OpenAI row and the current provider.
         // Refresh the fallback together instead of reusing a cached third-party route.
         val options = if (requestedAgent == "codex" && result.cleanSetting("provider").isBlank())
             connection.json(optionsPath) else null
-        if (api !== connection || agent != requestedAgent) return@launch
+        if (api !== connection || agent != requestedAgent || request!=providerReadEpoch) return@launch
         if (options != null) {
             if (selectedId == requestedSession) modelOptions = options
             result.put("provider", options.cleanSetting("provider"))
@@ -3113,6 +3116,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (selectedId == requestedSession) updateRuntimeDisplay()
         }
         providers = result
+        } catch(e:CancellationException){throw e}
+        catch(e:Exception){if(request==providerReadEpoch)providerError=e.message?:"供应商读取失败"}
+        finally{if(request==providerReadEpoch)providerLoading=false}
     }
     fun fetchTitleModel() = launch {
         titleModel = null; titleModelMessage = null; titleModelChoices = emptyList(); titleModelsMessage = null
@@ -3195,10 +3201,39 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     fun saveProvider(body: JSONObject, onDone: () -> Unit) = launch {
-        api.json("$root/providers", body)
-        fetchProviders()
-        fetchModels()
-        onDone()
+        if(providerBusy)return@launch
+        providerBusy=true;providerError=null;providerOperationNotice=null
+        try {
+            api.json("$root/providers", body)
+            fetchProviders().join();fetchModels().join()
+            providerOperationNotice="供应商已保存"
+            onDone()
+        }catch(e:CancellationException){throw e}
+        catch(e:Exception){providerError=if(writeWasRejected(e))e.message else "保存结果未确认，请刷新供应商列表核对后再试：${e.message}"}
+        finally{providerBusy=false}
+    }
+    var providerBusy by mutableStateOf(false)
+        private set
+    var providerLoading by mutableStateOf(false)
+        private set
+    var providerError by mutableStateOf<String?>(null)
+        private set
+    var providerOperationNotice by mutableStateOf<String?>(null)
+        private set
+    private var providerReadEpoch=0L
+    var showDisabledProviders by mutableStateOf(false)
+        private set
+    fun toggleDisabledProviders(){showDisabledProviders=!showDisabledProviders;fetchProviders()}
+    fun providerAction(id:String,delete:Boolean=false,enabled:Boolean=false)=launch {
+        if(providerBusy)return@launch
+        providerBusy=true;providerError=null;providerOperationNotice=null
+        try {
+            api.json("$root/providers/${if(delete)"delete" else "state"}",obj("id" to id,"enabled" to enabled))
+            fetchProviders().join();fetchModels().join()
+            providerOperationNotice=if(delete)"供应商已删除，原生配置已备份" else if(enabled)"供应商已启用" else "供应商已禁用"
+        }catch(e:CancellationException){throw e}
+        catch(e:Exception){providerError=e.message?:"供应商操作失败，请刷新核对"}
+        finally{providerBusy=false}
     }
 }
 

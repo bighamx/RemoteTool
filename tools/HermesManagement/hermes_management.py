@@ -139,7 +139,7 @@ def main():
                 db.close()
         print(json.dumps(result, ensure_ascii=True))
         return
-    if action not in {"providers", "save_provider", "default_model", "model_info", "model_reasoning", "session_context", "compress_session", "run_lookup", "message_action", "api_server_status", "enable_api_server"}:
+    if action not in {"providers", "save_provider", "delete_provider", "default_model", "model_info", "model_options", "model_reasoning", "session_context", "compress_session", "run_lookup", "message_action", "api_server_status", "enable_api_server"}:
         raise ValueError("Unsupported settings operation")
     if action in {"api_server_status", "enable_api_server"}:
         result = api_server_action(action, request.get("body") or {})
@@ -217,15 +217,29 @@ def main():
             effort = (load_config().get("agent") or {}).get("reasoning_effort")
         print(json.dumps({"reasoning_effort": "none" if effort is False else effort or ""}))
         return
+    if action == "model_options":
+        with contextlib.redirect_stdout(io.StringIO()):
+            import inspect
+            from hermes_cli import inventory
+            ctx=inventory.load_picker_context()
+            builder=getattr(inventory,'build_model_options_payload',inventory.build_models_payload)
+            parameters=inspect.signature(builder).parameters
+            choices={'include_unconfigured':False,'picker_hints':True,'canonical_order':True,'pricing':False,'capabilities':True,
+                'for_picker':True,'probe_custom_providers':False,'non_blocking_catalogs':True}
+            result=builder(ctx,**{k:v for k,v in choices.items() if k in parameters})
+            result.setdefault('provider',ctx.current_provider)
+            result.setdefault('model',ctx.current_model)
+        print(json.dumps(result,ensure_ascii=True))
+        return
     with contextlib.redirect_stdout(io.StringIO()):
-        from hermes_cli.web_routers.config_env import list_custom_endpoints, upsert_custom_endpoint
-        from hermes_cli.web_routers.models import get_model_info, set_model_assignment
-        from hermes_cli.web_models import CustomEndpointUpdate, ModelAssignment
-        if action in {"save_provider", "default_model"}:
+        from hermes_provider_compat import operate
+        def get_model_info(): return operate("model_info", {})
+        if action in {"save_provider", "delete_provider", "default_model"}:
             from hermes_constants import get_hermes_home
             home = get_hermes_home()
             backup = home / "backups" / "chuckie-helper" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             backup.mkdir(parents=True, exist_ok=False)
+            if os.name != 'nt': backup.chmod(0o700)
             for name in ("config.yaml", ".env"):
                 source = home / name
                 if source.exists(): shutil.copy2(source, backup / name)
@@ -268,15 +282,15 @@ def main():
                         limit = None
                 result = {"available": bool(messages) or not estimated, "tokens": tokens, "limit": limit, "estimated": estimated, "model": row.get("model")}
             finally: db.close()
-        elif action == "providers": result = list_custom_endpoints()
+        elif action == "providers": result = operate("providers", body)
         elif action == "model_info":
             result = get_model_info()
             from hermes_cli.config import load_config
             result["reasoning_effort"] = (load_config().get("agent") or {}).get("reasoning_effort") or ""
-        elif action == "save_provider": result = upsert_custom_endpoint(CustomEndpointUpdate.model_validate(body))
+        elif action in {"save_provider", "delete_provider"}: result = operate(action, body)
         else:
             body["scope"] = "main"
-            result = asyncio.run(set_model_assignment(ModelAssignment.model_validate(body)))
+            result = operate("default_model", body)
             # Hermes' main ModelAssignment currently ignores reasoning_effort (only auxiliary
             # assignments apply it). Use the official partial config handler after model acceptance.
             if not result.get("confirm_required") and result.get("ok") and "reasoning_effort" in body:
@@ -386,6 +400,9 @@ def compress_session(body):
 
 if __name__ == "__main__":
     try: main()
+    except __import__('hermes_provider_compat').ProviderConfigError as error:
+        print(json.dumps({"success":False,"code":"provider_config","message":str(error)},ensure_ascii=True))
+        sys.exit(1)
     except Exception:
         # Never export provider keys, raw config, command arguments or tracebacks.
         print(json.dumps({"success": False, "message": "Hermes 模型设置操作失败，请检查安装版本与配置"}, ensure_ascii=True))
