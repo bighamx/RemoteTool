@@ -4,14 +4,18 @@ import sys
 import time
 import types
 from pathlib import Path
+sys.path.insert(0, str(Path('tools/HermesManagement').resolve()))
 
 tree = ast.parse(Path('tools/HermesManagement/hermes_management.py').read_text(encoding='utf-8'))
 function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'bounded_context_limit')
 namespace = {}
 exec(compile(ast.Module(body=[function], type_ignores=[]), '<context-budget>', 'exec'), namespace)
 metadata = types.ModuleType('agent.model_metadata')
+metadata.get_cached_context_length = lambda *args: None
 config = types.ModuleType('hermes_cli.config')
 config.load_config = lambda: {'model': {'default': 'current', 'provider': 'custom', 'base_url': 'http://localhost'}}
+import hermes_context
+hermes_context.probe_endpoint = lambda *args: None
 sys.modules['agent.model_metadata'] = metadata
 sys.modules['hermes_cli.config'] = config
 calls = []

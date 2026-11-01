@@ -182,7 +182,7 @@ def main():
         with contextlib.redirect_stdout(io.StringIO()):
             from hermes_state import SessionDB
             from agent.usage_anchor import persisted_anchor_tokens
-            from agent.model_metadata import estimate_messages_tokens_rough, get_cached_context_length
+            from agent.model_metadata import estimate_messages_tokens_rough
             db = SessionDB()
             try:
                 session_id = db.resolve_resume_session_id(str((request.get("body") or {}).get("session_id") or ""))
@@ -195,18 +195,9 @@ def main():
                 estimated = tokens is None
                 if estimated: tokens = estimate_messages_tokens_rough(messages)
                 model = row.get("model") or ""
-                limit = config.get("context_length") or get_cached_context_length(model, config.get("base_url") or "")
-                if not limit:
-                    # Prefer local configuration/cache before a bounded metadata
-                    # lookup. A missing bound still permits displaying tokens.
-                    from hermes_cli.config import load_config
-                    global_model = load_config().get("model") or {}
-                    if isinstance(global_model, dict) and global_model.get("default") == model:
-                        limit = global_model.get("context_length") or get_cached_context_length(
-                            model, global_model.get("base_url") or "")
-                if not limit:
-                    limit = bounded_context_limit(model, config)
-                result = {"available": bool(messages) or not estimated, "tokens": tokens, "limit": limit, "estimated": estimated, "model": model}
+                from hermes_context import bounded_context_metadata
+                context = bounded_context_metadata(model, config)
+                result = {"available": bool(messages) or not estimated, "tokens": tokens, **context, "estimated": estimated, "model": model}
                 if not result["available"]: result["message"] = "暂无消息"
             finally: db.close()
         print(json.dumps(result, ensure_ascii=True))
@@ -250,38 +241,6 @@ def main():
                 raise ValueError("Invalid reasoning effort")
         if action == "compress_session":
             result = compress_session(body)
-        elif action == "session_context":
-            from hermes_state import SessionDB
-            from agent.usage_anchor import persisted_anchor_tokens
-            from agent.model_metadata import estimate_messages_tokens_rough, get_cached_context_length
-            session_id = str(body.get("session_id") or "")
-            db = SessionDB()
-            try:
-                row = db.get_session(session_id)
-                if not row: raise ValueError("Session not found")
-                messages = db.get_messages_as_conversation(session_id)
-                config = row.get("model_config") or {}
-                if isinstance(config, str): config = json.loads(config)
-                tokens = persisted_anchor_tokens(db, session_id, messages)
-                estimated = tokens is None
-                if estimated: tokens = estimate_messages_tokens_rough(messages)
-                model = row.get("model") or ""
-                limit = config.get("context_length") or get_cached_context_length(model, config.get("base_url") or "")
-                if not limit:
-                    info = get_model_info()
-                    if info.get("model") == model: limit = info.get("effective_context_length")
-                if not limit:
-                    # Gateway's actual resolution chain (models.dev catalog, local /models probe,
-                    # provider profiles) — the persistent cache above only has entries probed live
-                    # before, so sessions on models never probed (e.g. mobile-picked ones) showed
-                    # no limit. Same resolution the running agent uses for its compressor.
-                    try:
-                        from agent.model_metadata import get_model_context_length
-                        limit = get_model_context_length(model, config.get("base_url") or "")
-                    except Exception:
-                        limit = None
-                result = {"available": bool(messages) or not estimated, "tokens": tokens, "limit": limit, "estimated": estimated, "model": row.get("model")}
-            finally: db.close()
         elif action == "providers": result = operate("providers", body)
         elif action == "model_info":
             result = get_model_info()
@@ -306,25 +265,8 @@ def main():
     print(json.dumps(scrub(result), ensure_ascii=True))
 
 def bounded_context_limit(model, config):
-    # Optional metadata may consult a remote provider. Never keep token reads
-    # waiting for it or allow a non-daemon executor to block process shutdown.
-    import threading
-    result = []
-    def resolve():
-        try:
-            from agent.model_metadata import get_model_context_length
-            from hermes_cli.config import load_config
-            global_model = load_config().get("model") or {}
-            if not isinstance(global_model, dict) or global_model.get("default", global_model.get("name")) != model:
-                global_model = {}
-            limit = get_model_context_length(model, config.get("base_url") or global_model.get("base_url") or "",
-                provider=config.get("provider") or global_model.get("provider") or "")
-            if isinstance(limit, int) and limit > 0: result.append(limit)
-        except Exception:
-            pass
-    worker = threading.Thread(target=resolve, daemon=True)
-    worker.start(); worker.join(3)
-    return result[0] if result else None
+    from hermes_context import bounded_context_metadata
+    return bounded_context_metadata(model, config)['limit']
 
 def lookup_run(path, body):
     import re
