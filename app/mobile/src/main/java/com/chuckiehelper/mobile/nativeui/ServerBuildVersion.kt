@@ -11,12 +11,7 @@ internal fun JSONObject.serverVersionDescription(): String? {
         ?.takeIf { it.isFinite() && it >= 1 && it <= Int.MAX_VALUE && it % 1.0 == 0.0 }?.toInt()
     val build = serverBuildVersion()
     return listOfNotNull(protocol?.let { "协议 v$it" }, build?.let {
-        when {
-            it.matches(Regex("[0-9a-fA-F]{7,40}(-dirty)?")) -> "代码 $it"
-            it.matches(Regex("[0-9]{8}\\.[0-9]+")) -> "编译 $it" // Compatibility with older servers.
-            it == "unknown" -> "代码版本未知"
-            else -> "版本 $it"
-        }
+        if (it.equals("unknown", ignoreCase = true)) "版本未知" else "版本 $it"
     })
         .joinToString(" · ").takeIf { it.isNotEmpty() }
 }
