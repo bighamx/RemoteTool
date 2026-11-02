@@ -275,6 +275,7 @@ def lookup_run(path, body):
         raise ValueError("Invalid run lookup")
     if not path.is_file(): return {"found": False}
     with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_idempotency'").fetchone(): return {"found": False}
         rows = db.execute("SELECT run_id,status_json FROM run_idempotency WHERE idempotency_key=? LIMIT 2", (key,)).fetchall()
     if len(rows) != 1 or json.loads(rows[0][1]).get("session_id") != session: return {"found": False}
     # Only the native run ID is returned; the HTTP handler must verify its auth scope.

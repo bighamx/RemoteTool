@@ -43,7 +43,9 @@ def status(home):
         if not database.exists():
             continue
         with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=3) as db:
-            leases += db.execute("SELECT count(*) FROM session_turn_leases WHERE expires_at > ?", (time.time(),)).fetchone()[0]
+            # 旧版 Hermes 的 state.db 没有 session_turn_leases 表，缺表时按 0 处理，不要让整个状态查询失败
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_turn_leases'").fetchone():
+                leases += db.execute("SELECT count(*) FROM session_turn_leases WHERE expires_at > ?", (time.time(),)).fetchone()[0]
     running = bool(pid and _pid_exists(pid))
     return {"pid": pid, "running": running, "fresh": fresh,
             "session_id": process_session_id(pid) if running else None,
