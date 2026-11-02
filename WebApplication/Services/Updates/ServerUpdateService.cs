@@ -37,6 +37,7 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
         if (File.Exists(FileAt("check.json"))) check = JsonNode.Parse(File.ReadAllText(FileAt("check.json")));
         return new { supported = OperatingSystem.IsWindows() || OperatingSystem.IsLinux(), installed = Installed, currentVersion = ServerBuild.Version, currentSequence = Sequence,
             policy = Policy, check, job = Job, mode = Installation?.Mode, canRebuild = Installed && Installation.Mode == "source",
+            preparationMessage = bootstrap.Message,
             supportsForce = Installed && Installation.UpdaterVersion == UpdateContract.UpdaterVersion,
             message = Installed ? Installation.Mode == "source" ? "使用当前磁盘源码编译并重启，不自动拉取代码" : null : bootstrap.Message };
     }

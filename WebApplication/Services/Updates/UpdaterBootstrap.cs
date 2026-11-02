@@ -198,11 +198,14 @@ public sealed class UpdaterBootstrap(IWebHostEnvironment environment, IConfigura
         try {
             dynamic service = Keep(Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service", true)!)!); service.Connect();
             dynamic folder = Keep(service.GetFolder("\\"));
-            try {
-                dynamic task = Keep(folder.GetTask("RemoteTool_ServerUpdate"));
+            dynamic tasks = Keep(folder.GetTasks(1));
+            for (var index = 1; index <= (int)tasks.Count; index++) {
+                dynamic task = Keep(tasks[index]);
+                if (!string.Equals((string)task.Name, "RemoteTool_ServerUpdate", StringComparison.OrdinalIgnoreCase)) continue;
                 if (!File.Exists(backupPath)) File.WriteAllText(backupPath, (string)task.Xml);
                 folder.DeleteTask("RemoteTool_ServerUpdate", 0);
-            } catch (COMException error) when ((uint)error.HResult == 0x80070002) { }
+                break;
+            }
         } finally { for (var i = objects.Count - 1; i >= 0; i--) if (Marshal.IsComObject(objects[i])) Marshal.FinalReleaseComObject(objects[i]); }
     }
 }
