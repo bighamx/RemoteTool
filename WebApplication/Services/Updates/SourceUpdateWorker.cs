@@ -30,6 +30,10 @@ public sealed partial class Worker
     async Task<string> Tool(string executable, string directory, params string[] args) {
         var start = new ProcessStartInfo(executable) { WorkingDirectory = directory, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardOutput = true, RedirectStandardError = true };
+        if (executable == "git") {
+            start.ArgumentList.Add("-c");
+            start.ArgumentList.Add("safe.directory=" + Directory.GetParent(directory)!.FullName);
+        }
         foreach (var arg in args) start.ArgumentList.Add(arg);
         using var process = Process.Start(start)!;
         if (executable == "dotnet" && File.Exists(At("transaction.json"))) {

@@ -76,7 +76,9 @@
     <Content Include="..\tools\PhoneTools\**\*.md" Link="phone-tools\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <Target Name="StampSourceVersion" BeforeTargets="GetAssemblyVersion" DependsOnTargets="InitializeSourceControlInformation">
-    <Exec Command="git status --porcelain --untracked-files=normal" WorkingDirectory="$(MSBuildProjectDirectory)" ConsoleToMSBuild="true" StandardOutputImportance="Low" IgnoreExitCode="true" Condition="'$(SourceRevisionId)' != ''">
+    <PropertyGroup><SourceCheckoutRoot>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/..'))</SourceCheckoutRoot></PropertyGroup>
+    <!-- Service builds inherit SYSTEM/root; trust only this user-authorized checkout. -->
+    <Exec Command="git -c safe.directory=&quot;$(SourceCheckoutRoot)&quot; status --porcelain --untracked-files=normal" WorkingDirectory="$(MSBuildProjectDirectory)" ConsoleToMSBuild="true" StandardOutputImportance="Low" IgnoreExitCode="true" Condition="'$(SourceRevisionId)' != ''">
       <Output TaskParameter="ConsoleOutput" ItemName="SourceWorktreeChanges" />
     </Exec>
     <PropertyGroup>
