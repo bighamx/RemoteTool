@@ -16,9 +16,9 @@ public sealed class ServerUpdateController(ServerUpdateService updates, CodexBri
         try { return Ok(await updates.SavePolicy(policy, ct)); } catch (InvalidOperationException error) { return Conflict(new { message = error.Message }); }
     }
     public sealed record InstallRequest(long Sequence, bool Force = false);
-    public sealed record RebuildRequest(bool Force = false);
+    public sealed record RebuildRequest(bool Force = false, bool PullSource = false);
     [HttpPost("rebuild")] public async Task<IActionResult> Rebuild(RebuildRequest request, CancellationToken ct) {
-        try { return Accepted(await updates.Install(0, ct, rebuild: true, force: request.Force)); }
+        try { return Accepted(await updates.Install(0, ct, rebuild: true, force: request.Force, pullSource: request.PullSource)); }
         catch (Exception error) when (error is InvalidOperationException or IOException) { return Conflict(new { message = error.Message }); }
     }
     [HttpPost("install")] public async Task<IActionResult> Install(InstallRequest request, CancellationToken ct) {

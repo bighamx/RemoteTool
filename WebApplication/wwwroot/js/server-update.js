@@ -11,10 +11,22 @@
     // All remote strings are assigned with textContent, never interpreted as HTML.
     dialog.innerHTML = '<h2>服务端更新</h2><p data-current></p><p data-mode></p><p data-status></p><pre data-notes style="white-space:pre-wrap"></pre><p data-error role="alert"></p><div data-policy><label>更新方式 <select><option value="notify">仅提醒</option><option value="download">自动下载，手动安装</option><option value="automatic">空闲时自动更新并重启</option></select></label><p data-window>自动安装时段（本地时间） <input data-start type="time" step="900"> 至 <input data-end type="time" step="900"></p><button data-save>保存设置</button></div><p data-force-row hidden><label><input data-force type="checkbox"> 强制中断任务</label><small style="display:block">仅本次生效：断开连接并中断 RemoteTool 的 Codex 任务；Hermes 独立任务继续运行。</small></p><p><button data-check>立即检查</button> <button data-install>更新并重启</button> <button data-rebuild hidden>编译并重启</button> <button data-close>稍后</button></p>';
     document.body.append(dialog);
-    let state, pending = false, reconnecting = false;
+    let state, pending = false, reconnecting = false, checking = false;
     const at = selector => dialog.querySelector(selector);
     const text = value => value == null || value === 'null' ? '' : String(value);
     const friendly = value => text(value).replace(/Response status code does not indicate success: (\d+) \([^)]+\)\.?/g, '服务端请求失败（HTTP $1）');
+    const jobStatus = document.createElement('p'); at('[data-status]').insertAdjacentElement('afterend',jobStatus);
+    const pull = document.createElement('button'); pull.textContent='拉取并更新'; pull.hidden=true; pull.dataset.pull=''; at('[data-rebuild]').insertAdjacentElement('beforebegin',pull);
+    function checkText(value) {
+        if (checking) return '正在检查更新…';
+        const check = value.check;
+        if (!check) return '尚未检查更新';
+        if (value.mode === 'source' && check.kind !== 'source') return '尚未核对源码版本，请点击立即检查';
+        if (text(check.runningVersion) && check.runningVersion !== value.currentVersion) return '版本已变化，请重新检查';
+        if (text(check.error)) return '检查失败：' + friendly(check.error);
+        if (value.mode === 'source') return text(check.message) || '尚未核对源码版本';
+        return check.available ? `可更新至 ${text(check.version)}` : '已是最新版本';
+    }
     function localTime(hour) {
         const date = new Date(); date.setUTCHours(hour, 0, 0, 0);
         return `${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;
@@ -39,8 +51,10 @@
         const source = value.mode === 'source', available = !source && !!value.check?.available;
         button.textContent = available ? '发现服务端更新' : '服务端更新';
         at('[data-current]').textContent = `当前版本 ${text(value.currentVersion)}`;
-        at('[data-mode]').textContent = source ? '源码运行 · 使用当前磁盘源码编译，不自动拉取代码' : '正式部署 · 下载发行包更新';
-        at('[data-status]').textContent = friendly(value.job?.message || (!source && value.check?.error) || (available ? `可更新至 ${text(value.check.version)}` : source ? '编译完成后会自动重启服务端' : value.check ? '当前没有可用更新' : '尚未检查更新'));
+        at('[data-mode]').textContent = source ? (value.supportsSourcePull ? '源码运行 · 可拉取当前分支并更新' : '源码运行 · 编译当前磁盘源码') : '正式部署 · 下载发行包更新';
+        at('[data-status]').textContent = checkText(value);
+        at('[data-status]').style.fontWeight = at('[data-status]').textContent === '已是最新版本' ? '600' : '';
+        jobStatus.textContent = friendly(value.job?.message);
         at('[data-notes]').textContent = source ? '' : text(value.check?.releaseNotes);
         if (!value.installed) at('[data-status]').textContent = text(value.message);
         at('[data-policy]').hidden = source;
@@ -50,12 +64,15 @@
             at('[data-start]').value = localTime(value.policy?.startHourUtc ?? 18); at('[data-end]').value = localTime(value.policy?.endHourUtc ?? 22);
         }
         at('[data-window]').hidden = at('select').value !== 'automatic';
-        const updating = ['requested','downloading','waiting','building','switching','verifying','rolling_back','migrating','recovery_required'].includes(value.job?.phase);
+        const updating = ['requested','downloading','waiting','pulling','building','switching','verifying','rolling_back','migrating','recovery_required'].includes(value.job?.phase);
         at('[data-install]').hidden = source; at('[data-install]').disabled = pending || !value.installed || !available || updating;
         at('[data-rebuild]').hidden = !value.canRebuild; at('[data-rebuild]').disabled = pending || updating;
+        at('[data-rebuild]').textContent = value.supportsSourcePull ? '编译当前源码' : '编译并重启';
+        pull.hidden = !source || !value.supportsSourcePull; pull.disabled = pending || updating || !value.installed;
         at('[data-force-row]').hidden = !value.supportsForce;
         at('[data-force]').disabled = pending || updating;
         at('[data-save]').disabled = pending || !value.installed;
+        at('[data-check]').disabled = pending;
         if (['completed','rolled_back','failed','recovery_required'].includes(value.job?.phase)) reconnecting = false;
         const key = 'remotetool:server-update:' + value.check?.releaseSequence;
         if (available && !sessionStorage.getItem(key)) { sessionStorage.setItem(key, '1'); if (!dialog.open) dialog.showModal(); }
@@ -68,7 +85,7 @@
     button.onclick = () => { dialog.showModal(); action(() => request()); };
     at('[data-close]').onclick = () => dialog.close();
     dialog.addEventListener('close', () => { at('[data-force]').checked = false; });
-    at('[data-check]').onclick = () => action(() => request('/check', 'POST', {}));
+    at('[data-check]').onclick = () => { if(pending)return;checking=true; action(async () => {try{return await request('/check','POST',{});}finally{checking=false;}}); };
     at('[data-save]').onclick = () => {
         try {
             const policy = { mode: at('select').value, startHourUtc: utcHour(at('[data-start]').value), endHourUtc: utcHour(at('[data-end]').value) };
@@ -77,6 +94,11 @@
     };
     at('select').onchange = () => { at('[data-window]').hidden = at('select').value !== 'automatic'; };
     const force = () => state.supportsForce === true && at('[data-force]').checked;
+    pull.onclick = () => {
+        const interrupt=force();
+        if(!confirm(interrupt ? '中断任务，拉取当前分支最新源码，编译并重启？本地有未提交改动时会拒绝拉取。' : '等待空闲后拉取当前分支最新源码，编译并重启？本地有未提交改动时会拒绝拉取。'))return;
+        reconnecting=true;action(async()=>{const result=await request('/rebuild','POST',{force:interrupt,pullSource:true});at('[data-force]').checked=false;return result;});
+    };
     at('[data-install]').onclick = () => {
         const interrupt = force();
         if (!confirm(interrupt ? '中断 RemoteTool 的 Codex 任务和连接，立即更新并重启？' : '等待任务和连接空闲后，更新并重启？')) return;

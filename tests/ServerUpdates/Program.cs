@@ -9,6 +9,7 @@ using RemoteTool.WebApi.Services.Updates;
 if (args is ["--idle-fixture"]) { await Task.Delay(TimeSpan.FromMinutes(1)); return; }
 if (await UpdaterProcessChecks.Handle(args)) return;
 await UpdaterProcessChecks.Run();
+await SourceRepositoryChecks.Run();
 
 var checks = 0;
 void Assert(bool value, string message) { if (!value) throw new Exception(message); checks++; }
@@ -168,7 +169,7 @@ sealed class FakeRuntime(string original, string scenario) : IUpdateRuntime
     public Task<JsonNode> Readiness(string jobId) => Task.FromResult<JsonNode>(new JsonObject { ["ready"] = scenario != "busy", ["blockers"] = new JsonArray("active native task") });
 }
 
-sealed class FakeSourceRuntime(string output, bool failure, bool bridgeBusy, string? revision = null, bool dirty = false) : ISourceUpdateRuntime
+sealed class FakeSourceRuntime(string output, bool failure, bool bridgeBusy, string? revision = null, bool dirty = false, Func<string[],Task<string>>? git = null) : ISourceUpdateRuntime
 {
     public bool BridgeStopped, BridgeWarmed, DirectoryChanged;
     public bool Compiled, Forced;
@@ -185,7 +186,7 @@ sealed class FakeSourceRuntime(string output, bool failure, bool bridgeBusy, str
     }
     public Task StopBridge(bool force) { if (bridgeBusy && !force) throw new IOException("bridge busy"); Forced = force; BridgeStopped = true; return Task.CompletedTask; }
     public Task WarmBridge() { BridgeWarmed = true; return Task.CompletedTask; }
-    public Task<string> Git(string directory, params string[] args) => revision == null ? throw new Exception("Local rebuild must not run Git") : Task.FromResult(args[0] == "rev-parse" ? revision : dirty ? " M local.cs" : "");
+    public Task<string> Git(string directory, params string[] args) => git!=null?git(args):revision == null ? throw new Exception("Local rebuild must not run Git") : Task.FromResult(args[0] == "rev-parse" ? revision : dirty ? " M local.cs" : "");
     public Task Compile(string project, string target, long sequence) {
         Compiled = true;
         if (!BridgeStopped) throw new Exception("Compile started before bridge stopped");

@@ -9,7 +9,7 @@ public sealed record ServerRelease(int SchemaVersion, string Version, long Relea
     string ReleaseNotes, Dictionary<string, ServerPackage> Packages);
 public sealed record ServerPackage(string Url, string Sha256, long Size);
 public sealed record UpdatePolicy(string Mode = "notify", int StartHourUtc = 18, int EndHourUtc = 22);
-public sealed record UpdateJob(string Id, string Phase, string Message, long Sequence, string Version, bool SourceBuild = false, bool ReleaseSource = false, bool Force = false);
+public sealed record UpdateJob(string Id, string Phase, string Message, long Sequence, string Version, bool SourceBuild = false, bool ReleaseSource = false, bool Force = false, bool PullSource = false, string? SourceBranch = null);
 public sealed record Installation(string Site, string Pool, string Releases, string Shared, string HealthUrl,
     string DeviceId, string WorkerToken, string Mode = "release", string? ProjectDirectory = null, string? RuntimeDirectory = null, string? UpdaterVersion = null, string? UpdaterAssembly = null, string Host = "iis", bool UserService = false);
 
@@ -18,7 +18,7 @@ public static class UpdateContract
     public const string Repository = "bighamx/RemoteTool";
     public static string Platform => OperatingSystem.IsWindows() ? "win-x64-iis" : "linux-" +
         (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.Arm64 ? "arm64" : "x64") + "-systemd";
-    public const string UpdaterVersion = "1.2.0";
+    public const string UpdaterVersion = "1.3.0";
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     public static ServerRelease Verify(byte[] data) {
         var release = JsonSerializer.Deserialize<ServerRelease>(data, Json) ?? throw new InvalidDataException("更新清单为空");

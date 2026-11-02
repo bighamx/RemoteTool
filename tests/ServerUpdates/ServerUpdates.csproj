@@ -7,6 +7,7 @@
     <Compile Include="../../WebApplication/Services/Updates/LinuxUpdateWorker.cs" Link="LinuxUpdateWorker.cs" />
     <Compile Include="../../WebApplication/Services/Updates/SystemdControl.cs" Link="SystemdControl.cs" />
     <Compile Include="../../WebApplication/Services/Updates/UpdaterProcess.cs" Link="UpdaterProcess.cs" />
+    <Compile Include="../../WebApplication/Services/Updates/SourceRepository.cs" Link="SourceRepository.cs" />
   </ItemGroup>
   <ItemGroup><Compile Include="../../WebApplication/Services/Codex/CodexMaintenance.cs" Link="CodexMaintenance.cs" /></ItemGroup>
 </Project>

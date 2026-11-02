@@ -111,6 +111,13 @@ public sealed partial class Worker
         await Readiness();
         var oldHealth = await Health();
         if (oldHealth["id"]?.ToString() != config.DeviceId) throw new IOException("设备身份已变化");
+        if(job.PullSource) {
+            Phase("pulling","正在拉取当前分支的最新源码");
+            var repository=new SourceRepository(project,runtime is ISourceUpdateRuntime source?args=>source.Git(project,args):null);
+            var before=await repository.Read();
+            var after=await repository.Pull(job.SourceBranch ?? throw new IOException("未记录更新分支，请重新提交更新"));
+            UpdateContract.Write(At(Path.Combine("jobs",job.Id,"source.json")),new {branch=after.Branch,before=before.Revision,after=after.Revision});
+        }
         var backup = At(Path.Combine("jobs", job.Id, "runtime-backup")); Directory.CreateDirectory(backup);
         var files = RuntimeFiles(output);
         foreach (var file in files) {
@@ -159,6 +166,6 @@ public sealed partial class Worker
         }
         await Command("start", "apppool", "/apppool.name:" + config.Pool);
         await Verify(transaction["sequence"]!.GetValue<long>(), transaction["buildId"]!.ToString()); await WarmBridge();
-        Phase("rolled_back", "更新或启动失败，已恢复原程序；源码与用户数据未修改"); File.Delete(At("transaction.json"));
+        Phase("rolled_back", job.PullSource ? "编译或启动失败，已恢复原程序；已拉取源码保留，可修复后重新编译，用户数据未修改" : "更新或启动失败，已恢复原程序；源码与用户数据未修改"); File.Delete(At("transaction.json"));
     }
 }

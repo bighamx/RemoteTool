@@ -38,7 +38,7 @@ public sealed class UpdaterBootstrap(IWebHostEnvironment environment, IConfigura
                 if (existing.UpdaterVersion == UpdateContract.UpdaterVersion && File.Exists(currentAssembly) && File.Exists(existing.UpdaterAssembly) &&
                     SHA256.HashData(File.ReadAllBytes(currentAssembly)).SequenceEqual(SHA256.HashData(File.ReadAllBytes(existing.UpdaterAssembly)))) { Message = null; return; }
                 var jobFile = Path.Combine(root, "job.json");
-                if (File.Exists(jobFile) && UpdateContract.Read<UpdateJob>(jobFile).Phase is "requested" or "downloading" or "waiting" or "building" or "switching" or "verifying" or "rolling_back" or "migrating" or "recovery_required") {
+                if (File.Exists(jobFile) && UpdateContract.Read<UpdateJob>(jobFile).Phase is "requested" or "downloading" or "waiting" or "pulling" or "building" or "switching" or "verifying" or "rolling_back" or "migrating" or "recovery_required") {
                     Message = "当前更新任务结束后再升级独立更新器"; return;
                 }
                 if (platform.Kind == "unsupported" || !platform.IsElevated) { Message = "更新器准备需要服务端现有权限"; return; }
@@ -135,7 +135,7 @@ public sealed class UpdaterBootstrap(IWebHostEnvironment environment, IConfigura
         var settings=Path.Combine(root,"installation.json");var file=Path.Combine(root,"job.json");
         if(!File.Exists(settings)||!File.Exists(file)||UpdateContract.Read<Installation>(settings).UpdaterVersion!=UpdateContract.UpdaterVersion)return;
         var job=UpdateContract.Read<UpdateJob>(file);
-        if(job.Phase is not ("requested" or "downloading" or "waiting" or "building" or "switching" or "verifying" or "rolling_back"))return;
+        if(job.Phase is not ("requested" or "downloading" or "waiting" or "pulling" or "building" or "switching" or "verifying" or "rolling_back"))return;
         try {using var held=new FileStream(Path.Combine(root,"worker.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);}
         catch(IOException){return;}
         await Start(job.Id,ct);

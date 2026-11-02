@@ -19,7 +19,7 @@ cleanup() {
 trap cleanup EXIT
 cat > "$project/WebApplication.csproj" <<XML
 <Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><UseAppHost>false</UseAppHost></PropertyGroup><ItemGroup>
-$(for file in UpdateContract UpdaterProcess UpdaterBootstrap SystemdControl ServerUpdateWorker SourceUpdateWorker LinuxUpdateWorker; do echo "<Compile Include=\"$repo/WebApplication/Services/Updates/$file.cs\" Link=\"$file.cs\"/>"; done)
+$(for file in UpdateContract UpdaterProcess UpdaterBootstrap SystemdControl ServerUpdateWorker SourceUpdateWorker LinuxUpdateWorker SourceRepository; do echo "<Compile Include=\"$repo/WebApplication/Services/Updates/$file.cs\" Link=\"$file.cs\"/>"; done)
 <AssemblyMetadata Include="ReleaseSequence" Value="\$(ServerReleaseSequence)"/>
 </ItemGroup></Project>
 XML

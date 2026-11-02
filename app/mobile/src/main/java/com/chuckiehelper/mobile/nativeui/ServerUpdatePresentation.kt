@@ -12,6 +12,16 @@ internal fun JSONObject.updateText(key: String): String =
 internal fun updateErrorText(value: String): String = value.replace(
     Regex("Response status code does not indicate success: (\\d+) \\([^)]+\\)\\.?"), "服务端请求失败（HTTP $1）")
 
+internal fun updateCheckText(snapshot: JSONObject, checking: Boolean = false): String {
+    if (checking) return "正在检查更新…"
+    val check = snapshot.optJSONObject("check") ?: return "尚未检查更新"
+    if (snapshot.updateText("mode") == "source" && check.updateText("kind") != "source") return "尚未核对源码版本，请点击立即检查"
+    if (check.updateText("runningVersion").isNotBlank() && check.updateText("runningVersion") != snapshot.updateText("currentVersion")) return "版本已变化，请重新检查"
+    check.updateText("error").takeIf { it.isNotBlank() }?.let { return "检查失败：" + updateErrorText(it) }
+    if (snapshot.updateText("mode") == "source") return check.updateText("message").ifBlank { "尚未核对源码版本" }
+    return if (check.optBoolean("available")) "可更新至 " + check.updateText("version") else "已是最新版本"
+}
+
 internal fun updateWindowText(policy: JSONObject?, zone: ZoneId = ZoneId.systemDefault()): String {
     val start = policy?.optInt("startHourUtc", 18) ?: 18
     val end = policy?.optInt("endHourUtc", 22) ?: 22

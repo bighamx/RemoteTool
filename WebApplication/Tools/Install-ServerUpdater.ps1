@@ -49,7 +49,7 @@ if(Test-Path $platform){Get-ChildItem -LiteralPath $platform -Filter '*.dll' -Fi
 foreach($name in @('WebApplication.deps.json','WebApplication.runtimeconfig.json')){Copy-Item -LiteralPath (Join-Path $applicationDirectory $name) -Destination $updater}
 $updaterDll=Join-Path $updater 'WebApplication.dll'
 $settings=@{site=$Site;pool=$pool;releases=$releases;shared=$shared;healthUrl="$HealthBase/api/device/update-health";deviceId=$identity.id;
-    workerToken=[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32));mode=$Mode.ToLowerInvariant();projectDirectory=$ProjectDirectory;runtimeDirectory=$old;updaterVersion='1.2.0';updaterAssembly=$updaterDll;host='iis'}
+    workerToken=[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32));mode=$Mode.ToLowerInvariant();projectDirectory=$ProjectDirectory;runtimeDirectory=$old;updaterVersion='1.3.0';updaterAssembly=$updaterDll;host='iis'}
 [IO.File]::WriteAllText((Join-Path $updates 'installation.json'),($settings|ConvertTo-Json))
 if($Mode -eq 'Source'){
     Write-Output "Source rebuild enabled: $ProjectDirectory -> $old. IIS path and Git files were not changed."

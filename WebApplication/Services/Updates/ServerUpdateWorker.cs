@@ -132,7 +132,7 @@ public sealed partial class Worker(string configPath, IUpdateRuntime? runtime = 
             using (var process = Process.GetCurrentProcess()) UpdateContract.Write(At(Path.Combine("jobs", job.Id, "worker.json")),
                 new { pid = process.Id, startCookie = UpdaterProcess.StartCookie(process) });
             if (File.Exists(At("transaction.json"))) { await Recover(UpdateContract.Read<JsonObject>(At("transaction.json"))); return; }
-            if (job.Phase is not ("requested" or "downloading" or "waiting")) return;
+            if (job.Phase is not ("requested" or "downloading" or "waiting" or "pulling")) return;
             releaseDrain = true;
             if (job.SourceBuild) { await RebuildSource(); return; }
             var manifest = await File.ReadAllBytesAsync(At(Path.Combine("jobs", job.Id, "manifest.json")));

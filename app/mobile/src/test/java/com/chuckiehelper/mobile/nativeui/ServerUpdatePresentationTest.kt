@@ -6,6 +6,17 @@ import org.junit.Test
 import java.time.ZoneId
 
 class ServerUpdatePresentationTest {
+    @Test fun latestAndUnknownSourceStateAreExplicit() {
+        val value=JSONObject("""{"mode":"source","check":{"kind":"source","state":"up_to_date","message":"已是最新版本"}}""")
+        assertEquals("已是最新版本",updateCheckText(value))
+        assertEquals("正在检查更新…",updateCheckText(value,true))
+        value.put("check",JSONObject("""{"available":false}"""))
+        assertEquals("尚未核对源码版本，请点击立即检查",updateCheckText(value))
+        value.put("check",JSONObject("""{"kind":"source","error":"network unavailable"}"""))
+        assertTrue(updateCheckText(value).startsWith("检查失败："))
+        value.put("mode","release").put("check",JSONObject("""{"available":false,"error":null}"""))
+        assertEquals("已是最新版本",updateCheckText(value))
+    }
     @Test fun jsonNullAndMissingFieldsNeverBecomeLiteralNull() {
         val value = JSONObject("""{"error":null,"notes":"null","message":"等待空闲"}""")
         assertEquals("", value.updateText("error"))

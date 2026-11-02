@@ -54,16 +54,19 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
     val installed = snapshot.optBoolean("installed")
     val source = snapshot.updateText("mode") == "source"
     val supportsForce = snapshot.optBoolean("supportsForce")
-    val updating = job?.updateText("phase") in listOf("requested", "waiting", "building", "downloading", "switching", "verifying", "rolling_back", "migrating", "recovery_required")
+    val sourcePull = source && snapshot.optBoolean("supportsSourcePull")
+    val updating = job?.updateText("phase") in listOf("requested", "waiting", "pulling", "building", "downloading", "switching", "verifying", "rolling_back", "migrating", "recovery_required")
+    var checking by remember(deviceId,api) { mutableStateOf(false) }
     fun close() { dismissed = check?.optLong("releaseSequence") ?: -1; shown = false; force = false; onClosed() }
     fun run(path: String, body: JSONObject) {
         if (busy) return
         busy = true
+        checking = path == "check"
         scope.launch {
             try { state = api.json("/api/server-update/$path", body); error = null; if (path == "rebuild" || path == "install") force = false }
             catch (cancel: CancellationException) { throw cancel }
             catch (failure: Exception) { error = updateErrorText(failure.message.orEmpty()) }
-            finally { busy = false }
+            finally { busy = false; checking = false }
         }
     }
     AlertDialog(onDismissRequest = { close() },
@@ -71,15 +74,18 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("当前版本 " + snapshot.updateText("currentVersion"))
-                Text(if (source) "源码运行 · 使用当前磁盘源码编译，不自动拉取代码" else "正式部署 · 下载发行包更新")
+                val checkText = updateCheckText(snapshot,checking)
+                Text(checkText, color = if (checkText == "已是最新版本") MaterialTheme.colorScheme.primary else LocalContentColor.current)
+                Text(if (source) (if (sourcePull) "源码运行 · 可拉取当前分支并更新" else "源码运行 · 编译当前磁盘源码") else "正式部署 · 下载发行包更新")
                 if (!source) {
-                    if (check?.optBoolean("available") == true) Text("可更新至 " + check.updateText("version"))
-                    check?.updateText("error")?.takeIf { it.isNotBlank() }?.let { Text(updateErrorText(it)) }
                     check?.updateText("releaseNotes")?.takeIf { it.isNotBlank() }?.let { Text(it) }
                 }
                 job?.updateText("message")?.takeIf { it.isNotBlank() }?.let { Text(updateErrorText(it)) }
                 if (!installed) Text(snapshot.updateText("message"))
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                if (sourcePull) TextButton(enabled = installed && !busy && !updating, onClick = {
+                    tracking = true; run("rebuild", JSONObject().put("force",supportsForce && force))
+                }) { Text("编译当前源码") }
                 if (supportsForce) {
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         Checkbox(checked = force, enabled = !busy && !updating, onCheckedChange = { force = it })
@@ -113,8 +119,8 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
             TextButton(enabled = installed && (if (source) snapshot.optBoolean("canRebuild") else check?.optBoolean("available") == true) && !busy && !updating, onClick = {
                 tracking = true
                 val body = JSONObject().put("force", supportsForce && force)
-                if (source) run("rebuild", body) else run("install", body.put("sequence", check?.optLong("releaseSequence")))
-            }) { Text(if (source) "编译并重启" else "更新并重启") }
+                if (source) run("rebuild", body.put("pullSource",sourcePull)) else run("install", body.put("sequence", check?.optLong("releaseSequence")))
+            }) { Text(if (source) (if (sourcePull) "拉取并更新" else "编译并重启") else "更新并重启") }
         },
         dismissButton = { Row {
             TextButton(enabled = !busy, onClick = { run("check", JSONObject()) }) { Text("立即检查") }

@@ -17,7 +17,7 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
     private string FileAt(string name) => Path.Combine(root, name);
     public static long Sequence => long.TryParse(typeof(ServerUpdateService).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
         .FirstOrDefault(a => a.Key == "ReleaseSequence")?.Value, out var value) ? value : 0;
-    public bool Enter() { lock (requests) { if (draining || Job?.Phase is "building" or "switching" or "verifying" or "rolling_back" or "migrating" or "recovery_required") return false; activeRequests++; return true; } }
+    public bool Enter() { lock (requests) { if (draining || Job?.Phase is "pulling" or "building" or "switching" or "verifying" or "rolling_back" or "migrating" or "recovery_required") return false; activeRequests++; return true; } }
     public void Leave() { lock (requests) activeRequests--; }
     public void ReleaseDrain() { lock (requests) draining = false; }
     public Installation Installation => File.Exists(FileAt("installation.json")) ? UpdateContract.Read<Installation>(FileAt("installation.json")) : null;
@@ -31,7 +31,7 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
     public UpdateJob Job => File.Exists(FileAt("job.json")) ? UpdateContract.Read<UpdateJob>(FileAt("job.json")) : null;
     public UpdateJob ReadJob(string id) => Guid.TryParseExact(id, "N", out _) && File.Exists(FileAt(Path.Combine("jobs", id, "status.json")))
         ? UpdateContract.Read<UpdateJob>(FileAt(Path.Combine("jobs", id, "status.json"))) : null;
-    private bool BusyJob => Job?.Phase is "requested" or "downloading" or "waiting" or "building" or "switching" or "verifying" or "rolling_back" or "recovery_required" or "migrating";
+    private bool BusyJob => Job?.Phase is "requested" or "downloading" or "waiting" or "pulling" or "building" or "switching" or "verifying" or "rolling_back" or "recovery_required" or "migrating";
     public object Status() {
         JsonNode check = null;
         if (File.Exists(FileAt("check.json"))) check = JsonNode.Parse(File.ReadAllText(FileAt("check.json")));
@@ -39,7 +39,8 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
             policy = Policy, check, job = Job, mode = Installation?.Mode, canRebuild = Installed && Installation.Mode == "source",
             preparationMessage = bootstrap.Message,
             supportsForce = Installed && Installation.UpdaterVersion == UpdateContract.UpdaterVersion,
-            message = Installed ? Installation.Mode == "source" ? "使用当前磁盘源码编译并重启，不自动拉取代码" : null : bootstrap.Message };
+            supportsSourcePull = Installed && Installation.Mode == "source" && Installation.UpdaterVersion == UpdateContract.UpdaterVersion,
+            message = Installed ? Installation.Mode == "source" ? "可拉取当前分支并更新，或仅编译当前磁盘源码" : null : bootstrap.Message };
     }
     public async Task<object> SavePolicy(UpdatePolicy policy, CancellationToken ct) {
         if (policy.Mode is not ("notify" or "download" or "automatic") || policy.StartHourUtc is < 0 or > 23 || policy.EndHourUtc is < 0 or > 23)
@@ -54,6 +55,13 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
         await bootstrap.Resume(ct);
         await gate.WaitAsync(ct);
         try {
+            if (Installation?.Mode == "source") {
+                try { UpdateContract.Write(FileAt("check.json"),await new SourceRepository(Installation.ProjectDirectory!).Check(ServerBuild.Version)); }
+                catch(Exception error) when(error is not OperationCanceledException || !ct.IsCancellationRequested) {
+                    UpdateContract.Write(FileAt("check.json"),new {kind="source",state="failed",checkedAt=DateTimeOffset.UtcNow,available=false,error=error.Message});
+                }
+                return Status();
+            }
             using var client = clients.CreateClient(); client.Timeout = TimeSpan.FromSeconds(30);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("RemoteTool-ServerUpdater/1.0");
             using var request = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{UpdateContract.Repository}/releases?per_page=100");
@@ -92,17 +100,20 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
         } finally { gate.Release(); }
         return Status();
     }
-    public async Task<object> Install(long sequence, CancellationToken ct, bool downloadOnly = false, bool rebuild = false, bool force = false) {
+    public async Task<object> Install(long sequence, CancellationToken ct, bool downloadOnly = false, bool rebuild = false, bool force = false, bool pullSource = false) {
         await gate.WaitAsync(ct);
         try {
             if (!Installed) throw new InvalidOperationException("源码运行实例不能自动覆盖，请先迁移到正式安装目录");
             if (BusyJob) throw new InvalidOperationException("已有更新任务，请先核对其结果");
             if (force && Installation.UpdaterVersion != UpdateContract.UpdaterVersion) throw new InvalidOperationException("请先点立即检查以升级独立更新器，再使用强制中断");
             if (rebuild && Installation.Mode != "source") throw new InvalidOperationException("当前实例未配置开发重编译模式");
+            if(pullSource && (!rebuild || Installation.Mode!="source" || Installation.UpdaterVersion!=UpdateContract.UpdaterVersion))throw new InvalidOperationException("当前更新器尚不支持拉取源码，请先检查更新");
+            var source=pullSource?await new SourceRepository(Installation.ProjectDirectory!).Read():null;
+            if(source?.Dirty==true)throw new InvalidOperationException("本地有未提交改动，请先处理或选择编译当前源码");
             var release = rebuild ? null : UpdateContract.Verify(await File.ReadAllBytesAsync(FileAt("manifest.json"), ct));
             if (!rebuild && (release.ReleaseSequence != sequence || sequence <= Sequence)) throw new InvalidOperationException("更新版本已变化，请重新检查");
-            var job = new UpdateJob(Guid.NewGuid().ToString("N"), "requested", downloadOnly ? "预下载" : rebuild ? "等待空闲后重编译当前源码" : "等待独立更新器", rebuild ? Sequence : sequence,
-                rebuild ? "本地源码" : release.Version, rebuild || Installation.Mode == "source" && !downloadOnly, !rebuild && Installation.Mode == "source" && !downloadOnly, force);
+            var job = new UpdateJob(Guid.NewGuid().ToString("N"), "requested", downloadOnly ? "预下载" : pullSource ? "等待空闲后拉取并更新源码" : rebuild ? "等待空闲后重编译当前源码" : "等待独立更新器", rebuild ? Sequence : sequence,
+                rebuild ? "本地源码" : release.Version, rebuild || Installation.Mode == "source" && !downloadOnly, !rebuild && Installation.Mode == "source" && !downloadOnly, force, pullSource, source?.Branch);
             var snapshot = FileAt(Path.Combine("jobs", job.Id));
             Directory.CreateDirectory(snapshot);
             if (!rebuild) {
