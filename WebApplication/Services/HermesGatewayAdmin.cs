@@ -13,10 +13,23 @@ public sealed class HermesGatewayAdmin(HermesManagement management)
             return JsonNode.Parse(result.GetRawText())!.AsObject();
         }
     }
+    // Hermes 被卸载、venv 损坏或网关拉不起来时也要给出可读原因，不要整页 500
+    private static string FriendlyError(Exception error) {
+        var text = error.Message ?? "";
+        return text.Contains("No such file", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("cannot find", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("ENOENT", StringComparison.OrdinalIgnoreCase)
+            ? "本机未安装 Hermes 或运行环境缺失，可在 Agent 设置里一键安装"
+            : text;
+    }
     public async Task<JsonObject> Status(CancellationToken ct) {
-        var result = await Invoke("job", new { }, ct);
+        JsonObject result;
+        try { result = await Invoke("job", new { }, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception error) { return new JsonObject { ["read_error"] = FriendlyError(error) }; }
         try { result["gateway"] = await Invoke("status", new { }, ct); }
-        catch (Exception error) when (error is IOException or InvalidOperationException) { result["read_error"] = error.Message; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception error) { result["read_error"] = FriendlyError(error); }
         return result;
     }
     public async Task<JsonObject> Log(long offset, string key, CancellationToken ct) => await Invoke("log", new { offset, key }, ct);
