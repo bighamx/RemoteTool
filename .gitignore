@@ -177,3 +177,6 @@ WebApplication/Tools/RemoteTool.MacAgent/build/
 .tmp-linux-publish.tar.gz
 publish-linux/
 remotetool-linux.tar.gz
+
+# local server/updater publish output
+/artifacts/
