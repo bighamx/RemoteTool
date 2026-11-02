@@ -1,7 +1,7 @@
 #Requires -RunAsAdministrator
 #Requires -Version 7.0
 [CmdletBinding()]
-param([string]$Site='RemoteTool', [Parameter(Mandatory)][string]$UpdaterExecutable,
+param([string]$Site='RemoteTool', [string]$ApplicationDll,
       [ValidateSet('Auto','Source','Release')][string]$Mode='Auto', [string]$ProjectDirectory,
       [string]$InitialRelease, [string]$InstallRoot='C:\Program Files\RemoteTool',
       [string]$HealthBase='http://127.0.0.1:8888', [switch]$Activate)
@@ -22,7 +22,11 @@ if(-not $ProjectDirectory){
 if($Mode -eq 'Auto'){$Mode=if($ProjectDirectory){'Source'}else{'Release'}}
 if($Mode -eq 'Source' -and -not(Test-Path (Join-Path $ProjectDirectory 'WebApplication.csproj'))){throw 'Source mode requires WebApplication.csproj'}
 if($Mode -eq 'Release' -and (-not $InitialRelease -or -not(Test-Path (Join-Path $InitialRelease 'WebApplication.dll')))){throw 'Release mode requires a complete published InitialRelease directory'}
-if(-not(Test-Path $UpdaterExecutable)){throw 'Updater executable not found'}
+if(-not $ApplicationDll){$ApplicationDll=Join-Path $old 'WebApplication.dll'}
+$applicationDirectory=Split-Path ([IO.Path]::GetFullPath($ApplicationDll))
+foreach($name in @('WebApplication.dll','WebApplication.deps.json','WebApplication.runtimeconfig.json')){
+    if(-not(Test-Path (Join-Path $applicationDirectory $name))){throw 'Complete WebApplication DLL runtime is required'}
+}
 $root=[IO.Path]::GetFullPath($InstallRoot)
 $updates=Join-Path $env:ProgramData 'RemoteTool\updates'
 if(Test-Path $root){throw 'Use a fresh installation directory'}
@@ -35,17 +39,18 @@ foreach($directory in @($root,$updates)){
 }
 $shared=Join-Path $root 'shared';$releases=Join-Path $root 'releases';$updater=Join-Path $root 'updater'
 New-Item -ItemType Directory -Path $shared,$releases,$updater -Force|Out-Null
-Copy-Item -LiteralPath $UpdaterExecutable -Destination (Join-Path $updater 'ServerUpdater.exe')
+Get-ChildItem -LiteralPath $applicationDirectory -Filter '*.dll' -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $updater }
+$platform=Join-Path $applicationDirectory 'runtimes'
+if(Test-Path $platform){Get-ChildItem -LiteralPath $platform -Filter '*.dll' -File -Recurse | ForEach-Object {
+    $destination=Join-Path $updater ([IO.Path]::GetRelativePath($applicationDirectory,$_.FullName))
+    New-Item -ItemType Directory -Path (Split-Path $destination) -Force|Out-Null
+    Copy-Item -LiteralPath $_.FullName -Destination $destination
+}}
+foreach($name in @('WebApplication.deps.json','WebApplication.runtimeconfig.json')){Copy-Item -LiteralPath (Join-Path $applicationDirectory $name) -Destination $updater}
+$updaterDll=Join-Path $updater 'WebApplication.dll'
 $settings=@{site=$Site;pool=$pool;releases=$releases;shared=$shared;healthUrl="$HealthBase/api/device/update-health";deviceId=$identity.id;
-    workerToken=[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32));mode=$Mode.ToLowerInvariant();projectDirectory=$ProjectDirectory;runtimeDirectory=$old}
+    workerToken=[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32));mode=$Mode.ToLowerInvariant();projectDirectory=$ProjectDirectory;runtimeDirectory=$old;updaterVersion='1.2.0';updaterAssembly=$updaterDll;host='iis'}
 [IO.File]::WriteAllText((Join-Path $updates 'installation.json'),($settings|ConvertTo-Json))
-$action=New-ScheduledTaskAction -Execute (Join-Path $updater 'ServerUpdater.exe') -Argument ('"'+(Join-Path $updates 'installation.json')+'"')
-$trigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 5)
-$taskSettings=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-if($Mode -eq 'Source'){
-    $principal=New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Highest
-}else{$principal=New-ScheduledTaskPrincipal -UserId SYSTEM -LogonType ServiceAccount -RunLevel Highest}
-Register-ScheduledTask -TaskName RemoteTool_ServerUpdate -Action $action -Trigger $trigger -Settings $taskSettings -Principal $principal -Force|Out-Null
 if($Mode -eq 'Source'){
     Write-Output "Source rebuild enabled: $ProjectDirectory -> $old. IIS path and Git files were not changed."
     return

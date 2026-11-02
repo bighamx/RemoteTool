@@ -5,7 +5,27 @@ on:
 permissions:
   contents: read
 jobs:
+  linux-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet run --project tests/ServerUpdates/ServerUpdates.csproj
+      - run: dotnet run --project tests/UpdaterBootstrap/UpdaterBootstrap.csproj
+      - run: dotnet run --project tests/UpdaterReadiness/UpdaterReadiness.csproj
+      - run: dotnet publish WebApplication/WebApplication.csproj -c Release -p:UseAppHost=false -o artifacts/linux-entry
+      - run: bash tests/test_updater_entry_linux.sh artifacts/linux-entry
+      - name: Validate real systemd update and rollback
+        shell: bash
+        run: |
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          sudo loginctl enable-linger "$USER"
+          sudo systemctl start "user@$(id -u).service"
+          bash tests/test_updater_systemd.sh
   release:
+    needs: linux-validation
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -21,27 +41,41 @@ jobs:
           if ($env:GITHUB_REF_NAME -notmatch '^server-v\d+\.\d+\.\d+$') { throw 'Invalid server tag' }
           dotnet run --project tests/ServerUpdates/ServerUpdates.csproj
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Publish service and independent updater
+          dotnet run --project tests/UpdaterBootstrap/UpdaterBootstrap.csproj
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet run --project tests/UpdaterReadiness/UpdaterReadiness.csproj
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node tests/server_update_ui.test.cjs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Publish service with built-in updater mode
         shell: pwsh
         run: |
           $version=$env:GITHUB_REF_NAME.Substring(8)
-          dotnet publish WebApplication/WebApplication.csproj -c Release -r win-x64 --self-contained true -o artifacts/server -p:ServerReleaseSequence=$env:GITHUB_RUN_NUMBER -p:InformationalVersion="$version+$env:GITHUB_SHA"
+          dotnet publish WebApplication/WebApplication.csproj -c Release -r win-x64 --self-contained false -p:UseAppHost=false -o artifacts/server -p:ServerReleaseSequence=$env:GITHUB_RUN_NUMBER -p:InformationalVersion="$version+$env:GITHUB_SHA"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          dotnet publish WebApplication/Tools/ServerUpdater/ServerUpdater.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/updater
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          Compress-Archive artifacts/updater/* artifacts/RemoteTool-updater-win-x64.zip
+          foreach ($rid in @('linux-x64','linux-arm64')) {
+            dotnet publish WebApplication/WebApplication.csproj -c Release -r $rid --self-contained false -p:UseAppHost=false -o "artifacts/$rid" -p:ServerReleaseSequence=$env:GITHUB_RUN_NUMBER
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
           Copy-Item WebApplication/Tools/Install-ServerUpdater.ps1 artifacts/
           Copy-Item WebApplication/Tools/Activate-ServerUpdater.ps1 artifacts/
-      - name: Package and checksum
+          foreach ($name in @('WebApplication.dll','WebApplication.deps.json','WebApplication.runtimeconfig.json')) {
+            if (-not (Test-Path "artifacts/server/$name")) { throw "Updater runtime missing: $name" }
+          }
+      - name: Verify updater DLL starts outside the website
         shell: pwsh
-        run: ./WebApplication/Tools/Publish-ServerUpdate.ps1 -PublishDirectory artifacts/server -OutputDirectory artifacts -Version ($env:GITHUB_REF_NAME.Substring(8)) -Sequence $env:GITHUB_RUN_NUMBER -Commit $env:GITHUB_SHA
+        run: ./tests/test_server_updater_entry.ps1 -RuntimeDirectory artifacts/server
+      - name: Build release archive and checksum
+        shell: pwsh
+        run: ./WebApplication/Tools/Publish-ServerUpdate.ps1 -PublishDirectory artifacts/server -LinuxX64Directory artifacts/linux-x64 -LinuxArm64Directory artifacts/linux-arm64 -OutputDirectory artifacts -Version ($env:GITHUB_REF_NAME.Substring(8)) -Sequence $env:GITHUB_RUN_NUMBER -Commit $env:GITHUB_SHA
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           make_latest: false
           files: |
             artifacts/RemoteTool-server-win-x64.zip
-            artifacts/RemoteTool-updater-win-x64.zip
+            artifacts/RemoteTool-server-linux-x64.zip
+            artifacts/RemoteTool-server-linux-arm64.zip
             artifacts/Install-ServerUpdater.ps1
             artifacts/Activate-ServerUpdater.ps1
             artifacts/server-update.json

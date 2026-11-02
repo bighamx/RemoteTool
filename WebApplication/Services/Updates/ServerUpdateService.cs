@@ -7,7 +7,7 @@ using RemoteTool.Updates;
 namespace RemoteTool.WebApi.Services.Updates;
 
 public sealed class ServerUpdateService(IHttpClientFactory clients, IConfiguration config, IWebHostEnvironment environment,
-    HermesManagement hermes, HermesProfiles profiles, HermesBridge hermesBridge, CodexBridge codexBridge, RunRegistry registry) : BackgroundService
+    HermesManagement hermes, HermesProfiles profiles, HermesBridge hermesBridge, CodexBridge codexBridge, RunRegistry registry, UpdaterBootstrap bootstrap) : BackgroundService
 {
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly object requests = new();
@@ -21,7 +21,7 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
     public void Leave() { lock (requests) activeRequests--; }
     public void ReleaseDrain() { lock (requests) draining = false; }
     public Installation Installation => File.Exists(FileAt("installation.json")) ? UpdateContract.Read<Installation>(FileAt("installation.json")) : null;
-    public bool Installed => OperatingSystem.IsWindows() && Installation != null && (Installation.Mode == "source" || !DevelopmentTree());
+    public bool Installed => Installation != null && (OperatingSystem.IsWindows() && Installation.Host == "iis" || OperatingSystem.IsLinux() && Installation.Host == "systemd") && (Installation.Mode == "source" || !DevelopmentTree());
     private bool DevelopmentTree() {
         for (var dir = new DirectoryInfo(environment.ContentRootPath); dir != null; dir = dir.Parent)
             if (Directory.Exists(Path.Combine(dir.FullName, ".git")) || File.Exists(Path.Combine(dir.FullName, ".git"))) return true;
@@ -35,9 +35,10 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
     public object Status() {
         JsonNode check = null;
         if (File.Exists(FileAt("check.json"))) check = JsonNode.Parse(File.ReadAllText(FileAt("check.json")));
-        return new { supported = true, installed = Installed, currentVersion = ServerBuild.Version, currentSequence = Sequence,
+        return new { supported = OperatingSystem.IsWindows() || OperatingSystem.IsLinux(), installed = Installed, currentVersion = ServerBuild.Version, currentSequence = Sequence,
             policy = Policy, check, job = Job, mode = Installation?.Mode, canRebuild = Installed && Installation.Mode == "source",
-            message = Installed ? Installation.Mode == "source" ? "开发模式：重新编译当前源码，保留 IIS 目录，不自动拉取或重置 Git" : null : "尚未安装独立更新器，仅检查和提示更新" };
+            supportsForce = Installed && Installation.UpdaterVersion == UpdateContract.UpdaterVersion,
+            message = Installed ? Installation.Mode == "source" ? "使用当前磁盘源码编译并重启，不自动拉取代码" : null : bootstrap.Message };
     }
     public async Task<object> SavePolicy(UpdatePolicy policy, CancellationToken ct) {
         if (policy.Mode is not ("notify" or "download" or "automatic") || policy.StartHourUtc is < 0 or > 23 || policy.EndHourUtc is < 0 or > 23)
@@ -47,6 +48,9 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
         try { UpdateContract.Write(FileAt("policy.json"), policy); return Status(); } finally { gate.Release(); }
     }
     public async Task<object> Check(CancellationToken ct) {
+        await bootstrap.Ensure(ct);
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return Status();
+        await bootstrap.Resume(ct);
         await gate.WaitAsync(ct);
         try {
             using var client = clients.CreateClient(); client.Timeout = TimeSpan.FromSeconds(30);
@@ -87,16 +91,17 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
         } finally { gate.Release(); }
         return Status();
     }
-    public async Task<object> Install(long sequence, CancellationToken ct, bool downloadOnly = false, bool rebuild = false) {
+    public async Task<object> Install(long sequence, CancellationToken ct, bool downloadOnly = false, bool rebuild = false, bool force = false) {
         await gate.WaitAsync(ct);
         try {
             if (!Installed) throw new InvalidOperationException("源码运行实例不能自动覆盖，请先迁移到正式安装目录");
             if (BusyJob) throw new InvalidOperationException("已有更新任务，请先核对其结果");
+            if (force && Installation.UpdaterVersion != UpdateContract.UpdaterVersion) throw new InvalidOperationException("请先点立即检查以升级独立更新器，再使用强制中断");
             if (rebuild && Installation.Mode != "source") throw new InvalidOperationException("当前实例未配置开发重编译模式");
             var release = rebuild ? null : UpdateContract.Verify(await File.ReadAllBytesAsync(FileAt("manifest.json"), ct));
             if (!rebuild && (release.ReleaseSequence != sequence || sequence <= Sequence)) throw new InvalidOperationException("更新版本已变化，请重新检查");
             var job = new UpdateJob(Guid.NewGuid().ToString("N"), "requested", downloadOnly ? "预下载" : rebuild ? "等待空闲后重编译当前源码" : "等待独立更新器", rebuild ? Sequence : sequence,
-                rebuild ? "本地源码" : release.Version, rebuild || Installation.Mode == "source" && !downloadOnly, !rebuild && Installation.Mode == "source" && !downloadOnly);
+                rebuild ? "本地源码" : release.Version, rebuild || Installation.Mode == "source" && !downloadOnly, !rebuild && Installation.Mode == "source" && !downloadOnly, force);
             var snapshot = FileAt(Path.Combine("jobs", job.Id));
             Directory.CreateDirectory(snapshot);
             if (!rebuild) {
@@ -104,10 +109,10 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
             }
             UpdateContract.Write(FileAt("request.json"), new { job.Id, downloadOnly });
             UpdateContract.WriteJob(root, job);
-            using var process = Process.Start(new ProcessStartInfo("schtasks.exe") { UseShellExecute = false, CreateNoWindow = true,
-                ArgumentList = { "/Run", "/TN", "RemoteTool_ServerUpdate" }, RedirectStandardError = true, RedirectStandardOutput = true })!;
-            await process.WaitForExitAsync(ct);
-            if (process.ExitCode != 0) { UpdateContract.WriteJob(root, job with { Phase = "failed", Message = "无法启动独立更新器，请检查计划任务权限" }); throw new InvalidOperationException("无法启动独立更新器"); }
+            try { await bootstrap.Start(job.Id, CancellationToken.None); }
+            catch (Exception error) when (error is System.ComponentModel.Win32Exception or IOException) {
+                UpdateContract.WriteJob(root, job with { Phase = "failed", Message = "无法启动更新进程：" + error.Message }); throw new IOException("无法启动更新进程；网站未停止", error);
+            }
             return Status();
         } finally { gate.Release(); }
     }
@@ -120,6 +125,8 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
         int count; lock (requests) { draining = true; count = activeRequests; }
         try {
         var blockers = new List<string>();
+        // Force is an explicit per-job choice. It is never stored in automatic policy.
+        if (Job.Force) return new { ready = true, blockers };
         if (count > 0) blockers.Add($"有 {count} 个请求或实时连接尚未结束");
         // Native tasks can outlive their HTTP connection. Missing evidence never means idle.
         if (Directory.Exists(profiles.Root)) {
@@ -130,10 +137,9 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
                 }
             } catch { blockers.Add("无法确认 Hermes 空闲"); }
         }
-        // 进程被杀会漏写终态，登记可能永久残留；超过 6 小时没有更新的登记按残留处理，否则更新会被永远挡住。
-        var staleSeconds = (long)TimeSpan.FromHours(6).TotalSeconds;
-        var nowSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        async Task CheckRun(string agent, string session, string run, long updatedAt = 0) {
+        var checkedRuns = new HashSet<(string Agent, string Run)>();
+        async Task CheckRun(string agent, string session, string run) {
+            if (!checkedRuns.Add((agent, run))) return;
             try {
                 HttpResponseMessage response;
                 if (agent.StartsWith("hermes", StringComparison.Ordinal)) {
@@ -143,27 +149,26 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
                 using (response) {
                     var value = response.IsSuccessStatusCode ? JsonNode.Parse(await response.Content.ReadAsStringAsync(ct)) : null;
                     if (value?["status"]?.ToString() is "completed" or "failed" or "cancelled" or "interrupted") registry.Clear(agent, session, run);
-                    else if (!response.IsSuccessStatusCode) registry.Clear(agent, session, run); // 桥里已找不到该 run，登记是残留
-                    else if (updatedAt > 0 && nowSeconds - updatedAt > staleSeconds) registry.Clear(agent, session, run);
+                    // Age, a missing receipt, and a failed probe do not prove execution ended.
+                    // In particular, bridge shutdown also fences acceptance_unknown records.
+                    else if (!response.IsSuccessStatusCode) blockers.Add($"无法确认智能体任务状态：{agent}（HTTP {(int)response.StatusCode}）");
+                    else if (value?["status"]?.ToString() == "acceptance_unknown") blockers.Add("智能体任务结果待核对：" + agent);
                     else blockers.Add("智能体运行中或结果待核对：" + agent);
                 }
-            } catch { blockers.Add("无法确认智能体任务状态：" + agent); }
+            } catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { blockers.Add("无法确认智能体任务状态：" + agent); }
         }
         var registryPath = RemoteToolPaths.RunRegistry;
         if (File.Exists(registryPath) && JsonNode.Parse(await File.ReadAllTextAsync(registryPath, ct)) is JsonObject runs)
             foreach (var pair in runs) {
                 var separator = pair.Key.IndexOf(':');
                 if (separator < 0) { blockers.Add("运行记录格式待核对"); continue; }
-                await CheckRun(pair.Key[..separator], pair.Key[(separator + 1)..], pair.Value?["run_id"]?.ToString() ?? "", pair.Value?["updated_at"]?.GetValue<long>() ?? 0);
+                await CheckRun(pair.Key[..separator], pair.Key[(separator + 1)..], pair.Value?["run_id"]?.ToString() ?? "");
             }
         var nativeRuns = Path.Combine(RemoteToolPaths.CodexState, "runs.json");
         if (File.Exists(nativeRuns) && JsonNode.Parse(await File.ReadAllTextAsync(nativeRuns, ct)) is JsonObject native)
             foreach (var pair in native.Where(p => p.Value?["status"]?.ToString() is "started" or "queued" or "running" or "submitting" or "acceptance_unknown")) {
-                // 新版记录用 enqueued_at，旧版用 created_at
-                var created = pair.Value?["created_at"]?.GetValue<long>() ?? pair.Value?["enqueued_at"]?.GetValue<long>() ?? 0;
-                // 只丢了受理确认、且已经很久没有后续事件的记录属于残留，不算“正在运行”
-                if (pair.Value?["status"]?.ToString() == "acceptance_unknown" && created > 0 && nowSeconds - created > staleSeconds) continue;
-                await CheckRun("codex", pair.Value?["session_id"]?.ToString() ?? "", pair.Key, created);
+                await CheckRun("codex", pair.Value?["session_id"]?.ToString() ?? "", pair.Key);
             }
         try { if (Hangfire.JobStorage.Current.GetMonitoringApi().ProcessingCount() > 0) blockers.Add("后台定时任务正在执行"); }
         catch { blockers.Add("无法确认后台任务空闲"); }
@@ -177,7 +182,7 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
         while (!stoppingToken.IsCancellationRequested) {
             try {
                 await Check(stoppingToken);
-                if (Installed && !BusyJob && Policy.Mode != "notify" && File.Exists(FileAt("check.json")) &&
+                if (Installed && Installation.Mode != "source" && !BusyJob && Policy.Mode != "notify" && File.Exists(FileAt("check.json")) &&
                     JsonNode.Parse(File.ReadAllText(FileAt("check.json")))?["available"]?.GetValue<bool>() == true &&
                     (Policy.Mode == "download" || UpdateContract.InWindow(Policy, DateTime.UtcNow.Hour))) {
                     var release = UpdateContract.Read<ServerRelease>(FileAt("manifest.json"));

@@ -21,13 +21,13 @@ pwsh -File WebApplication/Tools/Deploy-Linux.ps1 -SourceConfig D:\GIT\RemoteTool
 
 | 依赖 | 说明 |
 |---|---|
-| ASP.NET Core 8 运行时 | `sudo apt-get install -y aspnetcore-runtime-8.0`。**主程序虽是自包含发布，但 Codex 桥接进程是用 `dotnet WebApplication.dll` 拉起的**，没有 runtime 会 `Win32Exception (2)`。 |
+| ASP.NET Core 8 运行时 | `sudo apt-get install -y aspnetcore-runtime-8.0`。网站、Codex 桥接和外部 DLL 更新进程共用此运行时。 |
 | Codex CLI | 已登录（`~/.codex/auth.json`），版本需支持 `codex app-server --stdio`（0.1xx 均可）。路径由 `-CodexExecutable` 指定。 |
 | sudo | 无密码 sudo 用于写 systemd unit（也可改成用户级 systemd）。 |
 
 ## 脚本做了什么
 
-1. `dotnet publish -c Release -r linux-x64 --self-contained true` → `.tmp-linux-publish/`（已 gitignore）。
+1. `dotnet publish -c Release -r linux-x64 --self-contained false -p:UseAppHost=false` → `.tmp-linux-publish/`（已 gitignore）。
 2. 用 Windows 的 `appsettings.json` 做底（保留 `Auth` 账号/JWT），重写 `Codex`/`Hermes` 为 Linux 路径，
    去掉 Windows 专属节（`RemoteControl`/`QbSettings`/`EmbySettings`/`CloudflareSettings`）。
 3. `tar` 使用相对归档文件名打包，兼容 Windows BSD tar 与 GNU tar，避免把盘符识别成远程主机。
@@ -37,6 +37,12 @@ pwsh -File WebApplication/Tools/Deploy-Linux.ps1 -SourceConfig D:\GIT\RemoteTool
    停服后保留应用目录中的 SQLite 数据库及伴随文件，避免部署时丢失 Hangfire 等应用数据。
 5. `REMOTETOOL_DATA_DIR=<DataPath>`：避免默认写 `/usr/share/RemoteTool` 需要 root。
 6. 健康检查：`http://<Address>:<Port>/Account/Login` == 200（`Address` 缺省从远端 `hostname -I` 取第一项）。
+
+## 自动更新
+
+部署脚本设置 `REMOTETOOL_SERVICE_NAME` 和 `KillMode=process`，保留独立 bridge / updater 的生命周期。Web 直接继承当前服务身份启动外部 DLL 更新进程，没有计划任务或 timer。更新设置、源码重编译、强制中断与 Web/App 提示共用 [SERVER-UPDATES.md](../SERVER-UPDATES.md) 中的接口。
+
+非 root 系统服务需要预先具有对该 unit 执行 `sudo -n systemctl start/stop` 的权限；更新功能不会扩大授权。也可以配置当前账户的用户级 systemd unit，设置 `ServerUpdate:UserService=true`。GitHub 发布包含 Linux x64 和 ARM64 包，运行实例按架构选择。更新保留原服务工作目录和配置，失败还原原程序。
 
 ## 排障
 

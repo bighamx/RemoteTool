@@ -4,9 +4,11 @@ using System.Reflection.PortableExecutable;
 using System.Text.Json.Nodes;
 using RemoteTool.Updates;
 
+namespace RemoteTool.WebApi.Services.Updates;
+
 public interface ISourceUpdateRuntime : IUpdateRuntime
 {
-    Task StopBridge();
+    Task StopBridge(bool force);
     Task WarmBridge();
     Task Compile(string project, string output, long sequence);
     Task<string> Git(string directory, params string[] arguments);
@@ -15,7 +17,7 @@ public interface ISourceUpdateRuntime : IUpdateRuntime
 public sealed partial class Worker
 {
     static readonly HashSet<string> CodeExtensions = new(StringComparer.OrdinalIgnoreCase) {
-        ".dll", ".pdb", ".exe", ".json", ".config", ".py", ".md", ".cshtml", ".js", ".css", ".html", ".svg", ".png", ".woff", ".woff2"
+        ".dll", ".so", ".dylib", ".pdb", ".exe", ".json", ".config", ".py", ".md", ".cshtml", ".js", ".css", ".html", ".svg", ".png", ".woff", ".woff2"
     };
     static bool ConfigurationFile(string path) => Path.GetFileName(path).StartsWith("appsettings", StringComparison.OrdinalIgnoreCase) || Path.GetFileName(path).Equals("web.config", StringComparison.OrdinalIgnoreCase);
     static string[] RuntimeFiles(string directory) => Directory.EnumerateFiles(directory, "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint })
@@ -45,7 +47,7 @@ public sealed partial class Worker
         return text.Trim();
     }
     async Task StopBridge() {
-        if (runtime is ISourceUpdateRuntime source) { await source.StopBridge(); return; }
+        if (runtime is ISourceUpdateRuntime source) { await source.StopBridge(job.Force); return; }
         var folder = Path.Combine(Path.GetDirectoryName(root)!, "codex-bridge");
         var statusFile = Path.Combine(folder, "status.json"); var connectionFile = Path.Combine(folder, "connection.json");
         if (!File.Exists(statusFile) || !File.Exists(connectionFile)) return;
@@ -59,13 +61,25 @@ public sealed partial class Worker
             probe.Headers.Authorization = new("Bearer", connection["token"]!.ToString());
             using var response = await http.SendAsync(probe); response.EnsureSuccessStatusCode();
             var health = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+            // Linux .NET derives wall-clock start time from a per-process boot-clock
+            // sample. Small sub-second differences are expected across processes.
+            var started=health["process_started_ticks"]?.GetValue<long>() ?? 0;
+            var delta=Math.Abs(started-process.StartTime.ToUniversalTime().Ticks);
             if (health["maintenance_shutdown"]?.GetValue<bool>() != true || health["bridge_pid"]?.GetValue<int>() != pid ||
-                health["process_started_ticks"]?.GetValue<long>() != process.StartTime.ToUniversalTime().Ticks)
+                started <= 0 || delta > (OperatingSystem.IsLinux()?TimeSpan.TicksPerSecond:0))
                 throw new IOException("当前 bridge 不支持安全关闭，请先部署支持维护接口的版本；不会按 PID 强杀");
+            if (job.Force) {
+                // Explicitly authorized for this job only. The authenticated endpoint,
+                // PID and start time above identify our bridge, never desktop Codex.
+                process.Kill(entireProcessTree: true);
+                using var forcedTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await process.WaitForExitAsync(forcedTimeout.Token);
+                return;
+            }
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint + "/maintenance/shutdown");
             request.Headers.Authorization = new("Bearer", connection["token"]!.ToString());
             using var stopped = await http.SendAsync(request);
-            if (!stopped.IsSuccessStatusCode) throw new IOException("Codex bridge 尚未空闲，已取消编译；没有强制停止任务");
+            if (!stopped.IsSuccessStatusCode) throw new IOException($"Codex bridge 尚未确认可安全关闭（HTTP {(int)stopped.StatusCode}），已取消编译；没有强制停止任务");
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             await process.WaitForExitAsync(timeout.Token);
         }
@@ -99,12 +113,14 @@ public sealed partial class Worker
             var destination = Path.Combine(backup, Path.GetRelativePath(output, file));
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!); File.Copy(file, destination, true);
         }
+        // A final atomic bridge check can still refuse after readiness (e.g. a direct
+        // bridge client started work). Keep IIS available when that happens.
+        await StopBridge();
         var transaction = new JsonObject { ["kind"] = "source", ["previous"] = output, ["target"] = output, ["sequence"] = oldHealth["sequence"]!.DeepClone(),
             ["buildId"] = oldHealth["buildId"]!.DeepClone(), ["backup"] = backup, ["buildStarted"] = false };
         UpdateContract.Write(At("transaction.json"), transaction);
-        Phase("building", "停止 Web 与空闲 bridge，重新编译当前源码");
+        Phase("building", job.Force ? "已强制中断 Codex 任务，正在编译并重启" : "正在编译并重启");
         await Command("stop", "apppool", "/apppool.name:" + config.Pool);
-        await StopBridge();
         transaction["buildStarted"] = true; UpdateContract.Write(At("transaction.json"), transaction);
         if (runtime is ISourceUpdateRuntime sourceRuntime) await sourceRuntime.Compile(project, output, job.Sequence);
         else await Tool("dotnet", project, "build", "WebApplication.csproj", "-c", "Debug", "-o", output, "--disable-build-servers", "-p:UseSharedCompilation=false", "-p:ServerReleaseSequence=" + job.Sequence);
@@ -139,6 +155,6 @@ public sealed partial class Worker
         }
         await Command("start", "apppool", "/apppool.name:" + config.Pool);
         await Verify(transaction["sequence"]!.GetValue<long>(), transaction["buildId"]!.ToString()); await WarmBridge();
-        Phase("rolled_back", "编译或启动失败，已恢复原程序；源码与用户数据未修改"); File.Delete(At("transaction.json"));
+        Phase("rolled_back", "更新或启动失败，已恢复原程序；源码与用户数据未修改"); File.Delete(At("transaction.json"));
     }
 }

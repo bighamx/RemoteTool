@@ -19,8 +19,8 @@
   <ItemGroup>
     <ProjectReference Include="..\RemoteTool.Lib\RemoteTool.Lib.csproj" />
     <AssemblyMetadata Include="ReleaseSequence" Value="$(ServerReleaseSequence)" />
-    <Compile Remove="Tools\ServerUpdater\**;Tools\RemoteTool.SensorHost\**" />
-    <Content Remove="Tools\ServerUpdater\**;Tools\RemoteTool.SensorHost\**;Tools\RemoteTool.MacAgent\**" />
+    <Compile Remove="Tools\RemoteTool.SensorHost\**;Tools\**\bin\**;Tools\**\obj\**" />
+    <Content Remove="Tools\RemoteTool.SensorHost\**;Tools\RemoteTool.MacAgent\**;Tools\**\bin\**;Tools\**\obj\**" />
   </ItemGroup>
 
   <ItemGroup>

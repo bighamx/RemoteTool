@@ -9,15 +9,16 @@ public sealed record ServerRelease(int SchemaVersion, string Version, long Relea
     string ReleaseNotes, Dictionary<string, ServerPackage> Packages);
 public sealed record ServerPackage(string Url, string Sha256, long Size);
 public sealed record UpdatePolicy(string Mode = "notify", int StartHourUtc = 18, int EndHourUtc = 22);
-public sealed record UpdateJob(string Id, string Phase, string Message, long Sequence, string Version, bool SourceBuild = false, bool ReleaseSource = false);
+public sealed record UpdateJob(string Id, string Phase, string Message, long Sequence, string Version, bool SourceBuild = false, bool ReleaseSource = false, bool Force = false);
 public sealed record Installation(string Site, string Pool, string Releases, string Shared, string HealthUrl,
-    string DeviceId, string WorkerToken, string Mode = "release", string? ProjectDirectory = null, string? RuntimeDirectory = null);
+    string DeviceId, string WorkerToken, string Mode = "release", string? ProjectDirectory = null, string? RuntimeDirectory = null, string? UpdaterVersion = null, string? UpdaterAssembly = null, string Host = "iis", bool UserService = false);
 
 public static class UpdateContract
 {
     public const string Repository = "bighamx/RemoteTool";
-    public const string Platform = "win-x64-iis";
-    public const string UpdaterVersion = "1.0.0";
+    public static string Platform => OperatingSystem.IsWindows() ? "win-x64-iis" : "linux-" +
+        (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.Arm64 ? "arm64" : "x64") + "-systemd";
+    public const string UpdaterVersion = "1.2.0";
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     public static ServerRelease Verify(byte[] data) {
         var release = JsonSerializer.Deserialize<ServerRelease>(data, Json) ?? throw new InvalidDataException("更新清单为空");
@@ -55,10 +56,12 @@ public static class UpdateContract
             var name = item.FullName.Replace('\\', '/');
             var path = Path.GetFullPath(Path.Combine(root, name));
             var leaf = Path.GetFileName(path);
-            if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase) || name.Contains(':') ||
+            if (!path.StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) || name.Contains(':') ||
                 (item.ExternalAttributes >> 16 & 0xF000) == 0xA000 ||
                 leaf.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase) || leaf.Equals("web.config", StringComparison.OrdinalIgnoreCase) ||
-                leaf == ".env" || name.Split('/').Any(s => s is ".git" or "shared" or "updates"))
+                leaf.Equals("auth.json",StringComparison.OrdinalIgnoreCase) || leaf == ".env" ||
+                new[] { ".db", ".sqlite", ".sqlite3", ".db-wal", ".db-shm", ".sqlite-wal", ".sqlite-shm" }.Any(suffix => leaf.EndsWith(suffix,StringComparison.OrdinalIgnoreCase)) ||
+                name.Split('/').Any(s => s is ".git" or "shared" or "updates" or "uploads" or "attachments" or "logs" or "data"))
                 throw new InvalidDataException("发行包包含受保护路径");
             expanded = checked(expanded + item.Length);
             if (expanded > 3L * 1024 * 1024 * 1024) throw new InvalidDataException("发行包解压大小超限");

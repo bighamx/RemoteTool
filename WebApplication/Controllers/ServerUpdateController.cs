@@ -15,13 +15,14 @@ public sealed class ServerUpdateController(ServerUpdateService updates, CodexBri
     [HttpPut("settings")] public async Task<IActionResult> Settings(UpdatePolicy policy, CancellationToken ct) {
         try { return Ok(await updates.SavePolicy(policy, ct)); } catch (InvalidOperationException error) { return Conflict(new { message = error.Message }); }
     }
-    public sealed record InstallRequest(long Sequence);
-    [HttpPost("rebuild")] public async Task<IActionResult> Rebuild(CancellationToken ct) {
-        try { return Accepted(await updates.Install(0, ct, rebuild: true)); }
+    public sealed record InstallRequest(long Sequence, bool Force = false);
+    public sealed record RebuildRequest(bool Force = false);
+    [HttpPost("rebuild")] public async Task<IActionResult> Rebuild(RebuildRequest request, CancellationToken ct) {
+        try { return Accepted(await updates.Install(0, ct, rebuild: true, force: request.Force)); }
         catch (Exception error) when (error is InvalidOperationException or IOException) { return Conflict(new { message = error.Message }); }
     }
     [HttpPost("install")] public async Task<IActionResult> Install(InstallRequest request, CancellationToken ct) {
-        try { return Accepted(await updates.Install(request.Sequence, ct)); }
+        try { return Accepted(await updates.Install(request.Sequence, ct, force: request.Force)); }
         catch (Exception error) when (error is InvalidOperationException or IOException) { return Conflict(new { message = error.Message }); }
     }
     [AllowAnonymous, HttpPost("readiness")]

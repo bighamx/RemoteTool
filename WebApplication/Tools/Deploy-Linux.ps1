@@ -7,7 +7,7 @@
   Intended for the Ubuntu test VM (or any systemd host with a non-root user).
 
   What it handles:
-    * self-contained linux-x64 publish (no dotnet needed to run the main app)
+    * framework-dependent linux-x64 publish (shared ASP.NET Core 8 runtime)
     * REMOTETOOL_DATA_DIR so data never lands in /usr/share (root-only)
     * appsettings.json derived from the Windows config (auth password/JWT preserved),
       with Codex/Hermes paths rewritten for Linux
@@ -67,12 +67,12 @@ if (-not $SkipPull) {
 }
 
 if (-not $SkipPublish) {
-    Step 'publish linux-x64 (self-contained)'
+    Step 'publish linux-x64 (DLL runtime)'
     if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
     Push-Location $repo
     try {
-        & dotnet publish 'WebApplication/WebApplication.csproj' -c Release -r linux-x64 --self-contained true `
-            -p:PublishTrimmed=false -o $staging -v q --nologo
+        & dotnet publish 'WebApplication/WebApplication.csproj' -c Release -r linux-x64 --self-contained false `
+            -p:UseAppHost=false -p:PublishTrimmed=false -o $staging -v q --nologo
         if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
     } finally { Pop-Location }
 }
@@ -130,7 +130,7 @@ if ($LASTEXITCODE -ne 0) { throw 'scp failed' }
 Step 'verify host prerequisites'
 $hasDotnet = ((& ssh -o BatchMode=yes $target 'command -v dotnet >/dev/null && echo yes || echo no') -join '').Trim()
 if ($hasDotnet -ne 'yes') {
-    Write-Warning 'dotnet runtime missing on host; the Codex bridge will fail. Install: sudo apt-get install -y aspnetcore-runtime-8.0'
+    throw 'dotnet runtime missing on host. Install aspnetcore-runtime-8.0 before deployment; no service was stopped.'
 }
 
 Step 'install and restart service'
@@ -178,7 +178,6 @@ for folder in old.iterdir():
         if not target.exists() and not target.is_symlink():
             target.symlink_to(folder.resolve(),target_is_directory=True)
 PRESERVE_WORKSPACES
-chmod +x '$RemotePath/WebApplication'
 sudo tee /etc/systemd/system/$ServiceName.service >/dev/null <<UNIT
 [Unit]
 Description=RemoteTool Web Server
@@ -192,10 +191,12 @@ WorkingDirectory=$RemotePath
 Environment=ASPNETCORE_URLS=http://0.0.0.0:$Port
 Environment=ASPNETCORE_ENVIRONMENT=Production
 Environment=REMOTETOOL_DATA_DIR=$DataPath
+Environment=REMOTETOOL_SERVICE_NAME=$ServiceName.service
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=DOTNET_HOST_PATH=/usr/bin/dotnet
 EnvironmentFile=-$DataPath/service-proxy.env
-ExecStart=$RemotePath/WebApplication
+ExecStart=/usr/bin/dotnet $RemotePath/WebApplication.dll
+KillMode=process
 Restart=always
 RestartSec=3
 

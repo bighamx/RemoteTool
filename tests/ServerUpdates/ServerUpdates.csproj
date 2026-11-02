@@ -1,5 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
-  <ItemGroup><ProjectReference Include="../../WebApplication/Tools/ServerUpdater/ServerUpdater.csproj" /></ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../WebApplication/Services/Updates/ServerUpdateWorker.cs" Link="ServerUpdateWorker.cs" />
+    <Compile Include="../../WebApplication/Services/Updates/SourceUpdateWorker.cs" Link="SourceUpdateWorker.cs" />
+    <Compile Include="../../WebApplication/Services/Updates/UpdateContract.cs" Link="UpdateContract.cs" />
+    <Compile Include="../../WebApplication/Services/Updates/LinuxUpdateWorker.cs" Link="LinuxUpdateWorker.cs" />
+    <Compile Include="../../WebApplication/Services/Updates/SystemdControl.cs" Link="SystemdControl.cs" />
+    <Compile Include="../../WebApplication/Services/Updates/UpdaterProcess.cs" Link="UpdaterProcess.cs" />
+  </ItemGroup>
   <ItemGroup><Compile Include="../../WebApplication/Services/Codex/CodexMaintenance.cs" Link="CodexMaintenance.cs" /></ItemGroup>
 </Project>

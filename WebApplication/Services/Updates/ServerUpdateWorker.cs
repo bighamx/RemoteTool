@@ -3,9 +3,7 @@ using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using RemoteTool.Updates;
 
-if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("The first updater supports Windows IIS.");
-if (args.Length != 1 || !Path.IsPathFullyQualified(args[0])) throw new ArgumentException("Expected the administrator-installed configuration path.");
-await new Worker(Path.GetFullPath(args[0])).Run();
+namespace RemoteTool.WebApi.Services.Updates;
 
 public interface IUpdateRuntime
 {
@@ -27,6 +25,7 @@ public sealed partial class Worker(string configPath, IUpdateRuntime? runtime = 
     void Phase(string phase, string message) { job = job with { Phase = phase, Message = message }; UpdateContract.WriteJob(root, job); }
     async Task Command(params string[] arguments) {
         if (runtime != null) { await runtime.Execute(arguments); return; }
+        if (config.Host == "systemd") { await Systemd(arguments[0], config.Pool); return; }
         var appcmd = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "inetsrv", "appcmd.exe");
         var start = new ProcessStartInfo(appcmd) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var value in arguments) start.ArgumentList.Add(value);
@@ -40,6 +39,11 @@ public sealed partial class Worker(string configPath, IUpdateRuntime? runtime = 
     }
     async Task<string> CurrentDirectory() {
         if (runtime != null) return await runtime.Directory();
+        if (config.Host == "systemd") {
+            var directory = await Systemd("show", config.Pool, "--property=WorkingDirectory", "--value");
+            if (Path.GetFullPath(directory) != config.RuntimeDirectory) throw new IOException("systemd 工作目录已变化，拒绝更新其他服务");
+            return Path.GetFullPath(directory);
+        }
         var appcmd = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "inetsrv", "appcmd.exe");
         var start = new ProcessStartInfo(appcmd) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
         foreach (var value in new[] { "list", "vdir", config.Site + "/", "/text:physicalPath" }) start.ArgumentList.Add(value);
@@ -83,6 +87,7 @@ public sealed partial class Worker(string configPath, IUpdateRuntime? runtime = 
         return stream.Length == package.Size && Convert.ToHexString(await SHA256.HashDataAsync(stream)).Equals(package.Sha256, StringComparison.OrdinalIgnoreCase);
     }
     async Task Readiness() {
+        if (runtime == null && config.Host == "systemd") await SystemdControl.VerifyControl(config.UserService,config.Pool);
         Phase("waiting", "等待全部任务、连接空闲");
         var deadline = Now.AddMinutes(30);
         var endpoint = new Uri(config.HealthUrl);
@@ -124,6 +129,8 @@ public sealed partial class Worker(string configPath, IUpdateRuntime? runtime = 
         try {
             if (!File.Exists(At("job.json"))) return;
             job = UpdateContract.Read<UpdateJob>(At("job.json"));
+            using (var process = Process.GetCurrentProcess()) UpdateContract.Write(At(Path.Combine("jobs", job.Id, "worker.json")),
+                new { pid = process.Id, startCookie = UpdaterProcess.StartCookie(process) });
             if (File.Exists(At("transaction.json"))) { await Recover(UpdateContract.Read<JsonObject>(At("transaction.json"))); return; }
             if (job.Phase is not ("requested" or "downloading" or "waiting")) return;
             releaseDrain = true;
@@ -139,11 +146,13 @@ public sealed partial class Worker(string configPath, IUpdateRuntime? runtime = 
             if (UpdateContract.Read<JsonObject>(At("request.json"))["downloadOnly"]?.GetValue<bool>() == true) { Phase("downloaded", "已下载，等待安装"); return; }
             var version = Path.Combine(config.Releases, job.Sequence + "-" + job.Id + "-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(version); UpdateContract.Extract(archive, version);
+            if (config.Host == "systemd") { await InstallLinuxRelease(version); return; }
             File.Copy(Path.Combine(config.Shared, "web.config"), Path.Combine(version, "web.config"));
             await Readiness();
             var previous = await CurrentDirectory();
             for (var dir = new DirectoryInfo(previous); dir != null; dir = dir.Parent)
                 if (File.Exists(Path.Combine(dir.FullName, ".git")) || Directory.Exists(Path.Combine(dir.FullName, ".git"))) throw new IOException("拒绝覆盖开发工作区");
+            if (job.Force) await StopBridge();
             var transaction = new JsonObject { ["previous"] = previous, ["sequence"] = currentSequence, ["target"] = version };
             UpdateContract.Write(At("transaction.json"), transaction);
             Phase("switching", "切换版本并重启 Web 服务");
@@ -151,11 +160,18 @@ public sealed partial class Worker(string configPath, IUpdateRuntime? runtime = 
             await Command("set", "vdir", config.Site + "/", "/physicalPath:" + version);
             await Command("start", "apppool", "/apppool.name:" + config.Pool);
             Phase("verifying", "核对版本、身份和健康状态"); await Verify(job.Sequence);
+            if (job.Force) await WarmBridge();
             Phase("completed", "服务端更新完成"); File.Delete(At("transaction.json"));
         } catch (Exception error) {
+            if (job == null) throw;
+            UpdateContract.Write(At(Path.Combine("jobs", job.Id, "failure.json")),
+                new { phase = job.Phase, error = error.Message, at = DateTimeOffset.UtcNow });
             if (File.Exists(At("transaction.json"))) {
-                try { await Recover(UpdateContract.Read<JsonObject>(At("transaction.json"))); }
-                catch (Exception rollback) { Phase("recovery_required", "更新及回滚未确认：" + rollback.Message); }
+                try {
+                    await Recover(UpdateContract.Read<JsonObject>(At("transaction.json")));
+                    Phase(job.Phase, job.Message + "；失败原因：" + error.Message);
+                }
+                catch (Exception rollback) { Phase("recovery_required", "更新失败：" + error.Message + "；回滚未确认：" + rollback.Message); }
             } else if (job != null) Phase(job.Phase == "waiting" ? "deferred" : "failed", error.Message);
         } finally {
             try {

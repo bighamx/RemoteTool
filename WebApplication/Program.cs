@@ -22,6 +22,12 @@ namespace RemoteTool.WebApi
     {
         public static async Task Main(string[] args)
         {
+            if (args.Length == 2 && args[0] == "--server-updater") {
+                if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) throw new PlatformNotSupportedException("Server updates currently require Windows IIS or Linux systemd.");
+                if (!Path.IsPathFullyQualified(args[1])) throw new ArgumentException("Expected the installed updater configuration path.");
+                await new Services.Updates.Worker(Path.GetFullPath(args[1])).Run();
+                return;
+            }
             if (args.Length == 2 && args[0] == "--file-git-worker") {
                 await FileGitService.Worker(args[1]);
                 return;
@@ -78,7 +84,9 @@ namespace RemoteTool.WebApi
             if (!string.IsNullOrWhiteSpace(sharedConfig)) {
                 builder.Configuration.AddJsonFile(Path.Combine(sharedConfig, "appsettings.json"), optional: false, reloadOnChange: true);
                 builder.Configuration.AddJsonFile(Path.Combine(sharedConfig, $"appsettings.{builder.Environment.EnvironmentName}.json"), optional: true, reloadOnChange: true);
+                builder.Configuration.AddJsonFile(Path.Combine(sharedConfig, "hosting.json"), optional: true, reloadOnChange: true);
             }
+            builder.Services.AddSingleton<Services.Updates.UpdaterBootstrap>();
             builder.Services.AddSingleton<Services.Updates.ServerUpdateService>();
             builder.Services.AddHostedService(provider => provider.GetRequiredService<Services.Updates.ServerUpdateService>());
             builder.Services.AddSingleton<Services.Storage.ManagedStorageService>(services=>new(
