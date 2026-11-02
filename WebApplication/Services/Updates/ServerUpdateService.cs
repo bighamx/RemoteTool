@@ -159,7 +159,8 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
         var nativeRuns = Path.Combine(RemoteToolPaths.CodexState, "runs.json");
         if (File.Exists(nativeRuns) && JsonNode.Parse(await File.ReadAllTextAsync(nativeRuns, ct)) is JsonObject native)
             foreach (var pair in native.Where(p => p.Value?["status"]?.ToString() is "started" or "queued" or "running" or "submitting" or "acceptance_unknown")) {
-                var created = pair.Value?["created_at"]?.GetValue<long>() ?? 0;
+                // 新版记录用 enqueued_at，旧版用 created_at
+                var created = pair.Value?["created_at"]?.GetValue<long>() ?? pair.Value?["enqueued_at"]?.GetValue<long>() ?? 0;
                 // 只丢了受理确认、且已经很久没有后续事件的记录属于残留，不算“正在运行”
                 if (pair.Value?["status"]?.ToString() == "acceptance_unknown" && created > 0 && nowSeconds - created > staleSeconds) continue;
                 await CheckRun("codex", pair.Value?["session_id"]?.ToString() ?? "", pair.Key, created);
