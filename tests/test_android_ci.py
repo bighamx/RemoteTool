@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import json
+import tempfile
 from unittest.mock import patch
 
 spec=importlib.util.spec_from_file_location('android_ci',Path(__file__).resolve().parents[1]/'tools/android_ci.py')
@@ -8,6 +10,21 @@ ci=importlib.util.module_from_spec(spec);spec.loader.exec_module(ci)
 
 
 class AndroidVersionTests(unittest.TestCase):
+    def test_stable_release_does_not_require_or_publish_server_zip(self):
+        info={'commit':'a'*40,'channel':'stable','versionCode':1711}
+        with tempfile.TemporaryDirectory() as folder:
+            out=Path(folder)
+            (out/'build.json').write_text(json.dumps(info))
+            for flavor,(_,manifest) in ci.EDITIONS.items():
+                apk=f'{flavor}.apk';(out/apk).write_bytes(b'fixture')
+                (out/manifest).write_text(json.dumps({'apkAsset':apk}))
+            with patch.dict(ci.os.environ,{'GITHUB_REF_NAME':'android-v0.3.147-build1711'}),patch.object(ci,'plan',return_value=info),patch.object(ci,'release_info',return_value=None),patch.object(ci,'run',return_value='a'*40) as command,patch.object(ci,'verify_assets') as verify:
+                ci.publish(out,'stable')
+                files=verify.call_args.args[1]
+                self.assertEqual(4,len(files))
+                self.assertNotIn('RemoteTool.zip',[p.name for p in files])
+                self.assertTrue(any(args.args[:3]==('gh','release','edit') and '--draft=false' in args.args for args in command.call_args_list))
+
     def test_channel_switch_and_next_commit_are_monotonic(self):
         count=350
         def git(*args): return 'a'*40 if args[1]=='rev-parse' else str(count)

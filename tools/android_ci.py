@@ -121,7 +121,7 @@ def publish(out, channel):
             prune_development_apks(tag, [p.name for p in apks])
         else:
             assert run('git', 'rev-list', '-n', '1', tag) == info['commit']
-            files = manifests + apks + [out / 'RemoteTool.zip']
+            files = manifests + apks
             assert all(p.is_file() for p in files)
             if previous and not previous['isDraft']:
                 verify_assets(tag, files); print('Existing published release verified'); return

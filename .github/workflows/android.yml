@@ -69,25 +69,6 @@ jobs:
           name: android-test-results
           path: app/mobile/build/test-results/
           retention-days: 7
-      - uses: actions/setup-dotnet@v4
-        if: startsWith(github.ref, 'refs/tags/android-v')
-        with:
-          dotnet-version: '8.0.x'
-      - name: Package server from the same commit
-        if: startsWith(github.ref, 'refs/tags/android-v')
-        shell: bash
-        run: |
-          dotnet publish WebApplication/WebApplication.csproj -c Release -o "$RUNNER_TEMP/android-server"
-          python - "$RUNNER_TEMP/android-server" "$RUNNER_TEMP/android-release/RemoteTool.zip" <<'PY'
-          import sys,zipfile
-          from pathlib import Path
-          root=Path(sys.argv[1])
-          with zipfile.ZipFile(sys.argv[2],'w',zipfile.ZIP_DEFLATED) as archive:
-              for path in root.rglob('*'):
-                  if not path.is_file(): continue
-                  assert not path.name.startswith('appsettings') and path.name not in {'auth.json','.env'} and path.suffix not in {'.db','.sqlite','.jks','.keystore'}, 'Private file in publish output'
-                  archive.write(path,path.relative_to(root))
-          PY
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
         with:
