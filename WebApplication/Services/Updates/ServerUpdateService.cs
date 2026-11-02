@@ -130,7 +130,10 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
                 }
             } catch { blockers.Add("无法确认 Hermes 空闲"); }
         }
-        async Task CheckRun(string agent, string session, string run) {
+        // 进程被杀会漏写终态，登记可能永久残留；超过 6 小时没有更新的登记按残留处理，否则更新会被永远挡住。
+        var staleSeconds = (long)TimeSpan.FromHours(6).TotalSeconds;
+        var nowSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        async Task CheckRun(string agent, string session, string run, long updatedAt = 0) {
             try {
                 HttpResponseMessage response;
                 if (agent.StartsWith("hermes", StringComparison.Ordinal)) {
@@ -140,6 +143,8 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
                 using (response) {
                     var value = response.IsSuccessStatusCode ? JsonNode.Parse(await response.Content.ReadAsStringAsync(ct)) : null;
                     if (value?["status"]?.ToString() is "completed" or "failed" or "cancelled" or "interrupted") registry.Clear(agent, session, run);
+                    else if (!response.IsSuccessStatusCode) registry.Clear(agent, session, run); // 桥里已找不到该 run，登记是残留
+                    else if (updatedAt > 0 && nowSeconds - updatedAt > staleSeconds) registry.Clear(agent, session, run);
                     else blockers.Add("智能体运行中或结果待核对：" + agent);
                 }
             } catch { blockers.Add("无法确认智能体任务状态：" + agent); }
@@ -149,16 +154,22 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
             foreach (var pair in runs) {
                 var separator = pair.Key.IndexOf(':');
                 if (separator < 0) { blockers.Add("运行记录格式待核对"); continue; }
-                await CheckRun(pair.Key[..separator], pair.Key[(separator + 1)..], pair.Value?["run_id"]?.ToString() ?? "");
+                await CheckRun(pair.Key[..separator], pair.Key[(separator + 1)..], pair.Value?["run_id"]?.ToString() ?? "", pair.Value?["updated_at"]?.GetValue<long>() ?? 0);
             }
         var nativeRuns = Path.Combine(RemoteToolPaths.CodexState, "runs.json");
         if (File.Exists(nativeRuns) && JsonNode.Parse(await File.ReadAllTextAsync(nativeRuns, ct)) is JsonObject native)
-            foreach (var pair in native.Where(p => p.Value?["status"]?.ToString() is "started" or "queued" or "running" or "submitting" or "acceptance_unknown"))
-                await CheckRun("codex", pair.Value?["session_id"]?.ToString() ?? "", pair.Key);
+            foreach (var pair in native.Where(p => p.Value?["status"]?.ToString() is "started" or "queued" or "running" or "submitting" or "acceptance_unknown")) {
+                var created = pair.Value?["created_at"]?.GetValue<long>() ?? 0;
+                // 只丢了受理确认、且已经很久没有后续事件的记录属于残留，不算“正在运行”
+                if (pair.Value?["status"]?.ToString() == "acceptance_unknown" && created > 0 && nowSeconds - created > staleSeconds) continue;
+                await CheckRun("codex", pair.Value?["session_id"]?.ToString() ?? "", pair.Key, created);
+            }
         try { if (Hangfire.JobStorage.Current.GetMonitoringApi().ProcessingCount() > 0) blockers.Add("后台定时任务正在执行"); }
         catch { blockers.Add("无法确认后台任务空闲"); }
         if (blockers.Count > 0) ReleaseDrain();
-        return new { ready = blockers.Count == 0, blockers };
+        // 同一类阻塞只显示一次并带数量，避免界面刷出一长串重复原因
+        var summarized = blockers.GroupBy(b => b).Select(g => g.Count() > 1 ? $"{g.Key} ×{g.Count()}" : g.Key).ToList();
+        return new { ready = summarized.Count == 0, blockers = summarized };
         } catch { ReleaseDrain(); throw; }
     }
     protected override async Task ExecuteAsync(CancellationToken stoppingToken) {
