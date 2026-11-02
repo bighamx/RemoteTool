@@ -284,7 +284,7 @@ WebApplication.exe
 
 Hermes API 密钥默认读取 `%ProgramData%\RemoteTool\hermes\api-key.env`，可通过 `Hermes:KeyFile` 或 `HERMES_API_KEY_FILE` 覆盖；该文件应只授权运行账户及 IIS 应用池读取。Hermes 自身的安装目录与 `state.db` 仍位于运行用户的 `%LocalAppData%\hermes`，IIS 部署必须通过 `Hermes:HomeDirectory` 明确指定桌面用户的 Hermes 目录，不能从密钥所在目录推断。
 
-解决方案中的类库与测试项目分别为 `RemoteTool.Lib`、`RemoteTool.Lib.Tests`，传感器程序为 `tools/RemoteTool.SensorHost`，服务端代码命名空间为 `RemoteTool.WebApi`。为兼容已有 Hangfire 任务，仅任务类型的 `ChuckieHelper.WebApi.Jobs` 命名空间暂时保留，旧任务记录中的程序集名由类型解析器映射到当前程序集；设备 ID 的哈希前缀、桌面代理管道/计划任务名、Android 应用 ID/密钥别名和历史附件标记也保留，避免改名导致任务无法读取、重复代理或客户端凭据失效。
+解决方案中的类库与测试项目分别为 `RemoteTool.Lib`、`RemoteTool.Lib.Tests`，传感器程序为 `WebApplication/Tools/RemoteTool.SensorHost`，服务端代码命名空间为 `RemoteTool.WebApi`。为兼容已有 Hangfire 任务，仅任务类型的 `ChuckieHelper.WebApi.Jobs` 命名空间暂时保留，旧任务记录中的程序集名由类型解析器映射到当前程序集；设备 ID 的哈希前缀、桌面代理管道/计划任务名、Android 应用 ID/密钥别名和历史附件标记也保留，避免改名导致任务无法读取、重复代理或客户端凭据失效。
 
 ### 方式二：IIS 部署（推荐用于生产环境）<sup>🪟 仅Windows</sup>
 #### 步骤 1：安装必要组件

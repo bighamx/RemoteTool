@@ -21,6 +21,7 @@ internal sealed class CodexHandoff : IDisposable
         if (settings?["runs"] is JsonObject runs) foreach (var run in runs) pending[run.Key] = run.Value?.ToString() ?? "";
     }
     public bool Contains(string id) => pending.ContainsKey(id);
+    public bool HasPending => !pending.IsEmpty;
     public bool OwnsSession(string session) => pending.Values.Contains(session);
     private HttpRequestMessage Request(HttpMethod method, string path) {
         var request = new HttpRequestMessage(method, $"http://127.0.0.1:{settings.L("port")}/{path}");

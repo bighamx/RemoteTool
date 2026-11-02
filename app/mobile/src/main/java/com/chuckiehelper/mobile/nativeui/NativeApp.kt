@@ -111,6 +111,10 @@ fun NativeApp(model: NativeModel) {
             androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current
                 ?.onBackPressedDispatcher
         val session = model.session.takeUnless { model.browsingDevices }
+        var serverUpdatesOpen by remember(session?.device?.id) { mutableStateOf(false) }
+        var serverUpdatesSupported by remember(session?.device?.id) { mutableStateOf(false) }
+        session?.let { ServerUpdateNotice(it.api, it.device.id, serverUpdatesOpen,
+            onClosed = { serverUpdatesOpen = false }, onSupported = { serverUpdatesSupported = it }) }
         val context = LocalContext.current
         val activity = remember(context) {
             generateSequence(context) { (it as? ContextWrapper)?.baseContext }
@@ -220,6 +224,9 @@ fun NativeApp(model: NativeModel) {
                             }
                     },
                     actions = {
+                        if (session != null && serverUpdatesSupported) IconButton(onClick = { serverUpdatesOpen = true }) {
+                            Icon(Icons.Outlined.SystemUpdateAlt, "服务端更新")
+                        }
                         if (session == null) IconButton(onClick = { settings = true }) {
                             Icon(Icons.Outlined.Settings, "设置")
                         }

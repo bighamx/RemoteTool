@@ -96,7 +96,8 @@ if ($PreviousApkPath) {
     if ($versionCode -le $oldCode) { throw 'versionCode must be greater than the previous APK.' }
 }
 $notes = if ($NotesPath) { [IO.File]::ReadAllText((Resolve-Path -LiteralPath $NotesPath).Path, [Text.Encoding]::UTF8) } else { "RemoteTool Android v$versionName" }
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskRepo "artifacts\app-updates\$versionCode" }
+$useLatestDirectory = -not $OutputDirectory
+if ($useLatestDirectory) { $OutputDirectory = Join-Path $taskRepo 'artifacts\app-updates\latest' }
 $destination = [IO.Path]::GetFullPath($OutputDirectory)
 $apkName = "RemoteTool-$versionName.apk"
 $targetApk = Join-Path $destination $apkName
@@ -124,7 +125,7 @@ if ($companion) {
     $phoneName = "RemoteTool-PhoneControl-$($companion.VersionName).apk"
     $phoneTarget = Join-Path $destination $phoneName
     $phoneManifestPath = Join-Path $destination 'remotetool-phone-update.json'
-    if ($companion.Path -ne $phoneTarget) { Copy-Item -LiteralPath $companion.Path -Destination $phoneTarget }
+    if ($companion.Path -ne $phoneTarget) { Copy-Item -LiteralPath $companion.Path -Destination $phoneTarget -Force }
     $phoneManifest = [ordered]@{ schemaVersion=1; packageId=$companion.PackageId; versionCode=$companion.VersionCode; versionName=$companion.VersionName; apkAsset=$phoneName; size=$companion.Size; sha256=$companion.Sha256; signerSha256=$companion.Signer; notes=$notes }
     [IO.File]::WriteAllText($phoneManifestPath, ($phoneManifest | ConvertTo-Json -Depth 5), $utf8)
     if ((Get-ApkSha256 $phoneTarget) -ne $companion.Sha256) { throw 'Copied companion APK hash mismatch.' }
@@ -169,6 +170,15 @@ if ($Publish) {
     & gh release create "android-v$versionName-build$versionCode" @releaseAssets --repo $repository --target $releaseCommit --title "RemoteTool Android v$versionName" --notes-file $notesTarget
     if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
 } else { Write-Output 'Prepared locally. Add -Publish to publish these assets as an Android GitHub release.' }
+if ($useLatestDirectory) {
+    $retainedApks = @($targetApk)
+    if ($companion) { $retainedApks += $phoneTarget }
+    foreach ($oldApk in Get-ChildItem -LiteralPath $destination -File -Filter 'RemoteTool-*.apk') {
+        # When only one edition is being prepared, preserve the other edition's current package.
+        if (!$companion -and $oldApk.Name.StartsWith('RemoteTool-PhoneControl-')) { continue }
+        if ($oldApk.FullName -notin $retainedApks) { Remove-Item -LiteralPath $oldApk.FullName }
+    }
+}
 Write-Output "APK: $targetApk"
 Write-Output "Manifest: $manifestPath"
 Write-Output "Version: $versionName ($versionCode)"

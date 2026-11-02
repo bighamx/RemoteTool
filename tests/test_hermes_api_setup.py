@@ -14,7 +14,7 @@ class HermesApiSetupTests(unittest.TestCase):
         bootstrap.__spec__=importlib.machinery.ModuleSpec('hermes_bootstrap',None)
         constants=types.ModuleType('hermes_constants');constants.get_hermes_home=lambda:root
         with patch.dict(sys.modules,{'hermes_bootstrap':bootstrap,'hermes_constants':constants}):
-            spec=importlib.util.spec_from_file_location('setup_test_module','tools/HermesManagement/hermes_management.py')
+            spec=importlib.util.spec_from_file_location('setup_test_module','WebApplication/Tools/HermesManagement/hermes_management.py')
             module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
             return module.api_server_action('enable_api_server',{'restart':False,'api_server_key':'existing-managed-test-key'})
     def test_disabled_flag_is_enabled_without_rotating_keys(self):

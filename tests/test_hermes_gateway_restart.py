@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 class RestartWorkerTests(unittest.TestCase):
     def test_legacy_helper_rejects_restart_before_reading_or_writing_config(self):
-        source = Path(__file__).resolve().parents[1] / 'tools/HermesManagement/hermes_management.py'
+        source = Path(__file__).resolve().parents[1] / 'WebApplication/Tools/HermesManagement/hermes_management.py'
         tree = ast.parse(source.read_text(encoding='utf-8-sig'))
         function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'api_server_action')
         namespace = {}
@@ -37,7 +37,7 @@ class RestartWorkerTests(unittest.TestCase):
         self.run_worker(1, 1, 'failed', True, update_stop_failure=True)
 
     def test_recovery_does_not_treat_a_live_pid_as_exited(self):
-        source = Path(__file__).resolve().parents[1] / 'tools/HermesManagement/hermes_ops.py'
+        source = Path(__file__).resolve().parents[1] / 'WebApplication/Tools/HermesManagement/hermes_ops.py'
         spec = importlib.util.spec_from_file_location('restart_worker', source)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -46,7 +46,7 @@ class RestartWorkerTests(unittest.TestCase):
             self.assertFalse(module.wait_for_gateway_exit(11))
 
     def run_worker(self, worker_session, gateway_session, expected_phase, expected_command, replacement_session=None, update_stop_failure=False):
-        source = Path(__file__).resolve().parents[1] / 'tools/HermesManagement/hermes_ops.py'
+        source = Path(__file__).resolve().parents[1] / 'WebApplication/Tools/HermesManagement/hermes_ops.py'
         spec = importlib.util.spec_from_file_location('restart_worker', source)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)

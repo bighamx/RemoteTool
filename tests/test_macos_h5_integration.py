@@ -63,7 +63,7 @@ def main():
                    Codex__Executable=str(mock), Codex__Home=str(home), Codex__AccountStore=str(folder / "accounts"),
                    Codex__WorkingDirectory=str(folder / "work"), REMOTETOOL_DATA_DIR=str(folder / "data"),
                    DOTNET_HOST_PATH=DOTNET, Hangfire__Database=str(folder / "hangfire.db"), ASPNETCORE_URLS=f"http://127.0.0.1:{port}")
-        mac_agent = ROOT / "tools/RemoteTool.MacAgent/build/RemoteToolMacAgent.app/Contents/MacOS/RemoteToolMacAgent"
+        mac_agent = ROOT / "WebApplication/Tools/RemoteTool.MacAgent/build/RemoteToolMacAgent.app/Contents/MacOS/RemoteToolMacAgent"
         if sys.platform == "darwin" and mac_agent.exists():
             env["RemoteControl__MacAgentExecutable"] = str(mac_agent)
         log = open(folder / "server.log", "w+")

@@ -6,7 +6,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
-sys.path.insert(0, str(Path('tools/HermesManagement').resolve()))
+sys.path.insert(0, str(Path('WebApplication/Tools/HermesManagement').resolve()))
 from hermes_context import bounded_context_metadata, endpoint_context, selected_endpoint
 
 

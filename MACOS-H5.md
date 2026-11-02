@@ -35,8 +35,8 @@
 在项目根目录运行：
 
 ```bash
-bash tools/RemoteTool.MacAgent/build.sh
-open tools/RemoteTool.MacAgent/build/RemoteToolMacAgent.app --args --permissions
+bash WebApplication/Tools/RemoteTool.MacAgent/build.sh
+open WebApplication/Tools/RemoteTool.MacAgent/build/RemoteToolMacAgent.app --args --permissions
 ```
 
 然后在“系统设置 → 隐私与安全性”中，开启该 App 的“屏幕录制”和“辅助功能”。设置后退出权限提示进程，再启动服务。未开启权限时，H5 概览会展示缺失权限。
@@ -50,7 +50,7 @@ open tools/RemoteTool.MacAgent/build/RemoteToolMacAgent.app --args --permissions
 ## 3. 生成配置并启动
 
 ```bash
-python3 tools/configure-macos.py
+python3 WebApplication/Tools/configure-macos.py
 dotnet run --project WebApplication --urls http://127.0.0.1:5104
 ```
 

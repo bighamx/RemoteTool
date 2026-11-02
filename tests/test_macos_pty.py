@@ -12,7 +12,7 @@ if sys.platform != "darwin":
     raise SystemExit("SKIP: macOS only")
 
 root = Path(__file__).resolve().parent.parent
-helper = Path(os.environ.get("REMOTETOOL_TEST_PTY_HELPER", root / "tools/RemoteTool.MacAgent/build/RemoteToolMacAgent.app/Contents/MacOS/RemoteToolPtyAgent"))
+helper = Path(os.environ.get("REMOTETOOL_TEST_PTY_HELPER", root / "WebApplication/Tools/RemoteTool.MacAgent/build/RemoteToolMacAgent.app/Contents/MacOS/RemoteToolPtyAgent"))
 if not helper.is_file():
     raise SystemExit(f"Build the Mac agent first: {helper}")
 

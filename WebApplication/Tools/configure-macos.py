@@ -7,7 +7,7 @@ from pathlib import Path
 import secrets
 import shutil
 
-root = Path(__file__).resolve().parent.parent
+root = Path(__file__).resolve().parents[2]
 target = root / "WebApplication" / "appsettings.json"
 if target.exists():
     raise SystemExit("appsettings.json 已存在，未覆盖。请手动修改 Codex / RemoteControl 配置。")
@@ -18,7 +18,7 @@ if not password:
 codex = shutil.which("codex")
 if not codex:
     codex = input("Codex 可执行程序完整路径（可暂时留空）: ").strip()
-helper = root / "tools" / "RemoteTool.MacAgent" / "build" / "RemoteToolMacAgent.app" / "Contents" / "MacOS" / "RemoteToolMacAgent"
+helper = root / "WebApplication" / "Tools" / "RemoteTool.MacAgent" / "build" / "RemoteToolMacAgent.app" / "Contents" / "MacOS" / "RemoteToolMacAgent"
 config = {
     "Logging": {"LogLevel": {"Default": "Information", "Microsoft.AspNetCore": "Warning"}},
     "AllowedHosts": "*",

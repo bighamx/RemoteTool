@@ -1,6 +1,6 @@
 import ast,json,sqlite3,tempfile,contextlib
 from pathlib import Path
-source=Path('tools/HermesManagement/hermes_management.py').read_text(encoding='utf-8')
+source=Path('WebApplication/Tools/HermesManagement/hermes_management.py').read_text(encoding='utf-8')
 tree=ast.parse(source)
 function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='lookup_run')
 namespace={'sqlite3':sqlite3,'json':json,'contextlib':contextlib}

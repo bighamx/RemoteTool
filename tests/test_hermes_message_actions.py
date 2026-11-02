@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("actions", Path(__file__).parents[1] / "tools/HermesManagement/hermes_message_actions.py")
+spec = importlib.util.spec_from_file_location("actions", Path(__file__).parents[1] / "WebApplication/Tools/HermesManagement/hermes_message_actions.py")
 actions = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(actions)
 

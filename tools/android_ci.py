@@ -72,6 +72,20 @@ def verify_assets(tag, files):
         assert asset['digest'] == 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest(), path.name
 
 
+def prune_development_apks(tag, apk_names):
+    assert tag == 'android-development', 'Only the moving development release may be pruned'
+    keep = set(apk_names)
+    assert len(keep) == 2 and all(re.fullmatch(r'RemoteTool-(?:PhoneControl-)?\d[^/\\]*\.apk', name) for name in keep)
+    assert sum(name.startswith('RemoteTool-PhoneControl-') for name in keep) == 1
+    assets = release_info(tag)['assets']
+    current = {a['name']: a for a in assets if a['name'] in keep}
+    assert set(current) == keep and all(a['state'] == 'uploaded' for a in current.values()), 'Both current APKs must be uploaded before cleanup'
+    for asset in assets:
+        name = asset['name']
+        if name not in keep and re.fullmatch(r'RemoteTool-(?:PhoneControl-)?\d[^/\\]*\.apk', name):
+            run('gh', 'release', 'delete-asset', tag, name, '--yes')
+
+
 def publish(out, channel):
     info = json.loads((out / 'build.json').read_text())
     assert info == plan(channel), 'Release artifacts must match this exact checkout'
@@ -102,13 +116,9 @@ def publish(out, channel):
             run('gh', 'release', 'upload', tag, *map(str, apks), '--clobber')
             run('gh', 'release', 'upload', tag, *map(str, manifests), '--clobber')
             verify_assets(tag, manifests + apks)
-            # Keep the latest twenty builds for in-flight downloads and manual rollback.
-            assets = release_info(tag)['assets']
-            for prefix in ('RemoteTool-', 'RemoteTool-PhoneControl-'):
-                rows = [a for a in assets if a['name'].endswith('.apk') and a['name'].startswith(prefix)
-                        and (prefix.endswith('PhoneControl-') or not a['name'].startswith('RemoteTool-PhoneControl-'))]
-                for old in sorted(rows, key=lambda a: a['createdAt'], reverse=True)[20:]:
-                    run('gh', 'release', 'delete-asset', tag, old['name'], '--yes')
+            # Manifests and APKs are verified first; retain exactly the two APKs
+            # referenced by this successful build, never guess by upload time.
+            prune_development_apks(tag, [p.name for p in apks])
         else:
             assert run('git', 'rev-list', '-n', '1', tag) == info['commit']
             files = manifests + apks + [out / 'RemoteTool.zip']

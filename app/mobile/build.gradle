@@ -40,7 +40,7 @@ android {
             dimension 'edition'
             applicationId 'com.chuckiehelper.mobile'
             versionCode appBuildCode
-            versionName appVersionName('0.3.146')
+            versionName appVersionName('0.3.147')
             buildConfigField 'boolean', 'PHONE_COMPANION', 'false'
             manifestPlaceholders = [appLabel: 'RemoteTool', appIcon: '@mipmap/ic_launcher',
                 siblingPackage: 'com.chuckiehelper.phonecontrol', accessibilityLabel: 'RemoteTool 手机操控', notificationLabel: 'RemoteTool 手机通知',
@@ -51,7 +51,7 @@ android {
             dimension 'edition'
             applicationId 'com.chuckiehelper.phonecontrol'
             versionCode appBuildCode
-            versionName appVersionName('0.2.18')
+            versionName appVersionName('0.2.19')
             buildConfigField 'boolean', 'PHONE_COMPANION', 'true'
             manifestPlaceholders = [appLabel: '手机操控', appIcon: '@drawable/ic_phone_control',
                 siblingPackage: 'com.chuckiehelper.mobile', accessibilityLabel: '手机操控 · 无障碍', notificationLabel: '手机操控 · 通知读取',
@@ -86,15 +86,27 @@ android {
         }
         if (variant.buildType.name == 'release') {
             def prefix = variant.flavorName == 'phone' ? 'RemoteTool-PhoneControl' : 'RemoteTool'
-            def archive = tasks.register("archive${variant.name.capitalize()}CrashMapping", Copy) {
+            def archive = tasks.register("archive${variant.name.capitalize()}CrashMapping", Zip) {
                 inputs.property('apkVersionName', variant.versionName)
                 inputs.property('apkVersionCode', variant.versionCode)
-                from layout.buildDirectory.file("outputs/mapping/${variant.name}/mapping.txt")
-                into layout.buildDirectory.dir('outputs/crash-mappings')
-                rename { "${prefix}-${variant.versionName}-${variant.versionCode}-mapping.txt" }
+                from(layout.buildDirectory.file("outputs/mapping/${variant.name}/mapping.txt")) {
+                    rename { "${prefix}-${variant.versionName}-${variant.versionCode}-mapping.txt" }
+                }
+                destinationDirectory = layout.buildDirectory.dir('outputs/crash-mappings')
+                archiveFileName = "${prefix}-mapping.zip"
             }
             variant.assembleProvider.configure { finalizedBy(archive) }
         }
+        def prune = tasks.register("prune${variant.name.capitalize()}OldApks") {
+            doLast {
+                def currentNames = variant.outputs.collect { it.outputFileName }.toSet()
+                def directory = layout.buildDirectory.dir("outputs/apk/${variant.flavorName}/${variant.buildType.name}").get().asFile
+                if (currentNames.every { new File(directory, it).isFile() }) {
+                    fileTree(directory) { include 'RemoteTool-*.apk' }.files.findAll { !currentNames.contains(it.name) }.each { it.delete() }
+                }
+            }
+        }
+        variant.assembleProvider.configure { finalizedBy(prune) }
     }
 
     buildTypes {

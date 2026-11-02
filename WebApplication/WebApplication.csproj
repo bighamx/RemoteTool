@@ -11,13 +11,16 @@
     <PreserveCompilationContext>true</PreserveCompilationContext>
     <!-- 发布时只保留英文、中文卫星程序集，去掉其他语言文件夹以减小体积 -->
     <SatelliteResourceLanguages>en;zh</SatelliteResourceLanguages>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <!-- UTC build timestamp, with minute precision shared by the API and Web UI. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\RemoteTool.Lib\RemoteTool.Lib.csproj" />
+    <AssemblyMetadata Include="ReleaseSequence" Value="$(ServerReleaseSequence)" />
+    <Compile Remove="Tools\ServerUpdater\**;Tools\RemoteTool.SensorHost\**" />
+    <Content Remove="Tools\ServerUpdater\**;Tools\RemoteTool.SensorHost\**;Tools\RemoteTool.MacAgent\**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -43,12 +46,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\tools\HermesManagement\hermes_management.py" Link="hermes\hermes_management.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\tools\HermesManagement\hermes_provider_compat.py" Link="hermes\hermes_provider_compat.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\tools\HermesManagement\hermes_context.py" Link="hermes\hermes_context.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\tools\HermesManagement\hermes_admin.py" Link="hermes\hermes_admin.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\tools\HermesManagement\hermes_ops.py" Link="hermes\hermes_ops.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\tools\HermesManagement\hermes_message_actions.py" Link="hermes\hermes_message_actions.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Tools\HermesManagement\hermes_management.py" Link="hermes\hermes_management.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Tools\HermesManagement\hermes_provider_compat.py" Link="hermes\hermes_provider_compat.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Tools\HermesManagement\hermes_context.py" Link="hermes\hermes_context.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Tools\HermesManagement\hermes_admin.py" Link="hermes\hermes_admin.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Tools\HermesManagement\hermes_ops.py" Link="hermes\hermes_ops.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Tools\HermesManagement\hermes_message_actions.py" Link="hermes\hermes_message_actions.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Update="web.config">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

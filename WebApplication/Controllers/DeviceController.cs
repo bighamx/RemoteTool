@@ -7,6 +7,9 @@ namespace RemoteTool.WebApi.Controllers;
 [Route("api/device")]
 public sealed class DeviceController : ControllerBase
 {
+    [HttpGet("update-health"), ResponseCache(NoStore = true)]
+    public IActionResult UpdateHealth() => Ok(new { id = _identity.Id, sequence = Services.Updates.ServerUpdateService.Sequence, version = ServerBuild.Version,
+        buildId = typeof(DeviceController).Assembly.ManifestModule.ModuleVersionId.ToString("N"), processId = Environment.ProcessId });
     private readonly DeviceIdentity _identity;
     public DeviceController(DeviceIdentity identity) => _identity = identity;
 

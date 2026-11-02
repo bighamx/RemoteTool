@@ -1,0 +1,47 @@
+name: Server release
+on:
+  push:
+    tags: ['server-v*']
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Validate tag and test update contracts
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^server-v\d+\.\d+\.\d+$') { throw 'Invalid server tag' }
+          dotnet run --project tests/ServerUpdates/ServerUpdates.csproj
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Publish service and independent updater
+        shell: pwsh
+        run: |
+          $version=$env:GITHUB_REF_NAME.Substring(8)
+          dotnet publish WebApplication/WebApplication.csproj -c Release -r win-x64 --self-contained true -o artifacts/server -p:ServerReleaseSequence=$env:GITHUB_RUN_NUMBER -p:InformationalVersion="$version+$env:GITHUB_SHA"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet publish WebApplication/Tools/ServerUpdater/ServerUpdater.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/updater
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Compress-Archive artifacts/updater/* artifacts/RemoteTool-updater-win-x64.zip
+          Copy-Item WebApplication/Tools/Install-ServerUpdater.ps1 artifacts/
+          Copy-Item WebApplication/Tools/Activate-ServerUpdater.ps1 artifacts/
+      - name: Package and checksum
+        shell: pwsh
+        run: ./WebApplication/Tools/Publish-ServerUpdate.ps1 -PublishDirectory artifacts/server -OutputDirectory artifacts -Version ($env:GITHUB_REF_NAME.Substring(8)) -Sequence $env:GITHUB_RUN_NUMBER -Commit $env:GITHUB_SHA
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          make_latest: false
+          files: |
+            artifacts/RemoteTool-server-win-x64.zip
+            artifacts/RemoteTool-updater-win-x64.zip
+            artifacts/Install-ServerUpdater.ps1
+            artifacts/Activate-ServerUpdater.ps1
+            artifacts/server-update.json

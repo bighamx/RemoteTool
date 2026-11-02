@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using SQLite;
@@ -23,6 +24,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private readonly CodexSessionPermissions sessionPermissions;
     private readonly AgentProviderPolicy providerAvailability = new("codex","default");
     private readonly object gate = new();
+    private readonly CodexMaintenance maintenance = new();
     private readonly SemaphoreSlim settingsLock = new(1, 1);
     private JsonObject providers, runs;
     private CodexRpc rpc;
@@ -1464,7 +1466,12 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private static long MessageId(string id) => CodexHistoryWindow.MessageId(id);
     private async Task<JsonObject> Route(HttpContext context, JsonObject body) {
         var method = context.Request.Method; var path = context.Request.Path.Value!.Trim('/'); var p = path.Split('/');
-        if (path == "health") return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", RemoteToolPaths.CodexBridgeVersion), ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId));
+        if (path == "health") {
+            using var process = Process.GetCurrentProcess();
+            return Obj(("agent", "codex"), ("implementation", "dotnet-v2"), ("state_version", RemoteToolPaths.CodexBridgeVersion),
+                ("ready", rpc?.Running == true), ("tools_ready", rpc?.ToolsAvailable == true), ("cli_pid", rpc?.ProcessId),
+                ("maintenance_shutdown", true), ("bridge_pid", Environment.ProcessId), ("process_started_ticks", process.StartTime.ToUniversalTime().Ticks));
+        }
         if (path == "capabilities") return Obj(("agent", "codex"), ("sessions", true), ("runs", true), ("model_options", true), ("attachments", true), ("attachment_steering", true), ("message_items", true), ("native_compaction_history", true), ("session_takeover", true), ("title_model", true), ("message_actions", true), ("native_session_search", true), ("model_settings_snapshot", true), ("phone_tools", true), ("session_permissions", true), ("approval_choices", true), ("state_version", RemoteToolPaths.CodexBridgeVersion));
         if (path == "sessions/search" && method == "GET") {
             var query = context.Request.Query["query"].ToString().Trim();
@@ -2097,8 +2104,20 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private async Task Serve(HttpContext context) {
         var supplied = Encoding.UTF8.GetBytes(context.Request.Headers.Authorization.ToString()); var expected = Encoding.UTF8.GetBytes("Bearer " + settings.S("token"));
         if (!CryptographicOperations.FixedTimeEquals(supplied, expected)) { context.Response.StatusCode = 401; return; }
+        var tracked = false;
         try {
             var path = context.Request.Path.Value!.Trim('/');
+            if (path == "maintenance/shutdown" && HttpMethods.IsPost(context.Request.Method)) {
+                if (!maintenance.TryBeginShutdown(() => {
+                    lock (gate) return active.Count > 0 || handoff.HasPending || runs.Any(pair => pair.Value.S("status") is "started" or "submitting" or "queued" or "running" or "acceptance_unknown");
+                })) throw new CodexError("Codex 有运行中、排队或待确认任务，请等待空闲", 409, "bridge_busy", "rejected");
+                context.Response.OnCompleted(() => { context.RequestServices.GetRequiredService<IHostApplicationLifetime>().StopApplication(); return Task.CompletedTask; });
+                await context.Response.WriteAsJsonAsync(new { accepted = true }); return;
+            }
+            if (path != "health") {
+                if (!maintenance.TryEnter()) throw new CodexError("Codex 正在维护，请稍后重连", 503, "bridge_updating", "rejected");
+                tracked = true;
+            }
             if (await handoff.Forward(context, path)) return;
             // Account reads and login capture use isolated credentials; they must not
             // stop or depend on a task owned by the current inference app-server.
@@ -2110,6 +2129,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         } catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
         catch (CodexError error) when (!context.Response.HasStarted) { context.Response.StatusCode = error.Status; await context.Response.WriteAsJsonAsync(new { message = error.Message, code = error.Code, delivery = error.Delivery }); }
         catch (Exception) when (!context.Response.HasStarted) { context.Response.StatusCode = 503; await context.Response.WriteAsJsonAsync(new { message = "本机 Codex 处理失败；任务不会自动重发" }); }
+        finally { if (tracked) maintenance.Leave(); }
     }
     private async Task Stream(HttpContext context, string run) {
         await ReconcileRun(run, context.RequestAborted);

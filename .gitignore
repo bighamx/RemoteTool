@@ -146,6 +146,7 @@ __pycache__/
 *.py[cod]
 /artifacts/app-updates/
 /artifacts/phone-validation/
+/artifacts/diagnostics/
 /artifacts/release-*/
 /docs/
 screenshots/android-*.png
@@ -169,9 +170,9 @@ aoci.txt
 aoci.meta.txt
 aoci.code.txt
 AGENTS.md
-tools/RemoteTool.MacAgent/build/
+WebApplication/Tools/RemoteTool.MacAgent/build/
 
-# Linux publish output (tools/Deploy-Linux.ps1)
+# Linux publish output (WebApplication/Tools/Deploy-Linux.ps1)
 .tmp-linux-publish/
 .tmp-linux-publish.tar.gz
 publish-linux/

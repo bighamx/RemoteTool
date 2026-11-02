@@ -2,7 +2,7 @@ import importlib.util,json,sys,tempfile,types,unittest
 from pathlib import Path
 from unittest.mock import patch
 
-spec=importlib.util.spec_from_file_location('hermes_provider_compat',Path(__file__).parents[1]/'tools/HermesManagement/hermes_provider_compat.py')
+spec=importlib.util.spec_from_file_location('hermes_provider_compat',Path(__file__).parents[1]/'WebApplication/Tools/HermesManagement/hermes_provider_compat.py')
 compat=importlib.util.module_from_spec(spec);spec.loader.exec_module(compat)
 
 class CoreProviderTests(unittest.TestCase):

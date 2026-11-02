@@ -4,9 +4,9 @@ import sys
 import time
 import types
 from pathlib import Path
-sys.path.insert(0, str(Path('tools/HermesManagement').resolve()))
+sys.path.insert(0, str(Path('WebApplication/Tools/HermesManagement').resolve()))
 
-tree = ast.parse(Path('tools/HermesManagement/hermes_management.py').read_text(encoding='utf-8'))
+tree = ast.parse(Path('WebApplication/Tools/HermesManagement/hermes_management.py').read_text(encoding='utf-8'))
 function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'bounded_context_limit')
 namespace = {}
 exec(compile(ast.Module(body=[function], type_ignores=[]), '<context-budget>', 'exec'), namespace)

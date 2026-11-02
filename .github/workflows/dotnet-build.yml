@@ -1,17 +1,53 @@
-name: Build and Publish
+name: Web build and publish
 
 on:
   push:
     branches: [ "master", "main" ]
+    paths:
+      - 'WebApplication/**'
+      - 'RemoteTool.Lib/**'
+      - 'RemoteTool.Lib.Tests/**'
+      - 'tools/PhoneTools/**'
+      - 'tests/**'
+      - 'packages/**'
+      - 'RemoteTool.sln'
+      - 'Directory.Build.*'
+      - 'Directory.Packages.props'
+      - 'global.json'
+      - '[Nn]u[Gg]et.[Cc]onfig'
+      - '.github/workflows/dotnet-build.yml'
+      - '.github/workflows/server-release.yml'
     tags:
       - 'v*'
   pull_request:
     branches: [ "master", "main" ]
+    paths:
+      - 'WebApplication/**'
+      - 'RemoteTool.Lib/**'
+      - 'RemoteTool.Lib.Tests/**'
+      - 'tools/PhoneTools/**'
+      - 'tests/**'
+      - 'packages/**'
+      - 'RemoteTool.sln'
+      - 'Directory.Build.*'
+      - 'Directory.Packages.props'
+      - 'global.json'
+      - '[Nn]u[Gg]et.[Cc]onfig'
+      - '.github/workflows/dotnet-build.yml'
+      - '.github/workflows/server-release.yml'
 
 permissions:
   contents: write
 
 jobs:
+  server-update-contracts:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
+    - run: dotnet run --project tests/ServerUpdates/ServerUpdates.csproj
   build:
     runs-on: ubuntu-latest
 

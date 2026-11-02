@@ -92,6 +92,10 @@ rtk proxy .\gradlew.bat :mobile:assembleFullRelease :mobile:lintFullRelease --no
 
 主 App 产物位于 `mobile/build/outputs/apk/full/release/`，`tools/Publish-AppUpdate.ps1` 默认根据该目录的 `output-metadata.json` 读取版本化文件名。当前 Release 沿用已安装版本的签名，构建机必须使用同一签名密钥；发布脚本可通过 `-PreviousApkPath` 检查签名一致和版本递增。不要通过卸载 App 来解决签名不一致。
 
+本地构建只保留每个 flavor/buildType 的当前 APK，成功生成当前包后清理同目录的旧 APK。崩溃映射每个 App 只覆盖保留一份压缩包，不再累计各版本的未压缩副本。发布脚本默认输出到 `artifacts/app-updates/latest/` 并清理旧 APK，显式指定其他输出目录时不自动删除其中的文件。
+
+临时发布/验证目录应使用系统临时目录，用完即清理；构建和测试日志也写到系统临时目录，不在项目根目录或 `app/` 长期堆积。不要在项目中按版本保留旧 APK、ZIP 或整套编译/部署产物；签名、配置、用户数据和必要的诊断资料不作为编译缓存删除。
+
 两版一起发布时使用 `tools/Publish-AppUpdate.ps1 -IncludeCompanion` 先准备并验证安装包，再加 `-Publish` 发布。脚本从 `phone/release/output-metadata.json` 读取独立版，检查其包名、版本及签名，生成独立的 `remotetool-phone-update.json` 并与主 App 安装包一起上传同一 GitHub Release；主 App 的更新清单仍只指向主 App 包。可用 `-PreviousCompanionApkPath` 验证独立版覆盖升级。
 
 开发调试仍可使用以下命令：
@@ -113,7 +117,7 @@ App 原生绘制性能面板，Web 使用网页组件，两端共享性能 API�
 
 对话图片：Codex 以原生 `localImage` 输入发送，附件 ID 随普通任务、插话及原生队列记录保存。Hermes 的附件卡片直接解析对应 Profile 的 `state.db` 会话消息，支持消息内嵌 Base64、原生 `@image:` / `Image attached at` 引用及本机文件链接；图片字节在消息中时可直接下载，不要求原图仍在。Hermes 插话接口只接受文字，因此插话保留原生图片引用及必要的文件读取提示。Hermes 不读取或写入 RemoteTool 消息附件绑定文件；分叉沿用复制后的原生会话内容。附件原文件仍保存在现有上传位置，不迁移目录。
 
-- `tools/RemoteTool.SensorHost` 使用 LibreHardwareMonitor 0.9.6，独立部署到 Web 运行目录的 `sensors` 子目录。只读取温度和转速，不调用风扇控制 API。当前 MSI PRO Z790-P II 已有 PawnIO 驱动，服务复用既有 LocalSystem 身份采集。运行时优先加载 `RemoteTool.SensorHost.dll`，兼容尚未更新的旧名称采集程序。
+- `WebApplication/Tools/RemoteTool.SensorHost` 使用 LibreHardwareMonitor 0.9.6，独立部署到 Web 运行目录的 `sensors` 子目录。只读取温度和转速，不调用风扇控制 API。当前 MSI PRO Z790-P II 已有 PawnIO 驱动，服务复用既有 LocalSystem 身份采集。运行时优先加载 `RemoteTool.SensorHost.dll`，兼容尚未更新的旧名称采集程序。
 - 已读到 CPU P/E 核、封装、脚座、MOS、PCH、内存、显卡核心/热点及磁盘温度，CPU/水泵/机箱/显卡风扇 RPM。报警阈值、距 TjMax 余量及分辨率不作为当前温度展示。未标定的传感器保留原始名称，内存 DIMM 编号不猜测为 A2/B2。
 - 采集超过 20 秒未更新时隐藏旧读数。诊断快照在 ProgramData/RemoteTool/sensors/latest.json，不含账户凭据；采集程序随父服务退出。
 - 新增 `/api/native-jobs` 任务管理 API，均要求登录。

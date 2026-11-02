@@ -1,12 +1,12 @@
 # Linux 部署（Ubuntu 虚拟机 / 任意 systemd 主机）
 
-`tools/Deploy-Linux.ps1` 一条命令完成「发布 → 配置 → 传输 → 切换 → systemd → 健康检查」，可重复执行。
+`WebApplication/Tools/Deploy-Linux.ps1` 一条命令完成「发布 → 配置 → 传输 → 切换 → systemd → 健康检查」，可重复执行。
 
 ```powershell
-pwsh -File tools/Deploy-Linux.ps1                       # 默认 ssh 别名 ubuntu-vm、端口 8890
-pwsh -File tools/Deploy-Linux.ps1 -SkipPull             # 跳过 git pull
-pwsh -File tools/Deploy-Linux.ps1 -Port 9000 -HostName user@10.0.0.5
-pwsh -File tools/Deploy-Linux.ps1 -SourceConfig D:\GIT\RemoteTool\WebApplication\bin\Debug\net8.0\appsettings.json
+pwsh -File WebApplication/Tools/Deploy-Linux.ps1                       # 默认 ssh 别名 ubuntu-vm、端口 8890
+pwsh -File WebApplication/Tools/Deploy-Linux.ps1 -SkipPull             # 跳过 git pull
+pwsh -File WebApplication/Tools/Deploy-Linux.ps1 -Port 9000 -HostName user@10.0.0.5
+pwsh -File WebApplication/Tools/Deploy-Linux.ps1 -SourceConfig D:\GIT\RemoteTool\WebApplication\bin\Debug\net8.0\appsettings.json
 ```
 
 参数：`HostName`、`RemoteUser`、`Port`、`RemotePath`、`DataPath`、`ServiceName`、`Address`、`SourceConfig`、

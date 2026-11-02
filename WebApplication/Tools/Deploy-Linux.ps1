@@ -19,9 +19,9 @@
   when it is missing.
 
 .EXAMPLE
-  ./tools/Deploy-Linux.ps1
-  ./tools/Deploy-Linux.ps1 -HostName ubuntu-vm -Port 8890
-  ./tools/Deploy-Linux.ps1 -HostName ubuntu-vm -SourceConfig D:\GIT\RemoteTool\WebApplication\bin\Debug\net8.0\appsettings.json
+  ./WebApplication/Tools/Deploy-Linux.ps1
+  ./WebApplication/Tools/Deploy-Linux.ps1 -HostName ubuntu-vm -Port 8890
+  ./WebApplication/Tools/Deploy-Linux.ps1 -HostName ubuntu-vm -SourceConfig D:\GIT\RemoteTool\WebApplication\bin\Debug\net8.0\appsettings.json
 #>
 [CmdletBinding()]
 param(
@@ -45,7 +45,7 @@ foreach ($pathValue in @($RemotePath,$DataPath,$CodexHome)) {
     if (!$pathValue.StartsWith('/') -or $pathValue.Contains('\') -or $pathValue.Contains("'") -or $pathValue.Contains("`r") -or $pathValue.Contains("`n") -or $pathValue -match '/\.\.?(/|$)') { throw 'Remote paths must be absolute POSIX paths without shell delimiters or traversal' }
 }
 if ($RemotePath.TrimEnd('/') -in @('','/home','/usr','/var','/etc','/opt','/tmp')) { throw 'RemotePath must identify a dedicated application directory' }
-$repo   = Split-Path -Parent $PSScriptRoot
+$repo   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $staging = Join-Path $repo '.tmp-linux-publish'
 $archive = Join-Path $repo '.tmp-linux-publish.tar.gz'
 $target  = if ($RemoteUser) { "$RemoteUser@$HostName" } else { $HostName }

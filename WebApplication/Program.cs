@@ -74,6 +74,13 @@ namespace RemoteTool.WebApi
             }
 
             var builder = WebApplication.CreateBuilder(args);
+            var sharedConfig = Environment.GetEnvironmentVariable("REMOTETOOL_SHARED_CONFIG");
+            if (!string.IsNullOrWhiteSpace(sharedConfig)) {
+                builder.Configuration.AddJsonFile(Path.Combine(sharedConfig, "appsettings.json"), optional: false, reloadOnChange: true);
+                builder.Configuration.AddJsonFile(Path.Combine(sharedConfig, $"appsettings.{builder.Environment.EnvironmentName}.json"), optional: true, reloadOnChange: true);
+            }
+            builder.Services.AddSingleton<Services.Updates.ServerUpdateService>();
+            builder.Services.AddHostedService(provider => provider.GetRequiredService<Services.Updates.ServerUpdateService>());
             builder.Services.AddSingleton<Services.Storage.ManagedStorageService>(services=>new(
                 services.GetRequiredService<RunRegistry>(),services.GetRequiredService<IConfiguration>(),services.GetRequiredService<HermesProfiles>(),
                 (agent,profile,id)=>{
@@ -261,6 +268,13 @@ builder.Services.AddSingleton<HermesCompaction>();
             app.UseWebSockets();
             app.UseAuthentication();
             app.UseAuthorization();
+            app.Use(async (context, next) => {
+                if ((!context.Request.Path.StartsWithSegments("/api") && !context.Request.Path.StartsWithSegments("/ws")) || context.Request.Path.StartsWithSegments("/api/server-update") ||
+                    context.Request.Path.StartsWithSegments("/api/device/identity") || context.Request.Path.StartsWithSegments("/api/device/update-health")) { await next(); return; }
+                var updates = context.RequestServices.GetRequiredService<Services.Updates.ServerUpdateService>();
+                if (!updates.Enter()) { context.Response.StatusCode = 503; await context.Response.WriteAsJsonAsync(new { message = "服务端正在更新，请稍后重连", code = "server_updating" }); return; }
+                try { await next(); } finally { updates.Leave(); }
+            });
 
 
             // Custom Middleware to intercept Hangfire 401 and redirect to Login
