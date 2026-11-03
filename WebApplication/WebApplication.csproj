@@ -82,9 +82,12 @@
       <Output TaskParameter="ConsoleOutput" ItemName="SourceWorktreeChanges" />
     </Exec>
     <PropertyGroup>
-      <InformationalVersion Condition="'$(SourceRevisionId)' != ''">$(SourceRevisionId)</InformationalVersion>
-      <InformationalVersion Condition="'$(SourceRevisionId)' == ''">unknown</InformationalVersion>
-      <InformationalVersion Condition="'@(SourceWorktreeChanges)' != ''">$(InformationalVersion)-dirty</InformationalVersion>
+      <!-- 正式发行包（带 ReleaseSequence）显示语义版本，附带提交号便于追溯；开发构建仍用提交 hash。 -->
+      <InformationalVersion Condition="'$(ServerReleaseSequence)' != '' and '$(SourceRevisionId)' != ''">$(Version)+$(SourceRevisionId)</InformationalVersion>
+      <InformationalVersion Condition="'$(ServerReleaseSequence)' != '' and '$(SourceRevisionId)' == ''">$(Version)</InformationalVersion>
+      <InformationalVersion Condition="'$(ServerReleaseSequence)' == '' and '$(SourceRevisionId)' != ''">$(SourceRevisionId)</InformationalVersion>
+      <InformationalVersion Condition="'$(ServerReleaseSequence)' == '' and '$(SourceRevisionId)' == ''">unknown</InformationalVersion>
+      <InformationalVersion Condition="'$(ServerReleaseSequence)' == '' and '@(SourceWorktreeChanges)' != ''">$(InformationalVersion)-dirty</InformationalVersion>
     </PropertyGroup>
   </Target>
 </Project>
