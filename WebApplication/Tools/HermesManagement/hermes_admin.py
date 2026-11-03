@@ -54,6 +54,44 @@ def status(home):
             "code_sha": state.get('code_sha'), "platforms": {key:value.get('state') for key,value in (state.get('platforms') or {}).items()}}
 
 
+def update_status():
+    """复用 Hermes 自身的检测：源码安装比较 git 落后提交，包安装比较 PyPI 版本。"""
+    import importlib.metadata
+    import re
+    try:
+        installed = importlib.metadata.version("hermes-agent")
+    except Exception:
+        installed = None
+    try:
+        from hermes_cli.source_check import check_for_updates
+        result = check_for_updates(passive=True)
+    except Exception as error:
+        result = {"supported": False, "reason": str(error)}
+    if result.get("supported"):
+        behind = result.get("behind")
+        return {"kind": "source", "installed": installed, "supported": True, "behind": behind,
+                "updateAvailable": isinstance(behind, int) and behind > 0, "unknown": behind is None,
+                "branch": result.get("branch"), "currentSha": (result.get("currentSha") or result.get("head") or "")[:12],
+                "reason": result.get("reason")}
+    latest = None
+    error = None
+    try:
+        import json as _json
+        import urllib.request
+        request = urllib.request.Request("https://pypi.org/pypi/hermes-agent/json", headers={"User-Agent": "RemoteTool"})
+        with urllib.request.urlopen(request, timeout=8) as response:
+            latest = _json.load(response)["info"]["version"]
+    except Exception as failure:
+        error = str(failure)
+
+    def key(value):
+        return [int(part) for part in re.findall(r"\d+", value or "")][:4]
+
+    return {"kind": "package", "installed": installed, "latest": latest, "supported": False, "behind": None,
+            "updateAvailable": bool(latest and installed and key(latest) > key(installed)),
+            "reason": result.get("reason"), "error": error}
+
+
 def invoke(action, body):
     from hermes_constants import get_hermes_home
     from gateway.drain_control import write_drain_request, clear_drain_request, read_drain_request
@@ -103,6 +141,8 @@ def invoke(action, body):
         return job
     if action == "admin_gateway_status":
         return status(home)
+    if action == "admin_update_status":
+        return update_status()
     owner = "remotetool:" + body["key"]
     marker = read_drain_request(home=home)
     if marker is not None and marker.get("principal") != owner:

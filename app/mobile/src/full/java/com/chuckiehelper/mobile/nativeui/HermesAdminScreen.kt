@@ -32,6 +32,7 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
     var preview by remember { mutableStateOf(false) }
     var conflict by remember { mutableStateOf(false) }
     var gateway by remember { mutableStateOf(JSONObject()) }
+    var updateInfo by remember { mutableStateOf(JSONObject()) }
     var logText by remember { mutableStateOf("") }
     var logKey by remember { mutableStateOf("") }
     var logOffset by remember { mutableLongStateOf(0L) }
@@ -65,6 +66,9 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
         try { files = api.json("/api/hermes/admin/files").array("data").objects() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { error = failure.message }
+        try { updateInfo = api.json("/api/hermes/admin/gateway/update") }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { updateInfo = JSONObject() }
         while (true) {
             try {
                 gateway = api.json("/api/hermes/admin/gateway")
@@ -113,6 +117,7 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
                         }
                     }
                     Text(gatewayState + if (live != null && gateway.optString("read_error").isBlank() && live.optBoolean("running") && live.optBoolean("fresh")) " · 活跃任务 ${live.optInt("active")} · PID ${live.optInt("pid")}" else "")
+                    hermAdminVersionLine(updateInfo)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     gateway.optString("read_error").takeIf { it.isNotBlank() }?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     val phase = gateway.optString("phase")
                     val canStart = !busy && phase !in listOf("queued", "checking", "waiting", "updating", "restarting") && live?.optBoolean("restart_supported") == true && live.optBoolean("fresh") && live.optBoolean("running")
@@ -176,4 +181,20 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
             }) { Text(backup.optString("at")) } }
         }
     }, confirmButton = { TextButton(onClick = { backups = false }) { Text("关闭") } })
+}
+
+/** Hermes 自身的版本检测结果：源码安装看落后提交，包安装比 PyPI 版本。 */
+private fun hermAdminVersionLine(info: JSONObject): String? = when (info.optString("kind")) {
+    "source" -> when {
+        info.optBoolean("unknown") -> "源码安装 · 版本检测暂不可用（网络或 Git 访问受限）"
+        info.optInt("behind") > 0 -> "源码安装 · 落后 ${info.optInt("behind")} 个提交，可更新"
+        else -> "源码安装 · 已是最新"
+    }
+    "package" -> buildString {
+        append("包安装 · 已装 ").append(info.optString("installed").ifBlank { "未知" })
+        info.optString("latest").takeIf { it.isNotBlank() }?.let { append(" · 最新 ").append(it) }
+        if (info.optBoolean("updateAvailable")) append("（可更新）")
+    }
+    "none" -> "未检测到本机 Hermes 安装"
+    else -> null
 }

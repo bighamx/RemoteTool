@@ -33,6 +33,17 @@ public sealed class HermesGatewayAdmin(HermesManagement management)
         return result;
     }
     public async Task<JsonObject> Log(long offset, string key, CancellationToken ct) => await Invoke("log", new { offset, key }, ct);
+    /// <summary>Hermes 自身的版本检测：源码安装看落后提交，包安装比 PyPI 版本。</summary>
+    public async Task<JsonObject> UpdateStatus(CancellationToken ct) {
+        try {
+            using (HermesProfileScope.Enter("default")) {
+                var result = await management.Invoke("admin_update_status", JsonSerializer.SerializeToElement(new { }), ct);
+                return JsonNode.Parse(result.GetRawText())!.AsObject();
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception error) { return new JsonObject { ["kind"] = "none", ["updateAvailable"] = false, ["reason"] = FriendlyError(error) }; }
+    }
     public async Task<JsonObject> Start(bool wait, CancellationToken ct, string mode = "restart") {
         if (!OperatingSystem.IsWindows()) return await UnixStart(ct);
         management.BeginMaintenance();

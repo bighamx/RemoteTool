@@ -59,7 +59,7 @@
     const readVersions = new Map();
     const app = Vue.createApp({
         data: () => ({ agent, profile, agentSetup:null,setupBusy:false,setupDetails:false,setupNotice:'',profiles: [], profileError: '', sessionDetails: null, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: isMobile()&&!requestedSession(), mobileViewport: isMobile(), mobileComposerOpen: false,
-            adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminSettings:{},adminProvider:{},adminProviderDialog:false,adminEndpoints:[],adminProviders:[],adminShowDisabled:false,adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
+            adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminUpdate:{},adminSettings:{},adminProvider:{},adminProviderDialog:false,adminEndpoints:[],adminProviders:[],adminShowDisabled:false,adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyCacheState: '', historyLoadedEpoch: -1, historyFailedEpoch: -1, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [], schedules: [], showSchedule: false, scheduleText: '', scheduleAt: '', scheduleError: '', scheduleBusy: false, scheduleSession: '', scheduleClientKey: '', scheduleRequest: null,
             approvalBusy:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsInfo:'',permissionsError:'',showPermissionsDialog:false, activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelDefaults: {}, modelsError: '', modelSessionSupported: true, providersState: {}, globalModelOptions: {}, providerSwitch: {provider:'',model:'',effort:'',tier:''}, codexProviderEdit: null, modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
@@ -68,7 +68,19 @@
             showMoveDialog: false, moveTarget: null, moveMoving: false, moveSearch: '', moveError: '',
             showCreateDialog: false, createTitle: '', createProjectId: '', createMode: 'existing', createRoot: '', createRoots: [], createProjectName: '', createProjectSearch: '', createBrowser: false, createBrowserPath: '', createBrowserDirs: [], createBrowserLoading: false, createBrowserError: '', createBrowserNew: '', createBrowserMkdir: false, creating: false, createError: '', showEditDialog: false, editText: '', editTarget: null, editFiles: [], editing: false, editError: '', messageMenu: null, sessionMenu: null,
             liveSegments: [], liveTools: [], streamRun: null, streamSeq: 0, streamConnected: false, streamGone: false, toolTimer: null, externalRunning: false, externalActivity: null, toolsCollapsed: true, apiServer: null, enablingApiServer: false }),
-        computed: {adminProviderEditing() { return !!(this.adminProvider?.slug || this.adminProvider?.id); }, 
+        computed: {adminProviderEditing() { return !!(this.adminProvider?.slug || this.adminProvider?.id); },
+            adminUpdateText() {
+                const u=this.adminUpdate||{};
+                if(u.kind==='source') {
+                    if(u.unknown) return '源码安装 · 版本检测暂不可用（网络或 Git 访问受限）';
+                    return u.behind>0 ? `源码安装 · 落后 ${u.behind} 个提交，可运行 hermes update` : '源码安装 · 已是最新';
+                }
+                if(u.kind==='package') {
+                    return `包安装 · 已装 ${u.installed||'未知'}${u.latest?` · 最新 ${u.latest}`:''}${u.updateAvailable?'（可更新）':''}`;
+                }
+                if(u.kind==='none') return '未检测到本机 Hermes 安装';
+                return '';
+            },
             adminGatewayStatus() {
                 const live=this.adminGateway.gateway;
                 if(this.adminGateway.read_error || !live)return '状态不可用';
@@ -223,6 +235,10 @@
                 await this.adminAction(async () => { this.adminFiles = (await api.get(`${base}/admin/files`)).data || []; });
             },
             closeHermesAdmin() { if (!this.adminMayLeave()) return; this.adminOpen=false;this.adminDoc=null;this.adminText='';this.adminOriginal='';this.adminSettings={};this.adminProvider={};this.adminSettingsOriginal='';this.adminProviderOriginal='';clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
+            async loadAdminUpdate() {
+                try { this.adminUpdate = await api.get(`${base}/admin/gateway/update`); }
+                catch { this.adminUpdate = {}; }
+            },
             async pollAdminGateway() {
                 clearTimeout(adminTimer);
                 if (!this.adminOpen) return;
@@ -249,7 +265,7 @@
                     if(mode==='models') {const data=await api.get(`${base}/default-model`);this.adminSettings={provider:data.provider||'',model:data.model||'',reasoning_effort:data.reasoning_effort||''};await this.reloadAdminProviders();this.adminProvider={name:'',base_url:'',model:'',api_key:'',api_mode:''};}
                     if(mode==='title') {this.adminSettings={...await api.get(`${base}/title-model`),api_key:''};}
                     this.adminMode=mode;
-                    if(mode==='gateway') void this.pollAdminGateway();
+                    if(mode==='gateway') { void this.pollAdminGateway(); void this.loadAdminUpdate(); }
                     this.adminSettingsOriginal=mode==='models'||mode==='title'?JSON.stringify(this.adminSettings):'';this.adminProviderOriginal=mode==='models'?JSON.stringify(this.adminProvider):'';
                 });
             },

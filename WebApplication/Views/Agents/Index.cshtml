@@ -222,6 +222,7 @@
                             <div><dt>状态</dt><dd>{{adminGatewayStatus}}</dd></div>
                             <div v-if="adminGateway.gateway && !adminGateway.read_error"><dt>Profile</dt><dd>{{adminGateway.gateway.profiles?.join('、')}}</dd></div>
                         </dl>
+                        <p class="agent-admin-hint" v-if="adminUpdateText">{{adminUpdateText}}</p>
                         <p v-if="adminGateway.read_error" class="workspace-alert">{{adminGateway.read_error}}</p>
                         <div class="agent-admin-actions">
                             <i-button :disabled="adminBusy || !adminGateway.gateway?.running || !adminGateway.gateway?.fresh || !adminGateway.gateway?.restart_supported || adminGateway.gateway?.active!==0 || ['queued','checking','waiting','updating','restarting'].includes(adminGateway.phase)" @@click="restartAdminGateway(false)">空闲时立即重启</i-button>

@@ -20,6 +20,7 @@ public sealed class HermesAdminController(HermesAdminFiles files, HermesGatewayA
         catch (Exception error) when (error is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException) { return BadRequest(new { message = error.Message }); }
     }
     [HttpGet("gateway")] public async Task<IActionResult> Status(CancellationToken ct) { Response.Headers.CacheControl = "no-store"; return Ok(await gateway.Status(ct)); }
+    [HttpGet("gateway/update")] public async Task<IActionResult> UpdateStatus(CancellationToken ct) { Response.Headers.CacheControl = "no-store"; return Ok(await gateway.UpdateStatus(ct)); }
     [HttpGet("gateway/log")] public async Task<IActionResult> Log([FromQuery] long offset = 0, [FromQuery] string key = "", CancellationToken ct = default) { Response.Headers.CacheControl = "no-store"; return Ok(await gateway.Log(offset, key, ct)); }
     [HttpPost("gateway/update")] public async Task<IActionResult> Update(CancellationToken ct) {
         try { return Ok(await gateway.Start(true, ct, "update")); }
