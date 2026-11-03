@@ -35,15 +35,17 @@ try {
         var bridge = new CodexBridge(Reply);
         using var service = new ServerUpdateService(new Clients(), new ConfigurationBuilder().Build(), new TestEnvironment(root),
             new HermesManagement(), new HermesProfiles(), new HermesBridge(Reply), bridge, registry, new UpdaterBootstrap());
-        if (scenario == "inflight") Assert(service.Enter(), "Initial admission failed");
+        if (scenario == "inflight") Assert(service.Enter(DateTime.UtcNow.Ticks), "Initial admission failed");
         var result = JsonSerializer.SerializeToNode(await service.Readiness(job.Id, default))!;
         var terminal = scenario is "completed" or "cancelled";
-        var ready = terminal || job.Force || scenario == "reviewed-history";
+        // 只丢了受理确认、且时间戳停留在很久以前的记录不再阻塞（不可能仍在执行）
+        var stale = scenario is "old-unknown-enqueued" or "old-unknown-created";
+        var ready = terminal || job.Force || scenario == "reviewed-history" || stale;
         Assert(result["ready"]!.GetValue<bool>() == ready, "Wrong readiness: " + scenario + " " + result);
         Assert(bridge.Probes == (job.Force ? 0 : 1), "Duplicate registry/native probes: " + scenario);
         Assert(File.ReadAllBytes(Path.Combine(RemoteToolPaths.CodexState, "runs.json")).SequenceEqual(nativeBefore), "Readiness rewrote native receipt");
         Assert((registry.Query("codex", "session") == null) == (terminal || scenario == "inflight"), "Unsafe registry cleanup: " + scenario);
-        Assert(service.Enter() == !ready, "Admission barrier was not held/released correctly: " + scenario);
+        Assert(service.Enter(DateTime.UtcNow.Ticks) == !ready, "Admission barrier was not held/released correctly: " + scenario);
         Assert(UpdateContract.RunBlocksMaintenance(native) == (!terminal && scenario != "inflight" && scenario != "reviewed-history"), "Bridge maintenance classification: " + scenario);
         if (scenario.StartsWith("http-")) Assert(result["blockers"]!.ToJsonString().Contains(scenario[5..]), "Probe error missing from blockers");
         if (scenario == "force") {

@@ -280,8 +280,9 @@ builder.Services.AddSingleton<HermesCompaction>();
                 if ((!context.Request.Path.StartsWithSegments("/api") && !context.Request.Path.StartsWithSegments("/ws")) || context.Request.Path.StartsWithSegments("/api/server-update") ||
                     context.Request.Path.StartsWithSegments("/api/device/identity") || context.Request.Path.StartsWithSegments("/api/device/update-health")) { await next(); return; }
                 var updates = context.RequestServices.GetRequiredService<Services.Updates.ServerUpdateService>();
-                if (!updates.Enter()) { context.Response.StatusCode = 503; await context.Response.WriteAsJsonAsync(new { message = "服务端正在更新，请稍后重连", code = "server_updating" }); return; }
-                try { await next(); } finally { updates.Leave(); }
+                var requestStamp = DateTime.UtcNow.Ticks;
+                if (!updates.Enter(requestStamp)) { context.Response.StatusCode = 503; await context.Response.WriteAsJsonAsync(new { message = "服务端正在更新，请稍后重连", code = "server_updating" }); return; }
+                try { await next(); } finally { updates.Leave(requestStamp); }
             });
 
 

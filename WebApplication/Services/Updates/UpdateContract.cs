@@ -30,6 +30,14 @@ public static class UpdateContract
             new[] { "run_id", "session_id", "turn_id" }.All(key =>
                 !string.IsNullOrWhiteSpace(run?[key]?.ToString()) && review[key]?.ToString() == run[key]?.ToString());
     }
+    /// <summary>只丢了受理确认、且超过 6 小时没有任何进展的任务，不可能仍在执行；用于放行维护而不阻塞更新。</summary>
+    public static bool StaleAcceptance(JsonNode? run) {
+        if (run?["status"]?.ToString() != "acceptance_unknown") return false;
+        // 已有人工核对痕迹（哪怕对不上）时保持阻塞，交给核对流程处理
+        if (run?["maintenance_review"] != null) return false;
+        var stamp = run?["created_at"]?.GetValue<long>() ?? run?["enqueued_at"]?.GetValue<long>() ?? 0;
+        return stamp > 0 && DateTimeOffset.UtcNow.ToUnixTimeSeconds() - stamp > 6 * 3600;
+    }
     public static bool RunBlocksMaintenance(JsonNode? run) => run?["status"]?.ToString() is "started" or "submitting" or "queued" or "running" ||
         run?["status"]?.ToString() == "acceptance_unknown" && !ReviewedHistoricalRun(run);
     public static ServerRelease Verify(byte[] data) {

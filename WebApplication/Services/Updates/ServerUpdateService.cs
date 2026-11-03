@@ -11,14 +11,22 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
 {
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly object requests = new();
-    private int activeRequests;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, int> activeRequests = new(); // 启动时间刻度 -> 并发数
     private bool draining;
+    // 长连接（事件流、终端 WS）会被客户端一直挂着，不代表有任务在跑；只有最近 45 秒内发起的请求才算“进行中”
+    private static readonly TimeSpan RecentRequestWindow = TimeSpan.FromSeconds(45);
     private readonly string root = Path.Combine(RemoteToolPaths.ProgramData, "updates");
     private string FileAt(string name) => Path.Combine(root, name);
     public static long Sequence => long.TryParse(typeof(ServerUpdateService).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
         .FirstOrDefault(a => a.Key == "ReleaseSequence")?.Value, out var value) ? value : 0;
-    public bool Enter() { lock (requests) { if (draining || Job?.Phase is "pulling" or "building" or "switching" or "verifying" or "rolling_back" or "migrating" or "recovery_required") return false; activeRequests++; return true; } }
-    public void Leave() { lock (requests) activeRequests--; }
+    public bool Enter(long stamp) { lock (requests) { if (draining || Job?.Phase is "pulling" or "building" or "switching" or "verifying" or "rolling_back" or "migrating" or "recovery_required") return false; activeRequests.AddOrUpdate(stamp, 1, (_, value) => value + 1); return true; } }
+    public void Leave(long stamp) { lock (requests) { if (!activeRequests.TryGetValue(stamp, out var value)) return; if (value <= 1) activeRequests.TryRemove(stamp, out _); else activeRequests[stamp] = value - 1; } }
+    private int RecentRequestCount() {
+        var cutoff = DateTime.UtcNow.Ticks - RecentRequestWindow.Ticks;
+        var count = 0;
+        foreach (var pair in activeRequests) if (pair.Key >= cutoff) count += pair.Value;
+        return count;
+    }
     public void ReleaseDrain() { lock (requests) draining = false; }
     public Installation Installation => File.Exists(FileAt("installation.json")) ? UpdateContract.Read<Installation>(FileAt("installation.json")) : null;
     public bool Installed => Installation != null && (OperatingSystem.IsWindows() && Installation.Host == "iis" || OperatingSystem.IsLinux() && Installation.Host == "systemd") && (Installation.Mode == "source" || !DevelopmentTree());
@@ -134,11 +142,13 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
     }
     public async Task<object> Readiness(string id, CancellationToken ct) {
         if (Job?.Id != id || !BusyJob) throw new InvalidOperationException("更新任务标识无效");
-        int count; lock (requests) { draining = true; count = activeRequests; }
+        // 只有在确认可以更新时才进入 draining；否则检查期间会把正常请求打成 503
+        int count; lock (requests) { count = RecentRequestCount(); }
         try {
         var blockers = new List<string>();
+        var notices = new List<string>();
         // Force is an explicit per-job choice. It is never stored in automatic policy.
-        if (Job.Force) return new { ready = true, blockers };
+        if (Job.Force) { lock (requests) draining = true; return new { ready = true, blockers, notices = Array.Empty<string>() }; }
         if (count > 0) blockers.Add($"有 {count} 个请求或实时连接尚未结束");
         var hermesIdle = false;
         // Native tasks can outlive their HTTP connection. Missing evidence never means idle.
@@ -153,7 +163,7 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
             } catch { blockers.Add("无法确认 Hermes 空闲"); }
         }
         var checkedRuns = new HashSet<(string Agent, string Run)>();
-        async Task CheckRun(string agent, string session, string run) {
+        async Task CheckRun(string agent, string session, string run, bool staleTracking = false) {
             if (!checkedRuns.Add((agent, run))) return;
             try {
                 HttpResponseMessage response;
@@ -171,30 +181,40 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
                     // Age, a missing receipt, and a failed probe do not prove execution ended.
                     // In particular, bridge shutdown also fences acceptance_unknown records.
                     else if (!response.IsSuccessStatusCode) blockers.Add($"无法确认智能体任务状态：{agent}（HTTP {(int)response.StatusCode}）");
-                    else if (value?["status"]?.ToString() == "acceptance_unknown") blockers.Add("智能体任务结果待核对：" + agent);
+                    else if (value?["status"]?.ToString() == "acceptance_unknown") {
+                        // 登记很久没更新、只剩受理确认的记录不可能仍在执行：放行并提示，避免永远挡住更新
+                        if (staleTracking || UpdateContract.StaleAcceptance(value)) notices.Add("有历史任务结果未核对（超过 6 小时，已跳过）");
+                        else blockers.Add("智能体任务结果待核对：" + agent);
+                    }
                     else blockers.Add("智能体运行中或结果待核对：" + agent);
                 }
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch { blockers.Add("无法确认智能体任务状态：" + agent); }
         }
+        // 先读 codex 原生记录：判断“历史任务”要看记录自身的时间戳，登记表只用于找到 run
+        var nativeRuns = Path.Combine(RemoteToolPaths.CodexState, "runs.json");
+        var native = File.Exists(nativeRuns) ? JsonNode.Parse(await File.ReadAllTextAsync(nativeRuns, ct)) as JsonObject : null;
         var registryPath = RemoteToolPaths.RunRegistry;
         if (File.Exists(registryPath) && JsonNode.Parse(await File.ReadAllTextAsync(registryPath, ct)) is JsonObject runs)
             foreach (var pair in runs) {
                 var separator = pair.Key.IndexOf(':');
                 if (separator < 0) { blockers.Add("运行记录格式待核对"); continue; }
-                await CheckRun(pair.Key[..separator], pair.Key[(separator + 1)..], pair.Value?["run_id"]?.ToString() ?? "");
+                var runId = pair.Value?["run_id"]?.ToString() ?? "";
+                var staleTracking = native?[runId] is JsonNode record && UpdateContract.StaleAcceptance(record);
+                await CheckRun(pair.Key[..separator], pair.Key[(separator + 1)..], runId, staleTracking);
             }
-        var nativeRuns = Path.Combine(RemoteToolPaths.CodexState, "runs.json");
-        if (File.Exists(nativeRuns) && JsonNode.Parse(await File.ReadAllTextAsync(nativeRuns, ct)) is JsonObject native)
+        if (native != null)
             foreach (var pair in native.Where(p => UpdateContract.RunBlocksMaintenance(p.Value))) {
+                // 旧记录只丢了受理确认、又很久没有动静：不可能还在执行，放行并在提示里说明
+                if (UpdateContract.StaleAcceptance(pair.Value)) { notices.Add("有历史任务结果未核对（超过 6 小时，已跳过）"); continue; }
                 await CheckRun("codex", pair.Value?["session_id"]?.ToString() ?? "", pair.Key);
             }
         try { if (Hangfire.JobStorage.Current.GetMonitoringApi().ProcessingCount() > 0) blockers.Add("后台定时任务正在执行"); }
         catch { blockers.Add("无法确认后台任务空闲"); }
-        if (blockers.Count > 0) ReleaseDrain();
         // 同一类阻塞只显示一次并带数量，避免界面刷出一长串重复原因
         var summarized = blockers.GroupBy(b => b).Select(g => g.Count() > 1 ? $"{g.Key} ×{g.Count()}" : g.Key).ToList();
-        return new { ready = summarized.Count == 0, blockers = summarized };
+        if (summarized.Count == 0) { lock (requests) draining = true; }
+        return new { ready = summarized.Count == 0, blockers = summarized, notices = notices.GroupBy(n => n).Select(g => g.Count() > 1 ? $"{g.Key} ×{g.Count()}" : g.Key).ToList() };
         } catch { ReleaseDrain(); throw; }
     }
     protected override async Task ExecuteAsync(CancellationToken stoppingToken) {
