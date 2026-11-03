@@ -17,6 +17,10 @@ public sealed class ServerUpdateController(ServerUpdateService updates, CodexBri
     }
     public sealed record InstallRequest(long Sequence, bool Force = false);
     public sealed record RebuildRequest(bool Force = false, bool PullSource = false);
+    /// <summary>取消仍在等待空闲的更新任务（不会中断已经在切换/编译的更新）。</summary>
+    [HttpPost("cancel")] public IActionResult Cancel() => updates.RequestCancel()
+        ? Accepted(new { cancelled = true })
+        : Conflict(new { message = "当前没有可取消的等待任务" });
     [HttpPost("rebuild")] public async Task<IActionResult> Rebuild(RebuildRequest request, CancellationToken ct) {
         try { return Accepted(await updates.Install(0, ct, rebuild: true, force: request.Force, pullSource: request.PullSource)); }
         catch (Exception error) when (error is InvalidOperationException or IOException) { return Conflict(new { message = error.Message }); }

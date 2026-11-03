@@ -93,6 +93,10 @@ public sealed partial class Worker(string configPath, IUpdateRuntime? runtime = 
         var endpoint = new Uri(config.HealthUrl);
         var url = endpoint.GetLeftPart(UriPartial.Authority) + "/api/server-update/readiness?jobId=" + job.Id;
         while (Now < deadline) {
+            if (File.Exists(At("cancel.json")) && UpdateContract.Read<JsonObject>(At("cancel.json"))?["id"]?.ToString() == job.Id) {
+                File.Delete(At("cancel.json"));
+                throw new UpdateCancelled();
+            }
             JsonNode? state;
             if (runtime != null) state = await runtime.Readiness(job.Id);
             else {
@@ -162,6 +166,8 @@ public sealed partial class Worker(string configPath, IUpdateRuntime? runtime = 
             Phase("verifying", "核对版本、身份和健康状态"); await Verify(job.Sequence);
             if (job.Force) await WarmBridge();
             Phase("completed", "服务端更新完成"); File.Delete(At("transaction.json"));
+        } catch (UpdateCancelled) {
+            Phase("cancelled", "已取消等待，本次未更新");
         } catch (Exception error) {
             if (job == null) throw;
             UpdateContract.Write(At(Path.Combine("jobs", job.Id, "failure.json")),
@@ -183,4 +189,9 @@ public sealed partial class Worker(string configPath, IUpdateRuntime? runtime = 
             } catch { /* A failed Web process is recovered from the durable transaction next run. */ }
         }
     }
+}
+
+/// <summary>用户在等待空闲期间取消；由 cancel.json 触发。</summary>
+public sealed class UpdateCancelled : Exception {
+    public UpdateCancelled() : base("已取消等待") { }
 }

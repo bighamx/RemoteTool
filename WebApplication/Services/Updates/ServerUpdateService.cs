@@ -136,6 +136,13 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
             return Status();
         } finally { gate.Release(); }
     }
+    /// <summary>用户在“等待空闲”阶段取消：写一个标记文件，更新器每 5 秒检查一次。</summary>
+    public bool RequestCancel() {
+        var job = Job;
+        if (job == null || job.Phase is not ("requested" or "waiting" or "pulling")) return false;
+        UpdateContract.Write(FileAt("cancel.json"), new { id = job.Id, at = DateTimeOffset.UtcNow });
+        return true;
+    }
     public bool AuthenticateWorker(string token) {
         var expected = Installation?.WorkerToken;
         return expected != null && CryptographicOperations.FixedTimeEquals(System.Text.Encoding.UTF8.GetBytes(token), System.Text.Encoding.UTF8.GetBytes(expected));

@@ -31,7 +31,7 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
     var connectionError by remember(deviceId, api) { mutableStateOf<String?>(null) }
     var busy by remember(deviceId, api) { mutableStateOf(false) }
     var tracking by remember(deviceId, api) { mutableStateOf(false) }
-    var force by remember(deviceId, api) { mutableStateOf(false) }
+    var force by remember(deviceId, api) { mutableStateOf(true) }
     var submitting by remember(deviceId, api) { mutableStateOf<String?>(null) }
     var revision by remember(deviceId, api) { mutableIntStateOf(0) }
     var uncertain by remember(deviceId, api) { mutableStateOf(false) }
@@ -74,7 +74,7 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
     val actionable = if (source) sourceAction != null else check?.optBoolean("available") == true
     val updating = uncertain || updateJobActive(job) || job?.updateText("phase") == "recovery_required"
     var checking by remember(deviceId,api) { mutableStateOf(false) }
-    fun close() { revision++; dismissed = check?.optLong("releaseSequence") ?: -1; shown = false; force = false; currentJobId = null; onClosed() }
+    fun close() { revision++; dismissed = check?.optLong("releaseSequence") ?: -1; shown = false; force = true; currentJobId = null; onClosed() }
     fun run(path: String, body: JSONObject) {
         if (busy) return
         busy = true
@@ -91,7 +91,7 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
                 val value = api.json("/api/server-update/$path", body)
                 if (updatingRequest) {
                     if (requestRevision == revision) currentJobId = value.optJSONObject("job")?.updateText("id")?.takeIf { it.isNotBlank() }
-                    force = false
+                    force = true
                 }
                 state = value; error = null
             }
@@ -126,6 +126,10 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
                         if (source) {
                             UpdateVersionColumn("本地源码", sourceCheck?.updateText("localRevision").orEmpty(), Modifier.weight(1f))
                             UpdateVersionColumn("远端源码", sourceCheck?.updateText("latestRevision").orEmpty(), Modifier.weight(1f))
+                        } else {
+                            val target = if (check?.optBoolean("available") == true) check.updateText("version") else ""
+                            UpdateVersionColumn("目标版本", target.ifBlank { "已是最新" }, Modifier.weight(1f))
+                            UpdateVersionColumn("上次更新", job?.updateText("version")?.takeIf { it.isNotBlank() } ?: "无", Modifier.weight(1f))
                         }
                     }
                 }
@@ -142,6 +146,19 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
                             if (submitting != null || uncertain || updateJobActive(job)) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                             if (submitting == null && !uncertain) job?.updateText("message")?.takeIf { it.isNotBlank() }?.let { Text(updateErrorText(it)) }
                             if (uncertain || updateJobActive(job)) Text("进度自动刷新；服务重启期间会暂时断开并自动重连。", style = MaterialTheme.typography.bodySmall)
+                            if (job?.updateText("phase") in setOf("requested", "waiting", "pulling")) {
+                                TextButton(enabled = !busy, onClick = {
+                                    scope.launch {
+                                        busy = true
+                                        try {
+                                            api.json("/api/server-update/cancel", JSONObject())
+                                            state = api.json("/api/server-update")
+                                        } catch (cancel: CancellationException) { throw cancel }
+                                        catch (failure: Exception) { error = updateErrorText(failure.message.orEmpty()) }
+                                        finally { busy = false }
+                                    }
+                                }) { Text("取消等待") }
+                            }
                         }
                     }
                 }
@@ -157,23 +174,30 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
                 }
                 if (installed && !source) {
                     val policy = snapshot.optJSONObject("policy")
-                    Text("更新方式")
-                    if (policy?.updateText("mode") == "automatic") Text(updateWindowText(policy), style = MaterialTheme.typography.bodySmall)
-                    listOf("notify" to "仅提醒", "download" to "自动下载，手动安装", "automatic" to "空闲时自动更新并重启").forEach { (mode, label) ->
-                        TextButton(enabled = !busy, onClick = {
-                            scope.launch {
-                                busy = true
-                                try {
-                                    val policy = snapshot.optJSONObject("policy") ?: JSONObject()
-                                    val request = api.request("/api/server-update/settings", null).newBuilder().put(
-                                        JSONObject(policy.toString()).put("mode", mode).toString().toRequestBody("application/json".toMediaType())).build()
-                                    state = api.json(request)
-                                } catch (cancel: CancellationException) { throw cancel }
-                                catch (failure: Exception) { error = updateErrorText(failure.message.orEmpty()) }
-                                finally { busy = false }
-                            }
-                        }) { Text((if (snapshot.optJSONObject("policy")?.optString("mode") == mode) "✓ " else "") + label) }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("更新方式", style = MaterialTheme.typography.labelLarge)
+                        if (policy?.updateText("mode") == "automatic") Text(updateWindowText(policy), style = MaterialTheme.typography.bodySmall)
                     }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("notify" to "仅提醒", "download" to "自动下载", "automatic" to "空闲自动更新").forEach { (mode, label) ->
+                            FilterChip(selected = policy?.updateText("mode") == mode, enabled = !busy,
+                                onClick = {
+                                    scope.launch {
+                                        busy = true
+                                        try {
+                                            val current = snapshot.optJSONObject("policy") ?: JSONObject()
+                                            val request = api.request("/api/server-update/settings", null).newBuilder().put(
+                                                JSONObject(current.toString()).put("mode", mode).toString().toRequestBody("application/json".toMediaType())).build()
+                                            state = api.json(request)
+                                        } catch (cancel: CancellationException) { throw cancel }
+                                        catch (failure: Exception) { error = updateErrorText(failure.message.orEmpty()) }
+                                        finally { busy = false }
+                                    }
+                                },
+                                label = { Text(label) })
+                        }
+                    }
+                    if (policy?.updateText("mode") == "automatic") Text("自动更新只在空闲时段执行，避免中断正在运行的任务。", style = MaterialTheme.typography.bodySmall)
                 }
             }
         },
