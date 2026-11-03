@@ -38,7 +38,7 @@ public sealed class SourceRepository(string project, Func<string[],Task<string>>
         if(!owned)throw new IOException("当前源码的 origin 不是 "+UpdateContract.Repository+"，请先核对仓库");
         var branch=await Git("branch","--show-current");
         if(string.IsNullOrWhiteSpace(branch))throw new IOException("源码处于分离 HEAD 状态，请先切换到要更新的分支");
-        return new(branch,await Git("rev-parse","HEAD"),(await Git("status","--porcelain","--untracked-files=no")).Length>0);
+        return new(branch,await Git("rev-parse","HEAD"),(await Git("status","--porcelain")).Length>0);
     }
     private async Task<bool> IsAncestor(string ancestor, string descendant) {
         try { await Git("merge-base","--is-ancestor",ancestor,descendant); return true; }
@@ -54,10 +54,15 @@ public sealed class SourceRepository(string project, Func<string[],Task<string>>
         // 本地比远端新（有未推送提交）时不该再提示“可更新”：拉取改变不了任何东西
         var runningMatches = runningVersion.Length>=7 && !runningVersion.EndsWith("-dirty",StringComparison.Ordinal) &&
             local.Revision.StartsWith(runningVersion,StringComparison.OrdinalIgnoreCase);
+        // 检查必须只读：不 fetch，所以用上次抓取的 origin/<branch> 判断方向
+        var fetched = "";
+        try { fetched = await Git("rev-parse","refs/remotes/origin/"+local.Branch); } catch { }
         var relation = local.Revision==remote ? "same"
-            : await IsAncestor(remote,local.Revision) ? "ahead"
-            : await IsAncestor(local.Revision,remote) ? "behind" : "diverged";
-        var state=local.Dirty?"source_changed":relation switch {
+            : fetched.Length==40 && remote==fetched ? (await IsAncestor(fetched,local.Revision) ? "ahead" : "diverged")
+            : fetched.Length==40 && local.Revision==fetched ? "behind"
+            : "diverged";
+        var trackedDirty=(await Git("status","--porcelain","--untracked-files=no")).Length>0;
+        var state=trackedDirty?"source_changed":relation switch {
             "diverged"=>"source_diverged",
             "behind"=>"source_out_of_sync",
             "ahead" or "same"=>runningMatches?"up_to_date":"rebuild_required",
