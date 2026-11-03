@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.compositeOver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
@@ -114,7 +115,11 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
         },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f).compositeOver(MaterialTheme.colorScheme.surface),
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    shape = MaterialTheme.shapes.medium,
+                ) {
                     Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         val sourceCheck = check?.takeIf { it.updateText("kind") == "source" }
                         UpdateVersionColumn("运行版本", snapshot.updateText("currentVersion"), Modifier.weight(1f))
@@ -192,7 +197,7 @@ private fun UpdateVersionColumn(label: String, version: String, modifier: Modifi
         version.take(8) + if (version.endsWith("-dirty")) "\n-dirty" else ""
     } else version.ifBlank { "未获取" }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = LocalContentColor.current.copy(alpha = 0.8f))
         Text(display, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
     }
 }
