@@ -6,6 +6,21 @@ import org.junit.Test
 import java.time.ZoneId
 
 class ServerUpdatePresentationTest {
+    @Test fun activeAndTerminalJobProgressMatchesServerPhases() {
+        for (phase in listOf("requested","waiting","pulling","building","downloading","switching","verifying","rolling_back","migrating")) {
+            val job=JSONObject().put("phase",phase)
+            assertTrue(phase,updateJobActive(job))
+            assertTrue(phase,updateJobTitle(job).isNotBlank())
+        }
+        for (phase in listOf("completed","deferred","rolled_back","failed","downloaded","recovery_required")) {
+            val job=JSONObject().put("phase",phase)
+            assertFalse(phase,updateJobActive(job))
+            assertTrue(phase,updateJobTitle(job).isNotBlank())
+        }
+        assertFalse(updateJobActive(null))
+        assertEquals("",updateJobTitle(null))
+        assertEquals("等待任务空闲",updateJobTitle(JSONObject().put("phase","waiting")))
+    }
     @Test fun latestAndUnknownSourceStateAreExplicit() {
         val value=JSONObject("""{"mode":"source","check":{"kind":"source","state":"up_to_date","message":"已是最新版本"}}""")
         assertEquals("已是最新版本",updateCheckText(value))

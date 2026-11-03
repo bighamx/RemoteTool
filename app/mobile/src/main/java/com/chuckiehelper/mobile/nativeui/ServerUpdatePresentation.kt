@@ -12,6 +12,27 @@ internal fun JSONObject.updateText(key: String): String =
 internal fun updateErrorText(value: String): String = value.replace(
     Regex("Response status code does not indicate success: (\\d+) \\([^)]+\\)\\.?"), "服务端请求失败（HTTP $1）")
 
+internal fun updateJobActive(job: JSONObject?): Boolean = job?.updateText("phase") in setOf(
+    "requested", "waiting", "pulling", "building", "downloading", "switching", "verifying", "rolling_back", "migrating")
+
+internal fun updateJobTitle(job: JSONObject?): String = when (job?.updateText("phase")) {
+    "requested" -> "准备更新"
+    "waiting" -> "等待任务空闲"
+    "pulling" -> "正在拉取源码"
+    "downloading" -> "正在下载并校验"
+    "building" -> "正在编译并重启"
+    "switching", "migrating" -> "正在切换并重启"
+    "verifying" -> "正在验证更新结果"
+    "rolling_back" -> "正在恢复上一版本"
+    "completed" -> "更新完成"
+    "downloaded" -> "已下载，等待安装"
+    "deferred" -> "更新已延后"
+    "rolled_back" -> "更新失败，已回滚"
+    "failed" -> "更新失败"
+    "recovery_required" -> "更新异常，需要检查恢复结果"
+    else -> ""
+}
+
 internal fun updateCheckText(snapshot: JSONObject, checking: Boolean = false): String {
     if (checking) return "正在检查更新…"
     val check = snapshot.optJSONObject("check") ?: return "尚未检查更新"

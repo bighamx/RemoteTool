@@ -25,25 +25,34 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
     var shown by remember(deviceId, api) { mutableStateOf(false) }
     var dismissed by remember(deviceId, api) { mutableLongStateOf(-1) }
     var error by remember(deviceId, api) { mutableStateOf<String?>(null) }
+    var connectionError by remember(deviceId, api) { mutableStateOf<String?>(null) }
     var busy by remember(deviceId, api) { mutableStateOf(false) }
     var tracking by remember(deviceId, api) { mutableStateOf(false) }
     var force by remember(deviceId, api) { mutableStateOf(false) }
+    var submitting by remember(deviceId, api) { mutableStateOf<String?>(null) }
+    var revision by remember(deviceId, api) { mutableIntStateOf(0) }
+    var uncertain by remember(deviceId, api) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(deviceId, api, lifecycle) {
+    LaunchedEffect(deviceId, api, lifecycle, tracking, shown, requested) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
         while (true) {
+            // A GET started before the POST must not replace its accepted job with an old result.
+            if (busy) { delay(250); continue }
+            val started = revision
             try {
                 val value = api.json("/api/server-update")
+                if (busy || started != revision) { delay(250); continue }
+                uncertain = false
                 state = value
                 onSupported(value.optBoolean("supported"))
                 val check = value.optJSONObject("check")
                 if (value.updateText("mode") != "source" && check?.optBoolean("available") == true && check.optLong("releaseSequence") != dismissed) shown = true
-                if (value.optJSONObject("job")?.optString("phase") in listOf("completed", "rolled_back", "failed", "recovery_required")) tracking = false
-                error = null
+                tracking = updateJobActive(value.optJSONObject("job"))
+                connectionError = null
             } catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { if (tracking) error = "服务端更新中，正在重连并核对结果…" }
-            delay(if (tracking) 3000 else 60000)
+            catch (_: Exception) { if (tracking) connectionError = "服务端更新中，正在重连并核对结果…" }
+            delay(if (tracking || shown || requested) 2000 else 60000)
         }
         }
     }
@@ -55,18 +64,27 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
     val source = snapshot.updateText("mode") == "source"
     val supportsForce = snapshot.optBoolean("supportsForce")
     val sourcePull = source && snapshot.optBoolean("supportsSourcePull")
-    val updating = job?.updateText("phase") in listOf("requested", "waiting", "pulling", "building", "downloading", "switching", "verifying", "rolling_back", "migrating", "recovery_required")
+    val updating = uncertain || updateJobActive(job) || job?.updateText("phase") == "recovery_required"
     var checking by remember(deviceId,api) { mutableStateOf(false) }
     fun close() { dismissed = check?.optLong("releaseSequence") ?: -1; shown = false; force = false; onClosed() }
     fun run(path: String, body: JSONObject) {
         if (busy) return
         busy = true
+        revision++
+        val updatingRequest = path == "rebuild" || path == "install"
+        if (updatingRequest) {
+            submitting = if (body.optBoolean("pullSource")) "正在提交拉取并更新请求…" else if (path == "rebuild") "正在提交编译并重启请求…" else "正在提交更新请求…"
+            tracking = true
+        }
         checking = path == "check"
         scope.launch {
             try { state = api.json("/api/server-update/$path", body); error = null; if (path == "rebuild" || path == "install") force = false }
             catch (cancel: CancellationException) { throw cancel }
-            catch (failure: Exception) { error = updateErrorText(failure.message.orEmpty()) }
-            finally { busy = false; checking = false }
+            catch (failure: Exception) {
+                if (updatingRequest) uncertain = true
+                error = updateErrorText(failure.message.orEmpty()) + if (updatingRequest) "；正在核对任务是否已受理，请勿重复提交" else ""
+            }
+            finally { busy = false; checking = false; submitting = null }
         }
     }
     AlertDialog(onDismissRequest = { close() },
@@ -80,11 +98,22 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
                 if (!source) {
                     check?.updateText("releaseNotes")?.takeIf { it.isNotBlank() }?.let { Text(it) }
                 }
-                job?.updateText("message")?.takeIf { it.isNotBlank() }?.let { Text(updateErrorText(it)) }
+                val progressTitle = submitting ?: if (uncertain) "正在核对更新任务是否已受理…" else updateJobTitle(job)
+                if (progressTitle.isNotBlank()) {
+                    Surface(tonalElevation = 2.dp, shape = MaterialTheme.shapes.medium) {
+                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(progressTitle, style = MaterialTheme.typography.titleSmall)
+                            if (submitting != null || uncertain || updateJobActive(job)) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            if (submitting == null && !uncertain) job?.updateText("message")?.takeIf { it.isNotBlank() }?.let { Text(updateErrorText(it)) }
+                            if (uncertain || updateJobActive(job)) Text("进度自动刷新；服务重启期间会暂时断开并自动重连。", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
                 if (!installed) Text(snapshot.updateText("message"))
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                connectionError?.let { Text(it) }
                 if (sourcePull) TextButton(enabled = installed && !busy && !updating, onClick = {
-                    tracking = true; run("rebuild", JSONObject().put("force",supportsForce && force))
+                    run("rebuild", JSONObject().put("force",supportsForce && force))
                 }) { Text("编译当前源码") }
                 if (supportsForce) {
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -117,7 +146,6 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
         },
         confirmButton = {
             TextButton(enabled = installed && (if (source) snapshot.optBoolean("canRebuild") else check?.optBoolean("available") == true) && !busy && !updating, onClick = {
-                tracking = true
                 val body = JSONObject().put("force", supportsForce && force)
                 if (source) run("rebuild", body.put("pullSource",sourcePull)) else run("install", body.put("sequence", check?.optLong("releaseSequence")))
             }) { Text(if (source) (if (sourcePull) "拉取并更新" else "编译并重启") else "更新并重启") }

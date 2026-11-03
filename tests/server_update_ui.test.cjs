@@ -5,8 +5,10 @@ process.env.TZ = 'Asia/Hong_Kong';
 const source = fs.readFileSync(require('node:path').join(__dirname, '../WebApplication/wwwroot/js/server-update.js'), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function setup(mode, supportsForce = true) {
-  const elements = new Map(), requests = [], listeners = {};
-  const make = () => ({ hidden:false, disabled:false, value:'', textContent:'', checked:false,style:{},dataset:{},insertAdjacentElement(position,node){if(position==='afterend')elements.set('[data-job]',node);else elements.set('[data-pull]',node);} });
+  const elements = new Map(), requests = [], listeners = {}, timers = new Map();
+  let timerId=0;
+  const control={};
+  const make = () => ({ hidden:false, disabled:false, value:'', textContent:'', checked:false,style:{},dataset:{},setAttribute(){},insertAdjacentHTML(){},insertAdjacentElement(position,node){if(position==='afterend')elements.set('[data-job]',node);else elements.set('[data-pull]',node);} });
   const element = name => elements.get(name) || (elements.set(name, make()), elements.get(name));
   const dialog = { style:{}, open:false, contains: () => false,
     querySelector: element, showModal() { this.open=true; }, close() { this.open=false; listeners.close?.(); },
@@ -19,11 +21,13 @@ function setup(mode, supportsForce = true) {
     createElement: type => type==='dialog' ? dialog : make(), body:{append() {}} };
   vm.runInNewContext(source, {document, location:{pathname:'/'}, Date,
     localStorage:{getItem:()=>null}, sessionStorage:{getItem:()=>null,setItem(){}},
-    confirm:()=>true,setTimeout(){},fetch:async(path, options)=>{
+    confirm:()=>true,setTimeout(fn,delay){timers.set(++timerId,{fn,delay});return timerId;},clearTimeout(id){timers.delete(id);},fetch:async(path, options)=>{
       requests.push({path, ...options, body:options.body && JSON.parse(options.body)});
+      if(control.fetch)return control.fetch(path,options);
       return {ok:true,json:async()=>structuredClone(status)};
     }});
-  return {element, dialog, status, requests, button:()=>button};
+  return {element, dialog, status, requests, control, timers, button:()=>button,
+    async tick(){const [id,timer]=timers.entries().next().value;timers.delete(id);timer.fn();await flush();}};
 }
 (async () => {
   const src=setup('source'); await flush();
@@ -66,5 +70,46 @@ function setup(mode, supportsForce = true) {
   src.element('[data-check]').onclick(); await flush();
   assert.match(src.element('[data-status]').textContent,/检查失败/);
   assert.equal(release.element('[data-notes]').textContent.includes('null'),false);
+  const progress=setup('source'); await flush();
+  let accept;
+  progress.control.fetch=async()=>new Promise(resolve=>{accept=()=>resolve({ok:true,json:async()=>structuredClone(progress.status)});});
+  progress.element('[data-rebuild]').onclick();
+  assert.equal(progress.element('[data-job-title]').textContent,'正在提交编译并重启请求…','Immediate feedback before POST completes');
+  assert.equal(progress.element('[data-progress]').hidden,false);
+  assert.equal(progress.element('[data-rebuild]').disabled,true);
+  progress.status.job={id:'new-job',phase:'waiting',message:'等待空闲：智能体运行中'};
+  accept(); await flush(); progress.control.fetch=null;
+  assert.equal(progress.element('[data-job-title]').textContent,'等待任务空闲');
+  assert.match(progress.element('[data-job]').textContent,/智能体运行中/);
+  assert.equal([...progress.timers.values()][0].delay,0,'Do not wait for the old 60s timer');
+  for(const [phase,title] of [['pulling','正在拉取源码'],['building','正在编译并重启'],['verifying','正在验证更新结果']]){
+    progress.status.job={id:'new-job',phase,message:phase}; await progress.tick();
+    assert.equal(progress.element('[data-job-title]').textContent,title);
+    assert.equal([...progress.timers.values()][0].delay,2000);
+  }
+  progress.control.fetch=async()=>{throw new Error('offline');}; await progress.tick();
+  assert.match(progress.element('[data-job]').textContent,/正在重连/);
+  assert.equal(progress.element('[data-progress]').hidden,false);
+  progress.control.fetch=null;
+  for(const phase of ['completed','deferred','rolled_back','failed','recovery_required']){
+    progress.status.job={phase,message:phase}; await progress.tick();
+    assert.equal(progress.element('[data-progress]').hidden,true,'Terminal '+phase+' must stop progress');
+    assert.equal(progress.element('[data-rebuild]').disabled,phase==='recovery_required');
+  }
+  const race=setup('source'); await flush();
+  let oldResponse;
+  race.control.fetch=async(path,options)=>options.method==='GET' ? new Promise(resolve=>{oldResponse=resolve;}) : {ok:true,json:async()=>({...structuredClone(race.status),job:{phase:'waiting',message:'new job'}})};
+  const pendingPoll=race.tick(); await flush(); race.element('[data-rebuild]').onclick(); await flush();
+  oldResponse({ok:true,json:async()=>({...structuredClone(race.status),job:{phase:'completed',message:'old job'}})}); await pendingPoll; await flush();
+  assert.equal(race.element('[data-job-title]').textContent,'等待任务空闲','An old in-flight GET must not overwrite the new POST job');
+  const uncertain=setup('source'); await flush();
+  uncertain.control.fetch=async()=>{throw new Error('timeout');};
+  uncertain.element('[data-rebuild]').onclick(); await flush();
+  assert.equal(uncertain.element('[data-job-title]').textContent,'正在核对更新任务是否已受理…');
+  assert.equal(uncertain.element('[data-rebuild]').disabled,true);
+  assert.match(uncertain.element('[data-error]').textContent,/请勿重复提交/);
+  uncertain.control.fetch=null; uncertain.status.job={phase:'waiting',message:'accepted after timeout'}; await uncertain.tick();
+  assert.equal(uncertain.element('[data-job-title]').textContent,'等待任务空闲');
+  assert.equal(uncertain.requests.filter(request=>request.method==='POST').length,1,'Never replay an uncertain update');
   console.log('Server update Web UI: source/release actions, force scope, legacy capability, local time and error checks passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
