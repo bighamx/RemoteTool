@@ -43,6 +43,10 @@ class ServerUpdatePresentationTest {
         assertFalse(updateJobActive(null))
         assertEquals("",updateJobTitle(null))
         assertEquals("等待任务空闲",updateJobTitle(JSONObject().put("phase","waiting")))
+        val finished = JSONObject().put("id", "current-job").put("phase", "completed")
+        assertEquals("上次更新：已完成", updateJobTitle(finished))
+        assertEquals("本次更新：已完成", updateJobTitle(finished, "current-job"))
+        assertEquals("上次更新：已完成", updateJobTitle(finished, "different-job"))
     }
     @Test fun latestAndUnknownSourceStateAreExplicit() {
         val value=JSONObject("""{"mode":"source","check":{"kind":"source","state":"up_to_date","message":"已是最新版本"}}""")

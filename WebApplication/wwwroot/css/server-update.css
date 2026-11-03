@@ -76,3 +76,8 @@
     .server-update-dialog .btn { min-height: 44px; padding: 8px 12px; }
     .server-update-policy :is(select, input) { min-height: 44px; font-size: 16px; }
 }
+.sidebar-version { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+.app-shell .sidebar-update-button { flex: none; padding: 1px 6px; border: 1px solid color-mix(in srgb, var(--accent-primary) 50%, transparent); border-radius: 5px; background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-primary); font: inherit; line-height: 1.5; cursor: pointer; }
+.app-shell .sidebar-update-button:hover { background: color-mix(in srgb, var(--accent-primary) 22%, transparent); }
+.app-shell .sidebar-update-button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.sidebar-update-button[hidden] { display: none; }

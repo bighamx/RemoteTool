@@ -1,11 +1,7 @@
 (() => {
     if (location.pathname.toLowerCase().startsWith('/account/')) return;
-    const host = document.querySelector('.header-right');
-    if (!host) return;
-    const button = document.createElement('button');
-    button.hidden = true;
-    button.className = 'btn btn-secondary btn-sm'; button.textContent = '服务端更新';
-    button.type = 'button'; host.prepend(button);
+    const button = document.querySelector('[data-server-update-entry]');
+    if (!button) return;
     const dialog = document.createElement('dialog');
     dialog.className = 'server-update-dialog';
     dialog.setAttribute('aria-labelledby', 'server-update-title');
@@ -30,7 +26,7 @@
         </div>
         <footer class="server-update-footer"><button class="btn btn-secondary" data-check type="button">立即检查</button><div class="server-update-actions"><button class="btn btn-secondary" data-close type="button">关闭</button><button class="btn btn-primary" data-install type="button">更新并重启</button><button class="btn btn-primary" data-rebuild type="button" hidden>编译并重启</button></div></footer>`;
     document.body.append(dialog);
-    let state, pending = false, reconnecting = false, checking = false, submitting = '', pollTimer, polling = false, revision = 0, uncertain = false;
+    let state, pending = false, reconnecting = false, checking = false, submitting = '', pollTimer, polling = false, revision = 0, uncertain = false, currentJobId = '';
     const at = selector => dialog.querySelector(selector);
     const text = value => value == null || value === 'null' ? '' : String(value);
     const friendly = value => text(value).replace(/Response status code does not indicate success: (\d+) \([^)]+\)\.?/g, '服务端请求失败（HTTP $1）');
@@ -47,7 +43,11 @@
         return value.supportsSourcePull ? '' : 'compile';
     }
     const activeJob = job => ['requested','downloading','waiting','pulling','building','switching','verifying','rolling_back','migrating'].includes(job?.phase);
-    const jobTitle = job => ({requested:'准备更新',waiting:'等待任务空闲',pulling:'正在拉取源码',downloading:'正在下载并校验',building:'正在编译并重启',switching:'正在切换并重启',migrating:'正在切换并重启',verifying:'正在验证更新结果',rolling_back:'正在恢复上一版本',completed:'更新完成',downloaded:'已下载，等待安装',deferred:'更新已延后',rolled_back:'更新失败，已回滚',failed:'更新失败',recovery_required:'更新异常，需要检查恢复结果'})[job?.phase] || '';
+    const jobTitle = job => {
+        const outcome = {completed:'已完成',deferred:'已延后',rolled_back:'失败，已回滚',failed:'失败'}[job?.phase];
+        if (outcome) return `${currentJobId && text(job.id) === currentJobId ? '本次' : '上次'}更新：${outcome}`;
+        return ({requested:'准备更新',waiting:'等待任务空闲',pulling:'正在拉取源码',downloading:'正在下载并校验',building:'正在编译并重启',switching:'正在切换并重启',migrating:'正在切换并重启',verifying:'正在验证更新结果',rolling_back:'正在恢复上一版本',downloaded:'已下载，等待安装',recovery_required:'更新异常，需要检查恢复结果'})[job?.phase] || '';
+    };
     function checkText(value) {
         if (checking) return '正在检查更新…';
         const check = value.check;
@@ -78,9 +78,12 @@
     }
     function render(value) {
         state = value;
-        button.hidden = value.supported !== true;
+        if (dialog.open && activeJob(value.job) && text(value.job.id)) currentJobId = text(value.job.id);
         const source = value.mode === 'source', available = !source && !!value.check?.available;
-        button.textContent = available ? '发现服务端更新' : '服务端更新';
+        const verified = value.check && !text(value.check.error) &&
+            (!text(value.check.runningVersion) || value.check.runningVersion === value.currentVersion);
+        button.hidden = value.supported !== true || !value.installed || !verified || value.check.available !== true ||
+            (source && (value.check.kind !== 'source' || !sourceAction(value)));
         at('[data-current]').textContent = text(value.currentVersion);
         at('[data-deploy-label]').textContent = source ? '源码部署' : '发行包部署';
         const localRevision = source && value.check?.kind === 'source' ? text(value.check.localRevision) : '';
@@ -118,17 +121,21 @@
         if (available && !sessionStorage.getItem(key)) { sessionStorage.setItem(key, '1'); if (!dialog.open) dialog.showModal(); }
     }
     async function action(work, progressText = '') {
-        if (pending) return; pending = true; revision++; submitting = progressText; at('[data-error]').textContent = ''; if (state) render(state);
-        try { render(await work()); } catch (error) {
+        if (pending) return; pending = true; const requestRevision = ++revision; submitting = progressText; at('[data-error]').textContent = ''; if (state) render(state);
+        try {
+            const result = await work();
+            if (progressText && requestRevision === revision) currentJobId = text(result.job?.id);
+            render(result);
+        } catch (error) {
             if (progressText) { uncertain = true; reconnecting = true; }
             at('[data-error]').textContent = friendly(error.message) + (progressText ? '；正在核对任务是否已受理，请勿重复提交' : '');
         }
         finally { pending = false; submitting = ''; if (state) render(state); schedulePoll(0); }
     }
-    button.onclick = () => { dialog.showModal(); action(() => request()); };
+    button.onclick = () => { currentJobId = ''; dialog.showModal(); action(() => request()); };
     at('[data-close]').onclick = () => dialog.close();
     at('[data-close-header]').onclick = () => dialog.close();
-    dialog.addEventListener('close', () => { at('[data-force]').checked = false; });
+    dialog.addEventListener('close', () => { revision++; at('[data-force]').checked = false; currentJobId = ''; });
     at('[data-check]').onclick = () => { if(pending)return;checking=true; action(async () => {try{return await request('/check','POST',{});}finally{checking=false;}}); };
     at('[data-save]').onclick = () => {
         try {

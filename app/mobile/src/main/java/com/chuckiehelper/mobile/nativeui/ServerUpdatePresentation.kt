@@ -15,7 +15,19 @@ internal fun updateErrorText(value: String): String = value.replace(
 internal fun updateJobActive(job: JSONObject?): Boolean = job?.updateText("phase") in setOf(
     "requested", "waiting", "pulling", "building", "downloading", "switching", "verifying", "rolling_back", "migrating")
 
-internal fun updateJobTitle(job: JSONObject?): String = when (job?.updateText("phase")) {
+internal fun updateJobTitle(job: JSONObject?, currentJobId: String? = null): String {
+    val outcome = when (job?.updateText("phase")) {
+        "completed" -> "已完成"
+        "deferred" -> "已延后"
+        "rolled_back" -> "失败，已回滚"
+        "failed" -> "失败"
+        else -> null
+    }
+    if (outcome != null) {
+        val current = !currentJobId.isNullOrBlank() && job?.updateText("id") == currentJobId
+        return (if (current) "本次更新：" else "上次更新：") + outcome
+    }
+    return when (job?.updateText("phase")) {
     "requested" -> "准备更新"
     "waiting" -> "等待任务空闲"
     "pulling" -> "正在拉取源码"
@@ -24,13 +36,10 @@ internal fun updateJobTitle(job: JSONObject?): String = when (job?.updateText("p
     "switching", "migrating" -> "正在切换并重启"
     "verifying" -> "正在验证更新结果"
     "rolling_back" -> "正在恢复上一版本"
-    "completed" -> "更新完成"
     "downloaded" -> "已下载，等待安装"
-    "deferred" -> "上次更新已延后"
-    "rolled_back" -> "更新失败，已回滚"
-    "failed" -> "更新失败"
     "recovery_required" -> "更新异常，需要检查恢复结果"
     else -> ""
+    }
 }
 
 internal enum class SourceUpdateAction(val label: String) {

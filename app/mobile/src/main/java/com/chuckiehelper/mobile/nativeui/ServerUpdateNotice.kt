@@ -4,9 +4,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontFamily
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
@@ -32,6 +34,7 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
     var submitting by remember(deviceId, api) { mutableStateOf<String?>(null) }
     var revision by remember(deviceId, api) { mutableIntStateOf(0) }
     var uncertain by remember(deviceId, api) { mutableStateOf(false) }
+    var currentJobId by remember(deviceId, api) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(deviceId, api, lifecycle, tracking, shown, requested) {
@@ -45,6 +48,9 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
                 if (busy || started != revision) { delay(250); continue }
                 uncertain = false
                 state = value
+                if ((shown || requested) && updateJobActive(value.optJSONObject("job"))) {
+                    currentJobId = value.optJSONObject("job")?.updateText("id")?.takeIf { it.isNotBlank() }
+                }
                 onSupported(value.optBoolean("supported"))
                 val check = value.optJSONObject("check")
                 if (value.updateText("mode") != "source" && check?.optBoolean("available") == true && check.optLong("releaseSequence") != dismissed) shown = true
@@ -67,11 +73,12 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
     val actionable = if (source) sourceAction != null else check?.optBoolean("available") == true
     val updating = uncertain || updateJobActive(job) || job?.updateText("phase") == "recovery_required"
     var checking by remember(deviceId,api) { mutableStateOf(false) }
-    fun close() { dismissed = check?.optLong("releaseSequence") ?: -1; shown = false; force = false; onClosed() }
+    fun close() { revision++; dismissed = check?.optLong("releaseSequence") ?: -1; shown = false; force = false; currentJobId = null; onClosed() }
     fun run(path: String, body: JSONObject) {
         if (busy) return
         busy = true
         revision++
+        val requestRevision = revision
         val updatingRequest = path == "rebuild" || path == "install"
         if (updatingRequest) {
             submitting = if (body.optBoolean("pullSource")) "正在提交拉取并更新请求…" else if (path == "rebuild") "正在提交编译并重启请求…" else "正在提交更新请求…"
@@ -79,7 +86,14 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
         }
         checking = path == "check"
         scope.launch {
-            try { state = api.json("/api/server-update/$path", body); error = null; if (path == "rebuild" || path == "install") force = false }
+            try {
+                val value = api.json("/api/server-update/$path", body)
+                if (updatingRequest) {
+                    if (requestRevision == revision) currentJobId = value.optJSONObject("job")?.updateText("id")?.takeIf { it.isNotBlank() }
+                    force = false
+                }
+                state = value; error = null
+            }
             catch (cancel: CancellationException) { throw cancel }
             catch (failure: Exception) {
                 if (updatingRequest) uncertain = true
@@ -89,20 +103,33 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
         }
     }
     AlertDialog(onDismissRequest = { close() },
-        title = { Text("服务端更新") },
+        title = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("服务端更新", modifier = Modifier.weight(1f, fill = false))
+                Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small) {
+                    Text(if (source) "源码部署" else "发行包部署", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("服务端运行版本 " + snapshot.updateText("currentVersion"))
+                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
+                    Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val sourceCheck = check?.takeIf { it.updateText("kind") == "source" }
+                        UpdateVersionColumn("运行版本", snapshot.updateText("currentVersion"), Modifier.weight(1f))
+                        if (source) {
+                            UpdateVersionColumn("本地源码", sourceCheck?.updateText("localRevision").orEmpty(), Modifier.weight(1f))
+                            UpdateVersionColumn("远端源码", sourceCheck?.updateText("latestRevision").orEmpty(), Modifier.weight(1f))
+                        }
+                    }
+                }
                 val checkText = updateCheckText(snapshot,checking)
                 Text(checkText, color = if (checkText == "已是最新版本") MaterialTheme.colorScheme.primary else LocalContentColor.current)
-                if (source) {
-                    val localRevision = check?.takeIf { it.updateText("kind") == "source" }?.updateText("localRevision").orEmpty()
-                    Text(if (localRevision.isNotBlank()) "本地源码版本 " + localRevision.take(12) else "源码部署", style = MaterialTheme.typography.bodySmall)
-                } else Text("发行包部署", style = MaterialTheme.typography.bodySmall)
                 if (!source) {
                     check?.updateText("releaseNotes")?.takeIf { it.isNotBlank() }?.let { Text(it) }
                 }
-                val progressTitle = submitting ?: if (uncertain) "正在核对更新任务是否已受理…" else updateJobTitle(job)
+                val progressTitle = submitting ?: if (uncertain) "正在核对更新任务是否已受理…" else updateJobTitle(job, currentJobId)
                 if (progressTitle.isNotBlank()) {
                     Surface(tonalElevation = 2.dp, shape = MaterialTheme.shapes.medium) {
                         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -156,4 +183,16 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
             TextButton(onClick = { close() }) { Text("关闭") }
         } }
     )
+}
+
+@Composable
+private fun UpdateVersionColumn(label: String, version: String, modifier: Modifier = Modifier) {
+    // Keep hashes compact enough for three columns, including the existing dirty marker.
+    val display = if (version.matches(Regex("[a-fA-F0-9]{12,40}(-dirty)?"))) {
+        version.take(8) + if (version.endsWith("-dirty")) "\n-dirty" else ""
+    } else version.ifBlank { "未获取" }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(display, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+    }
 }
