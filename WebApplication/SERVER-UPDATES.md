@@ -25,6 +25,10 @@ dotnet publish WebApplication/WebApplication.csproj -c Release -r win-x64 --self
 
 创建 `server-v*` 标签后，`.github/workflows/server-release.yml` 测试、编译并上传服务端 ZIP、备用安装脚本和 `server-update.json`。更新逻辑编入同一个 `WebApplication.dll`，无独立更新器项目、EXE 或 ZIP。服务端和更新进程共用已安装的 .NET 8 / ASP.NET Core 运行时。清单包含提交 SHA、递增发行序号、协议范围、包大小和 SHA256。Android 标签与服务端标签互不混用。常规分支/PR 不自动发布。
 
+日常 `Web CI`（`dotnet-build.yml`）在 master/main 的网站、依赖、测试或相关工作流变动及对应 PR 时运行，也支持手动检查；只编译解决方案并保留 7 天的 `published-app` 构建产物，不创建 Release，不再监听旧 `v*` 标签。相同分支或 PR 的新检查会取消旧检查。
+
+Web CI 与 Server release 共同调用 `server-update-validation.yml`，并行执行 Windows/Linux 更新契约、Web 更新界面及 DLL 更新器入口验证；Linux 还执行真实 systemd 更新与回滚。正式发布必须等两端验证成功，再生成并检查实际发行包。发布工作流文件名保持不变，以延续现有发行序号；同一服务端标签的发布串行执行，不自动取消正在进行的发布。验证任务只读，只有正式上传任务拥有 Release 写权限。
+
 ## 首次启动自动准备
 
 首次运行时，Web 将 `WebApplication.dll`、DLL 依赖及 `.deps.json` / `.runtimeconfig.json` 复制到网站外的 `<数据目录>/updates/engine/<构建标识>/`。Windows 数据目录通常为 `C:/ProgramData/RemoteTool`，Linux 使用 `REMOTETOOL_DATA_DIR`。外部副本不复制 appsettings、数据库、日志或凭据。

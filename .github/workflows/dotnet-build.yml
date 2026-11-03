@@ -1,4 +1,4 @@
-name: Web build and publish
+name: Web CI
 
 on:
   push:
@@ -17,8 +17,7 @@ on:
       - '[Nn]u[Gg]et.[Cc]onfig'
       - '.github/workflows/dotnet-build.yml'
       - '.github/workflows/server-release.yml'
-    tags:
-      - 'v*'
+      - '.github/workflows/server-update-validation.yml'
   pull_request:
     branches: [ "master", "main" ]
     paths:
@@ -35,27 +34,24 @@ on:
       - '[Nn]u[Gg]et.[Cc]onfig'
       - '.github/workflows/dotnet-build.yml'
       - '.github/workflows/server-release.yml'
+      - '.github/workflows/server-update-validation.yml'
+
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: web-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  server-update-contracts:
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: 8.0.x
-    - run: dotnet run --project tests/ServerUpdates/ServerUpdates.csproj
-    - run: dotnet run --project tests/UpdaterBootstrap/UpdaterBootstrap.csproj
-    - run: dotnet run --project tests/UpdaterReadiness/UpdaterReadiness.csproj
-    - run: node tests/server_update_ui.test.cjs
-    - run: dotnet publish WebApplication/WebApplication.csproj -c Release -p:UseAppHost=false -o artifacts/updater-smoke
-    - shell: pwsh
-      run: ./tests/test_server_updater_entry.ps1 -RuntimeDirectory artifacts/updater-smoke
+  update-validation:
+    uses: ./.github/workflows/server-update-validation.yml
+
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
@@ -74,42 +70,10 @@ jobs:
     - name: Publish
       run: dotnet publish WebApplication/WebApplication.csproj --no-build --configuration Release --output ./publish
 
-    - name: Zip published app
-      if: startsWith(github.ref, 'refs/tags/')
-      run: |
-        cd publish
-        zip -r ../RemoteTool.zip .
-        cd ..
-
-    - name: Release
-      uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        files: RemoteTool.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: published-app
         path: ./publish
-  linux-update-contracts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-      - run: dotnet run --project tests/ServerUpdates/ServerUpdates.csproj
-      - run: dotnet run --project tests/UpdaterBootstrap/UpdaterBootstrap.csproj
-      - run: dotnet run --project tests/UpdaterReadiness/UpdaterReadiness.csproj
-      - run: dotnet publish WebApplication/WebApplication.csproj -c Release -p:UseAppHost=false -o artifacts/linux-entry
-      - run: bash tests/test_updater_entry_linux.sh artifacts/linux-entry
-      - name: Real systemd update and rollback
-        shell: bash
-        run: |
-          export XDG_RUNTIME_DIR=/run/user/$(id -u)
-          sudo loginctl enable-linger "$USER"
-          sudo systemctl start "user@$(id -u).service"
-          bash tests/test_updater_systemd.sh
+        if-no-files-found: error
+        retention-days: 7

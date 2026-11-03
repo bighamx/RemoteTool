@@ -4,28 +4,17 @@ on:
     tags: ['server-v*']
 permissions:
   contents: read
+
+concurrency:
+  group: server-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  linux-validation:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-      - run: dotnet run --project tests/ServerUpdates/ServerUpdates.csproj
-      - run: dotnet run --project tests/UpdaterBootstrap/UpdaterBootstrap.csproj
-      - run: dotnet run --project tests/UpdaterReadiness/UpdaterReadiness.csproj
-      - run: dotnet publish WebApplication/WebApplication.csproj -c Release -p:UseAppHost=false -o artifacts/linux-entry
-      - run: bash tests/test_updater_entry_linux.sh artifacts/linux-entry
-      - name: Validate real systemd update and rollback
-        shell: bash
-        run: |
-          export XDG_RUNTIME_DIR=/run/user/$(id -u)
-          sudo loginctl enable-linger "$USER"
-          sudo systemctl start "user@$(id -u).service"
-          bash tests/test_updater_systemd.sh
+  update-validation:
+    uses: ./.github/workflows/server-update-validation.yml
+
   release:
-    needs: linux-validation
+    needs: update-validation
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -35,18 +24,10 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-      - name: Validate tag and test update contracts
+      - name: Validate release tag
         shell: pwsh
         run: |
           if ($env:GITHUB_REF_NAME -notmatch '^server-v\d+\.\d+\.\d+$') { throw 'Invalid server tag' }
-          dotnet run --project tests/ServerUpdates/ServerUpdates.csproj
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          dotnet run --project tests/UpdaterBootstrap/UpdaterBootstrap.csproj
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          dotnet run --project tests/UpdaterReadiness/UpdaterReadiness.csproj
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          node tests/server_update_ui.test.cjs
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Publish service with built-in updater mode
         shell: pwsh
         run: |

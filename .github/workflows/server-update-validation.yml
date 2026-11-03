@@ -1,0 +1,42 @@
+name: Server update validation
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  update-contracts:
+    name: Update contracts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet run --project tests/ServerUpdates/ServerUpdates.csproj
+      - run: dotnet run --project tests/UpdaterBootstrap/UpdaterBootstrap.csproj
+      - run: dotnet run --project tests/UpdaterReadiness/UpdaterReadiness.csproj
+      - run: node tests/server_update_ui.test.cjs
+      - run: dotnet publish WebApplication/WebApplication.csproj -c Release -p:UseAppHost=false -o artifacts/updater-smoke
+      - name: Verify Windows updater DLL entry
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/test_server_updater_entry.ps1 -RuntimeDirectory artifacts/updater-smoke
+      - name: Verify Linux updater DLL entry
+        if: runner.os == 'Linux'
+        run: bash tests/test_updater_entry_linux.sh artifacts/updater-smoke
+      - name: Validate real systemd update and rollback
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          sudo loginctl enable-linger "$USER"
+          sudo systemctl start "user@$(id -u).service"
+          bash tests/test_updater_systemd.sh
