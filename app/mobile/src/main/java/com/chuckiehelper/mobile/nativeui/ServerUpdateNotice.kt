@@ -63,7 +63,8 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
     val installed = snapshot.optBoolean("installed")
     val source = snapshot.updateText("mode") == "source"
     val supportsForce = snapshot.optBoolean("supportsForce")
-    val sourcePull = source && snapshot.optBoolean("supportsSourcePull")
+    val sourceAction = sourceUpdateAction(snapshot)
+    val actionable = if (source) sourceAction != null else check?.optBoolean("available") == true
     val updating = uncertain || updateJobActive(job) || job?.updateText("phase") == "recovery_required"
     var checking by remember(deviceId,api) { mutableStateOf(false) }
     fun close() { dismissed = check?.optLong("releaseSequence") ?: -1; shown = false; force = false; onClosed() }
@@ -91,10 +92,13 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
         title = { Text("服务端更新") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("当前版本 " + snapshot.updateText("currentVersion"))
+                Text("服务端运行版本 " + snapshot.updateText("currentVersion"))
                 val checkText = updateCheckText(snapshot,checking)
                 Text(checkText, color = if (checkText == "已是最新版本") MaterialTheme.colorScheme.primary else LocalContentColor.current)
-                Text(if (source) (if (sourcePull) "源码运行 · 可拉取当前分支并更新" else "源码运行 · 编译当前磁盘源码") else "正式部署 · 下载发行包更新")
+                if (source) {
+                    val localRevision = check?.takeIf { it.updateText("kind") == "source" }?.updateText("localRevision").orEmpty()
+                    Text(if (localRevision.isNotBlank()) "本地源码版本 " + localRevision.take(12) else "源码部署", style = MaterialTheme.typography.bodySmall)
+                } else Text("发行包部署", style = MaterialTheme.typography.bodySmall)
                 if (!source) {
                     check?.updateText("releaseNotes")?.takeIf { it.isNotBlank() }?.let { Text(it) }
                 }
@@ -112,10 +116,7 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
                 if (!installed) Text(snapshot.updateText("message"))
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 connectionError?.let { Text(it) }
-                if (sourcePull) TextButton(enabled = installed && !busy && !updating, onClick = {
-                    run("rebuild", JSONObject().put("force",supportsForce && force))
-                }) { Text("编译当前源码") }
-                if (supportsForce) {
+                if (supportsForce && actionable) {
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         Checkbox(checked = force, enabled = !busy && !updating, onCheckedChange = { force = it })
                         Text("强制中断任务")
@@ -145,14 +146,14 @@ fun ServerUpdateNotice(api: NativeApi, deviceId: String, requested: Boolean = fa
             }
         },
         confirmButton = {
-            TextButton(enabled = installed && (if (source) snapshot.optBoolean("canRebuild") else check?.optBoolean("available") == true) && !busy && !updating, onClick = {
+            if (actionable) Button(enabled = installed && !busy && !updating, onClick = {
                 val body = JSONObject().put("force", supportsForce && force)
-                if (source) run("rebuild", body.put("pullSource",sourcePull)) else run("install", body.put("sequence", check?.optLong("releaseSequence")))
-            }) { Text(if (source) (if (sourcePull) "拉取并更新" else "编译并重启") else "更新并重启") }
+                if (source) run("rebuild", body.put("pullSource", sourceAction == SourceUpdateAction.PULL)) else run("install", body.put("sequence", check?.optLong("releaseSequence")))
+            }) { Text(if (source) sourceAction!!.label else "更新并重启") }
         },
         dismissButton = { Row {
             TextButton(enabled = !busy, onClick = { run("check", JSONObject()) }) { Text("立即检查") }
-            TextButton(onClick = { close() }) { Text("稍后") }
+            TextButton(onClick = { close() }) { Text("关闭") }
         } }
     )
 }

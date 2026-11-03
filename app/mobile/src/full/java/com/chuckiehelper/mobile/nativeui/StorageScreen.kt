@@ -104,8 +104,8 @@ internal fun StoragePane(backend:StorageBackend,server:Boolean,location:String,o
         if(showScope&&!server)Text("安装文件 ${bytes((inventory?.optLong("appBytes")?:0).toDouble())} · 其他私有数据 ${bytes((inventory?.optLong("otherPrivateBytes")?:0).toDouble())}（保留）",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.labelSmall)
         if(inventory?.optBoolean("partial")==true)Text("部分文件无法读取或超出扫描上限，当前显示已扫描结果。",Modifier.padding(horizontal=16.dp),color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)){
-            FilterChip(selected=category.isEmpty(),onClick={if(!busy)category=""},label={Text("全部")})
-            inventory?.array("categories")?.objects()?.forEach{c->FilterChip(selected=category==c.getString("id"),onClick={if(!busy)category=c.getString("id")},label={Text("${c.getString("name")} ${bytes(c.optLong("bytes").toDouble())}")})}
+            ChoiceChip(selected=category.isEmpty(),onClick={if(!busy)category=""},label={Text("全部")})
+            inventory?.array("categories")?.objects()?.forEach{c->ChoiceChip(selected=category==c.getString("id"),onClick={if(!busy)category=c.getString("id")},label={Text("${c.getString("name")} ${bytes(c.optLong("bytes").toDouble())}")})}
         }
         Row(Modifier.padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically){
             OutlinedTextField(search,{if(!busy)search=it},Modifier.weight(1f),placeholder={Text("搜索文件 / 设备 / 会话")},singleLine=true)

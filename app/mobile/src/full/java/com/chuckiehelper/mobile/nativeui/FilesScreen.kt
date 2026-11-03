@@ -49,9 +49,9 @@ fun directoryPositionKey(path: String): String {
 @Composable
 private fun FileDirectionToggle(descending: Boolean, onChange: (Boolean) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        FilterChip(selected = !descending, onClick = { onChange(false) },
+        ChoiceChip(selected = !descending, onClick = { onChange(false) },
             label = { Text("升序", style = MaterialTheme.typography.labelMedium) }, modifier = Modifier.height(28.dp))
-        FilterChip(selected = descending, onClick = { onChange(true) },
+        ChoiceChip(selected = descending, onClick = { onChange(true) },
             label = { Text("降序", style = MaterialTheme.typography.labelMedium) }, modifier = Modifier.height(28.dp))
     }
 }
@@ -555,7 +555,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onClose: (() -> Unit)
                 }
                 FlowRowCompat {
                     FileSort.entries.forEach { sort ->
-                        FilterChip(selected = viewSettings.sort == sort,
+                        ChoiceChip(selected = viewSettings.sort == sort,
                             onClick = { updateView(viewSettings.copy(sort = sort)) },
                             label = { Text(sort.label, style = MaterialTheme.typography.labelMedium) },
                             modifier = Modifier.height(30.dp))
@@ -566,12 +566,12 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onClose: (() -> Unit)
                     FileDirectionToggle(viewSettings.secondaryDescending) { updateView(viewSettings.copy(secondaryDescending = it)) }
                 }
                 FlowRowCompat {
-                    FilterChip(selected = viewSettings.secondarySort == null,
+                    ChoiceChip(selected = viewSettings.secondarySort == null,
                         onClick = { updateView(viewSettings.copy(secondarySort = null)) },
                         label = { Text("无", style = MaterialTheme.typography.labelMedium) },
                         modifier = Modifier.height(30.dp))
                     FileSort.entries.forEach { sort ->
-                        FilterChip(selected = viewSettings.secondarySort == sort,
+                        ChoiceChip(selected = viewSettings.secondarySort == sort,
                             onClick = { updateView(viewSettings.copy(secondarySort = sort)) },
                             label = { Text(sort.label, style = MaterialTheme.typography.labelMedium) },
                             modifier = Modifier.height(30.dp))

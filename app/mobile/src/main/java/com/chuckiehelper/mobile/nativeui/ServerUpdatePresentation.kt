@@ -26,11 +26,29 @@ internal fun updateJobTitle(job: JSONObject?): String = when (job?.updateText("p
     "rolling_back" -> "正在恢复上一版本"
     "completed" -> "更新完成"
     "downloaded" -> "已下载，等待安装"
-    "deferred" -> "更新已延后"
+    "deferred" -> "上次更新已延后"
     "rolled_back" -> "更新失败，已回滚"
     "failed" -> "更新失败"
     "recovery_required" -> "更新异常，需要检查恢复结果"
     else -> ""
+}
+
+internal enum class SourceUpdateAction(val label: String) {
+    COMPILE("编译并重启"), PULL("拉取并更新")
+}
+
+internal fun sourceUpdateAction(snapshot: JSONObject): SourceUpdateAction? {
+    if (snapshot.updateText("mode") != "source" || !snapshot.optBoolean("canRebuild")) return null
+    val check = snapshot.optJSONObject("check")
+    val valid = check?.updateText("kind") == "source" && check.updateText("error").isBlank() &&
+        (check.updateText("runningVersion").isBlank() || check.updateText("runningVersion") == snapshot.updateText("currentVersion"))
+    if (valid) return when (check?.updateText("state")) {
+        "up_to_date" -> null
+        "source_changed", "rebuild_required" -> SourceUpdateAction.COMPILE
+        "source_out_of_sync" -> if (snapshot.optBoolean("supportsSourcePull")) SourceUpdateAction.PULL else SourceUpdateAction.COMPILE
+        else -> if (snapshot.optBoolean("supportsSourcePull")) null else SourceUpdateAction.COMPILE
+    }
+    return if (snapshot.optBoolean("supportsSourcePull")) null else SourceUpdateAction.COMPILE
 }
 
 internal fun updateCheckText(snapshot: JSONObject, checking: Boolean = false): String {
@@ -39,7 +57,13 @@ internal fun updateCheckText(snapshot: JSONObject, checking: Boolean = false): S
     if (snapshot.updateText("mode") == "source" && check.updateText("kind") != "source") return "尚未核对源码版本，请点击立即检查"
     if (check.updateText("runningVersion").isNotBlank() && check.updateText("runningVersion") != snapshot.updateText("currentVersion")) return "版本已变化，请重新检查"
     check.updateText("error").takeIf { it.isNotBlank() }?.let { return "检查失败：" + updateErrorText(it) }
-    if (snapshot.updateText("mode") == "source") return check.updateText("message").ifBlank { "尚未核对源码版本" }
+    if (snapshot.updateText("mode") == "source") return when (check.updateText("state")) {
+        "up_to_date" -> "已是最新版本"
+        "rebuild_required" -> "源码已是最新，需编译并重启服务端"
+        "source_changed" -> "本地源码有未提交改动，将仅编译本地源码"
+        "source_out_of_sync" -> "本地源码与远端不同，更新将先拉取源码"
+        else -> check.updateText("message").ifBlank { "尚未核对源码版本" }
+    }
     return if (check.optBoolean("available")) "可更新至 " + check.updateText("version") else "已是最新版本"
 }
 

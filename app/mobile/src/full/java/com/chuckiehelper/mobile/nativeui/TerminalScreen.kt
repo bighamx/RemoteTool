@@ -98,7 +98,7 @@ fun TerminalScreen(api: NativeApi, onError: (String) -> Unit) {
         FlowRowCompat {
             types.forEach {
                 (kind, label) ->
-                FilterChip(type == kind, { type = kind }, label = { Text(label) })
+                ChoiceChip(type == kind, { type = kind }, label = { Text(label) })
             }
         }
         Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {

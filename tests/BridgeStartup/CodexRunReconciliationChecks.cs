@@ -22,10 +22,11 @@ internal static class CodexRunReconciliationChecks
         var observation = new JsonObject { ["available"] = true, ["running"] = true, ["activity_id"] = "new-turn",
             ["turn_statuses"] = new JsonObject { ["old-turn"] = "completed", ["new-turn"] = "inProgress" } };
         try {
-            foreach (var endpoint in new[] { "status", "lookup", "events" }) {
+            foreach (var endpoint in new[] { "status", "lookup", "events" }) foreach (var legacy in new[] { false, true }) {
                 runs["old-run"] = new JsonObject { ["run_id"] = "old-run", ["session_id"] = "session", ["owner"] = "desktop",
                     ["status"] = "acceptance_unknown", ["error_code"] = "run_tracking_lost", ["error"] = "lost subscription",
                     ["turn_id"] = "old-turn", ["key"] = "fixture_request_key" };
+                if (legacy) runs["old-run"]!.AsObject().Remove("error_code");
                 runs["new-run"] = new JsonObject { ["run_id"] = "new-run", ["status"] = "started" };
                 active["session"] = "new-run";
                 cache[cacheKey] = Activator.CreateInstance(entryType, Environment.TickCount64, Task.FromResult(observation))!;

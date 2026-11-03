@@ -56,8 +56,8 @@ internal fun CodexTitleModelDialog(model: HermesModel, onClose: () -> Unit) {
                     }
                     OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("API URL") }, placeholder = { Text("https://example.com/v1") }, singleLine = true, enabled = initialized && !model.titleModelBusy)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FilterChip(mode == "chat_completions", { mode = "chat_completions" }, label = { Text("Chat Completions") }, enabled = !model.titleModelBusy)
-                        FilterChip(mode == "responses", { mode = "responses" }, label = { Text("Responses") }, enabled = !model.titleModelBusy)
+                        ChoiceChip(mode == "chat_completions", { mode = "chat_completions" }, label = { Text("Chat Completions") }, enabled = !model.titleModelBusy)
+                        ChoiceChip(mode == "responses", { mode = "responses" }, label = { Text("Responses") }, enabled = !model.titleModelBusy)
                     }
                     OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth(), label = { Text(if (model.titleModel?.optBoolean("has_api_key") == true) "Key（已保存，留空保留）" else "API Key（可选）") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), enabled = initialized && !model.titleModelBusy)
                     if (model.titleModel?.optBoolean("has_api_key") == true) Row(verticalAlignment = Alignment.CenterVertically) {

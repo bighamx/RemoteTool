@@ -10,7 +10,7 @@ function setup(mode, supportsForce = true) {
   const control={};
   const make = () => ({ hidden:false, disabled:false, value:'', textContent:'', checked:false,style:{},dataset:{},setAttribute(){},insertAdjacentHTML(){},insertAdjacentElement(position,node){if(position==='afterend')elements.set('[data-job]',node);else elements.set('[data-pull]',node);} });
   const element = name => elements.get(name) || (elements.set(name, make()), elements.get(name));
-  const dialog = { style:{}, open:false, contains: () => false,
+  const dialog = { style:{}, open:false, setAttribute(){}, contains: () => false,
     querySelector: element, showModal() { this.open=true; }, close() { this.open=false; listeners.close?.(); },
     addEventListener(name, fn) { listeners[name]=fn; } };
   const status = { supported:true, installed:true, mode, supportsForce, canRebuild:mode==='source', currentVersion:'abc123',
@@ -40,7 +40,7 @@ function setup(mode, supportsForce = true) {
   assert.deepEqual(src.requests.at(-1).body,{force:true});
   assert.equal(src.requests.at(-1).path,'/api/server-update/rebuild');
   assert.equal(src.element('[data-force]').checked,false,'Force must reset after accepting one job');
-  src.element('[data-force]').checked=true; src.dialog.close(); assert.equal(src.element('[data-force]').checked,false);
+  src.element('[data-force]').checked=true; src.element('[data-close-header]').onclick(); assert.equal(src.element('[data-force]').checked,false);
   const legacy=setup('source',false); await flush();
   assert.equal(legacy.element('[data-force-row]').hidden,true);
   legacy.element('[data-force]').checked=true; legacy.element('[data-rebuild]').onclick(); await flush();
@@ -63,12 +63,33 @@ function setup(mode, supportsForce = true) {
   src.status.supportsSourcePull=true;
   src.element('[data-check]').onclick(); await flush();
   assert.equal(src.element('[data-status]').textContent,'已是最新版本');
-  assert.equal(src.element('[data-pull]').hidden,false);
-  src.element('[data-pull]').onclick(); await flush();
+  assert.equal(src.element('[data-rebuild]').hidden,true,'Latest source and running service need no update action');
+  const beforeLatestClick=src.requests.length;
+  src.element('[data-rebuild]').onclick(); await flush();
+  assert.equal(src.requests.length,beforeLatestClick,'A hidden stale update action must not submit');
+  src.status.check={kind:'source',state:'rebuild_required',localRevision:'6226b4b66cf5'};
+  src.element('[data-check]').onclick(); await flush();
+  assert.equal(src.element('[data-rebuild]').hidden,false);
+  assert.equal(src.element('[data-rebuild]').textContent,'编译并重启');
+  assert.match(src.element('[data-mode]').textContent,/6226b4b66cf5/);
+  assert.match(src.element('[data-status]').textContent,/源码已是最新/);
+  src.element('[data-rebuild]').onclick(); await flush();
+  assert.deepEqual(src.requests.at(-1).body,{force:false},'Up-to-date local source must only compile, never pull');
+  src.status.check={kind:'source',state:'source_out_of_sync'};
+  src.element('[data-check]').onclick(); await flush();
+  assert.equal(src.element('[data-rebuild]').textContent,'拉取并更新');
+  src.element('[data-rebuild]').onclick(); await flush();
   assert.deepEqual(src.requests.at(-1).body,{force:false,pullSource:true});
+  src.status.check={kind:'source',state:'source_changed'};
+  src.element('[data-check]').onclick(); await flush();
+  assert.equal(src.element('[data-rebuild]').textContent,'编译并重启','Dirty local source must not offer a pull');
   src.status.check={kind:'source',state:'failed',error:'network unavailable'};
   src.element('[data-check]').onclick(); await flush();
   assert.match(src.element('[data-status]').textContent,/检查失败/);
+  assert.equal(src.element('[data-rebuild]').hidden,true,'Check failure must not guess the next source operation');
+  src.status.check={kind:'source',state:'source_out_of_sync',runningVersion:'older-server'};
+  src.element('[data-check]').onclick(); await flush();
+  assert.equal(src.element('[data-rebuild]').hidden,true,'Stale checks must be refreshed before choosing an operation');
   assert.equal(release.element('[data-notes]').textContent.includes('null'),false);
   const progress=setup('source'); await flush();
   let accept;

@@ -26,7 +26,7 @@ fun PhoneSessionOptions(api: NativeApi, value: String, changed: (String) -> Unit
         Text("手机能力", style = MaterialTheme.typography.labelLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             listOf("off" to "关闭", "description" to "注入说明", "tools" to "启用工具").forEach { (id, label) ->
-                FilterChip(mode == id, { changed(JSONObject(value).put("mode", id).toString()) }, label = { Text(label) })
+                ChoiceChip(mode == id, { changed(JSONObject(value).put("mode", id).toString()) }, label = { Text(label) })
             }
         }
         if (mode != "off") {

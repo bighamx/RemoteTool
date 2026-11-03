@@ -90,12 +90,12 @@ private fun TunnelRuleDialog(rule: TunnelRule, onClose: () -> Unit, onSave: (Tun
     AlertDialog(onDismissRequest = onClose, title = { Text("转发规则") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(!phoneListens, { phoneListens = false }, label = { Text("电脑 → 手机") })
-                FilterChip(phoneListens, { phoneListens = true }, label = { Text("手机 → 电脑") })
+                ChoiceChip(!phoneListens, { phoneListens = false }, label = { Text("电脑 → 手机") })
+                ChoiceChip(phoneListens, { phoneListens = true }, label = { Text("手机 → 电脑") })
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(!udp, { udp = false }, label = { Text("TCP") })
-                FilterChip(udp, { udp = true }, label = { Text("UDP") })
+                ChoiceChip(!udp, { udp = false }, label = { Text("TCP") })
+                ChoiceChip(udp, { udp = true }, label = { Text("UDP") })
             }
             OutlinedTextField(name, { name = it }, label = { Text("名称（可选）") }, singleLine = true)
             OutlinedTextField(listen, { listen = it }, label = { Text(if (phoneListens) "手机监听端口" else "电脑监听端口") },

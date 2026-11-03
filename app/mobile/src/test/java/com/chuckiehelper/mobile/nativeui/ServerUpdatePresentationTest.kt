@@ -6,6 +6,29 @@ import org.junit.Test
 import java.time.ZoneId
 
 class ServerUpdatePresentationTest {
+    @Test fun sourcePrimaryActionMatchesTheActualNextStep() {
+        val value=JSONObject("""{"mode":"source","canRebuild":true,"supportsSourcePull":true,"currentVersion":"running","check":{"kind":"source","runningVersion":"running"}}""")
+        val check=value.getJSONObject("check")
+        check.put("state","rebuild_required")
+        assertEquals(SourceUpdateAction.COMPILE,sourceUpdateAction(value))
+        assertEquals("源码已是最新，需编译并重启服务端",updateCheckText(value))
+        check.put("state","source_changed")
+        assertEquals(SourceUpdateAction.COMPILE,sourceUpdateAction(value))
+        check.put("state","source_out_of_sync")
+        assertEquals(SourceUpdateAction.PULL,sourceUpdateAction(value))
+        check.put("state","up_to_date")
+        assertNull(sourceUpdateAction(value))
+        check.put("state","source_out_of_sync").put("runningVersion","old")
+        assertNull(sourceUpdateAction(value))
+        check.put("runningVersion","running").put("error","offline")
+        assertNull(sourceUpdateAction(value))
+        value.remove("check")
+        assertNull(sourceUpdateAction(value))
+        value.put("supportsSourcePull",false)
+        assertEquals(SourceUpdateAction.COMPILE,sourceUpdateAction(value))
+        value.put("canRebuild",false)
+        assertNull(sourceUpdateAction(value))
+    }
     @Test fun activeAndTerminalJobProgressMatchesServerPhases() {
         for (phase in listOf("requested","waiting","pulling","building","downloading","switching","verifying","rolling_back","migrating")) {
             val job=JSONObject().put("phase",phase)

@@ -140,11 +140,14 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
         // Force is an explicit per-job choice. It is never stored in automatic policy.
         if (Job.Force) return new { ready = true, blockers };
         if (count > 0) blockers.Add($"有 {count} 个请求或实时连接尚未结束");
+        var hermesIdle = false;
         // Native tasks can outlive their HTTP connection. Missing evidence never means idle.
         if (Directory.Exists(profiles.Root)) {
             try {
                 using (HermesProfileScope.Enter("default")) {
                     var value = await hermes.Invoke("admin_gateway_status", null, ct);
+                    hermesIdle = value.TryGetProperty("running", out var running) && running.GetBoolean() &&
+                        value.GetProperty("fresh").GetBoolean() && value.GetProperty("active").GetInt32() == 0;
                     if (!value.GetProperty("fresh").GetBoolean() || value.GetProperty("active").GetInt32() != 0) blockers.Add("Hermes 状态未确认或仍有任务");
                 }
             } catch { blockers.Add("无法确认 Hermes 空闲"); }
@@ -161,6 +164,10 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
                 using (response) {
                     var value = response.IsSuccessStatusCode ? JsonNode.Parse(await response.Content.ReadAsStringAsync(ct)) : null;
                     if (value?["status"]?.ToString() is "completed" or "failed" or "cancelled" or "interrupted") registry.Clear(agent, session, run);
+                    else if (UpdateContract.ReviewedHistoricalRun(value)) { /* Keep original receipt and idempotency key. */ }
+                    else if (agent.StartsWith("hermes", StringComparison.Ordinal) && hermesIdle && response.StatusCode == System.Net.HttpStatusCode.NotFound &&
+                        JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))?["error"]?["code"]?.ToString() == "run_not_found")
+                        registry.Clear(agent, session, run);
                     // Age, a missing receipt, and a failed probe do not prove execution ended.
                     // In particular, bridge shutdown also fences acceptance_unknown records.
                     else if (!response.IsSuccessStatusCode) blockers.Add($"无法确认智能体任务状态：{agent}（HTTP {(int)response.StatusCode}）");
@@ -179,7 +186,7 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
             }
         var nativeRuns = Path.Combine(RemoteToolPaths.CodexState, "runs.json");
         if (File.Exists(nativeRuns) && JsonNode.Parse(await File.ReadAllTextAsync(nativeRuns, ct)) is JsonObject native)
-            foreach (var pair in native.Where(p => p.Value?["status"]?.ToString() is "started" or "queued" or "running" or "submitting" or "acceptance_unknown")) {
+            foreach (var pair in native.Where(p => UpdateContract.RunBlocksMaintenance(p.Value))) {
                 await CheckRun("codex", pair.Value?["session_id"]?.ToString() ?? "", pair.Key);
             }
         try { if (Hangfire.JobStorage.Current.GetMonitoringApi().ProcessingCount() > 0) blockers.Add("后台定时任务正在执行"); }

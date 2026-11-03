@@ -69,7 +69,7 @@ fun ShareTargetScreen(inbox: ShareInboxModel, deviceApi: NativeApi, deviceId: St
         TextButton(onClick = changeDevice, enabled = !busy) { Text("设备：$deviceName · 切换") }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             listOf("codex" to "Codex", "hermes" to "Hermes", "files" to "文件管理").forEach { (id, name) ->
-                FilterChip(selected = agent == id, onClick = { agent = id; query = ""; target = null }, enabled = !busy, label = { Text(name) })
+                ChoiceChip(selected = agent == id, onClick = { agent = id; query = ""; target = null }, enabled = !busy, label = { Text(name) })
             }
         }
         Text(if (inbox.importing) "正在读取分享文件…" else "${inbox.files.size} 个文件" +

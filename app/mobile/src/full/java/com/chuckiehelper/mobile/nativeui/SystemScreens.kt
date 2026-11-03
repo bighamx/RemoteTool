@@ -101,7 +101,7 @@ fun SystemScreen(
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(60 to "60 秒", 300 to "5 分钟", 900 to "15 分钟").forEach { (value, label) ->
-                    FilterChip(
+                    ChoiceChip(
                         selected = seconds == value,
                         onClick = { seconds = value },
                         label = { Text(label) },

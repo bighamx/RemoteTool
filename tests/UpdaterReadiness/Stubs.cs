@@ -8,7 +8,7 @@ namespace RemoteTool.WebApi.Services {
     public static class ServerBuild { public static string Version => "test"; }
     public sealed class HermesProfiles { public string Root => Path.Combine(RemoteToolPaths.ProgramData, "no-hermes"); }
     public sealed class HermesProfileScope : IDisposable { public static HermesProfileScope Enter(string profile) => new(); public void Dispose() {} }
-    public sealed class HermesManagement { public Task<JsonElement> Invoke(string action, object? input, CancellationToken ct) => throw new Exception("Unexpected Hermes status probe"); }
+    public sealed class HermesManagement(Func<JsonElement>? status = null) { public Task<JsonElement> Invoke(string action, object? input, CancellationToken ct) => status == null ? throw new Exception("Unexpected Hermes status probe") : Task.FromResult(status()); }
     public sealed class HermesBridge(Func<HttpResponseMessage> response) {
         public Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body, object? extra, CancellationToken ct) => Task.FromResult(response());
     }

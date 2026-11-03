@@ -1627,7 +1627,7 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (fixedGlobal == null) Row {
-                    FilterChip(
+                    ChoiceChip(
                         !global,
                         {
                             if(sessionModelSupported)global = false
@@ -1637,7 +1637,7 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                         enabled = model.selectedId != null && sessionModelSupported,
                     )
                     Spacer(Modifier.width(8.dp))
-                    FilterChip(
+                    ChoiceChip(
                         global,
                         {
                             global = true
@@ -1770,7 +1770,7 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                                 Text("思考程度", style = MaterialTheme.typography.labelLarge)
                                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     (listOf("") + efforts).forEach { value ->
-                                        FilterChip(effort == value, { effort = value; model.modelWarning = null },
+                                        ChoiceChip(effort == value, { effort = value; model.modelWarning = null },
                                             label = { Text(effortLabel(value)) }, enabled = !model.modelSaving)
                                     }
                                 }
@@ -1781,10 +1781,10 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                             if (model.agent == "codex" && supportsServiceTier(provider)) {
                                 Text("速度", style = MaterialTheme.typography.labelLarge)
                                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    FilterChip(tier.isBlank(), { tier = "" }, label = { Text("默认") }, enabled = !model.modelSaving)
-                                    FilterChip(tier in listOf("default", "standard"), { tier = "default" }, label = { Text("标准") }, enabled = !model.modelSaving)
+                                    ChoiceChip(tier.isBlank(), { tier = "" }, label = { Text("默认") }, enabled = !model.modelSaving)
+                                    ChoiceChip(tier in listOf("default", "standard"), { tier = "default" }, label = { Text("标准") }, enabled = !model.modelSaving)
                                     fastTier(provider, selected)?.let { fast ->
-                                        FilterChip(tier == fast, { tier = fast }, label = { Text("快速") }, enabled = !model.modelSaving)
+                                        ChoiceChip(tier == fast, { tier = fast }, label = { Text("快速") }, enabled = !model.modelSaving)
                                     }
                                 }
                                 if (fastTier(provider, selected) != null)
@@ -1965,7 +1965,7 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
                             "anthropic_messages" to "Anthropic Messages",
                         ))
                         .forEach { (mode, label) ->
-                            FilterChip(
+                            ChoiceChip(
                                 transport == mode,
                                 { transport = mode },
                                 label = { Text(label) },

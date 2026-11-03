@@ -180,8 +180,8 @@ fun PhoneToolsScreen(api: PhoneWebApi?, close: () -> Unit) {
             } }
             item { PhoneSettingsCard("连接配置") {
                 Row(Modifier.padding(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(connectionTab == "direct", { connectionTab = "direct"; settings.connectionTab = "direct" }, label = { Text("直连手机") })
-                    FilterChip(connectionTab == "web", { connectionTab = "web"; settings.connectionTab = "web" }, label = { Text("转发通道") }, enabled = api != null)
+                    ChoiceChip(connectionTab == "direct", { connectionTab = "direct"; settings.connectionTab = "direct" }, label = { Text("直连手机") })
+                    ChoiceChip(connectionTab == "web", { connectionTab = "web"; settings.connectionTab = "web" }, label = { Text("转发通道") }, enabled = api != null)
                 }
                 if (connectionTab == "direct") {
                     OutlinedTextField(address, { address = it; settings.address = it }, label = { Text("手机访问地址") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp))

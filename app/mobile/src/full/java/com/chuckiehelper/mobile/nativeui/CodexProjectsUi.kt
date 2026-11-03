@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.chuckiehelper.mobile.nativeui
 
 import androidx.compose.foundation.clickable
@@ -38,9 +38,9 @@ fun CodexNewSessionDialog(api: NativeApi, model: HermesModel, close: () -> Unit,
         title = { Text("新建 Codex 会话") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf("existing" to "已有项目", "new" to "新项目", "none" to "无项目").forEach { (id, label) ->
-                        FilterChip(selected = mode == id, onClick = { mode = id; model.error = null }, label = { Text(label, maxLines = 1) }, enabled = !model.submitting, modifier = Modifier.weight(1f))
+                        ChoiceChip(selected = mode == id, onClick = { mode = id; model.error = null }, label = { Text(label, maxLines = 1) }, enabled = !model.submitting)
                     }
                 }
                 when (mode) {

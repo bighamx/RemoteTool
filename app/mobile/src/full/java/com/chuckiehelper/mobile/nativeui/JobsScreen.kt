@@ -80,7 +80,7 @@ fun JobsScreen(api: NativeApi, onError: (String) -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 tabs.forEach { (state, title) ->
-                    FilterChip(
+                    ChoiceChip(
                         tab == state,
                         {
                             tab = state

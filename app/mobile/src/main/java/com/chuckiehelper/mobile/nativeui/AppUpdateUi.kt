@@ -82,7 +82,7 @@ internal fun AppUpdateHost(model: AppUpdateModel) {
                 Text("更新渠道", style = MaterialTheme.typography.titleSmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     UpdateChannel.entries.forEach { channel ->
-                        FilterChip(selected = model.channel == channel, enabled = !model.busy,
+                        ChoiceChip(selected = model.channel == channel, enabled = !model.busy,
                             onClick = { model.updateChannel(channel) }, label = { Text(channel.label) })
                     }
                 }

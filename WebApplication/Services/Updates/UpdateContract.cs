@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace RemoteTool.Updates;
 
@@ -20,6 +21,17 @@ public static class UpdateContract
         (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.Arm64 ? "arm64" : "x64") + "-systemd";
     public const string UpdaterVersion = "1.3.0";
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    // A human review closes tracking for this exact receipt, never rewrites its execution outcome.
+    public static bool ReviewedHistoricalRun(JsonNode? run) {
+        var review = run?["maintenance_review"];
+        return run?["status"]?.ToString() == "acceptance_unknown" &&
+            review?["kind"]?.ToString() == "historical_tracking" &&
+            review["reviewed_at"] is JsonValue stamp && stamp.TryGetValue<long>(out var at) && at > 0 &&
+            new[] { "run_id", "session_id", "turn_id" }.All(key =>
+                !string.IsNullOrWhiteSpace(run?[key]?.ToString()) && review[key]?.ToString() == run[key]?.ToString());
+    }
+    public static bool RunBlocksMaintenance(JsonNode? run) => run?["status"]?.ToString() is "started" or "submitting" or "queued" or "running" ||
+        run?["status"]?.ToString() == "acceptance_unknown" && !ReviewedHistoricalRun(run);
     public static ServerRelease Verify(byte[] data) {
         var release = JsonSerializer.Deserialize<ServerRelease>(data, Json) ?? throw new InvalidDataException("更新清单为空");
         if (release.SchemaVersion != 1 || release.ReleaseSequence <= 0 || release.Channel != "stable" ||

@@ -40,7 +40,7 @@ android {
             dimension 'edition'
             applicationId 'com.chuckiehelper.mobile'
             versionCode appBuildCode
-            versionName appVersionName('0.3.147')
+            versionName appVersionName('0.3.148')
             buildConfigField 'boolean', 'PHONE_COMPANION', 'false'
             manifestPlaceholders = [appLabel: 'RemoteTool', appIcon: '@mipmap/ic_launcher',
                 siblingPackage: 'com.chuckiehelper.phonecontrol', accessibilityLabel: 'RemoteTool 手机操控', notificationLabel: 'RemoteTool 手机通知',
@@ -51,7 +51,7 @@ android {
             dimension 'edition'
             applicationId 'com.chuckiehelper.phonecontrol'
             versionCode appBuildCode
-            versionName appVersionName('0.2.19')
+            versionName appVersionName('0.2.20')
             buildConfigField 'boolean', 'PHONE_COMPANION', 'true'
             manifestPlaceholders = [appLabel: '手机操控', appIcon: '@drawable/ic_phone_control',
                 siblingPackage: 'com.chuckiehelper.mobile', accessibilityLabel: '手机操控 · 无障碍', notificationLabel: '手机操控 · 通知读取',

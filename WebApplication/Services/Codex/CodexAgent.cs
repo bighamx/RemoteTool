@@ -326,7 +326,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
 
     /// 被其他客户端持锁（桌面端开着）时的 turns 读取：thread/turns/list 读分页历史存储，
     /// 不受写锁影响（实测 0.2s/页）。默认新→旧返回，翻完 nextCursor 后倒序成 thread.read 的时间序。
-    private async Task<JsonObject> ReadThreadTurnsPaged(string id, CancellationToken ct, CodexHistoryWindow window = null) {
+    private async Task<JsonObject> ReadThreadTurnsPaged(string id, CancellationToken ct, CodexHistoryWindow window = null, string targetTurn = null) {
         var thread = (await rpc.Call("thread/read", Obj(("threadId", id), ("includeTurns", false)), ct))["thread"]!;
         var turns = new JsonArray();
         var cursor = "";
@@ -343,6 +343,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 thread["history_partial"] = cursor.Length > 0 || included < pageTurns.Count;
                 break;
             }
+            if (!string.IsNullOrEmpty(targetTurn) && pageTurns.Any(turn => turn.S("id") == targetTurn)) break;
             if (cursor.Length == 0) break;
         }
         var ordered = new JsonArray();
@@ -572,7 +573,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             owned = active.GetValueOrDefault(session);
             candidates = runs.Select(entry => entry.Value as JsonObject).Where(row => row != null &&
                 row.S("session_id") == session && row.S("owner") == "desktop" && row.S("status") == "acceptance_unknown" &&
-                row.S("error_code") == "run_tracking_lost" && row.S("turn_id").Length > 0).ToArray();
+                row.S("turn_id").Length > 0).ToArray();
         }
         if (owned != null) { lock (gate) return runs[owned]?.DeepClone().AsObject() ?? Obj(("run_id", null)); }
         if (candidates.Length == 0) return Obj(("run_id", null));
@@ -600,7 +601,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             tracked = active.GetValueOrDefault(state.S("session_id")) == id;
         }
         if (state.S("owner") == "desktop" && state.S("status") == "acceptance_unknown" &&
-            state.S("error_code") == "run_tracking_lost" && state.S("turn_id").Length > 0) {
+            state.S("turn_id").Length > 0) {
             // A bridge restart loses its subscription, not the desktop's accepted turn.
             await FindActiveRun(state.S("session_id"), ct);
             var observed = await CodexDesktopActivity.Read(home, state.S("session_id"), ct);
@@ -610,25 +611,27 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 tracked = active.GetValueOrDefault(state.S("session_id")) == id;
             }
         }
-        if (state.S("status") is not ("started" or "submitting")) return state;
+        if (state.S("status") is not ("started" or "submitting" or "acceptance_unknown")) return state;
+        if (state.S("status") == "acceptance_unknown" && state.S("turn_id").Length == 0) return state;
         if (tracked && state.S("owner") != "desktop" && state.S("phase") != "preparing") {
             CodexRpc owner; lock (gate) sessionRpcs.TryGetValue(state.S("session_id"), out owner);
             if (owner?.Running != true) tracked = false;
             // This owner already delivers ordered lifecycle notifications. Querying it
             // again on every status poll can stall status and all client recovery reads.
         }
-        if (!tracked) {
+        if (!tracked || state.S("status") == "acceptance_unknown") {
             var status = "";
             try {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(5));
-                var thread = (await ReadThreadTurnsPaged(state.S("session_id"), timeout.Token))["thread"];
+                var thread = (await ReadThreadTurnsPaged(state.S("session_id"), timeout.Token, targetTurn: state.S("turn_id")))["thread"];
                 status = thread.A("turns").FirstOrDefault(turn => turn.S("id") == state.S("turn_id")).S("status");
             } catch (CodexError) { }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
             lock (gate) {
-                if (CodexRunRecovery.Recover(runs[id]!.AsObject(), false, status)) {
+                if (CodexRunRecovery.Recover(runs[id]!.AsObject(), tracked, status)) {
                     if (active.GetValueOrDefault(state.S("session_id")) == id) active.Remove(state.S("session_id"));
-                    loaded.Remove(state.S("session_id")); Persist();
+                    if (!active.ContainsKey(state.S("session_id"))) loaded.Remove(state.S("session_id"));
+                    Persist();
                 }
                 state = runs[id]!.DeepClone().AsObject();
             }
@@ -2109,9 +2112,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             var path = context.Request.Path.Value!.Trim('/');
             if (path == "maintenance/shutdown" && HttpMethods.IsPost(context.Request.Method)) {
                 if (!maintenance.TryBeginShutdown(() => {
-                    lock (gate) return active.Count > 0 || handoff.HasPending || runs.Any(pair => pair.Value.S("status") is "started" or "submitting" or "queued" or "running" or "acceptance_unknown");
+                    lock (gate) return active.Count > 0 || handoff.HasPending || runs.Any(pair => RemoteTool.Updates.UpdateContract.RunBlocksMaintenance(pair.Value));
                 })) throw new CodexError("Codex 有运行中、排队或待确认任务，请等待空闲", 409, "bridge_busy", "rejected");
-                context.Response.OnCompleted(() => { context.RequestServices.GetRequiredService<IHostApplicationLifetime>().StopApplication(); return Task.CompletedTask; });
+                // Resolve before request completion; the request scope is unavailable inside OnCompleted.
+                var lifetime = context.RequestServices.GetRequiredService<IHostApplicationLifetime>();
+                context.Response.OnCompleted(() => { lifetime.StopApplication(); return Task.CompletedTask; });
                 await context.Response.WriteAsJsonAsync(new { accepted = true }); return;
             }
             if (path != "health") {

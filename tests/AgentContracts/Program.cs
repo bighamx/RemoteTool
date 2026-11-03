@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using RemoteTool.WebApi.Services.Codex;
 
+if (args.Length == 1 && args[0] == "--run-recovery") { CodexRunRecoveryChecks.Run(); return; }
+
 if (args.Length == 1 && args[0] == "--attachment-input-only") {
     CodexAttachmentInputChecks.Run();
     return;
@@ -43,17 +45,7 @@ await CodexHandoffQueueChecks.Run();
     } finally { if (Directory.Exists(pinTest)) Directory.Delete(pinTest, true); }
 }
 
-{
-    var orphan = new JsonObject { ["status"] = "started", ["approval"] = new JsonObject() };
-    if (!CodexRunRecovery.Recover(orphan, false) || orphan.S("status") != "acceptance_unknown" || orphan.ContainsKey("approval"))
-        throw new Exception("An old journal entry must not prove a running task or retain an approval");
-    var live = new JsonObject { ["status"] = "started" };
-    if (CodexRunRecovery.Recover(live, true) || live.S("status") != "started") throw new Exception("Live ownership must remain active");
-    var finished = new JsonObject { ["status"] = "started" };
-    if (!CodexRunRecovery.Recover(finished, false, "interrupted") || finished.S("status") != "interrupted") throw new Exception("Actual history confirms terminal status");
-    if (new CodexError("Rejected", 409).Delivery != "rejected" || new CodexError("No acknowledgement", 504).Delivery != "unknown")
-        throw new Exception("A timeout cannot prove a message was rejected");
-}
+CodexRunRecoveryChecks.Run();
 
 if (args.Length == 3 && args[0] == "--workspace-probe") {
     var config = CodexJson.Read(args[1]); var saved = CodexJson.Read(args[2]);

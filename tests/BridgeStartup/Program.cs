@@ -2,6 +2,10 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
 
+if (args.FirstOrDefault() == "app-server" && Environment.GetEnvironmentVariable("REMOTETOOL_NATIVE_RECOVERY_FIXTURE") == "1") {
+    await CodexNativeRecoveryChecks.FakeCli(); return;
+}
+
 var dll = Path.GetFullPath(args[0]);
 AssemblyLoadContext.Default.Resolving += (_, name) => {
     var path = Path.Combine(Path.GetDirectoryName(dll)!, name.Name + ".dll");
@@ -21,6 +25,8 @@ try {
 } finally { File.Delete(file); }
 await CodexDesktopRecoveryChecks.Run(assembly);
 await CodexRunReconciliationChecks.Run(assembly);
+await CodexNativeRecoveryChecks.Run(assembly);
+await CodexShutdownChecks.Run(assembly);
 if (args.Length > 1 && args[1] == "sid") {
     var launcher = assembly.GetType("RemoteTool.WebApi.Services.RemoteControl.InteractiveProcessLauncher", true)!;
     var sid = (string)launcher.GetMethod("GetInteractiveUserSid")!.Invoke(null, null)!;

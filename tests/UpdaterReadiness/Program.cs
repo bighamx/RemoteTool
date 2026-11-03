@@ -12,7 +12,7 @@ Directory.CreateDirectory(root);
 var checks = 0;
 void Assert(bool value, string message) { if (!value) throw new Exception(message); checks++; }
 try {
-    foreach (var scenario in new[] { "old-running", "old-unknown-enqueued", "old-unknown-created", "unknown-no-date", "http-404", "http-500", "completed", "cancelled", "inflight", "force" }) {
+    foreach (var scenario in new[] { "old-running", "old-unknown-enqueued", "old-unknown-created", "unknown-no-date", "http-404", "http-500", "completed", "cancelled", "inflight", "force", "reviewed-history", "review-wrong-turn", "reviewed-running" }) {
         RemoteToolPaths.ProgramData = Path.Combine(root, scenario);
         var updates = Path.Combine(RemoteToolPaths.ProgramData, "updates"); Directory.CreateDirectory(updates);
         var job = new UpdateJob(Guid.NewGuid().ToString("N"), "waiting", "", 0, "test", SourceBuild: true, Force: scenario == "force");
@@ -21,14 +21,16 @@ try {
         var registered = JsonNode.Parse(File.ReadAllText(RemoteToolPaths.RunRegistry))!;
         registered["codex:session"]!["updated_at"] = 1L;
         File.WriteAllText(RemoteToolPaths.RunRegistry, registered.ToJsonString());
-        var status = scenario == "old-running" ? "started" : scenario == "completed" || scenario == "inflight" ? "completed" : scenario == "cancelled" ? "cancelled" : "acceptance_unknown";
-        var native = new JsonObject { ["status"] = status, ["session_id"] = "session" };
+        var status = scenario is "old-running" or "reviewed-running" ? "started" : scenario == "completed" || scenario == "inflight" ? "completed" : scenario == "cancelled" ? "cancelled" : "acceptance_unknown";
+        var native = new JsonObject { ["status"] = status, ["session_id"] = "session", ["run_id"] = "run", ["turn_id"] = "turn" };
+        if (scenario is "reviewed-history" or "review-wrong-turn" or "reviewed-running") native["maintenance_review"] = new JsonObject {
+            ["kind"]="historical_tracking", ["reviewed_at"]=1L, ["run_id"]="run", ["session_id"]="session", ["turn_id"]=scenario=="review-wrong-turn"?"other":"turn" };
         if (scenario != "unknown-no-date") native[scenario == "old-unknown-created" ? "created_at" : "enqueued_at"] = 1L;
         Directory.CreateDirectory(RemoteToolPaths.CodexState);
         File.WriteAllText(Path.Combine(RemoteToolPaths.CodexState, "runs.json"), new JsonObject { ["run"] = native }.ToJsonString());
         var nativeBefore = File.ReadAllBytes(Path.Combine(RemoteToolPaths.CodexState, "runs.json"));
         HttpResponseMessage Reply() => new(scenario == "http-404" ? HttpStatusCode.NotFound : scenario == "http-500" ? HttpStatusCode.InternalServerError : HttpStatusCode.OK) {
-            Content = new StringContent(new JsonObject { ["status"] = status }.ToJsonString())
+            Content = new StringContent(native.ToJsonString())
         };
         var bridge = new CodexBridge(Reply);
         using var service = new ServerUpdateService(new Clients(), new ConfigurationBuilder().Build(), new TestEnvironment(root),
@@ -36,11 +38,13 @@ try {
         if (scenario == "inflight") Assert(service.Enter(), "Initial admission failed");
         var result = JsonSerializer.SerializeToNode(await service.Readiness(job.Id, default))!;
         var terminal = scenario is "completed" or "cancelled";
-        Assert(result["ready"]!.GetValue<bool>() == (terminal || job.Force), "Wrong readiness: " + scenario + " " + result);
+        var ready = terminal || job.Force || scenario == "reviewed-history";
+        Assert(result["ready"]!.GetValue<bool>() == ready, "Wrong readiness: " + scenario + " " + result);
         Assert(bridge.Probes == (job.Force ? 0 : 1), "Duplicate registry/native probes: " + scenario);
         Assert(File.ReadAllBytes(Path.Combine(RemoteToolPaths.CodexState, "runs.json")).SequenceEqual(nativeBefore), "Readiness rewrote native receipt");
         Assert((registry.Query("codex", "session") == null) == (terminal || scenario == "inflight"), "Unsafe registry cleanup: " + scenario);
-        Assert(service.Enter() == !(terminal || job.Force), "Admission barrier was not held/released correctly: " + scenario);
+        Assert(service.Enter() == !ready, "Admission barrier was not held/released correctly: " + scenario);
+        Assert(UpdateContract.RunBlocksMaintenance(native) == (!terminal && scenario != "inflight" && scenario != "reviewed-history"), "Bridge maintenance classification: " + scenario);
         if (scenario.StartsWith("http-")) Assert(result["blockers"]!.ToJsonString().Contains(scenario[5..]), "Probe error missing from blockers");
         if (scenario == "force") {
             UpdateContract.WriteJob(updates, job with { Phase = "completed", Force = false });
@@ -51,6 +55,19 @@ try {
             Assert(rejected, "Old updater must reject force before scheduling a job");
             Assert(!UpdateContract.Read<UpdateJob>(Path.Combine(updates, "job.json")).Force, "Rejected force request changed the accepted job");
         }
+    }
+    foreach (var scenario in new[] { "idle", "stale", "active", "generic-404", "server-error" }) {
+        RemoteToolPaths.ProgramData=Path.Combine(root,"hermes-"+scenario);
+        var updates=Path.Combine(RemoteToolPaths.ProgramData,"updates");Directory.CreateDirectory(updates);
+        var job=new UpdateJob(Guid.NewGuid().ToString("N"),"waiting","",0,"test",SourceBuild:true);UpdateContract.WriteJob(updates,job);
+        var registry=new RunRegistry();registry.Register("hermes","session","expired-run");
+        var profiles=new HermesProfiles();Directory.CreateDirectory(profiles.Root);
+        var management=new HermesManagement(()=>JsonSerializer.SerializeToElement(new {running=true,fresh=scenario!="stale",active=scenario=="active"?1:0}));
+        HttpResponseMessage Reply()=>new(scenario=="server-error"?HttpStatusCode.InternalServerError:HttpStatusCode.NotFound){Content=new StringContent(scenario=="generic-404"?"{}":"{\"error\":{\"code\":\"run_not_found\"}}")};
+        using var service=new ServerUpdateService(new Clients(),new ConfigurationBuilder().Build(),new TestEnvironment(root),management,profiles,new HermesBridge(Reply),new CodexBridge(Reply),registry,new UpdaterBootstrap());
+        var result=JsonSerializer.SerializeToNode(await service.Readiness(job.Id,default))!;
+        Assert(result["ready"]!.GetValue<bool>()==(scenario=="idle"),"Hermes readiness: "+scenario);
+        Assert((registry.Query("hermes","session")==null)==(scenario=="idle"),"Hermes hint cleanup needs fresh idle plus native not-found: "+scenario);
     }
     Console.WriteLine($"Updater readiness: {checks} real-service checks passed");
 } finally { Directory.Delete(root, true); }
