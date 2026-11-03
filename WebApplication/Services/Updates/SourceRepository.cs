@@ -38,7 +38,11 @@ public sealed class SourceRepository(string project, Func<string[],Task<string>>
         if(!owned)throw new IOException("当前源码的 origin 不是 "+UpdateContract.Repository+"，请先核对仓库");
         var branch=await Git("branch","--show-current");
         if(string.IsNullOrWhiteSpace(branch))throw new IOException("源码处于分离 HEAD 状态，请先切换到要更新的分支");
-        return new(branch,await Git("rev-parse","HEAD"),(await Git("status","--porcelain")).Length>0);
+        return new(branch,await Git("rev-parse","HEAD"),(await Git("status","--porcelain","--untracked-files=no")).Length>0);
+    }
+    private async Task<bool> IsAncestor(string ancestor, string descendant) {
+        try { await Git("merge-base","--is-ancestor",ancestor,descendant); return true; }
+        catch { return false; }
     }
     public async Task<JsonObject> Check(string runningVersion) {
         var local=await Read();
@@ -47,12 +51,23 @@ public sealed class SourceRepository(string project, Func<string[],Task<string>>
         var current=await Read();
         if(current.Branch!=local.Branch)throw new IOException("检查期间分支已变化，请重新检查");
         local=current;
-        var state=local.Dirty?"source_changed":local.Revision!=remote?"source_out_of_sync":
-            runningVersion.Length<7 || runningVersion.EndsWith("-dirty",StringComparison.Ordinal) || !local.Revision.StartsWith(runningVersion,StringComparison.OrdinalIgnoreCase)?"rebuild_required":"up_to_date";
+        // 本地比远端新（有未推送提交）时不该再提示“可更新”：拉取改变不了任何东西
+        var runningMatches = runningVersion.Length>=7 && !runningVersion.EndsWith("-dirty",StringComparison.Ordinal) &&
+            local.Revision.StartsWith(runningVersion,StringComparison.OrdinalIgnoreCase);
+        var relation = local.Revision==remote ? "same"
+            : await IsAncestor(remote,local.Revision) ? "ahead"
+            : await IsAncestor(local.Revision,remote) ? "behind" : "diverged";
+        var state=local.Dirty?"source_changed":relation switch {
+            "diverged"=>"source_diverged",
+            "behind"=>"source_out_of_sync",
+            "ahead" or "same"=>runningMatches?"up_to_date":"rebuild_required",
+            _=>"source_out_of_sync"
+        };
         var message=state switch {
             "up_to_date"=>"已是最新版本",
             "source_changed"=>"本地源码有未提交改动，可编译当前源码",
-            "source_out_of_sync"=>"本地源码与远端版本不同，可拉取并更新",
+            "source_out_of_sync"=>"远端有新的提交，可拉取并更新",
+            "source_diverged"=>"本地与远端已分叉，需先手动合并再更新",
             _=>"源码已更新，需编译并重启"
         };
         return new() { ["kind"]="source",["state"]=state,["message"]=message,["checkedAt"]=DateTimeOffset.UtcNow,
