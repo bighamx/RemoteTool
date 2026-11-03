@@ -11,7 +11,7 @@
     <PreserveCompilationContext>true</PreserveCompilationContext>
     <!-- 发布时只保留英文、中文卫星程序集，去掉其他语言文件夹以减小体积 -->
     <SatelliteResourceLanguages>en;zh</SatelliteResourceLanguages>
-    <Version>1.2.1</Version>
+    <Version>1.2.3</Version>
     <!-- UTC build timestamp, with minute precision shared by the API and Web UI. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>

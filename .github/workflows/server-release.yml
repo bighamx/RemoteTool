@@ -35,7 +35,7 @@ jobs:
           dotnet publish WebApplication/WebApplication.csproj -c Release -r win-x64 --self-contained false -p:UseAppHost=false -o artifacts/server -p:ServerReleaseSequence=$env:GITHUB_RUN_NUMBER -p:InformationalVersion="$version+$env:GITHUB_SHA"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           foreach ($rid in @('linux-x64','linux-arm64')) {
-            dotnet publish WebApplication/WebApplication.csproj -c Release -r $rid --self-contained false -p:UseAppHost=false -o "artifacts/$rid" -p:ServerReleaseSequence=$env:GITHUB_RUN_NUMBER
+            dotnet publish WebApplication/WebApplication.csproj -c Release -r $rid --self-contained false -p:UseAppHost=false -o "artifacts/$rid" -p:ServerReleaseSequence=$env:GITHUB_RUN_NUMBER -p:Version=$version -p:InformationalVersion="$version+$env:GITHUB_SHA"
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
           Copy-Item WebApplication/Tools/Install-ServerUpdater.ps1 artifacts/
