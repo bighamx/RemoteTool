@@ -9,8 +9,17 @@ public static class ServerBuild
     public const int ProtocolVersion = 1;
     public static string DisplayVersion => $"协议 v{ProtocolVersion} · 版本 {Version}";
 
-    public static string Version { get; } = ShortVersion(typeof(ServerBuild).Assembly
-        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown");
+    public static string Version { get; } = Describe(typeof(ServerBuild).Assembly
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown", ReleaseSequence);
+
+    /// <summary>正式发行包（带 ReleaseSequence 编译）显示语义版本号，开发构建显示提交短 hash。</summary>
+    internal static string Describe(string value, long sequence) {
+        var semantic = value.Split('+')[0];
+        return sequence > 0 && semantic.Count(character => character == '.') >= 1 ? semantic : ShortVersion(value);
+    }
+
+    public static long ReleaseSequence => long.TryParse(typeof(ServerBuild).Assembly
+        .GetCustomAttributes<AssemblyMetadataAttribute>().FirstOrDefault(a => a.Key == "ReleaseSequence")?.Value, out var value) ? value : 0;
 
     internal static string ShortVersion(string value) {
         var revision = value.Split('+').Last();
