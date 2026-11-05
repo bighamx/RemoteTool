@@ -23,7 +23,8 @@ def run(*args):
 def plan(channel):
     commit = run('git', 'rev-parse', 'HEAD')
     count = int(run('git', 'rev-list', '--first-parent', '--count', 'HEAD'))
-    code = 1000 + count * 2 + (channel == 'stable')
+    versioning = json.loads((ROOT / 'app/versioning.json').read_text(encoding='utf-8'))
+    code = versioning['versionCodeBase'] + count * 2 + (channel == 'stable')
     assert 148 < code < 2_100_000_000
     return {'commit': commit, 'channel': channel, 'versionCode': code}
 

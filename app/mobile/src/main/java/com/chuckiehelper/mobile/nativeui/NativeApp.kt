@@ -2,10 +2,8 @@
 
 package com.chuckiehelper.mobile.nativeui
 
-import android.app.Activity
 import android.content.ContextWrapper
 import android.content.SharedPreferences
-import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
@@ -31,6 +29,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import com.chuckiehelper.mobile.telemetry.USAGE_STATS_KEY
+
+// A tab selection is content state, not a new full-screen navigation scene.
+private data class NativeScene(val overlay: String?, val detail: String?, val devices: Boolean)
 
 @Composable
 fun NativeApp(model: NativeModel) {
@@ -45,9 +47,13 @@ fun NativeApp(model: NativeModel) {
     val appearanceContext = LocalContext.current
     val appearancePrefs = remember(appearanceContext) { appearanceContext.getSharedPreferences("MainActivity", 0) }
     var appearance by remember(appearancePrefs) { mutableStateOf(AppAppearance.from(appearancePrefs.getString(AppAppearance.KEY, null))) }
+    var predictiveBack by remember(appearancePrefs) { mutableStateOf(appearancePrefs.getBoolean(PREDICTIVE_BACK_KEY, false)) }
+    var usageStats by remember(appearancePrefs) { mutableStateOf(appearancePrefs.getBoolean(USAGE_STATS_KEY, true)) }
     DisposableEffect(appearancePrefs) {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
             if (key == null || key == AppAppearance.KEY) appearance = AppAppearance.from(prefs.getString(AppAppearance.KEY, null))
+            if (key == null || key == PREDICTIVE_BACK_KEY) predictiveBack = prefs.getBoolean(PREDICTIVE_BACK_KEY, false)
+            if (key == null || key == USAGE_STATS_KEY) usageStats = prefs.getBoolean(USAGE_STATS_KEY, true)
         }
         appearancePrefs.registerOnSharedPreferenceChangeListener(listener)
         onDispose { appearancePrefs.unregisterOnSharedPreferenceChangeListener(listener) }
@@ -116,12 +122,14 @@ fun NativeApp(model: NativeModel) {
         session?.let { ServerUpdateNotice(it.api, it.device.id, serverUpdatesOpen,
             onClosed = { serverUpdatesOpen = false }, onSupported = { serverUpdatesSupported = it }) }
         val context = LocalContext.current
-        val activity = remember(context) {
-            generateSequence(context) { (it as? ContextWrapper)?.baseContext }
-                .filterIsInstance<Activity>().firstOrNull()
-        }
         val exitToast = remember(context) { Toast.makeText(context, "再次返回退出 App", Toast.LENGTH_SHORT) }
-        var exitDeadline by remember { mutableLongStateOf(0L) }
+        var exitArmed by remember { mutableStateOf(false) }
+        LaunchedEffect(exitArmed) {
+            if (exitArmed) {
+                delay(2_000L)
+                exitArmed = false
+            }
+        }
         DisposableEffect(exitToast) { onDispose { exitToast.cancel() } }
         val pages = rememberSaveableStateHolder()
         var route by rememberSaveable { mutableStateOf(edition.initialRoute) }
@@ -133,19 +141,61 @@ fun NativeApp(model: NativeModel) {
             edition.shareRoute(session?.device?.id)?.let { detail = null; route = it }
         }
         val scope = rememberCoroutineScope()
-        if (phoneTools) {
-            PhoneToolsScreen(session?.api) { phoneTools = false }
-            return@MaterialTheme
+        val currentScene = NativeScene(
+            when { phoneTools -> "phone"; diagnostics -> "diagnostics"; storage -> "storage"; settings -> "settings"; else -> null },
+            detail, model.browsingDevices,
+        )
+        val previousScene = when {
+            currentScene.overlay != null -> currentScene.copy(overlay =
+                if (currentScene.overlay in listOf("diagnostics", "storage") && settings) "settings" else null)
+            detail != null -> currentScene.copy(detail = null)
+            model.browsingDevices && model.session != null -> currentScene.copy(devices = false)
+            else -> null
         }
-        if (diagnostics) {
+        val keyboardVisible = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
+        LaunchedEffect(model.message) {
+            model.message?.let {
+                snackbar.showSnackbar(it)
+                model.message = null
+            }
+        }
+        LaunchedEffect(model.session) { detail = null }
+        LaunchedEffect(route, detail, model.browsingDevices, model.loginNeeded, model.session) { exitArmed = false }
+        // After the first root back, release the callback so Android can preview
+        // and complete the second gesture itself instead of an explicit finish().
+        BackHandler(enabled = currentScene.overlay == null && model.session != null &&
+            (model.browsingDevices || detail != null || model.loginNeeded || !exitArmed)) {
+            if (model.browsingDevices) model.returnToDevice()
+            else if (detail != null) detail = null
+            else if (model.loginNeeded) model.showDevices()
+            else {
+                exitArmed = true
+                exitToast.show()
+            }
+        }
+        PredictiveBackScene(currentScene, previousScene, enabled = predictiveBack, onBack = {
+            when (currentScene.overlay) {
+                "phone" -> phoneTools = false
+                "diagnostics" -> diagnostics = false
+                "storage" -> storage = false
+                "settings" -> settings = false
+                else -> if (model.browsingDevices) model.returnToDevice() else detail = null
+            }
+        }) { scene ->
+        val renderedSession = model.session.takeUnless { scene.devices }
+        if (scene.overlay == "phone") {
+            PhoneToolsScreen(renderedSession?.api) { phoneTools = false }
+            return@PredictiveBackScene
+        }
+        if (scene.overlay == "diagnostics") {
             CrashLogsScreen { diagnostics = false }
-            return@MaterialTheme
+            return@PredictiveBackScene
         }
-        if (storage) {
-            edition.StorageHost(session?.api, session?.device?.id) { storage = false }
-            return@MaterialTheme
+        if (scene.overlay == "storage") {
+            edition.StorageHost(renderedSession?.api, renderedSession?.device?.id) { storage = false }
+            return@PredictiveBackScene
         }
-        if (settings) {
+        if (scene.overlay == "settings") {
             AppSettingsScreen(
                 updateSubtitle = edition.updateSubtitle,
                 onUpdate = { edition.openUpdates() },
@@ -159,51 +209,35 @@ fun NativeApp(model: NativeModel) {
                 },
                 showUpdates = edition.showUpdates,
                 onStorage = if (edition.supportsStorage) ({ storage = true }) else null,
+                predictiveBack = predictiveBack,
+                onPredictiveBackChange = {
+                    predictiveBack = it
+                    appearancePrefs.edit().putBoolean(PREDICTIVE_BACK_KEY, it).apply()
+                },
+                usageStats = usageStats,
+                onUsageStatsChange = {
+                    usageStats = it
+                    appearancePrefs.edit().putBoolean(USAGE_STATS_KEY, it).apply()
+                },
             )
-            edition.UpdateHost()
-            if (startup) StartupDialog { startup = false }
-            return@MaterialTheme
-        }
-        val keyboardVisible = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
-        LaunchedEffect(model.message) {
-            model.message?.let {
-                snackbar.showSnackbar(it)
-                model.message = null
-            }
-        }
-        LaunchedEffect(model.session) { detail = null }
-        LaunchedEffect(route, detail, model.browsingDevices, model.loginNeeded) { exitDeadline = 0L }
-        BackHandler(enabled = model.session != null) {
-            if (model.browsingDevices) model.returnToDevice()
-            else if (detail != null) detail = null
-            else if (model.loginNeeded) model.showDevices()
-            else {
-                val now = SystemClock.elapsedRealtime()
-                if (now < exitDeadline) {
-                    exitToast.cancel()
-                    activity?.finish()
-                } else {
-                    exitDeadline = now + 2_000L
-                    exitToast.show()
-                }
-            }
+            return@PredictiveBackScene
         }
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },
             topBar = {
-                if (choosingShare || session == null || model.loginNeeded || !edition.ownsToolbar(detail ?: route)) TopAppBar(
+                if (choosingShare || renderedSession == null || model.loginNeeded || !edition.ownsToolbar(scene.detail ?: route)) TopAppBar(
                     title = {
                         Column {
                             Text(
-                                if (session == null) "我的设备" else edition.pageTitle(detail ?: route),
+                                if (renderedSession == null) "我的设备" else edition.pageTitle(scene.detail ?: route),
                                 style = MaterialTheme.typography.titleLarge,
                             )
-                            if (session != null)
+                            if (renderedSession != null)
                                 Text(
-                                    session.device.name +
+                                    renderedSession.device.name +
                                         " · " +
-                                        session.channels
-                                            .firstOrNull { it.url == session.api.base }
+                                        renderedSession.channels
+                                            .firstOrNull { it.url == renderedSession.api.base }
                                             ?.ms +
                                         " ms",
                                     style = MaterialTheme.typography.labelMedium,
@@ -212,11 +246,11 @@ fun NativeApp(model: NativeModel) {
                         }
                     },
                     navigationIcon = {
-                        if (detail != null || (model.browsingDevices && model.session != null))
+                        if (scene.detail != null || (scene.devices && model.session != null))
                             IconButton(
                                 onClick = {
-                                    if (model.browsingDevices) model.returnToDevice()
-                                    else if (detail in listOf("Hermes", "Codex")) backDispatcher?.onBackPressed()
+                                    if (scene.devices) model.returnToDevice()
+                                    else if (scene.detail in listOf("Hermes", "Codex")) backDispatcher?.onBackPressed()
                                     else detail = null
                                 }
                             ) {
@@ -224,17 +258,17 @@ fun NativeApp(model: NativeModel) {
                             }
                     },
                     actions = {
-                        if (session != null && serverUpdatesSupported) IconButton(onClick = { serverUpdatesOpen = true }) {
+                        if (renderedSession != null && serverUpdatesSupported) IconButton(onClick = { serverUpdatesOpen = true }) {
                             Icon(Icons.Outlined.SystemUpdateAlt, "服务端更新")
                         }
-                        if (session == null) IconButton(onClick = { settings = true }) {
+                        if (renderedSession == null) IconButton(onClick = { settings = true }) {
                             Icon(Icons.Outlined.Settings, "设置")
                         }
-                        if (session != null)
-                            IconButton(onClick = { model.openChannels(session.device) }) {
+                        if (renderedSession != null)
+                            IconButton(onClick = { model.openChannels(renderedSession.device) }) {
                                 Icon(Icons.Outlined.Route, "连接通道")
                             }
-                        if (session != null)
+                        if (renderedSession != null)
                             IconButton(onClick = { model.showDevices() }) {
                                 Icon(Icons.Outlined.Devices, "切换设备")
                             }
@@ -242,8 +276,8 @@ fun NativeApp(model: NativeModel) {
                 )
             },
             bottomBar = {
-                if (!choosingShare && session != null && !model.loginNeeded && detail == null && !keyboardVisible)
-                    edition.Navigation(route, session.device.name) { route = it }
+                if (!choosingShare && renderedSession != null && !model.loginNeeded && scene.detail == null && !keyboardVisible)
+                    edition.Navigation(route, renderedSession.device.name) { route = it }
             },
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
@@ -257,25 +291,27 @@ fun NativeApp(model: NativeModel) {
                             Spacer(Modifier.height(16.dp))
                             Text("正在验证设备并检测通道…")
                         }
-                    session == null -> DeviceScreen(model, cloud) { phoneTools = true }
-                    model.loginNeeded -> key(session.device.id) {
-                        LoginScreen(session.api, model.savedUsername(session.device.id),
-                            onLogin = { username, password -> model.login(session, username, password) },
+                    renderedSession == null -> DeviceScreen(model, cloud) { phoneTools = true }
+                    model.loginNeeded -> key(renderedSession.device.id) {
+                        LoginScreen(renderedSession.api, model.savedUsername(renderedSession.device.id),
+                            onLogin = { username, password -> model.login(renderedSession, username, password) },
                             onError = { model.message = it })
                     }
-                    choosingShare -> edition.ShareChooser(session.api, session.device.id, session.device.name,
+                    choosingShare -> edition.ShareChooser(renderedSession.api, renderedSession.device.id, renderedSession.device.name,
                         changeDevice = { model.showDevices() })
                     else ->
-                        key(session.api.base, session.device.id, model.configurationVersion) {
-                            val api = session.api
+                        key(renderedSession.api.base, renderedSession.device.id, model.configurationVersion) {
+                            val api = renderedSession.api
                             val error: (String) -> Unit = {
                                 if (it.contains("登录已过期")) model.loginNeeded = true
                                 model.message = it
                             }
-                            pages.SaveableStateProvider("${session.device.id}:${detail ?: route}") {
+                            val page = scene.detail ?: route
+                            key(page) {
+                            pages.SaveableStateProvider("${renderedSession.device.id}:$page") {
                                 when {
-                                    (detail ?: route) == "端口转发" -> TunnelScreen(api, session.device.id, session.device.name)
-                                    edition.Page(detail ?: route, api, session.device.id, error,
+                                    page == "端口转发" -> TunnelScreen(api, renderedSession.device.id, renderedSession.device.name)
+                                    edition.Page(page, api, renderedSession.device.id, error,
                                         onDetail = { detail = it }, onClose = { detail = null }) -> Unit
                                     else ->
                                         Column(
@@ -290,9 +326,11 @@ fun NativeApp(model: NativeModel) {
                                         }
                                 }
                             }
+                            }
                         }
                 }
             }
+        }
         }
         model.channelDevice?.let { ChannelDialog(model, it) }
         edition.UpdateHost()

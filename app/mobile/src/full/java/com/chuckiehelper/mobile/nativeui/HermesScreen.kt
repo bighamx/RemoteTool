@@ -194,7 +194,6 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             if (list) while (true) { awaitUiRead(model.pollSessionStates()); kotlinx.coroutines.delay(agentSessionPollDelay(model.hasKnownActivity)) }
         }
     }
-    androidx.activity.compose.BackHandler(enabled = !list) { list = true }
     var queueDialog by remember { mutableStateOf(false) }
     var filesDialog by remember { mutableStateOf(false) }
     var attachMenu by remember { mutableStateOf(false) }
@@ -317,6 +316,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
         if(titleModelDialog)CodexTitleModelDialog(model){titleModelDialog=false}
         return
     }
+    PredictiveBackScene(target = list, previous = true.takeUnless { list }, onBack = { list = true }) { displayList ->
     Column(Modifier.fillMaxSize().imePadding()
         .onGloballyPositioned { composerCoordinates = it }
         .pointerInput(commands, attachMenu) {
@@ -341,17 +341,17 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f).clickable(enabled = !list && model.selectedId != null) {
+            Column(Modifier.weight(1f).clickable(enabled = !displayList && model.selectedId != null) {
                 renameChat = obj("id" to model.selectedId, "title" to model.title)
             }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        if (list) "$agentName 会话" else model.title,
+                        if (displayList) "$agentName 会话" else model.title,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f, fill = false),
                         maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
-                    if (agent == "hermes" && list) Box {
+                    if (agent == "hermes" && displayList) Box {
                         TextButton(onClick = { profileMenu = true; onRefreshProfiles() }) {
                             Text(profile, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp))
                             Icon(Icons.Outlined.ArrowDropDown, contentDescription = "切换 Profile")
@@ -370,10 +370,10 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                         }
                     }
                     // 本地已有数据、正在同步最新历史：标题后的小型加载指示
-                    if (model.recovering || !list && model.historyLoading && model.messages.isNotEmpty())
+                    if (model.recovering || !displayList && model.historyLoading && model.messages.isNotEmpty())
                         CircularProgressIndicator(Modifier.padding(start = 8.dp).size(14.dp), strokeWidth = 2.dp)
                 }
-                if (list) Text(
+                if (displayList) Text(
                     model.runtime,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -382,7 +382,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             }
             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-            if (list && agent == "codex") IconButton(
+            if (displayList && agent == "codex") IconButton(
                 onClick = { model.toggleGroupByProject() }, modifier = Modifier.size(40.dp)
             ) {
                 Icon(
@@ -392,7 +392,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             }
             IconButton(
                 onClick = {
-                    list = !list
+                    list = !displayList
                     model.refresh()
                 }, modifier = Modifier.size(40.dp)
             ) {
@@ -403,7 +403,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.MoreVert, "$agentName 菜单") }
                 DropdownMenu(menu, { menu = false }) {
                     if (agent == "hermes") {
-                        if (!list) {
+                        if (!displayList) {
                             DropdownMenuItem(text = { Text("会话详情") }, onClick = { menu = false; detailsChat = obj("id" to model.selectedId, "title" to model.title) })
                             DropdownMenuItem(text = { Text("复制会话 ID") }, onClick = {
                                 menu = false
@@ -417,22 +417,22 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                             if (current != null) DropdownMenuItem(text = { Text(if (model.isSessionPinned(current)) "取消置顶" else "置顶会话") }, onClick = { menu = false; model.toggleSessionPin(current) })
                             HorizontalDivider()
                         }
-                        DropdownMenuItem(text = { Text(if (list) "Hermes 管理" else "Hermes 管理 ↗") }, onClick = { menu = false; admin = true })
-                        DropdownMenuItem(text = { Text(if (list) "刷新列表" else "刷新会话") }, onClick = { menu = false; model.reconnect() })
+                        DropdownMenuItem(text = { Text(if (displayList) "Hermes 管理" else "Hermes 管理 ↗") }, onClick = { menu = false; admin = true })
+                        DropdownMenuItem(text = { Text(if (displayList) "刷新列表" else "刷新会话") }, onClick = { menu = false; model.reconnect() })
                     } else {
-                    if (!list && model.canHandoverSession) DropdownMenuItem(
+                    if (!displayList && model.canHandoverSession) DropdownMenuItem(
                         text = { Text("放弃写入权") },
                         onClick = {
                             menu = false
                             handoverSession = obj("id" to model.selectedId, "title" to model.title)
                         },
                     )
-                    if (agent == "codex" && !list && model.selectedId != null) DropdownMenuItem(
+                    if (agent == "codex" && !displayList && model.selectedId != null) DropdownMenuItem(
                         text = { Text("会话权限") }, onClick = { menu = false; permissionsDialog = true })
                     if (agent == "codex") DropdownMenuItem(text = { Text("账户与工作空间") }, onClick = { menu = false; accountsPanel = true; model.fetchAccounts() })
                     DropdownMenuItem(text = { Text("标题生成模型") }, onClick = { menu = false; titleModelDialog = true; model.fetchTitleModel() })
                     (listOf("模型选择" to "/model") +
-                        (if (list) listOf("Provider 管理" to "/providers") else emptyList()) +
+                        (if (displayList) listOf("Provider 管理" to "/providers") else emptyList()) +
                         listOf("刷新与重连" to "/status"))
                         .forEach { (name, value) ->
                             DropdownMenuItem(
@@ -452,13 +452,13 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
         if (agent == "codex") CodexUsage(model, compact = true) { accountsPanel = true; model.fetchAccounts() }
         var setupVisible by remember(agent,model.profile){mutableStateOf(false) }
         AgentSetupCard(api,agent,model.profile,model.capabilities.optInt("state_version")){ setupVisible=it }
-        if (agent == "codex" && !list && accessMode == "full") TextButton(onClick = { permissionsDialog = true }) {
+        if (agent == "codex" && !displayList && accessMode == "full") TextButton(onClick = { permissionsDialog = true }) {
             Text("权限设置：完全访问", style = MaterialTheme.typography.labelSmall)
         }
-        if (!list && model.selectedId != null) AgentContextInfo(model.contextInfo,
+        if (!displayList && model.selectedId != null) AgentContextInfo(model.contextInfo,
             model.runtime + if (model.sessionEffort.isNotBlank()) " · ${effortLabel(model.sessionEffort)}思考" else "",
             onClick = { globalModels = false; models = true; model.fetchModels() })
-        if (!list && model.error == null && model.canTakeover) model.writeAccessMessage?.let { message ->
+        if (!displayList && model.error == null && model.canTakeover) model.writeAccessMessage?.let { message ->
             FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.Center) {
                 Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth())
                 TextButton(onClick = { takeover = true }) { Text("中断并接管") }
@@ -481,15 +481,15 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                 }
             }
         }
-        if (!list) model.controlMessage?.let { Text(it, Modifier.fillMaxWidth().padding(12.dp), style = MaterialTheme.typography.bodySmall) }
-        if (!list && model.runId != null && !model.runStateVerified) {
+        if (!displayList) model.controlMessage?.let { Text(it, Modifier.fillMaxWidth().padding(12.dp), style = MaterialTheme.typography.bodySmall) }
+        if (!displayList && model.runId != null && !model.runStateVerified) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("任务状态尚未确认，计时已暂停", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = { model.reconnect() }) { Text("核对状态") }
             }
         }
         if (model.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (list) {
+        if (displayList) {
             OutlinedTextField(
                 filter,
                 { filter = it },
@@ -1121,6 +1121,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                 }
             }
         }
+    }
     }
     if (queueDialog) MessageQueueDialog(model.messageQueue) { queueDialog = false }
     if (scheduleDialog) ScheduleComposerDialog(model, model.draft) { scheduleDialog = false }

@@ -29,7 +29,7 @@ import org.json.JSONObject
 @Composable
 internal fun StorageScreen(api:NativeApi?, deviceId:String?, onClose:()->Unit) {
     val context=LocalContext.current
-    BackHandler(onBack=onClose)
+    SceneBackHandler(onBack=onClose)
     var server by remember{mutableStateOf(false)}
     var operating by remember{mutableStateOf(false)}
     BackHandler(operating){}

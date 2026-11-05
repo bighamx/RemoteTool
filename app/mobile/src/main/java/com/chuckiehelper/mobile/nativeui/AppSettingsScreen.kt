@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -30,6 +31,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Card
+import androidx.compose.material3.Switch
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -53,11 +57,15 @@ internal fun AppSettingsScreen(
     onAppearanceChange: (AppAppearance) -> Unit,
     showUpdates: Boolean = true,
     onStorage: (() -> Unit)? = null,
+    predictiveBack: Boolean = false,
+    onPredictiveBackChange: (Boolean) -> Unit = {},
+    usageStats: Boolean = true,
+    onUsageStatsChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
     var chooseAppearance by rememberSaveable { mutableStateOf(false) }
-    BackHandler(onBack = onBack)
+    SceneBackHandler(onBack = onBack)
     Scaffold(
         topBar = {
             TopAppBar(
@@ -80,6 +88,30 @@ internal fun AppSettingsScreen(
                 ToolRow("项目主页", "GitHub · RemoteTool", Icons.Outlined.OpenInNew) {
                     runCatching { uriHandler.openUri("https://github.com/bighamx/RemoteTool") }
                         .onFailure { Toast.makeText(context, "无法打开项目主页", Toast.LENGTH_SHORT).show() }
+                }
+                Card(Modifier.fillMaxWidth()) {
+                    Row(Modifier.fillMaxWidth().toggleable(value = predictiveBack, role = Role.Switch,
+                        onValueChange = onPredictiveBackChange).padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text("预测性返回手势", style = MaterialTheme.typography.titleMedium)
+                            Text("滑动预览上一级页面，撤回手势可取消返回", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = predictiveBack, onCheckedChange = null)
+                    }
+                }
+                Card(Modifier.fillMaxWidth()) {
+                    Row(Modifier.fillMaxWidth().toggleable(value = usageStats, role = Role.Switch,
+                        onValueChange = onUsageStatsChange).padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text("使用统计", style = MaterialTheme.typography.titleMedium)
+                            Text("上报随机安装标识、设备型号、版本及活跃次数，不含会话内容", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = usageStats, onCheckedChange = null)
+                    }
                 }
             }
     }

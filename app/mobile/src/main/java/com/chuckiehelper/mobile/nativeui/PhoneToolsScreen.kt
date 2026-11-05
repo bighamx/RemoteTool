@@ -40,7 +40,7 @@ private fun phoneQuery(value: String) = java.net.URLEncoder.encode(value, "UTF-8
 fun PhoneToolsScreen(api: PhoneWebApi?, close: () -> Unit) {
     var connectionsOpen by rememberSaveable { mutableStateOf(false) }
     if (connectionsOpen) { PhoneConnectionsScreen { connectionsOpen = false }; return }
-    BackHandler(onBack = close)
+    SceneBackHandler(onBack = close)
     val context = LocalContext.current
     val engine = remember { PhoneEngine.get(context) }
     val settings = engine.settings

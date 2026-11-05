@@ -14,6 +14,7 @@ class RemoteToolApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.chuckiehelper.mobile.telemetry.AppUsageTelemetry.install(this)
         if (BuildConfig.PHONE_COMPANION && !getSharedPreferences("phone-tools", MODE_PRIVATE).contains("port")) {
             com.chuckiehelper.mobile.phonecontrol.PhoneSettings(this).port = 18792
         }

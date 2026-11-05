@@ -138,3 +138,9 @@ App 原生绘制性能面板，Web 使用网页组件，两端共享性能 API�
 当前已发行版本使用既有开发签名，更新须保持一致。签名密钥迁移需单独规划，不能直接更换后覆盖安装。
 
 构建优先使用项目私有的 `signing/RemoteTool-release-signing-debug.keystore`，该目录已被 Git 忽略。也可用 `-PremoteToolSigningStore=完整路径` 或 `REMOTE_TOOL_SIGNING_STORE` 指定相同证书的密钥。2026-10-21 已将原 Downloads 中的密钥移至此目录；发布前仍须与已安装 APK 的证书核对。
+# Android 0.3.150 / PhoneControl 0.2.21
+
+- 设置末尾新增“预测性返回手势”（默认关闭）：预览上一级页面，取消手势平稳恢复；底部 Tab 直接切换内容，不播放切换动画。
+- “使用统计”默认开启：仅发送随机安装标识、设备型号、系统/App 版本及香港自然日活跃/打开次数。首次安装和旧版升级首次接入均补报安装；关闭停止发送并清除待上报增量，保留安装标识防止重复计数。
+- 已接入 `https://api.xbyham.com/api/app-telemetry/v1/report`，离线数据持久化并退避重试，服务端明确确认后才清理；协议见 [telemetry-contract.md](telemetry-contract.md)。
+- 两款 App 的版本名和版本码基数统一维护在 `versioning.json`，Gradle 与 GitHub Actions 打包脚本共同读取。基数仅向上调整，本次为正式版覆盖已经分发的 1763 测试包预留空间；后续仍按主线 first-parent 提交数单调递增。

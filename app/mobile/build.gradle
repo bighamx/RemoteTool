@@ -19,8 +19,9 @@ def gitOutput = { List<String> args ->
 }
 def sourceHash = gitOutput(['rev-parse', '--short=12', 'HEAD'])
 def sourceCount = gitOutput(['rev-list', '--first-parent', '--count', 'HEAD'])
+def versioning = new groovy.json.JsonSlurper().parse(rootProject.file('versioning.json'))
 def buildChannel = providers.gradleProperty('buildChannel').orElse('development').get()
-def automaticBuildCode = sourceCount.isInteger() ? 1000 + sourceCount.toInteger() * 2 + (buildChannel == 'stable' ? 1 : 0) : 149
+def automaticBuildCode = sourceCount.isInteger() ? versioning.versionCodeBase.toInteger() + sourceCount.toInteger() * 2 + (buildChannel == 'stable' ? 1 : 0) : 149
 def appBuildCode = providers.gradleProperty('buildVersionCode').map { it.toInteger() }.orElse(automaticBuildCode).get()
 def appVersionName = { String base -> buildChannel == 'stable' ? base : "${base}-dev.${sourceHash ?: 'unknown'}" }
 
@@ -40,7 +41,7 @@ android {
             dimension 'edition'
             applicationId 'com.chuckiehelper.mobile'
             versionCode appBuildCode
-            versionName appVersionName('0.3.149')
+            versionName appVersionName(versioning.fullVersionName)
             buildConfigField 'boolean', 'PHONE_COMPANION', 'false'
             manifestPlaceholders = [appLabel: 'RemoteTool', appIcon: '@mipmap/ic_launcher',
                 siblingPackage: 'com.chuckiehelper.phonecontrol', accessibilityLabel: 'RemoteTool 手机操控', notificationLabel: 'RemoteTool 手机通知',
@@ -51,7 +52,7 @@ android {
             dimension 'edition'
             applicationId 'com.chuckiehelper.phonecontrol'
             versionCode appBuildCode
-            versionName appVersionName('0.2.20')
+            versionName appVersionName(versioning.phoneVersionName)
             buildConfigField 'boolean', 'PHONE_COMPANION', 'true'
             manifestPlaceholders = [appLabel: '手机操控', appIcon: '@drawable/ic_phone_control',
                 siblingPackage: 'com.chuckiehelper.mobile', accessibilityLabel: '手机操控 · 无障碍', notificationLabel: '手机操控 · 通知读取',
@@ -77,7 +78,11 @@ android {
         signingConfigs.debug.keyAlias = providers.environmentVariable('REMOTE_TOOL_SIGNING_KEY_ALIAS').orElse('androiddebugkey').get()
         signingConfigs.debug.keyPassword = providers.environmentVariable('REMOTE_TOOL_SIGNING_KEY_PASSWORD').orElse('android').get()
     }
-    testOptions { unitTests.includeAndroidResources = true }
+    testOptions {
+        unitTests.includeAndroidResources = true
+        // Local/Robolectric tests must never send production usage statistics.
+        unitTests.all { systemProperty 'remotetool.telemetry.disabled', 'true' }
+    }
     // Deliverable naming follows the project name (RemoteTool), not the legacy package.
     applicationVariants.all { variant ->
         variant.outputs.all { output ->

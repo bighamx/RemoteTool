@@ -50,7 +50,8 @@ internal fun CrashLogsScreen(onClose: () -> Unit) {
         catch (failure: Exception) { error = failure.message }
     }
     fun back() { if (selected != null) { selected = null; content = "" } else onClose() }
-    BackHandler { back() }
+    SceneBackHandler(onBack = onClose)
+    BackHandler(enabled = selected != null) { back() }
     Scaffold(
         topBar = {
             TopAppBar(
