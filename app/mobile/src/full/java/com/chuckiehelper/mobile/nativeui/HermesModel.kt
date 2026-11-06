@@ -304,7 +304,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var reasoningStartedAt: Long? = null
     var reasoningEnded by mutableStateOf(false)
         private set
-    private val reasoningVisible get() = agent == "hermes" && reasoningSession == selectedId && (runId == null || runId == reasoningRun)
+    private val reasoningVisible get() = agent == "hermes" && reasoningSession == selectedId && !reasoningEnded && (runId == null || runId == reasoningRun)
     internal val reasoningText get() = if (reasoningVisible) reasoningRows.joinToString("") { it.text } else ""
     internal val reasoningStreamingKey get() = reasoningSegmentId.takeIf { reasoningVisible && !reasoningEnded }
     internal val messagesWithReasoning get() = if (reasoningVisible) projectHermesReasoning(messages, reasoningRows) else messages

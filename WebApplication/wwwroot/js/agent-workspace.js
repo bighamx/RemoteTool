@@ -199,8 +199,11 @@
                 // instead: real merging still happens in pushLiveSegment, which may mutate state.
                 const out=[],acknowledged=new Set();
                 for (const segment of this.liveSegments) {
-                    // A reasoning event is native narration, not assistant reply markup.
-                    if(segment.reasoning){if(this.asText(segment.text).trim())out.push({...segment});continue;}
+                    // A reasoning event is native narration, not assistant reply markup. It is a
+                    // live-only signal: once the turn is over (no active run, or the run ended)
+                    // the thinking stream stops being displayed, like every mainstream agent UI —
+                    // the reply and its tool card are what remain in the transcript.
+                    if(segment.reasoning){if(!this.activeRun||this.reasoningEnded)continue;if(this.asText(segment.text).trim())out.push({...segment});continue;}
                     const text=this.agent==='hermes'?hermesAssistantText(this.asText(segment.text)):this.asText(segment.text);
                     if (!text.trim()) continue;
                     if(this.agent==='hermes'&&segment.messageUid){
