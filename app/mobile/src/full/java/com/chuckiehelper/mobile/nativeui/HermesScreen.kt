@@ -983,14 +983,18 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                         }
                         ComposerMenu(commands, { commands = false }, onBounds = { commandPanelBounds = it }) {
                             DropdownMenuItem(
-                                text = { Text(if (model.showReasoning) "思考过程：开" else "思考过程：关") },
+                                text = { Text("思考过程") },
                                 trailingIcon = {
-                                    if (model.showReasoning) Icon(Icons.Outlined.Check, null, modifier = Modifier.size(18.dp))
+                                    Icon(
+                                        if (model.showReasoning) Icons.Outlined.Check else Icons.Outlined.Close,
+                                        null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = if (model.showReasoning) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
                                 },
-                                onClick = {
-                                    commands = false
-                                    model.toggleReasoning()
-                                },
+                                // 不关面板: 方便连续开关对比
+                                onClick = { model.toggleReasoning() },
                             )
                             (listOf(
                                     "新建会话" to "/new",
