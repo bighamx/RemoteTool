@@ -110,11 +110,9 @@ fun truncateNarration(text: String): String {
 
 /** Alter only known narration spans; final answers, attachment parsing and raw history stay intact. */
 fun displayNarration(text: String, narration: Boolean, spans: List<String> = emptyList()): String {
-    if (narration) return truncateNarration(text)
-    var display = text
-    for (span in spans.filter { it.isNotBlank() }.distinct().sortedByDescending { it.length })
-        display = display.replace(span, truncateNarration(span))
-    return display
+    // 不截断: 过去的 truncateNarration 会保留中文、把连续非中文截到 100 字符再补一个「…」,
+    // 结果英文旁白/思考每张卡都以省略号结尾、看着像模型只说了一半。原文直出。
+    return text
 }
 
 /** Hermes persists interim assistant text together with its tool calls. No code-content guessing. */

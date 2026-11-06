@@ -304,10 +304,18 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var reasoningStartedAt: Long? = null
     var reasoningEnded by mutableStateOf(false)
         private set
+    /** 输入框左侧菜单里的开关：关掉后不再接收/渲染思考流。 */
+    var showReasoning by mutableStateOf(prefs.getBoolean("show_reasoning", true))
+        private set
+    fun toggleReasoning() {
+        showReasoning = !showReasoning
+        prefs.edit().putBoolean("show_reasoning", showReasoning).apply()
+        if (!showReasoning) { reasoningRows = emptyList(); reasoningBuffer.clear(); reasoningSegmentId = null }
+    }
     /** 终止后让行再留一拍做收缩动画，动画结束由定时器清掉。 */
     var reasoningClosing by mutableStateOf(false)
         private set
-    private val reasoningVisible get() = agent == "hermes" && reasoningSession == selectedId && !reasoningEnded && (runId == null || runId == reasoningRun)
+    private val reasoningVisible get() = showReasoning && agent == "hermes" && reasoningSession == selectedId && !reasoningEnded && (runId == null || runId == reasoningRun)
     internal val reasoningText get() = if (reasoningVisible) reasoningRows.joinToString("") { it.text } else ""
     internal val reasoningStreamingKey get() = reasoningSegmentId.takeIf { reasoningVisible && !reasoningEnded }
     internal val messagesWithReasoning get() = if (reasoningVisible || (reasoningClosing && reasoningSession == selectedId)) projectHermesReasoning(messages, reasoningRows) else messages
@@ -352,10 +360,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             return false // Preserve the existing terminal status/history handling.
         }
         if (type in setOf("message.started", "message.delta", "message.snapshot", "message.completed", "message.interim", "tool.started")) {
-            // 一轮内的思考合并成一张卡片: 这里不再切段, 只在轮次结束(finishReasoning)时收尾。
+            // 思考合并成一张卡片: 工具事件不切段; 只有真的旁白/正文插进来时才收尾,
+            // 后续再出现的思考另起一张卡片。
+            if (type != "tool.started") closeReasoningSegment()
             return false
         }
         if (type != "reasoning.delta") return false
+        if (!showReasoning) return true
         if (eventRun.isNotBlank() && eventRun != run || runId != run || runSession != selectedId) return true
         val delta = event.opt("delta") as? String ?: return true
         if (delta.isEmpty()) return true

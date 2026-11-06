@@ -88,7 +88,9 @@
             showMoveDialog: false, moveTarget: null, moveMoving: false, moveSearch: '', moveError: '',
             showCreateDialog: false, createTitle: '', createProjectId: '', createMode: 'existing', createRoot: '', createRoots: [], createProjectName: '', createProjectSearch: '', createBrowser: false, createBrowserPath: '', createBrowserDirs: [], createBrowserLoading: false, createBrowserError: '', createBrowserNew: '', createBrowserMkdir: false, creating: false, createError: '', showEditDialog: false, editText: '', editTarget: null, editFiles: [], editing: false, editError: '', messageMenu: null, sessionMenu: null,
             reasoningRun: null, reasoningEnded: false, reasoningSegmentId: null, reasoningIndex: 0, reasoningStartedAt: 0,
-            liveSegments: [], liveTools: [], streamRun: null, streamSeq: 0, streamConnected: false, streamGone: false, toolTimer: null, externalRunning: false, externalActivity: null, toolsCollapsed: true, apiServer: null, enablingApiServer: false }),
+            liveSegments: [], liveTools: [], streamRun: null, streamSeq: 0, streamConnected: false, streamGone: false, toolTimer: null, externalRunning: false, externalActivity: null, toolsCollapsed: true, apiServer: null, enablingApiServer: false,
+            // 思考过程显示开关: 输入框左侧菜单里切换, 记在 localStorage。
+            showReasoning: localStorage.getItem('remotetool:web:showReasoning') !== '0' }),
         computed: {adminProviderEditing() { return !!(this.adminProvider?.slug || this.adminProvider?.id); },
             adminUpdateText() {
                 const u=this.adminUpdate||{};
@@ -205,6 +207,7 @@
                     // the thinking stream stops being displayed, like every mainstream agent UI —
                     // the reply and its tool card are what remain in the transcript.
                     if(segment.reasoning){
+                        if(!this.showReasoning)continue;
                         // 轮次结束后不再显示；正在收缩的那一份留到动画结束再移除。
                         if((!this.activeRun||this.reasoningEnded)&&!segment.collapsing)continue;
                         if(this.asText(segment.text).trim())out.push({...segment});continue;}
@@ -877,6 +880,11 @@
                 if(reasoningCollapseTimer!==null)clearTimeout(reasoningCollapseTimer);
                 reasoningCollapseTimer=setTimeout(()=>{reasoningCollapseTimer=null;this.liveSegments=this.liveSegments.filter(segment=>!segment.reasoning);},300);
             },
+            toggleReasoning() {
+                this.showReasoning=!this.showReasoning;
+                localStorage.setItem('remotetool:web:showReasoning',this.showReasoning?'1':'0');
+                if(!this.showReasoning)this.liveSegments=this.liveSegments.filter(segment=>!segment.reasoning);
+            },
             ensureEventStream(runId,run={}) {if(this.streamRun===runId)return;const sameReasoningRun=this.agent==='hermes'&&this.reasoningRun===runId;if(this.agent==='hermes'&&!sameReasoningRun)this.resetReasoning(runId);this.stopEventStream();this.streamRun=runId;if(!sameReasoningRun)this.streamSeq=0;this.streamGone=false;const started=Number(run.created_at||run.started_at||0)*1000;this.streamHistoryIds=this.messages.filter(m=>!started||this.messageStamp(m)<started).map(m=>String(m.id));if(!sameReasoningRun)this.liveSegments=this.liveSegments.filter(s=>s.complete).slice(-100);this.liveTools=[];this.watchEventStream(runId,this.epoch);},
             async watchEventStream(runId,epoch) {let failures=0;while(this.streamRun===runId&&this.epoch===epoch&&this.activeRun===runId){const controller=new AbortController();streamAbort=controller;const started=Date.now();try{await RemoteToolSse({url:`${base}/runs/${api.id(runId)}/events`,lastId:this.streamSeq,signal:controller.signal,onConnected:()=>{if(this.streamRun===runId)this.streamConnected=true;},onEvent:event=>{if(this.streamRun===runId&&this.epoch===epoch)this.onRunEvent(event);}});if(Date.now()-started>15000)failures=0;}catch(error){if(controller.signal.aborted)break;if(error.status===404){this.streamGone=true;await this.loadHistory(epoch);break;}}finally{if(streamAbort===controller)streamAbort=null;this.streamConnected=false;}if(this.streamRun!==runId||this.epoch!==epoch||this.activeRun!==runId)break;failures++;await new Promise(resolve=>setTimeout(resolve,Math.min(30000,1500*2**Math.min(failures-1,4))));}},
             onRunEvent(event) {const seq=Number(event.seq||0);const type=event.type||event.event||'';if(seq&&seq<=this.streamSeq)return;if(type==='stream.gap'||(seq&&this.streamSeq&&seq>this.streamSeq+1)){this.loadHistory();this.refreshActiveTools();}if(seq)this.streamSeq=seq;if(type==='stream.gap')return;
@@ -884,13 +892,14 @@
                     const runId=this.activeRun;
                     if(this.agent!=='hermes'||!runId||event.run_id&&event.run_id!==runId||typeof event.delta!=='string'||!event.delta)return;
                     if(this.reasoningRun!==runId)this.resetReasoning(runId);
-                    if(this.reasoningEnded)return;
+                    if(this.reasoningEnded||!this.showReasoning)return;
                     if(!this.reasoningSegmentId){this.reasoningSegmentId=`reasoning-${runId}-${++this.reasoningIndex}`;this.reasoningStartedAt=this.messageStamp(event)||Date.now();}
                     reasoningChunks.push(event.delta);
                     if(reasoningTimer===null)reasoningTimer=setTimeout(()=>this.flushReasoning(),100);
                     return;
                 }
-                // 一轮内的思考合并成一张卡片: 正文/工具事件不再切段, 只有 run 结束才收尾(collapseReasoning)。
+                // 思考合并成一张卡片: 工具事件不切段; 只有真的旁白/正文插进来时才收尾, 后续思考另起一张。
+                if(['message.started','message.delta','message.snapshot','message.completed','message.interim'].includes(type))this.closeReasoningSegment();
                 if(type==='message.started'||type==='message.delta'||type==='message.snapshot'||type==='message.completed'){
                     const last=this.liveSegments.at(-1);
                     const uid=this.agent==='hermes'?messageUid(event):null;

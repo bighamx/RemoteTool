@@ -1047,6 +1047,16 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                         }
                         ComposerMenu(attachMenu, { attachMenu = false }, alignRight = true, onBounds = { attachmentPanelBounds = it }) {
                             DropdownMenuItem(
+                                text = { Text(if (model.showReasoning) "隐藏思考过程" else "显示思考过程") },
+                                onClick = {
+                                    attachMenu = false
+                                    model.toggleReasoning()
+                                },
+                                trailingIcon = {
+                                    if (model.showReasoning) Icon(Icons.Outlined.Check, null, modifier = Modifier.size(18.dp))
+                                },
+                            )
+                            DropdownMenuItem(
                                 text = { Text("查看会话附件") },
                                 onClick = {
                                     attachMenu = false

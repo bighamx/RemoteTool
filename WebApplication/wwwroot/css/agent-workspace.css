@@ -2631,3 +2631,9 @@
 .live-segment.agent-reasoning .agent-message-text{font-size:.9em;opacity:.9}
 .live-segment.agent-reasoning .agent-message-meta strong{font-size:11px;opacity:.75}
 .live-segment.agent-reasoning.is-collapsing{grid-template-rows:0fr;opacity:0;margin-top:0;margin-bottom:0}
+
+/* 输入框左侧的思考显示开关(🧠): 关掉只影响思考卡片, 不影响正文/工具卡片 */
+.agent-reasoning-toggle{display:inline-flex;align-items:center;justify-content:center;width:30px;height:26px;border:1px solid var(--border-color);border-radius:7px;cursor:pointer;opacity:.45;transition:opacity .15s,border-color .15s,background .15s;font-size:14px;line-height:1}
+.agent-reasoning-toggle:hover{opacity:.8}
+.agent-reasoning-toggle.on{opacity:1;border-color:color-mix(in srgb,var(--accent-primary) 45%,var(--border-color));background:color-mix(in srgb,var(--accent-primary) 10%,transparent)}
+.agent-reasoning-toggle input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
