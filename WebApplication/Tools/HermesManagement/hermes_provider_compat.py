@@ -43,15 +43,20 @@ def operate(action,body):
         from hermes_cli.config import load_config
         import json,sqlite3,time
         home=get_hermes_home();state=home/'gateway_state.json'
-        if state.exists():
-            try:busy=int(json.loads(state.read_text(encoding='utf-8-sig')).get('active_agents') or 0)>0
-            except (ValueError,OSError):raise ProviderConfigError('无法确认网关状态，已取消删除，请刷新后重试') from None
-            if busy:raise ProviderConfigError('Hermes 正在执行任务，请等待结束后再删除供应商')
+        # 与 admin_gateway_status 一致：有租约表时以带过期的租约为准，
+        # active_agents 计数器异常退出会漏减，会把"其实空闲"报成忙。
+        leases_known=False;busy=False
         database=home/'state.db'
         if database.exists():
-            with sqlite3.connect(database.as_uri()+'?mode=ro',uri=True) as db:
-                if db.execute("SELECT 1 FROM sqlite_master WHERE name='session_turn_leases'").fetchone() and db.execute('SELECT 1 FROM session_turn_leases WHERE expires_at>? LIMIT 1',(time.time(),)).fetchone():
-                    raise ProviderConfigError('Hermes 正在执行任务，请等待结束后再删除供应商')
+            import contextlib
+            with contextlib.closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True)) as db:
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='session_turn_leases'").fetchone():
+                    leases_known=True
+                    busy=db.execute('SELECT 1 FROM session_turn_leases WHERE expires_at>? LIMIT 1',(time.time(),)).fetchone() is not None
+        if not leases_known and state.exists():
+            try:busy=int(json.loads(state.read_text(encoding='utf-8-sig')).get('active_agents') or 0)>0
+            except (ValueError,OSError):raise ProviderConfigError('无法确认网关状态，已取消删除，请刷新后重试') from None
+        if busy:raise ProviderConfigError('Hermes 正在执行任务，请等待结束后再删除供应商')
         config=load_config();main=config.get('model') or {};main=main if isinstance(main,dict) else {}
         for key,entry,source,slug in _rows(config):
             if key==body.get('id') and (main.get('provider') in {key,slug} or

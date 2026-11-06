@@ -1,4 +1,5 @@
 """Narrow gateway lifecycle adapter. Never kills a process or exports configuration secrets."""
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,23 @@ def require_interactive_session():
     return session
 
 
+def live_leases(home):
+    """未过期的会话轮次租约数（含各 Profile）；第二项表示本机是否有租约表。"""
+    leases = 0
+    known = False
+    homes = [home] + [p for p in (home / "profiles").glob("*") if p.is_dir() and not p.name.startswith(".")]
+    for directory in homes:
+        database = directory / "state.db"
+        if not database.exists():
+            continue
+        with contextlib.closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
+            # 旧版 Hermes 的 state.db 没有 session_turn_leases 表，缺表时按 0 处理，不要让整个状态查询失败
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_turn_leases'").fetchone():
+                known = True
+                leases += db.execute("SELECT count(*) FROM session_turn_leases WHERE expires_at > ?", (time.time(),)).fetchone()[0]
+    return leases, known
+
+
 def status(home):
     from gateway.status import _pid_exists
     state = json.loads((home / "gateway_state.json").read_text(encoding="utf-8-sig"))
@@ -36,20 +54,15 @@ def status(home):
     heartbeat = json.loads((home / "state" / "gateway.heartbeat").read_text(encoding="utf-8-sig"))
     stamp = datetime.fromisoformat(heartbeat["updated_at"].replace("Z", "+00:00"))
     fresh = int(heartbeat.get("pid") or 0) == pid and 0 <= (datetime.now(timezone.utc) - stamp).total_seconds() < 30
-    leases = 0
-    homes = [home] + [p for p in (home / "profiles").glob("*") if p.is_dir() and not p.name.startswith(".")]
-    for directory in homes:
-        database = directory / "state.db"
-        if not database.exists():
-            continue
-        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=3) as db:
-            # 旧版 Hermes 的 state.db 没有 session_turn_leases 表，缺表时按 0 处理，不要让整个状态查询失败
-            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_turn_leases'").fetchone():
-                leases += db.execute("SELECT count(*) FROM session_turn_leases WHERE expires_at > ?", (time.time(),)).fetchone()[0]
+    leases, leases_known = live_leases(home)
+    # gateway_state.json 的 active_agents 是网关自己维护的计数器，异常退出/重放时会漏减，
+    # 出现"没有会话在跑但 active=3"的假忙。有租约表时以带过期的租约数为准，计数器只作诊断字段。
+    counter = int(state.get("active_agents") or 0)
+    active = leases if leases_known else counter
     running = bool(pid and _pid_exists(pid))
     return {"pid": pid, "running": running, "fresh": fresh,
             "session_id": process_session_id(pid) if running else None,
-            "state": state.get("gateway_state"), "active": max(leases, int(state.get("active_agents") or 0)),
+            "state": state.get("gateway_state"), "active": active, "active_agents": counter,
             "profiles": state.get("served_profiles") or ["default"], "restart_supported": os.name == "nt",
             "code_sha": state.get('code_sha'), "platforms": {key:value.get('state') for key,value in (state.get('platforms') or {}).items()}}
 
