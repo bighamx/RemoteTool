@@ -38,11 +38,7 @@ public sealed class OidcController(OidcProviderStore store, OidcSchemeRegistry r
             return Redirect("/Account/Login?oidcError=failed");
 
         var token = auth.GenerateToken(email, "oidc", provider.Id);
-        Response.Cookies.Append("access_token", token, new CookieOptions
-        {
-            HttpOnly = true, Secure = Request.IsHttps, SameSite = SameSiteMode.Strict,
-            Path = "/", Expires = DateTimeOffset.UtcNow.AddHours(24)
-        });
+        AuthCookies.Write(Response, Request.IsHttps, token, DateTimeOffset.UtcNow.AddHours(24));
         ViewData["Email"] = email;
         ViewData["ReturnUrl"] = Url.IsLocalUrl(returnUrl) ? returnUrl : "/";
         return new ViewResult { ViewName = "~/Views/Account/OidcComplete.cshtml", ViewData = ViewData };

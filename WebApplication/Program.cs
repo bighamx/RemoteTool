@@ -241,11 +241,8 @@ builder.Services.AddSingleton<HermesCompaction>();
                     var auth = context.RequestServices.GetRequiredService<AuthService>();
                     var token = auth.GenerateToken(context.RequestServices.GetRequiredService<IConfiguration>()["Auth:Username"] ?? "admin", "cloudflare", email);
                     context.Request.Headers.Authorization = "Bearer " + token;
-                    if (!context.Request.Cookies.TryGetValue("access_token", out var existingToken) || !auth.ValidateToken(existingToken))
-                        context.Response.Cookies.Append("access_token", token, new CookieOptions {
-                            HttpOnly = true, Secure = context.Request.IsHttps, SameSite = SameSiteMode.Strict,
-                            Path = "/", Expires = DateTimeOffset.UtcNow.AddHours(24)
-                        });
+                    if (AuthCookies.Read(context.Request) is not { Length: > 0 } existingToken || !auth.ValidateToken(existingToken))
+                        AuthCookies.Write(context.Response, context.Request.IsHttps, token, DateTimeOffset.UtcNow.AddHours(24));
                 }
                 await next();
             });
@@ -330,8 +327,7 @@ builder.Services.AddSingleton<HermesCompaction>();
                 }
 
 
-                var token = context.Request.Cookies["access_token"]
-                    ?? context.Request.Query["access_token"].ToString();
+                var token = AuthCookies.Read(context.Request) ?? context.Request.Query["access_token"].ToString();
                 var authService = context.RequestServices.GetRequiredService<AuthService>();
                 if (string.IsNullOrEmpty(token) || !authService.ValidateToken(token))
                 {
@@ -362,8 +358,7 @@ builder.Services.AddSingleton<HermesCompaction>();
                     return;
                 }
 
-                var token = context.Request.Cookies["access_token"]
-                    ?? context.Request.Query["access_token"].ToString();
+                var token = AuthCookies.Read(context.Request) ?? context.Request.Query["access_token"].ToString();
                 var authService = context.RequestServices.GetRequiredService<AuthService>();
                 if (string.IsNullOrEmpty(token) || !authService.ValidateToken(token))
                 {
@@ -385,7 +380,7 @@ builder.Services.AddSingleton<HermesCompaction>();
 
             app.Map("/ws/tunnel", async context => {
                 if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 400; return; }
-                var token = context.Request.Cookies["access_token"] ?? context.Request.Headers.Authorization.ToString().Replace("Bearer ", "", StringComparison.Ordinal);
+                var token = AuthCookies.Read(context.Request) ?? context.Request.Headers.Authorization.ToString().Replace("Bearer ", "", StringComparison.Ordinal);
                 var auth = context.RequestServices.GetRequiredService<AuthService>();
                 if (!auth.ValidateToken(token)) { context.Response.StatusCode = 401; return; }
                 var origin = context.Request.Headers.Origin.ToString();
@@ -396,7 +391,7 @@ builder.Services.AddSingleton<HermesCompaction>();
             });
             app.Map("/ws/phone-agent", async context => {
                 if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 400; return; }
-                var token = context.Request.Cookies["access_token"] ?? context.Request.Headers.Authorization.ToString().Replace("Bearer ", "", StringComparison.Ordinal);
+                var token = AuthCookies.Read(context.Request) ?? context.Request.Headers.Authorization.ToString().Replace("Bearer ", "", StringComparison.Ordinal);
                 if (!context.RequestServices.GetRequiredService<AuthService>().ValidateToken(token)) { context.Response.StatusCode = 401; return; }
                 using var socket = await context.WebSockets.AcceptWebSocketAsync();
                 await context.RequestServices.GetRequiredService<Services.PhoneControl.PhoneGateway>().Attach(socket, context.RequestAborted);

@@ -26,14 +26,7 @@ public class AuthController : ControllerBase
         if (_authService.ValidateCredentials(request.Username, request.Password))
         {
             var token = _authService.GenerateToken(request.Username);
-            Response.Cookies.Append("access_token", token, new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = Request.IsHttps,
-                SameSite = SameSiteMode.Strict,
-                Path = "/",
-                Expires = DateTimeOffset.UtcNow.AddHours(24)
-            });
+            AuthCookies.Write(Response, Request.IsHttps, token, DateTimeOffset.UtcNow.AddHours(24));
             return Ok(new { token, username = request.Username });
         }
 
@@ -63,7 +56,7 @@ public class AuthController : ControllerBase
     [HttpPost("logout")]
     public IActionResult Logout()
     {
-        Response.Cookies.Delete("access_token", new CookieOptions { Path = "/", Secure = Request.IsHttps, SameSite = SameSiteMode.Strict });
+        AuthCookies.Delete(Response, Request.IsHttps);
         return Ok(new { success = true });
     }
 }

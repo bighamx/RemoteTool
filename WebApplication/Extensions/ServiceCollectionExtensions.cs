@@ -81,7 +81,7 @@ namespace RemoteTool.WebApi.Extensions
                         var accessToken = context.Request.Query["access_token"];
                         if (string.IsNullOrEmpty(accessToken))
                         {
-                            if (context.Request.Cookies.TryGetValue("access_token", out var cookieToken))
+                            if (AuthCookies.Read(context.Request) is { Length: > 0 } cookieToken)
                             {
                                 accessToken = cookieToken;
                             }

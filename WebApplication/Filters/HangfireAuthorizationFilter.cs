@@ -18,7 +18,7 @@ public class HangfireAuthorizationFilter : IDashboardAuthorizationFilter
         }
 
         // 2. Check for Cookie manually (since we are handling the cookie logic ourselves for browser apps)
-        if (httpContext.Request.Cookies.TryGetValue("access_token", out var token))
+        if (AuthCookies.Read(httpContext.Request) is { Length: > 0 } token)
         {
             var authService = httpContext.RequestServices.GetService<AuthService>();
             if (authService != null && authService.ValidateToken(token))
