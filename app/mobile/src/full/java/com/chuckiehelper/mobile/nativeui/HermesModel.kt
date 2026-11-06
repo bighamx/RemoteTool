@@ -310,7 +310,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun toggleReasoning() {
         showReasoning = !showReasoning
         prefs.edit().putBoolean("show_reasoning", showReasoning).apply()
-        if (!showReasoning) { reasoningRows = emptyList(); reasoningBuffer.clear(); reasoningSegmentId = null }
+        // 只切显示: 思考流照常累积, 关掉再打开能立刻看到本轮已有内容,
+        // 也不会让 run 的记账(reasoningRun/reasoningEnded)停在旧值。
     }
     /** 终止后让行再留一拍做收缩动画，动画结束由定时器清掉。 */
     var reasoningClosing by mutableStateOf(false)
@@ -366,7 +367,6 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             return false
         }
         if (type != "reasoning.delta") return false
-        if (!showReasoning) return true
         if (eventRun.isNotBlank() && eventRun != run || runId != run || runSession != selectedId) return true
         val delta = event.opt("delta") as? String ?: return true
         if (delta.isEmpty()) return true

@@ -883,7 +883,7 @@
             toggleReasoning() {
                 this.showReasoning=!this.showReasoning;
                 localStorage.setItem('remotetool:web:showReasoning',this.showReasoning?'1':'0');
-                if(!this.showReasoning)this.liveSegments=this.liveSegments.filter(segment=>!segment.reasoning);
+                // 只切显示: 不动 liveSegments/累积状态, 关掉再打开能立刻看到本轮已有内容。
             },
             ensureEventStream(runId,run={}) {if(this.streamRun===runId)return;const sameReasoningRun=this.agent==='hermes'&&this.reasoningRun===runId;if(this.agent==='hermes'&&!sameReasoningRun)this.resetReasoning(runId);this.stopEventStream();this.streamRun=runId;if(!sameReasoningRun)this.streamSeq=0;this.streamGone=false;const started=Number(run.created_at||run.started_at||0)*1000;this.streamHistoryIds=this.messages.filter(m=>!started||this.messageStamp(m)<started).map(m=>String(m.id));if(!sameReasoningRun)this.liveSegments=this.liveSegments.filter(s=>s.complete).slice(-100);this.liveTools=[];this.watchEventStream(runId,this.epoch);},
             async watchEventStream(runId,epoch) {let failures=0;while(this.streamRun===runId&&this.epoch===epoch&&this.activeRun===runId){const controller=new AbortController();streamAbort=controller;const started=Date.now();try{await RemoteToolSse({url:`${base}/runs/${api.id(runId)}/events`,lastId:this.streamSeq,signal:controller.signal,onConnected:()=>{if(this.streamRun===runId)this.streamConnected=true;},onEvent:event=>{if(this.streamRun===runId&&this.epoch===epoch)this.onRunEvent(event);}});if(Date.now()-started>15000)failures=0;}catch(error){if(controller.signal.aborted)break;if(error.status===404){this.streamGone=true;await this.loadHistory(epoch);break;}}finally{if(streamAbort===controller)streamAbort=null;this.streamConnected=false;}if(this.streamRun!==runId||this.epoch!==epoch||this.activeRun!==runId)break;failures++;await new Promise(resolve=>setTimeout(resolve,Math.min(30000,1500*2**Math.min(failures-1,4))));}},
@@ -892,7 +892,7 @@
                     const runId=this.activeRun;
                     if(this.agent!=='hermes'||!runId||event.run_id&&event.run_id!==runId||typeof event.delta!=='string'||!event.delta)return;
                     if(this.reasoningRun!==runId)this.resetReasoning(runId);
-                    if(this.reasoningEnded||!this.showReasoning)return;
+                    if(this.reasoningEnded)return;
                     if(!this.reasoningSegmentId){this.reasoningSegmentId=`reasoning-${runId}-${++this.reasoningIndex}`;this.reasoningStartedAt=this.messageStamp(event)||Date.now();}
                     reasoningChunks.push(event.delta);
                     if(reasoningTimer===null)reasoningTimer=setTimeout(()=>this.flushReasoning(),100);

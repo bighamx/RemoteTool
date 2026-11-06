@@ -982,6 +982,22 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                             )
                         }
                         ComposerMenu(commands, { commands = false }, onBounds = { commandPanelBounds = it }) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(Modifier.widthIn(min = 210.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text("思考过程")
+                                        Text(if (model.showReasoning) "开" else "关",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                },
+                                trailingIcon = {
+                                    if (model.showReasoning) Icon(Icons.Outlined.Check, null, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    commands = false
+                                    model.toggleReasoning()
+                                },
+                            )
                             (listOf(
                                     "新建会话" to "/new",
                                     "会话历史" to "/sessions",
@@ -1046,16 +1062,6 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                             Icon(Icons.Outlined.AttachFile, "发送附件", modifier = Modifier.size(20.dp))
                         }
                         ComposerMenu(attachMenu, { attachMenu = false }, alignRight = true, onBounds = { attachmentPanelBounds = it }) {
-                            DropdownMenuItem(
-                                text = { Text(if (model.showReasoning) "隐藏思考过程" else "显示思考过程") },
-                                onClick = {
-                                    attachMenu = false
-                                    model.toggleReasoning()
-                                },
-                                trailingIcon = {
-                                    if (model.showReasoning) Icon(Icons.Outlined.Check, null, modifier = Modifier.size(18.dp))
-                                },
-                            )
                             DropdownMenuItem(
                                 text = { Text("查看会话附件") },
                                 onClick = {
