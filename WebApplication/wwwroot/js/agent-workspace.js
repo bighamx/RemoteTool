@@ -37,6 +37,23 @@
         return `k${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}${Math.random().toString(16).slice(2, 6)}`;
     };
     const terminal = new Set(['completed','failed','cancelled','interrupted','acceptance_unknown']);
+    const messageUid = row => typeof row?.message_uid==='string'&&row.message_uid.trim()?row.message_uid:null;
+    const historyIdentity = row => agent==='hermes'&&messageUid(row)?`uid:${messageUid(row)}`:`id:${row.id}`;
+    // Clean the accumulated assistant text, never individual chunks: a provider can split
+    // a reasoning envelope across SSE events. Quoted/inline/code tags remain literal.
+    const hermesAssistantText = raw => {
+        let text=raw;
+        for (;;) {
+            const head=text.trimStart(), lower=head.toLowerCase();
+            if(head && ['<think>','</think>'].some(tag=>tag.startsWith(lower)))return '';
+            if(lower.startsWith('</think>'))text=head.slice(8).trimStart();
+            else if(lower.startsWith('<think>')) {
+                const end=lower.indexOf('</think>',7);
+                if(end<0)return '';
+                text=head.slice(end+8).trimStart();
+            } else return text;
+        }
+    };
     const previewSupport = new Map();
     // 两个 agent 都启用 markdown 渲染（hermes assistant 消息同为 markdown 输出；
     // html:false 转义裸 HTML，安全面不变）。
@@ -56,6 +73,8 @@
     let timelineResizeObserver = null;
     let scrollRestoreTimer = null;
     let adminTimer = null;
+    let reasoningTimer = null;
+    let reasoningChunks = [];
     const readVersions = new Map();
     const app = Vue.createApp({
         data: () => ({ agent, profile, agentSetup:null,setupBusy:false,setupDetails:false,setupNotice:'',profiles: [], profileError: '', sessionDetails: null, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: isMobile()&&!requestedSession(), mobileViewport: isMobile(), mobileComposerOpen: false,
@@ -67,6 +86,7 @@
             collapsedGroups: (() => { try { return JSON.parse(localStorage.getItem(`remotetool:web:collapsedGroups:${agent}`) || '[]'); } catch { return []; } })(),
             showMoveDialog: false, moveTarget: null, moveMoving: false, moveSearch: '', moveError: '',
             showCreateDialog: false, createTitle: '', createProjectId: '', createMode: 'existing', createRoot: '', createRoots: [], createProjectName: '', createProjectSearch: '', createBrowser: false, createBrowserPath: '', createBrowserDirs: [], createBrowserLoading: false, createBrowserError: '', createBrowserNew: '', createBrowserMkdir: false, creating: false, createError: '', showEditDialog: false, editText: '', editTarget: null, editFiles: [], editing: false, editError: '', messageMenu: null, sessionMenu: null,
+            reasoningRun: null, reasoningEnded: false, reasoningSegmentId: null, reasoningIndex: 0, reasoningStartedAt: 0,
             liveSegments: [], liveTools: [], streamRun: null, streamSeq: 0, streamConnected: false, streamGone: false, toolTimer: null, externalRunning: false, externalActivity: null, toolsCollapsed: true, apiServer: null, enablingApiServer: false }),
         computed: {adminProviderEditing() { return !!(this.adminProvider?.slug || this.adminProvider?.id); },
             adminUpdateText() {
@@ -131,7 +151,14 @@
             createProjectRoots() { return this.projectRootsOf((this.projects||[]).find(p=>p.id===this.createProjectId)); },
             createValid() { if(this.agent!=='codex'||this.createMode==='none')return true; if(this.createMode==='existing')return !!this.createProjectId&&!!this.createRoot; if(this.createMode==='new')return this.createRoots.length>0&&!!this.createRoot&&!!this.createProjectName.trim(); return true; },
             displayMessages() {
-                const rows=this.messages.filter(m=>this.hasRenderableContent(m)), echoes=[], used=new Set();
+                const presented=this.agent==='hermes'?this.messages.map(row=>{
+                    const uid=messageUid(row);if(!uid||row.role!=='assistant')return row;
+                    const live=this.liveSegments.findLast(segment=>segment.messageUid===uid);
+                    if(!live)return row;
+                    const text=hermesAssistantText(live.text),saved=this.messageText(row);
+                    return text.length>saved.length&&text.startsWith(saved)?{...row,content:text}:row;
+                }):this.messages;
+                const rows=presented.filter(m=>this.hasRenderableContent(m)), echoes=[], used=new Set();
                 for(const row of this.delivered.filter(row=>!row.canonicalId)){
                     const match=this.legacyImageDisplayMatch(row,rows,used);
                     if(match){const index=rows.indexOf(match);rows[index]={...match,attachments:row.attachments};used.add(String(match.id));}
@@ -144,10 +171,18 @@
                 const items=[];
                 if (this.agent==='hermes') {
                     // Hermes 压缩会把存活消息的时间戳整批改写成压缩时刻，按时间排序会把顺序打乱；
-                    // 接口本身按原始写入顺序返回，这里保持数组顺序，实时旁白排在最后。
-                    let index=0;
-                    for (const message of this.displayMessages) items.push({kind:'message', at:index++, message});
-                    for (const segment of this.visibleLiveSegments.slice().sort((a,b)=>(a.createdAt||0)-(b.createdAt||0))) items.push({kind:'live', at:index++, segment});
+                    // 接口本身按原始写入顺序返回，绝不重排原生行。只将未落盘旁白
+                    // 放入对应用户轮次，避免插话后旧旁白被追加到新问题下面。
+                    for (const message of this.displayMessages) items.push({kind:'message', message});
+                    for (const segment of this.visibleLiveSegments.slice().sort((a,b)=>(a.createdAt||0)-(b.createdAt||0))) {
+                        const time=segment.createdAt||0;
+                        const anchor=items.findLastIndex(item=>item.kind==='message'&&item.message.role==='user'&&this.messageStamp(item.message)>0&&this.messageStamp(item.message)<=time+50);
+                        const next=anchor<0?-1:items.findIndex((item,index)=>index>anchor&&item.kind==='message'&&item.message.role==='user');
+                        const end=next<0?items.length:next;
+                        const before=segment.reasoning?items.findIndex((item,index)=>index>anchor&&index<end&&item.kind==='message'&&item.message.role==='assistant'&&this.messageStamp(item.message)>time):-1;
+                        items.splice(before<0?end:before,0,{kind:'live',segment});
+                    }
+                    items.forEach((item,index)=>item.at=index);
                     return items;
                 }
                 // 历史消息与实时旁白按时间合并成单一时间线，插话气泡落在旁白之间的正确位置。
@@ -162,15 +197,28 @@
                 // from inside itself and made Vue's reactivity recurse (trigger -> triggerEffects ->
                 // trigger) until "RangeError: Maximum call stack size exceeded". Merge on local copies
                 // instead: real merging still happens in pushLiveSegment, which may mutate state.
-                const out=[];
+                const out=[],acknowledged=new Set();
                 for (const segment of this.liveSegments) {
-                    const text=this.asText(segment.text);
+                    // A reasoning event is native narration, not assistant reply markup.
+                    if(segment.reasoning){if(this.asText(segment.text).trim())out.push({...segment});continue;}
+                    const text=this.agent==='hermes'?hermesAssistantText(this.asText(segment.text)):this.asText(segment.text);
                     if (!text.trim()) continue;
+                    if(this.agent==='hermes'&&segment.messageUid){
+                        if(!this.messages.some(row=>row.role==='assistant'&&messageUid(row)===segment.messageUid))out.push({...segment,text});
+                        continue; // A different UID must never be acknowledged by matching text.
+                    }
                     // 流式期间的多次 interim 各自落成一条历史消息，而 snapshot/completed 产生的是
                     // 它们的拼接段；拼接段不被任何单条消息覆盖，会与历史气泡重复显示。
                     // 因此除单条覆盖外，再对窗口内助手消息拼接后的整段做一次覆盖判断。
                     // 不能用时间窗过滤：累积的实时段包含更早的旁白，而那些行早已落库（时间窗会漏掉）。
                     const recent=this.messages.filter(m=>{if(m.role!=='assistant')return false;const native=m.native_item_id||m.item_id;if(native&&segment.nativeItem)return String(native)===String(segment.id);return Array.isArray(segment.historyIds)?!segment.historyIds.includes(String(m.id)):this.messageStamp(m)>=(segment.createdAt||0)-30000;}).slice(-400);
+                    if(this.agent==='hermes'&&!segment.nativeItem){
+                        // Consume a native row once: two identical replies in one run are
+                        // still two messages. Preserve live text until its own row arrives.
+                        const landed=recent.find(m=>!acknowledged.has(m)&&this.narrationNormalized(this.messageText(m))===this.narrationNormalized(text));
+                        if(landed){acknowledged.add(landed);continue;}
+                        out.push({...segment,text});continue;
+                    }
                     if (recent.some(m=>this.narrationCovers(this.messageText(m),text))) continue;
                     if (this.narrationCovers(recent.map(m=>this.messageText(m)).join('\n'), text)) continue;
                     // 拼接段里已经落成历史气泡的行不再重复显示，只留尚未落地的尾巴；
@@ -179,7 +227,7 @@
                         .filter(line=>line&&!recent.some(m=>this.narrationCovers(this.messageText(m),line)))
                         .join('\n').trim();
                     if (!display) continue;
-                    const covered=out.find(prev=>this.sameNarration(prev.text,display));
+                    const covered=out.find(prev=>(this.agent!=='hermes'||prev.id===segment.id)&&this.sameNarration(prev.text,display));
                     if (covered) { if (display.length>this.asText(covered.text).trim().length) covered.text=display; continue; }
                     out.push({...segment, text:display});
                 }
@@ -417,6 +465,7 @@
             narrationOverlap(prev,next) { const a=this.asText(prev).split('\n').map(x=>x.trim()).filter(Boolean),b=this.asText(next).split('\n').map(x=>x.trim()).filter(Boolean); for(let k=Math.min(a.length,b.length,4);k>=1;k--){ if(a.slice(-k).join('\n')===b.slice(0,k).join('\n')) return k; } return 0; },
             pushLiveSegment(segment) {
                 const text=this.asText(segment.text).trim(); if (!text) return;
+                if(this.agent==='hermes'){this.liveSegments.push(segment);return;}
                 for (const existing of this.liveSegments) {
                     if (!existing.text || !existing.text.trim()) continue;
                     if (this.sameNarration(existing.text, text)) { if (text.length>existing.text.trim().length) existing.text=segment.text; existing.complete=existing.complete||segment.complete; return; }
@@ -451,8 +500,8 @@
                 return `${date.getFullYear()}/${date.getMonth()+1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
             },
             messageStamp(m) {const raw=m.timestamp||0;const value=(raw!==null&&typeof raw==='object')?NaN:Number(raw);if(Number.isFinite(value)&&value>0)return value<1e12?value*1000:value;return typeof raw==='string'?Date.parse(raw)||0:0;}, sameText(a,b) { const norm=v=>this.asText(v).replace(/\s+/g,' ').trim(); return norm(a)===norm(b); },
-            messageKey(m) { return m.localKey||m.id||`${m.role}-${m.timestamp}-${this.asText(m.content).slice(0,24)}`; },
-            messageText(m) { return this.cleanRuntimeNotes(this.unwrapOob(this.messageTextRaw(m)), m.role==='user'&&(m.attachments||[]).length>0, m.role); },
+            messageKey(m) { return this.agent==='hermes'&&messageUid(m)?`uid-${messageUid(m)}`:m.localKey||m.id||`${m.role}-${m.timestamp}-${this.asText(m.content).slice(0,24)}`; },
+            messageText(m) { const raw=this.unwrapOob(this.messageTextRaw(m));return this.cleanRuntimeNotes(this.agent==='hermes'&&m.role==='assistant'?hermesAssistantText(raw):raw, m.role==='user'&&(m.attachments||[]).length>0, m.role); },
             // 运行时会把图片注记 / 技能变更提示追加进用户消息正文；它们既不该显示，
             // 也会让本地回显与历史行对不上（同一条消息出现两次）。
             cleanRuntimeNotes(text, hasAttachments=false, role='user') {
@@ -531,7 +580,7 @@
                 this.sessionStatusRefreshing=true; this.sessionStatusRefreshAt=Date.now();
                 try {
                     const result=await api.get(`${base}/sessions`);
-                    const fresh=(result.data||[]).filter(row=>row?.id);
+                    const fresh=(result.data||[]).filter(row=>row?.id&&(this.agent!=='hermes'||row.source!=='cron'));
                     const updates=new Map(fresh.map(row=>[String(row.id),row]));
                     const existing=new Set(this.sessions.map(row=>String(row.id)));
                     for (const row of this.sessions) {
@@ -539,6 +588,7 @@
                         const status=row.status;Object.assign(row,update);
                         if(row.id===this.selectedId&&this.selectedStatusKnown)row.status=status;
                     }
+                    if(this.agent==='hermes')this.sessions=this.sessions.filter(row=>row.source!=='cron'&&(result.has_more!==false||updates.has(String(row.id))));
                     this.sessions.unshift(...fresh.filter(row=>!existing.has(String(row.id))));
                     const selected=updates.get(String(this.selectedId));
                     if(selected&&this.selected)this.selected.title=selected.title;
@@ -617,6 +667,7 @@
                 const fromList=this.mobileViewport&&this.sessionsOpen;
                 this.mobileComposerOpen=false;this.inspectorOpen=false;
                 this.stopEventStream();
+                this.resetReasoning();
                 this.olderLoading=false;
                 if(this.scrollFrame!==null){cancelAnimationFrame(this.scrollFrame);this.scrollFrame=null;}
                 const current=++this.epoch; if(scrollRestoreTimer){clearTimeout(scrollRestoreTimer);scrollRestoreTimer=null;} this.selected=item; this.selectedId=item.id;this.permissionsMode='default';this.permissionsChoice='default';this.permissionsLoaded=false;this.permissionsLoading=false;this.permissionsSaving=false;this.showPermissionsDialog=false;this.approvalBusy=false; this.selectedStatusKnown=false; this.sessionsOpen=false;this.dialog=null;this.showEditDialog=false;this.messages=[];this.historyLoading=true; this.historyHasMore=false; this.oldestId=null; this.followLatest=true;this.showJumpToLatest=false;this.lastTimelineTop=0; this.activeRun=null; this.externalRunning=false;this.externalActivity=null;this.approval=null; this.context={}; this.queue=[];this.schedules=[]; this.attachments=[]; this.sessionFiles=[];this.mediaSignature='';this.filesRefreshAt=0;this.error='';this.liveSegments=[];this.liveTools=[];this.streamSeq=0;this.streamGone=false;
@@ -666,12 +717,12 @@
                     result=result||await api.get(`${base}/sessions/${api.id(id)}/messages?limit=80`);
                     if(!current())return;
                     if(!Array.isArray(result.data))throw new Error('会话历史格式无效，请重试');
-                    const recent=result.data, previous=this.historyCacheState?[]:this.messages, tail=previous.at(-1)?.id;
+                    const recent=result.data, previous=this.historyCacheState?[]:this.messages, tail=previous.at(-1);
                     this.historyLoadedEpoch=epoch;this.historyCacheState='';
                     void historyCache?.write(id,result);
-                    const continuous=tail!=null&&recent.some(row=>String(row.id)===String(tail));
-                    const ids=new Set(recent.map(row=>String(row.id)));
-                    const earlier=continuous?previous.filter(row=>row.id!=null&&!ids.has(String(row.id))):[];
+                    const continuous=tail!=null&&recent.some(row=>historyIdentity(row)===historyIdentity(tail));
+                    const ids=new Set(recent.map(historyIdentity));
+                    const earlier=continuous?previous.filter(row=>row.id!=null&&!ids.has(historyIdentity(row))):[];
                     this.messages=[...earlier,...recent];
                     this.historyHasMore=earlier.length?this.historyHasMore:!!result.has_more;
                     this.oldestId=this.messages[0]?.id||result.oldest_id;
@@ -687,7 +738,7 @@
                 }catch(e){if(current()){this.error=e.message;this.historyFailedEpoch=epoch;if(this.historyCacheState)this.historyCacheState='failed';}}
             },
             async loadFiles(epoch=this.epoch) {const current=this.startRead('files',epoch);try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/files`);if(current())this.sessionFiles=result.data||[];return result.data||[];}catch{return[];}},
-            async loadOlder() {if(!this.oldestId||this.olderLoading)return;this.olderLoading=true;this.followLatest=false;this.showJumpToLatest=true;const epoch=this.epoch;const el=this.$refs.timeline;const oldHeight=el?.scrollHeight||0;const oldTop=el?.scrollTop||0;try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/messages?limit=80&older_before=${api.id(this.oldestId)}`);if(epoch!==this.epoch)return;const ids=new Set(this.messages.map(m=>String(m.id)));this.messages=[...(result.data||[]).filter(m=>!ids.has(String(m.id))),...this.messages];this.historyHasMore=!!result.has_more;this.oldestId=result.oldest_id||this.messages[0]?.id;await this.$nextTick();if(el)el.scrollTop=oldTop+el.scrollHeight-oldHeight;}catch(e){if(epoch===this.epoch)this.error=e.message;}finally{if(epoch===this.epoch)this.olderLoading=false;}},
+            async loadOlder() {if(!this.oldestId||this.olderLoading)return;this.olderLoading=true;this.followLatest=false;this.showJumpToLatest=true;const epoch=this.epoch;const el=this.$refs.timeline;const oldHeight=el?.scrollHeight||0;const oldTop=el?.scrollTop||0;try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/messages?limit=80&older_before=${api.id(this.oldestId)}`);if(epoch!==this.epoch)return;const ids=new Set(this.messages.map(historyIdentity));this.messages=[...(result.data||[]).filter(m=>!ids.has(historyIdentity(m))),...this.messages];this.historyHasMore=!!result.has_more;this.oldestId=result.oldest_id||this.messages[0]?.id;await this.$nextTick();if(el)el.scrollTop=oldTop+el.scrollHeight-oldHeight;}catch(e){if(epoch===this.epoch)this.error=e.message;}finally{if(epoch===this.epoch)this.olderLoading=false;}},
             onTimelineScroll(e) {const el=e.target;const top=el.scrollTop;const height=el.scrollHeight;const distance=Math.max(0,height-el.clientHeight-top);const shrank=height<this.lastTimelineHeight;this.lastTimelineHeight=height;if(!shrank){if(top<this.lastTimelineTop-2)this.followLatest=false;else if(distance<=24&&top>this.lastTimelineTop+2)this.followLatest=true;}this.lastTimelineTop=top;this.showJumpToLatest=!this.followLatest&&!!this.selectedId&&height>el.clientHeight+4;if(!this.historyLoading&&top<80&&this.historyHasMore&&!this.olderLoading)this.loadOlder();},
             scrollToLatest(force) {const el=this.$refs.timeline;if(!el)return;if(force||this.followLatest){el.scrollTop=el.scrollHeight;this.followLatest=true;}this.lastTimelineTop=el.scrollTop;this.lastTimelineHeight=el.scrollHeight;this.showJumpToLatest=false;},
             scheduleScrollRestore(id) {if(!this.followLatest)return;if(scrollRestoreTimer)clearTimeout(scrollRestoreTimer);const started=Date.now();const tick=()=>{if(this.selectedId!==id||!this.followLatest){scrollRestoreTimer=null;return;}this.scrollToLatest();scrollRestoreTimer=Date.now()-started<1800?setTimeout(tick,250):null;};scrollRestoreTimer=setTimeout(tick,150);},
@@ -773,7 +824,7 @@
                         try {run=runDoc||await api.get(`${base}/runs/${api.id(runId)}`);} catch(error){if(error.status!==404)throw error;run={status:'missing'};}
                         if(!current())return;
                         if(terminal.has(run.status)||run.status==='missing'){
-                            this.stopEventStream();this.liveSegments.forEach(s=>s.complete=true);this.activeRun=null;this.approval=null;this.runStatus=run.status;
+                            this.finishReasoning(runId);this.stopEventStream();this.liveSegments.forEach(s=>s.complete=true);this.activeRun=null;this.approval=null;this.runStatus=run.status;
                             await this.loadHistory(epoch);
                             if(!current())return;
                         }else{
@@ -793,14 +844,73 @@
             },
             async takeover() {if(this.agent!=='codex'||!this.externalRunning||!this.selectedId)return;if(!confirm('将中断其他客户端正在执行的任务，并由 Web 端接管会话。继续？'))return;try{const id=this.selectedId;const result=await api.post(`${base}/sessions/${api.id(id)}/takeover`,{expected_activity_id:this.externalActivity?.activity_id||''});if(!result.ready)throw new Error('接管尚未确认');this.externalRunning=false;this.externalActivity=null;await this.refreshAll();}catch(e){this.error=e.message;}},
             stopEventStream() {streamAbort?.abort();streamAbort=null;this.streamRun=null;this.streamConnected=false;},
-            ensureEventStream(runId,run={}) {if(this.streamRun===runId)return;this.stopEventStream();this.streamRun=runId;this.streamSeq=0;this.streamGone=false;const started=Number(run.created_at||run.started_at||0)*1000;this.streamHistoryIds=this.messages.filter(m=>!started||this.messageStamp(m)<started).map(m=>String(m.id));this.liveSegments=this.liveSegments.filter(s=>s.complete).slice(-100);this.liveTools=[];this.watchEventStream(runId,this.epoch);},
+            resetReasoning(runId=null) {
+                if(reasoningTimer!==null)clearTimeout(reasoningTimer);
+                reasoningTimer=null;reasoningChunks=[];this.reasoningRun=runId;this.reasoningEnded=false;this.reasoningSegmentId=null;this.reasoningIndex=0;this.reasoningStartedAt=0;
+                this.liveSegments=this.liveSegments.filter(segment=>!segment.reasoning);
+            },
+            flushReasoning() {
+                if(reasoningTimer!==null)clearTimeout(reasoningTimer);
+                reasoningTimer=null;
+                if(!reasoningChunks.length)return;
+                const text=reasoningChunks.join('');reasoningChunks=[];
+                if(!this.reasoningSegmentId)return;
+                const segment=this.liveSegments.find(row=>row.id===this.reasoningSegmentId);
+                if(segment)segment.text+=text;
+                else this.liveSegments.push({id:this.reasoningSegmentId,reasoning:true,text,phase:'commentary',createdAt:this.reasoningStartedAt,complete:false});
+                this.queueFollowLatest();
+            },
+            closeReasoningSegment() {this.flushReasoning();const segment=this.liveSegments.find(row=>row.id===this.reasoningSegmentId);if(segment)segment.complete=true;this.reasoningSegmentId=null;},
+            finishReasoning(runId) {if(this.reasoningRun!==runId)return;this.closeReasoningSegment();this.reasoningEnded=true;},
+            ensureEventStream(runId,run={}) {if(this.streamRun===runId)return;const sameReasoningRun=this.agent==='hermes'&&this.reasoningRun===runId;if(this.agent==='hermes'&&!sameReasoningRun)this.resetReasoning(runId);this.stopEventStream();this.streamRun=runId;if(!sameReasoningRun)this.streamSeq=0;this.streamGone=false;const started=Number(run.created_at||run.started_at||0)*1000;this.streamHistoryIds=this.messages.filter(m=>!started||this.messageStamp(m)<started).map(m=>String(m.id));if(!sameReasoningRun)this.liveSegments=this.liveSegments.filter(s=>s.complete).slice(-100);this.liveTools=[];this.watchEventStream(runId,this.epoch);},
             async watchEventStream(runId,epoch) {let failures=0;while(this.streamRun===runId&&this.epoch===epoch&&this.activeRun===runId){const controller=new AbortController();streamAbort=controller;const started=Date.now();try{await RemoteToolSse({url:`${base}/runs/${api.id(runId)}/events`,lastId:this.streamSeq,signal:controller.signal,onConnected:()=>{if(this.streamRun===runId)this.streamConnected=true;},onEvent:event=>{if(this.streamRun===runId&&this.epoch===epoch)this.onRunEvent(event);}});if(Date.now()-started>15000)failures=0;}catch(error){if(controller.signal.aborted)break;if(error.status===404){this.streamGone=true;await this.loadHistory(epoch);break;}}finally{if(streamAbort===controller)streamAbort=null;this.streamConnected=false;}if(this.streamRun!==runId||this.epoch!==epoch||this.activeRun!==runId)break;failures++;await new Promise(resolve=>setTimeout(resolve,Math.min(30000,1500*2**Math.min(failures-1,4))));}},
             onRunEvent(event) {const seq=Number(event.seq||0);const type=event.type||event.event||'';if(seq&&seq<=this.streamSeq)return;if(type==='stream.gap'||(seq&&this.streamSeq&&seq>this.streamSeq+1)){this.loadHistory();this.refreshActiveTools();}if(seq)this.streamSeq=seq;if(type==='stream.gap')return;
-                if(type==='message.started'||type==='message.delta'||type==='message.snapshot'||type==='message.completed'){const id=event.item_id||(type==='message.started'?`seq-${seq}`:this.liveSegments.at(-1)?.id||`seq-${seq}`);let segment=this.liveSegments.find(s=>s.id===id);if(!segment){segment={id,text:'',phase:event.phase||'commentary',createdAt:Date.now(),nativeItem:!!event.item_id,historyIds:[...this.streamHistoryIds]};this.liveSegments.push(segment);}if(event.phase)segment.phase=event.phase;if(type==='message.delta')segment.text+=this.asText(event.delta);else if(type==='message.snapshot'||type==='message.completed')segment.text=this.asText(event.text)||segment.text;if(type==='message.completed'){segment.complete=true;this.loadHistory();}this.queueFollowLatest();return;}
-                if(type==='message.interim'){const interim=this.asText(event.text);if(interim.trim())this.pushLiveSegment({id:`interim-${seq}`,text:interim,phase:'commentary',complete:true,createdAt:Date.now(),historyIds:[...this.streamHistoryIds]});this.loadHistory();this.queueFollowLatest();return;}
-                if(type==='tool.started'||type==='tool.completed'||type==='tool.failed'){const id=event.item_id||event.call_id||(type==='tool.started'?`tool-${seq}`:this.liveTools.findLast(t=>t.status==='running'&&t.tool===event.tool)?.id)||`tool-${seq}`;let tool=this.liveTools.find(t=>t.id===id);if(!tool){tool={id,tool:event.tool||'工具',preview:event.preview||'',status:'running',open:false};this.liveTools.push(tool);}if(event.preview)tool.preview=event.preview;if(type!=='tool.started')tool.status=type==='tool.failed'||event.error?'failed':'completed';if(this.dialog?.activeTools)this.refreshActiveTools();this.queueFollowLatest();return;}
+                if(type==='reasoning.delta'){
+                    const runId=this.activeRun;
+                    if(this.agent!=='hermes'||!runId||event.run_id&&event.run_id!==runId||typeof event.delta!=='string'||!event.delta)return;
+                    if(this.reasoningRun!==runId)this.resetReasoning(runId);
+                    if(this.reasoningEnded)return;
+                    if(!this.reasoningSegmentId){this.reasoningSegmentId=`reasoning-${runId}-${++this.reasoningIndex}`;this.reasoningStartedAt=this.messageStamp(event)||Date.now();}
+                    reasoningChunks.push(event.delta);
+                    if(reasoningTimer===null)reasoningTimer=setTimeout(()=>this.flushReasoning(),100);
+                    return;
+                }
+                if(['message.started','message.delta','message.snapshot','message.completed','message.interim','tool.started'].includes(type))this.closeReasoningSegment();
+                if(type==='message.started'||type==='message.delta'||type==='message.snapshot'||type==='message.completed'){
+                    const last=this.liveSegments.at(-1);
+                    const uid=this.agent==='hermes'?messageUid(event):null;
+                    const id=uid?`uid-${uid}`:event.item_id||(type==='message.started'||this.agent==='hermes'&&last?.complete?`seq-${seq}`:last?.id||`seq-${seq}`);
+                    let segment=this.liveSegments.find(s=>s.id===id);
+                    if(!segment&&uid&&last&&!last.complete&&!last.messageUid&&type!=='message.started'){
+                        segment=last;segment.id=id;segment.messageUid=uid;
+                    }
+                    if(!segment){segment={id,text:'',phase:event.phase||'commentary',createdAt:this.messageStamp(event)||Date.now(),nativeItem:!!event.item_id,messageUid:uid,historyIds:[...this.streamHistoryIds]};this.liveSegments.push(segment);}
+                    if(event.phase)segment.phase=event.phase;
+                    if(type==='message.delta')segment.text+=this.asText(event.delta);
+                    else if(type==='message.snapshot'||type==='message.completed')segment.text=this.asText(event.text)||segment.text;
+                    if(type==='message.completed'){segment.complete=true;this.loadHistory();}
+                    this.queueFollowLatest();return;
+                }
+                if(type==='message.interim'){
+                    const interim=this.asText(event.text),last=this.liveSegments.findLast(segment=>!segment.reasoning);
+                    const uid=this.agent==='hermes'?messageUid(event):null;
+                    const identified=uid?this.liveSegments.find(segment=>segment.messageUid===uid):null;
+                    if(identified){identified.text=interim||identified.text;identified.complete=true;identified.interimAcknowledged=true;}
+                    else if(this.agent==='hermes'&&last&&!last.messageUid&&!last.interimAcknowledged&&
+                        (!last.complete&&event.already_streamed||hermesAssistantText(last.text).trim()===hermesAssistantText(interim).trim())){
+                        // interim acknowledges the same streamed message, not another bubble.
+                        last.text=interim||last.text;last.complete=true;last.interimAcknowledged=true;
+                        if(uid){last.id=`uid-${uid}`;last.messageUid=uid;}
+                    }else if(interim.trim())this.pushLiveSegment({id:uid?`uid-${uid}`:`interim-${seq}`,messageUid:uid,text:interim,phase:'commentary',complete:true,interimAcknowledged:true,createdAt:this.messageStamp(event)||Date.now(),historyIds:[...this.streamHistoryIds]});
+                    this.loadHistory();this.queueFollowLatest();return;
+                }
+                if(type==='tool.started'||type==='tool.completed'||type==='tool.failed'){
+                    if(this.agent==='hermes'&&type==='tool.started'&&this.liveSegments.at(-1))this.liveSegments.at(-1).complete=true;
+                    const id=event.item_id||event.call_id||(type==='tool.started'?`tool-${seq}`:this.liveTools.findLast(t=>t.status==='running'&&t.tool===event.tool)?.id)||`tool-${seq}`;
+                    let tool=this.liveTools.find(t=>t.id===id);if(!tool){tool={id,tool:event.tool||'工具',preview:event.preview||'',status:'running',open:false};this.liveTools.push(tool);}if(event.preview)tool.preview=event.preview;if(type!=='tool.started')tool.status=type==='tool.failed'||event.error?'failed':'completed';if(this.dialog?.activeTools)this.refreshActiveTools();this.queueFollowLatest();return;
+                }
                 if(type==='approval.request'){this.approval=event;return;}
-                if(type.startsWith('run.')){this.loadStatus();this.loadHistory();this.loadContext();}
+                if(type.startsWith('run.')){if(terminal.has(type.slice(4)))this.finishReasoning(event.run_id||this.activeRun);this.loadStatus();this.loadHistory();this.loadContext();}
             },
             async loadContext(epoch=this.epoch, result=null) {
                 const id=this.selectedId,current=this.startRead('context',epoch);
@@ -1127,7 +1237,7 @@
                 }finally{this.sending=false;}
             },
             async removeQueued(item) {if(!confirm('从队列移除此消息？'))return;try{await api.post(`${base}/sessions/${api.id(this.selectedId)}/queue`,{action:'delete',id:item.id});await this.loadQueue();}catch(e){this.error=e.message;}},
-            async send() {const input=this.draft.trim();if(!this.selectedId||!input||this.sending||this.pending||(this.historyCacheState&&!this.selectedStatusKnown)||(this.externalRunning&&this.agent==='codex'))return;const id=this.selectedId;const key=newKey();const files=[...this.attachments];const selection=this.readModelSelection(this.selected);const modelSettings=this.agent==='codex'?{provider:selection.provider,model:selection.model,reasoning_effort:selection.effort,service_tier:selection.tier}:null;const submission={key,input,attachments:files,createdAt:Date.now(),delivery:'正在发送',modelSettings,historyIds:this.messages.map(m=>String(m.id)).filter(id=>id!=='undefined')};this.pending=submission;this.savePending();this.draft='';this.attachments=[];localStorage.removeItem(`remotetool:web:draft:${agent}:${id}`);this.sending=true;this.queueFollowLatest();try{const body={input,session_id:id,attachment_ids:files.map(f=>f.id)};if(this.agent==='codex'&&modelSettings?.provider&&modelSettings?.model)body.model_settings=modelSettings;if(this.agent==='codex'&&this.context.question?.request_id)body.question_reply_id=this.context.question.request_id;if(this.agent==='hermes'){if(this.modelSelection.provider)body.provider=this.modelSelection.provider;if(this.modelSelection.model)body.model=this.modelSelection.model;}const steering=!!this.activeRun;const route=steering?`${base}/runs/${api.id(this.activeRun)}/steer`:`${base}/runs`;const response=await api.post(route,body,{'Idempotency-Key':key});const accepted=response.delivery!=='unknown'&&response.delivery!=='rejected'&&response.status!=='acceptance_unknown'&&(response.delivery==='accepted'||response.accepted===true||(steering?response.accepted!==false:!!response.run_id));if(this.selectedId!==id){if(accepted){const rows=this.restoreDelivered(id);rows.push({...submission,delivery:'已送达'});localStorage.setItem(echoKey(id),JSON.stringify(rows.slice(-20)));localStorage.removeItem(receiptKey(id));}return;}if(this.pending?.key!==key)return;if(accepted){this.acceptPending(id,key);if(response.run_id){this.activeRun=response.run_id;this.ensureEventStream(response.run_id);}}else{this.pending.delivery='发送状态待核对';this.savePending();}this.loadStatus();this.loadHistory();for(const delay of [800,2500])setTimeout(()=>{if(this.selectedId===id&&(this.pending?.key===key||this.delivered.some(row=>row.key===key)))this.loadHistory();},delay);}catch(error){if(this.selectedId!==id||this.pending?.key!==key)return;if(error.delivery==='rejected'){this.draft=input;this.attachments=files;this.pending=null;this.savePending();this.error=`${error.message}。消息未写入，草稿已恢复。`;}else{this.pending.delivery='发送状态待核对';this.savePending();this.error=`${error.message}。请先核对发送状态，避免重复发送。`;}}finally{this.sending=false;}},
+            async send() {const input=this.draft.trim();if(!this.selectedId||!input||this.sending||this.pending||(this.historyCacheState&&!this.selectedStatusKnown)||(this.externalRunning&&this.agent==='codex'))return;const id=this.selectedId;const key=newKey();const files=[...this.attachments];if(this.agent==='hermes')this.closeReasoningSegment();const selection=this.readModelSelection(this.selected);const modelSettings=this.agent==='codex'?{provider:selection.provider,model:selection.model,reasoning_effort:selection.effort,service_tier:selection.tier}:null;const submission={key,input,attachments:files,createdAt:Date.now(),delivery:'正在发送',modelSettings,historyIds:this.messages.map(m=>String(m.id)).filter(id=>id!=='undefined')};this.pending=submission;this.savePending();this.draft='';this.attachments=[];localStorage.removeItem(`remotetool:web:draft:${agent}:${id}`);this.sending=true;this.queueFollowLatest();try{const body={input,session_id:id,attachment_ids:files.map(f=>f.id)};if(this.agent==='codex'&&modelSettings?.provider&&modelSettings?.model)body.model_settings=modelSettings;if(this.agent==='codex'&&this.context.question?.request_id)body.question_reply_id=this.context.question.request_id;if(this.agent==='hermes'){if(this.modelSelection.provider)body.provider=this.modelSelection.provider;if(this.modelSelection.model)body.model=this.modelSelection.model;}const steering=!!this.activeRun;const route=steering?`${base}/runs/${api.id(this.activeRun)}/steer`:`${base}/runs`;const response=await api.post(route,body,{'Idempotency-Key':key});const accepted=response.delivery!=='unknown'&&response.delivery!=='rejected'&&response.status!=='acceptance_unknown'&&(response.delivery==='accepted'||response.accepted===true||(steering?response.accepted!==false:!!response.run_id));if(this.selectedId!==id){if(accepted){const rows=this.restoreDelivered(id);rows.push({...submission,delivery:'已送达'});localStorage.setItem(echoKey(id),JSON.stringify(rows.slice(-20)));localStorage.removeItem(receiptKey(id));}return;}if(this.pending?.key!==key)return;if(accepted){this.acceptPending(id,key);if(response.run_id){this.activeRun=response.run_id;this.ensureEventStream(response.run_id);}}else{this.pending.delivery='发送状态待核对';this.savePending();}this.loadStatus();this.loadHistory();for(const delay of [800,2500])setTimeout(()=>{if(this.selectedId===id&&(this.pending?.key===key||this.delivered.some(row=>row.key===key)))this.loadHistory();},delay);}catch(error){if(this.selectedId!==id||this.pending?.key!==key)return;if(error.delivery==='rejected'){this.draft=input;this.attachments=files;this.pending=null;this.savePending();this.error=`${error.message}。消息未写入，草稿已恢复。`;}else{this.pending.delivery='发送状态待核对';this.savePending();this.error=`${error.message}。请先核对发送状态，避免重复发送。`;}}finally{this.sending=false;}},
             async showFiles() {try{const files=await this.loadFiles();this.dialog={title:'会话文件',files,text:'',more:false};}catch(e){this.error=e.message;}},
             async showActiveTools(tool=null) {if(!this.selectedId)return;this.dialog={title:'工具调用详情',tools:[],files:[],text:'',more:false,activeTools:true,selectedTool:tool?.id||null,running:!!(this.activeRun||this.externalRunning)};await this.refreshActiveTools();if(this.toolTimer)clearInterval(this.toolTimer);this.toolTimer=setInterval(()=>{if(this.dialog?.activeTools&&(this.dialog.running||this.externalRunning))this.refreshActiveTools();},2000);},
             async refreshActiveTools(offset=0) {if(!this.dialog?.activeTools||!this.selectedId)return;try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/tools/active?offset=${offset}`);if(!this.dialog?.activeTools)return;const rows=result.data||[];const current=offset?this.dialog.tools||[]:[];const ids=new Set(current.map(row=>row.id));this.dialog.tools=[...current,...rows.filter(row=>!ids.has(row.id))];if(this.dialog.selectedTool){const index=this.dialog.tools.findIndex(row=>row.id===this.dialog.selectedTool);if(index>0)this.dialog.tools.unshift(...this.dialog.tools.splice(index,1));}this.dialog.running=!!result.running;this.dialog.more=!!result.has_more;this.toolOffset=offset+rows.length;this.dialog.title=`工具 ${result.tools??this.dialog.tools.length} 次 · 文件修改 ${result.file_changes??0} 次`;}catch(error){if(error.status!==404)this.error=error.message;}},
@@ -1138,7 +1248,7 @@
             async loadMoreTool() {if(this.dialog?.activeTools){await this.refreshActiveTools(this.toolOffset);return;}if(!this.dialog?.toolId)return;try{const result=await api.get(`${base}/sessions/${api.id(this.selectedId)}/tools/${api.id(this.dialog.toolId)}?offset=${this.toolOffset}`);this.dialog.tools.push(...(result.data||[]));this.dialog.more=!!result.has_more;this.toolOffset+=(result.data||[]).length;}catch(e){this.error=e.message;}}
         },
         created() { this.loadProfiles(); },
-        unmounted() { clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
+        unmounted() { this.resetReasoning();clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
         watch: {adminOpen() {this.syncAdminClass();}, sessionsOpen() {this.syncMobileShell();}, inspectorOpen(value) {if(value)this.loadModels();}, selectedId() { this.schedules=[]; }, draft(value) {if(this.selectedId)localStorage.setItem(draftKey(this.selectedId),value);this.$nextTick(()=>this.resizeComposer());}, attachments: {deep:true,handler(value){if(agent==='hermes'&&this.selectedId)localStorage.setItem(draftFilesKey(this.selectedId),JSON.stringify(value));}}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
         mounted() {this.syncAdminClass();this.loadAgentSetup();mobileQuery=window.matchMedia?.(mobileMedia);mobileQuery?.addEventListener('change',this.onMobileLayoutChange);this.syncMobileShell();void this.refreshSessions().finally(()=>{this.loadCapabilities();this.loadCurrentUsage();});this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible'&&this.workspaceVisible())this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible'||!this.workspaceVisible())return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadSchedules();this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
         beforeUnmount() {mobileQuery?.removeEventListener('change',this.onMobileLayoutChange);this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}

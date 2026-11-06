@@ -810,7 +810,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             var kind = item.S("type");
             var name = item.S("tool", item.S("name", kind switch { "commandExecution" => "终端", "fileChange" => "文件修改", "mcpToolCall" => "MCP", "webSearch" => "搜索", "imageView" => "查看图片", _ => kind }));
             var preview = item.S("command", item.S("query", item.S("arguments")));
-            preview = Regex.Replace(preview, "\\s+", " "); if (preview.Length > 180) preview = preview[..180];
+            preview = CodexToolEvent.Preview(preview);
             Emit(run, method.EndsWith("/started") ? "tool.started" : "tool.completed",
                 CodexToolEvent.Fields(item, name, preview));
         } else if (method == "turn/completed") {
@@ -1431,7 +1431,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     var completed = item.B("completed") || item.S("status") is "completed" or "failed" or "declined";
                     var phase = completed ? "tool.completed" : "tool.started"; var id = item.S("id");
                     if (seenTools.GetValueOrDefault(id) == phase) continue; seenTools[id] = phase;
-                    var preview = Regex.Replace(item.S("command", item.S("query", item.S("arguments"))), "\\s+", " "); if (preview.Length > 180) preview = preview[..180];
+                    var preview = CodexToolEvent.Preview(item.S("command", item.S("query", item.S("arguments"))));
                     Emit(run, phase, CodexToolEvent.Fields(item,
                         item.S("tool", item.S("name", kind)), preview));
                 }

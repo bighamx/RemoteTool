@@ -22,7 +22,6 @@ import android.view.WindowManager
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -45,25 +44,7 @@ class PhoneAgentUi(private val context: Context) {
     private var minimized = windowPrefs.getBoolean("minimized", false)
     private var horizontalPosition = windowPrefs.getFloat("horizontal", .5f)
     private var verticalPosition = windowPrefs.getFloat("vertical", 0f)
-    private var contentScroll: ScrollView? = null
-    private var contentOffset = 0
-    private var scrollDirection = 1
-    private var scrollPauseUntil = 0L
-    private val scrollTick = object : Runnable {
-        override fun run() {
-            val view = contentScroll ?: return
-            if (!running || minimized || overlay == null) return
-            val maximum = ((view.getChildAt(0)?.height ?: 0) - view.height).coerceAtLeast(0)
-            if (maximum > 0 && SystemClock.elapsedRealtime() >= scrollPauseUntil) {
-                contentOffset = (contentOffset + dp(1) * scrollDirection).coerceIn(0, maximum)
-                view.scrollTo(0, contentOffset)
-                if (contentOffset == 0 || contentOffset == maximum) {
-                    scrollDirection = -scrollDirection; scrollPauseUntil = SystemClock.elapsedRealtime() + 2000
-                }
-            }
-            handler.postDelayed(this, if (maximum > 0) 80 else 1000)
-        }
-    }
+    private var expandedHelpId: String? = null
     private var rendered: AgentDisplayState? = null
     private var renderedNotice: String? = null
     private var scope: CoroutineScope? = null
@@ -96,13 +77,15 @@ class PhoneAgentUi(private val context: Context) {
     fun requireUi(id: String) { ledger.requireUi(id); refresh() }
     fun touchConnection(id: String) { ledger.touchConnection(id) }
     internal fun connectionStates() = ledger.snapshot().connections
-    fun toolStarted(id: String, tool: String, explanation: String = ""): Boolean {
+    fun toolStarted(id: String, tool: String, explanation: String = "", operationId: String = ""): Boolean {
         val label = label(tool)
         if (label == null && explanation.isBlank()) return false
-        ledger.toolStarted(id, label.orEmpty(), explanation); refresh()
+        ledger.toolStarted(id, label.orEmpty(), explanation, operationId); refresh()
         return true
     }
-    fun toolFinished(id: String) { ledger.toolFinished(id); refresh() }
+    fun toolFinished(id: String, operationId: String = "", status: String = "completed", error: String = "") {
+        ledger.toolFinished(id, operationId, status, error); refresh()
+    }
     fun notify(id: String, message: String, help: Boolean, seconds: Int): JSONObject {
         val row = ledger.notify(id, message, help, seconds); refresh()
         return noticeJson(row).put("overlay_allowed", Settings.canDrawOverlays(context))
@@ -138,6 +121,11 @@ class PhoneAgentUi(private val context: Context) {
     private fun render() {
         if (!running) return
         val state = ledger.snapshot()
+        val help = state.notice?.takeIf { it.help }
+        if (help != null && help.id != expandedHelpId) {
+            expandedHelpId = help.id
+            minimized = false
+        }
         val show = settings.agentOverlay && Settings.canDrawOverlays(context) && (state.connected || state.notice != null)
         if (state == rendered && (overlay != null) == show) return
         rendered = state
@@ -154,28 +142,55 @@ class PhoneAgentUi(private val context: Context) {
         renderNotice(state.notice)
         if (!show) { removeOverlay(); return }
         val maximumContentHeight = minOf(dp(280), (context.resources.displayMetrics.heightPixels * .4f).toInt())
+        val single = state.connections.size == 1
         val groups = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            state.connections.forEachIndexed { index, client ->
+            val clients = state.connections.sortedWith(compareByDescending<AgentConnectionState> { it.ownsUi }
+                .thenByDescending { it.history.lastOrNull()?.at ?: 0L })
+            clients.forEachIndexed { index, client ->
                 addView(LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL
                     setPadding(0, if (index == 0) 0 else dp(7), 0, dp(3))
-                    addView(text("${client.name} · ${if (client.ownsUi) "占用界面" else "已连接"}", 11f,
-                        if (client.ownsUi) Color.rgb(136, 234, 206) else Color.WHITE, true))
-                    fun information(value: String) {
-                        if (value.isNotBlank()) addView(text(value, 11f, Color.rgb(223, 232, 229)).apply { setPadding(dp(10), dp(2), 0, dp(2)) })
-                    }
-                    listOf(client.goal, client.operation, client.explanation).filter { it.isNotBlank() }.distinct().forEach(::information)
-                    client.notices.forEach { notice ->
-                        information("${if (notice.help) "请求协助" else "消息"}：${notice.message}")
-                        addView(LinearLayout(context).apply {
-                            gravity = Gravity.END
-                            if (notice.help) addView(button("已完成") { reply(notice.id, "done") })
-                            addView(button(if (notice.help) "暂不处理" else "知道了") { reply(notice.id, "dismissed") })
+                    fun information(value: String, tint: Int = Color.rgb(223, 232, 229), bold: Boolean = false) {
+                        if (value.isBlank()) return
+                        addView(text(value, 11f, tint, bold).apply {
+                            setPadding(dp(10), dp(1), 0, dp(1))
+                            maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
                         })
                     }
+                    // 只有一个连接时，标题行已经包含 Agent 名和当前状态，不再重复一遍。
+                    if (!single) information("${client.name} · ${if (client.ownsUi) "占用界面" else "已连接"}",
+                        if (client.ownsUi) Color.rgb(136, 234, 206) else Color.WHITE, true)
+                    if (client.goal.isNotBlank() && client.goal != client.operation) information("目标：${client.goal}")
+                    val recent = client.history.takeLast(3)
+                    if (recent.isNotEmpty()) {
+                        information("最近命令", Color.rgb(150, 201, 190), true)
+                        recent.asReversed().forEach { entry ->
+                            val mark = when (entry.status) {
+                                "running" -> "▸"
+                                "completed" -> "✓"
+                                "failed" -> "✕"
+                                "cancelled" -> "–"
+                                else -> "?"
+                            }
+                            // Keep each action independently readable, including repeated failures.
+                            val label = entry.label.removePrefix("正在")
+                            val line = listOf(label, entry.explanation).filter { it.isNotBlank() }.joinToString(" — ")
+                            val error = PhoneAgentStatus.errorText(entry.error)
+                            information("$mark $line" + error.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty(),
+                                if (entry.status == "failed") Color.rgb(255, 181, 171) else Color.rgb(223, 232, 229))
+                            (getChildAt(childCount - 1) as? TextView)?.contentDescription =
+                                "${when (entry.status) {
+                                    "running" -> "执行中"
+                                    "completed" -> "完成"
+                                    "failed" -> "失败"
+                                    "cancelled" -> "已取消"
+                                    else -> "结果待确认"
+                                }}，$line，$error"
+                        }
+                    } else if (client.operation.isNotBlank()) information("▸ ${client.operation}")
                 }, LinearLayout.LayoutParams(-1, -2))
-                if (index < state.connections.lastIndex) addView(android.view.View(context).apply {
+                if (index < clients.lastIndex) addView(android.view.View(context).apply {
                     setBackgroundColor(Color.argb(35, 255, 255, 255))
                 }, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(3) })
             }
@@ -204,18 +219,32 @@ class PhoneAgentUi(private val context: Context) {
             addView(LinearLayout(context).apply {
                 gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(30)
                 contentDescription = "按住拖动悬浮窗，点击${if (minimized) "展开" else "最小化"}"
-                addView(text("● ${if (minimized && !state.operating) if (state.notice?.help == true) "待协助" else "Agent" else title} · ${state.connections.size}", 11f, Color.rgb(136, 234, 206), true), LinearLayout.LayoutParams(0, -2, 1f))
+                val heading = "● $title"
+                addView(text(if (single) heading else "$heading · ${state.connections.size} 个连接", 11f, Color.rgb(136, 234, 206), true).apply {
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(0, -2, 1f))
                 addView(button(if (minimized) "展开" else "收起") { toggleMinimized() })
                 enableDragging(this)
             }, LinearLayout.LayoutParams(-1, -2))
-            if (!minimized) addView(object : ScrollView(context) {
-                override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                    super.onMeasure(widthMeasureSpec, android.view.View.MeasureSpec.makeMeasureSpec(maximumContentHeight, android.view.View.MeasureSpec.AT_MOST))
+            if (!minimized) {
+                state.notice?.let { notice ->
+                    addView(text("${notice.agent} · ${if (notice.help) "请求协助" else "消息"}", 11f, Color.rgb(136, 234, 206), true))
+                    addView(text(notice.message, 12f, Color.WHITE).apply {
+                        maxLines = 5; ellipsize = android.text.TextUtils.TruncateAt.END
+                    })
+                    addView(LinearLayout(context).apply {
+                        gravity = Gravity.END
+                        if (notice.help) addView(button("已完成") { reply(notice.id, "done") })
+                        addView(button(if (notice.help) "暂不处理" else "知道了") { reply(notice.id, "dismissed") })
+                    })
                 }
-            }.apply {
-                addView(groups); contentScroll = this
-                post { contentOffset = contentOffset.coerceAtMost(((groups.height - height).coerceAtLeast(0))); scrollTo(0, contentOffset) }
-            }, LinearLayout.LayoutParams(-1, -2))
+                // No scrolling: keep the most recent actions at the top, within a bounded area.
+                addView(object : LinearLayout(context) {
+                    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                        super.onMeasure(widthMeasureSpec, android.view.View.MeasureSpec.makeMeasureSpec(maximumContentHeight, android.view.View.MeasureSpec.AT_MOST))
+                    }
+                }.apply { orientation = LinearLayout.VERTICAL; addView(groups) }, LinearLayout.LayoutParams(-1, -2))
+            }
         }
         panel.dragTouch = enableDragging(panel)
         val layout = WindowManager.LayoutParams(
@@ -227,13 +256,7 @@ class PhoneAgentUi(private val context: Context) {
                 gravity = Gravity.TOP or Gravity.LEFT
             }
         val maximum = (context.resources.displayMetrics.widthPixels - dp(24)).coerceAtLeast(1)
-        val paint = android.text.TextPaint().apply { textSize = 11f * context.resources.displayMetrics.scaledDensity }
-        val strings = listOf("● $title  ·  ${state.connections.size} 个连接") + state.connections.flatMap { client ->
-            listOf("${client.name} · ${if (client.ownsUi) "占用界面" else "已连接"}", client.goal, client.operation, client.explanation) +
-                client.notices.map { "${if (it.help) "请求协助" else "消息"}：${it.message}" }
-        }
-        val desired = if (minimized) minOf(dp(175), maximum) else ((strings.flatMap { it.lines() }.maxOfOrNull { paint.measureText(it) } ?: 0f).toInt() + dp(80))
-            .coerceIn(minOf(dp(240), maximum), maximum)
+        val desired = if (minimized) minOf(dp(210), maximum) else minOf(dp(340), maximum)
         panel.measure(android.view.View.MeasureSpec.makeMeasureSpec(desired, android.view.View.MeasureSpec.EXACTLY),
             android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED))
         val existing = overlay
@@ -250,8 +273,6 @@ class PhoneAgentUi(private val context: Context) {
             runCatching { windows.updateViewLayout(existing, current) }
             animateWidth(existing, desired)
         }
-        handler.removeCallbacks(scrollTick)
-        if (!minimized) handler.postDelayed(scrollTick, 1000)
     }
 
     private fun animateWidth(host: LinearLayout, desired: Int) {
@@ -301,7 +322,6 @@ class PhoneAgentUi(private val context: Context) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     widthAnimation?.cancel(); pendingWidth?.let(handler::removeCallbacks)
-                    scrollPauseUntil = SystemClock.elapsedRealtime() + 1000
                     downX = event.rawX; downY = event.rawY; initialX = params.x; initialY = params.y; dragged = false; true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -368,7 +388,6 @@ class PhoneAgentUi(private val context: Context) {
     }
     private fun dp(value: Int) = (context.resources.displayMetrics.density * value).toInt()
     private fun removeOverlay() {
-        handler.removeCallbacks(scrollTick); contentScroll = null
         pendingWidth?.let(handler::removeCallbacks); pendingWidth = null; widthAnimation?.cancel(); widthAnimation = null; targetWidth = 0
         overlay?.let { runCatching { windows.removeViewImmediate(it) } }; overlay = null
     }

@@ -4,29 +4,59 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AgentActivityLedgerTest {
+    @Test fun overlayHistoryKeepsTheLastThreeCommandsWithExplanations() {
+        val state = AgentActivityLedger { 0 }
+        state.seen("a", "Hermes")
+        state.toolStarted("a", "读取界面", "看当前页面", operationId = "operation")
+        state.toolFinished("a", "operation")
+        state.toolStarted("a", "点击屏幕", "打开设置", operationId = "operation")
+        state.toolFinished("a", "operation")
+        state.toolStarted("a", "输入文本", "填写 WiFi 名称", operationId = "operation")
+        state.toolFinished("a", "operation")
+        state.toolStarted("a", "执行命令", "重启应用", operationId = "operation")
+        val history = state.snapshot().connections.first().history
+        assertEquals(3, history.size)
+        assertEquals(listOf("点击屏幕", "输入文本", "执行命令"), history.map { it.label })
+        assertEquals("重启应用", history.last().explanation)
+        assertTrue(history.last().running)
+        assertFalse(history.first().running)
+        state.toolFinished("a", "operation")
+        assertFalse(state.snapshot().connections.first().history.last().running)
+    }
+
+    @Test fun repeatingTheSameCommandRefreshesOneEntryInsteadOfStacking() {
+        val state = AgentActivityLedger { 0 }
+        state.seen("a", "Hermes")
+        state.toolStarted("a", "读取界面", "看当前页面", operationId = "operation")
+        state.toolStarted("a", "读取界面", "看当前页面", operationId = "operation")
+        assertEquals(1, state.snapshot().connections.first().history.size)
+        state.toolStarted("a", "读取界面", "看购物车", operationId = "operation")
+        assertEquals(2, state.snapshot().connections.first().history.size)
+    }
+
     @Test fun explanationsFollowTheCurrentOperationAndExpireWithoutBecomingNotices() {
         var now = 0L
         val state = AgentActivityLedger { now }
         state.seen("a", "Codex")
-        state.toolStarted("a", "正在点击屏幕", "打开网络设置，检查当前连接")
+        state.toolStarted("a", "正在点击屏幕", "打开网络设置，检查当前连接", operationId = "operation")
         assertEquals("正在点击屏幕", state.snapshot().operation)
         assertEquals("打开网络设置，检查当前连接", state.snapshot().explanation)
         assertNull(state.snapshot().notice)
-        state.toolFinished("a")
+        state.toolFinished("a", "operation")
         now = 2001
         assertEquals("", state.snapshot().explanation)
         assertFalse(state.snapshot().operating)
-        state.toolStarted("a", "读取界面")
+        state.toolStarted("a", "读取界面", operationId = "operation")
         assertEquals("", state.snapshot().explanation)
     }
     @Test fun readOnlyExplanationsAndUiCompletionDoNotDeclareUiOperations() {
         val state = AgentActivityLedger { 0 }
         state.seen("a", "Codex"); state.seen("b", "Hermes")
-        state.toolStarted("a", "", "检查手机能力")
+        state.toolStarted("a", "", "检查手机能力", operationId = "operation")
         assertFalse(state.snapshot().operating)
         assertEquals("检查手机能力", state.snapshot().explanation)
         state.beginUi("a", "检查界面", 300)
-        state.toolStarted("a", "", "界面检查完成")
+        state.toolStarted("a", "", "界面检查完成", operationId = "operation")
         state.endUi("a")
         assertFalse(state.snapshot().operating)
         assertEquals("界面检查完成", state.snapshot().explanation)
@@ -35,7 +65,7 @@ class AgentActivityLedgerTest {
         state.disconnect("a")
         assertEquals("", state.snapshot().explanation)
         assertFalse(state.snapshot().connected)
-        state.toolFinished("a")
+        state.toolFinished("a", "operation")
         state.seen("a", "Codex")
         assertEquals("", state.snapshot().explanation)
     }
@@ -95,7 +125,7 @@ class AgentActivityLedgerTest {
     @Test fun disconnectImmediatelyClearsOnlyTheCallingAgentsActivityAndNotices() {
         val state = AgentActivityLedger { 0 }
         state.seen("a", "Codex"); state.seen("b", "Hermes")
-        state.beginUi("a", "操作", 300); state.toolStarted("a", "截图")
+        state.beginUi("a", "操作", 300); state.toolStarted("a", "截图", operationId = "operation")
         val own = state.notify("a", "协助", true, 300)
         val other = state.notify("b", "其他协助", true, 300)
         val grouped = state.snapshot().connections.associateBy { it.id }

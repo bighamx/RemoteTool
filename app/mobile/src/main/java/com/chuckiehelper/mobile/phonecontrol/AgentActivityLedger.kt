@@ -5,15 +5,20 @@ import org.json.JSONObject
 
 internal data class AgentUserNotice(val id: String, val owner: String, val agent: String, val message: String,
     val help: Boolean, val expiresAt: Long, var status: String = "pending")
+internal data class AgentHistoryEntry(val label: String, val explanation: String, val at: Long,
+    val status: String = "running", val operationId: String = "", val error: String = "") {
+    val running get() = status == "running"
+}
 internal data class AgentConnectionState(val id: String, val name: String, val ownsUi: Boolean, val operation: String, val explanation: String,
-    val goal: String = "", val notices: List<AgentUserNotice> = emptyList())
+    val goal: String = "", val notices: List<AgentUserNotice> = emptyList(), val history: List<AgentHistoryEntry> = emptyList())
 internal data class AgentDisplayState(val connected: Boolean, val agent: String, val operating: Boolean,
     val operation: String, val notice: AgentUserNotice?, val explanation: String = "", val connections: List<AgentConnectionState> = emptyList())
 
 /** Connections are independent. UI ownership ends explicitly, or after five idle minutes. */
 internal class AgentActivityLedger(private val clock: () -> Long) {
     private data class Agent(var name: String, var seenUntil: Long, var goal: String = "",
-        var operation: String = "", var explanation: String = "", var operationUntil: Long = 0)
+        var operation: String = "", var explanation: String = "", var operationUntil: Long = 0,
+        val history: MutableList<AgentHistoryEntry> = mutableListOf())
     private val agents = linkedMapOf<String, Agent>()
     private val notices = linkedMapOf<String, AgentUserNotice>()
     private var uiOwner = ""
@@ -53,13 +58,33 @@ internal class AgentActivityLedger(private val clock: () -> Long) {
         if (uiOwner == id) uiOwner = ""
         agents[id]?.let { it.goal = ""; it.operation = "" }
     }
-    @Synchronized fun toolStarted(id: String, label: String, purpose: String = "") {
+    @Synchronized fun toolStarted(id: String, label: String, purpose: String = "", operationId: String = "") {
         agents[id]?.let {
-            it.operation = label; it.explanation = purpose.filter { ch -> !ch.isISOControl() || ch == '\n' }.trim().take(240)
+            val explanation = purpose.filter { ch -> !ch.isISOControl() || ch == '\n' }.trim().take(240)
+            it.operation = label; it.explanation = explanation
             it.operationUntil = clock() + 130_000
+            // 最近运行的命令留三条：同一命令的连续刷新只更新那一条，不重复占位。
+            val last = it.history.lastOrNull()
+            if (last != null && last.label == label && last.explanation == explanation && last.running && last.operationId == operationId) {
+                it.history[it.history.lastIndex] = last.copy(at = clock())
+            } else {
+                it.history.add(AgentHistoryEntry(label, explanation, clock(), operationId = operationId))
+                while (it.history.size > 3) it.history.removeAt(0)
+            }
         }
     }
-    @Synchronized fun toolFinished(id: String) { agents[id]?.operationUntil = clock() + 2_000 }
+    @Synchronized fun toolFinished(id: String, operationId: String = "", status: String = "completed", error: String = "") {
+        if (operationId.isBlank()) return
+        agents[id]?.let { agent ->
+            val index = agent.history.indexOfLast { it.operationId == operationId }
+            if (index >= 0) {
+                val entry = agent.history[index]
+                agent.history[index] = entry.copy(status = status,
+                    error = error.filter { !it.isISOControl() }.take(100))
+                if (index == agent.history.lastIndex) agent.operationUntil = clock() + 2_000
+            }
+        }
+    }
     @Synchronized fun notify(id: String, message: String, help: Boolean, duration: Int): AgentUserNotice {
         val notice = AgentUserNotice(UUID.randomUUID().toString(), id, agents[id]?.name ?: "Agent", message.take(1000), help,
             clock() + duration.coerceIn(5, 1800) * 1000L)
@@ -77,11 +102,13 @@ internal class AgentActivityLedger(private val clock: () -> Long) {
         val now = clock()
         val rows = agents.map { (id, row) -> AgentConnectionState(id, row.name, id == uiOwner,
             row.operation.takeIf { row.operationUntil > now }.orEmpty(), row.explanation.takeIf { row.operationUntil > now }.orEmpty(),
-            row.goal.takeIf { id == uiOwner }.orEmpty(), notices.values.filter { it.owner == id && it.status == "pending" }.map { it.copy() }) }
+            row.goal.takeIf { id == uiOwner }.orEmpty(), notices.values.filter { it.owner == id && it.status == "pending" }.map { it.copy() },
+            row.history.toList()) }
         val focused = rows.firstOrNull { it.ownsUi } ?: rows.lastOrNull { it.operation.isNotEmpty() || it.explanation.isNotEmpty() } ?: rows.lastOrNull()
         val operation = focused?.operation.orEmpty().ifBlank { agents[uiOwner]?.goal.orEmpty().ifBlank { if (uiOwner.isNotEmpty()) "界面已占用" else "" } }
         return AgentDisplayState(rows.isNotEmpty(), focused?.name ?: "Agent", uiOwner.isNotEmpty() || rows.any { it.operation.isNotEmpty() }, operation,
-            notices.values.lastOrNull { it.status == "pending" }?.copy(), focused?.explanation.orEmpty(), rows)
+            (notices.values.lastOrNull { it.status == "pending" && it.help }
+                ?: notices.values.lastOrNull { it.status == "pending" })?.copy(), focused?.explanation.orEmpty(), rows)
     }
     @Synchronized fun clear() {
         agents.clear(); uiOwner = ""
@@ -89,6 +116,13 @@ internal class AgentActivityLedger(private val clock: () -> Long) {
     }
     private fun expire() {
         val now = clock()
+        agents.values.forEach { agent ->
+            agent.history.indices.forEach { index ->
+                val entry = agent.history[index]
+                if (entry.running && now - entry.at >= 130_000)
+                    agent.history[index] = entry.copy(status = "unknown", error = "尚未收到执行结果")
+            }
+        }
         if (uiOwner.isNotEmpty() && now - lastUi >= 300_000L) { agents[uiOwner]?.goal = ""; uiOwner = "" }
         notices.values.filter { it.status == "pending" && it.expiresAt <= now }.forEach { it.status = "expired" }
         agents.filter { it.key != uiOwner && it.value.seenUntil <= now }.keys.toList().forEach(::disconnect)

@@ -54,7 +54,7 @@ internal fun encodeHistorySnapshot(messages: List<HermesMessage>) = JSONArray(me
     obj("role" to message.role, "text" to agentMessageContentText(message.text, message.attachments.isNotEmpty()), "id" to message.serverId,
         "attachments" to JSONArray(message.attachments), "timestamp" to message.timestamp,
         "narration" to message.narration, "turnId" to message.nativeTurnId, "editable" to message.editable,
-        "requestKey" to message.requestKey, "messageType" to message.messageType, "interactions" to JSONArray(message.interactions))
+        "requestKey" to message.requestKey, "messageType" to message.messageType, "interactions" to JSONArray(message.interactions), "messageUid" to message.messageUid)
 })
 
 internal fun decodeHistorySnapshot(rows: JSONArray): List<HermesMessage> = rows.objects().map { row ->
@@ -70,7 +70,8 @@ internal fun decodeHistorySnapshot(rows: JSONArray): List<HermesMessage> = rows.
         editable = row.optBoolean("editable", true),
         requestKey = row.optString("requestKey").takeIf { it.isNotBlank() && it != "null" },
         interactions = row.array("interactions").objects(),
-        messageType = row.cleanSetting("messageType").takeIf { it.isNotBlank() } ?: legacyType)
+        messageType = row.cleanSetting("messageType").takeIf { it.isNotBlank() } ?: legacyType,
+        messageUid = row.cleanSetting("messageUid").takeIf { it.isNotBlank() })
 }
 
 /** Pending submissions are temporary trailing rows, never position hints for native history. */
@@ -138,17 +139,23 @@ internal fun attachConfirmedSubmission(history: List<HermesMessage>, id: Long, a
     ) else row }
 
 /** Only the live task contributes an overlay. Native rows are never moved or coalesced. */
-internal fun withActiveNarrations(history: List<HermesMessage>, narrations: List<AssistantNarration>, activeRun: String?): List<HermesMessage> {
+internal fun withActiveNarrations(history: List<HermesMessage>, narrations: List<AssistantNarration>, activeRun: String?, legacyHermes: Boolean = false): List<HermesMessage> {
     if (activeRun == null) return history
     val active = narrations.filter { it.run == activeRun }.distinctBy { it.key }
     val liveRows = history.map { row ->
-        val live = active.lastOrNull { it.streamed && it.messageId != null && row.role == "assistant" &&
-            row.serverId == narrationMessageId(it.messageId) && narrationCovers(it.text, row.text) }
+        val live = active.lastOrNull { it.streamed && row.role == "assistant" &&
+            (it.messageUid != null && it.messageUid == row.messageUid || it.messageUid == null && it.messageId != null && row.serverId == narrationMessageId(it.messageId)) &&
+            (if (it.messageUid != null) it.text.startsWith(row.text) else narrationCovers(it.text, row.text)) }
         if (live != null && live.text.length > row.text.length) row.copy(text = live.text) else row
     }
     val firstNativeTime = liveRows.firstNotNullOfOrNull { it.timestamp.takeIf { _ -> it.serverId > 0 } }
+    val acknowledged = if (legacyHermes) acknowledgedHermesNarrations(liveRows, active) else emptyMap()
+    // Hermes may stamp an injected user a few milliseconds after its reply in the
+    // same native append batch. Apply this tolerance only to temporary overlays.
+    fun anchor(rows: List<HermesMessage>, note: AssistantNarration) = narrationAnchorIndex(rows, note, if (legacyHermes) 50 else 0)
     val overlays = active.filter { note ->
-        val anchor = narrationAnchorIndex(liveRows, note)
+        if (note.key in acknowledged) return@filter false
+        val anchor = anchor(liveRows, note)
         // A long-running task can outlive the last-30-message window. Its earlier
         // replayed events belong before that window, never after the newest reply.
         if (firstNativeTime != null && note.timestamp < firstNativeTime && anchor < 0) return@filter false
@@ -156,21 +163,22 @@ internal fun withActiveNarrations(history: List<HermesMessage>, narrations: List
             else liveRows.indexOfFirst { it.role == "user" && it.timestamp?.let { at -> at > note.timestamp } == true }
                 .takeIf { it >= 0 } ?: liveRows.size
         liveRows.withIndex().none { (index, row) -> row.role == "assistant" && (
-            note.messageId != null && row.serverId == narrationMessageId(note.messageId) ||
-                note.messageId == null && index in (anchor + 1 until end) &&
+            note.messageUid != null && note.messageUid == row.messageUid ||
+            note.messageUid == null && note.messageId != null && row.serverId == narrationMessageId(note.messageId) ||
+                note.messageUid == null && (!legacyHermes || !note.streamed) && note.messageId == null && index in (anchor + 1 until end) &&
                     (anchor >= 0 || firstNativeTime != null && row.timestamp != null &&
                         note.userTimestamp?.let { row.timestamp >= it } == true) && narrationCovers(row.text, note.text)) }
     }.sortedWith(compareBy<AssistantNarration> { it.timestamp }.thenBy { it.sequence ?: Long.MAX_VALUE })
     val rows = liveRows.toMutableList()
     overlays.forEach { note ->
-        val anchor = narrationAnchorIndex(rows, note)
+        val anchor = anchor(rows, note)
         val start = (anchor + 1).coerceAtLeast(0)
         val end = (start until rows.size).firstOrNull { rows[it].role == "user" &&
             (anchor >= 0 || rows[it].timestamp?.let { at -> at > note.timestamp } == true) } ?: rows.size
         // Insert only transient rows. Preserve the exact relative order of every native row,
         // including undated rows and timestamps that differ slightly from append order.
         val position = (start until end).firstOrNull { rows[it].timestamp?.let { at -> at > note.timestamp } == true } ?: end
-        rows.add(position, HermesMessage("assistant", note.text, localKey = note.key, timestamp = note.timestamp, narration = true))
+        rows.add(position, HermesMessage("assistant", note.text, localKey = note.key, timestamp = note.timestamp, narration = true, messageUid = note.messageUid))
     }
     return rows
 }

@@ -69,7 +69,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             providers = activity.SessionModelInfo(wanted).ToDictionary(pair => pair.Key, pair => pair.Value.Provider));
         var models = new Dictionary<string,string>();
         try {
-            using var upstream = await bridge.SendAsync(HttpMethod.Get, "api/sessions?limit=50", null, null, ct);
+            using var upstream = await bridge.SendAsync(HttpMethod.Get, "api/sessions?limit=50&exclude_sources=cron", null, null, ct);
             if (upstream.IsSuccessStatusCode && System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct)) is { } list && list["data"] is System.Text.Json.Nodes.JsonArray rows)
                 foreach (var row in rows.OfType<System.Text.Json.Nodes.JsonObject>())
                     if (row["id"]?.ToString() is { } rid && row["model"]?.ToString() is { } mdl) models[rid] = mdl;
@@ -262,7 +262,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     [HttpGet("sessions")] public async Task<IActionResult> Sessions([FromQuery] int offset = 0, CancellationToken ct = default) {
         Response.Headers.CacheControl = "no-store";
         try {
-            using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions?limit=50&offset={Math.Max(0, offset)}", null, null, ct);
+            using var upstream = await bridge.SendAsync(HttpMethod.Get, $"api/sessions?limit=50&offset={Math.Max(0, offset)}&exclude_sources=cron", null, null, ct);
             if (!upstream.IsSuccessStatusCode) return StatusCode(502, new { message = "无法读取 Hermes 会话列表" });
             var result = System.Text.Json.Nodes.JsonNode.Parse(await upstream.Content.ReadAsStringAsync(ct))!;
             if (result["data"] is System.Text.Json.Nodes.JsonArray rows) {

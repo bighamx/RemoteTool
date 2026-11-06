@@ -17,5 +17,5 @@ internal fun compactCodexToolPreview(preview: String): String {
         command = command.drop(1)
         if (command.lastOrNull() == quote) command = command.dropLast(1)
     }
-    return "pwsh $command"
+    return "…/pwsh $command"
 }

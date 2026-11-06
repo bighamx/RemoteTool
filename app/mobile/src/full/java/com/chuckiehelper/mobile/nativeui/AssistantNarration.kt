@@ -5,7 +5,8 @@ import org.json.JSONObject
 
 data class AssistantNarration(val key: String, val session: String, val text: String, val anchor: Long,
     val userText: String, val timestamp: Long, val userTimestamp: Long? = null, val sequence: Long? = null,
-    val run: String? = null, val messageId: String? = null, val streamed: Boolean = false, val userKey: String? = null)
+    val run: String? = null, val messageId: String? = null, val streamed: Boolean = false, val userKey: String? = null,
+    val messageUid: String? = null)
 
 /** Earlier caches inferred an anchor from the latest visible user and sometimes invented the time. */
 fun restoreAssistantNarrations(rows: JSONArray): List<AssistantNarration> = rows.objects().mapNotNull { row ->
@@ -16,12 +17,18 @@ fun restoreAssistantNarrations(rows: JSONArray): List<AssistantNarration> = rows
             row.optLong("userTimestamp").takeIf { it > 0 }, row.optLong("sequence", -1).takeIf { it >= 0 },
             row.optString("run").takeIf { it.isNotBlank() && it != "null" },
             row.optString("messageId").takeIf { it.isNotBlank() && it != "null" }, row.optBoolean("streamed"),
-            row.optString("userKey").takeIf { it.isNotBlank() && it != "null" })
+            row.optString("userKey").takeIf { it.isNotBlank() && it != "null" },
+            row.optString("messageUid").takeIf { it.isNotBlank() && it != "null" })
     }.getOrNull()?.takeIf { it.timestamp > 0 }
 }
 
 /** The message array is in server order; numeric Codex message IDs are hashes, not chronology. */
-fun narrationAnchorIndex(history: List<HermesMessage>, note: AssistantNarration): Int {
+fun narrationAnchorIndex(history: List<HermesMessage>, note: AssistantNarration, sourceSkewMillis: Long = 0): Int {
+    val observedAt = note.timestamp + sourceSkewMillis
+    note.messageUid?.let { uid ->
+        val message = history.indexOfFirst { it.role == "assistant" && it.messageUid == uid }
+        if (message >= 0) return (message - 1 downTo 0).firstOrNull { history[it].role == "user" } ?: -1
+    }
     note.messageId?.let { id ->
         val message = history.indexOfFirst { it.role == "assistant" && it.serverId == narrationMessageId(id) }
         if (message >= 0) return (message - 1 downTo 0).firstOrNull { history[it].role == "user" } ?: -1
@@ -35,7 +42,7 @@ fun narrationAnchorIndex(history: List<HermesMessage>, note: AssistantNarration)
             // A run can accept several interjections. Its original user binding
             // must not pull later commentary ahead of newer accepted instructions.
             val newer = (explicit + 1 until history.size).any {
-                history[it].role == "user" && history[it].timestamp?.let { at -> at <= note.timestamp } == true
+                history[it].role == "user" && history[it].timestamp?.let { at -> at <= observedAt } == true
             }
             if (!newer) return explicit
         }
@@ -43,14 +50,14 @@ fun narrationAnchorIndex(history: List<HermesMessage>, note: AssistantNarration)
     val users = history.indices.filter { history[it].role == "user" }
     val candidates = users.filter {
         val user = history[it]
-        user.serverId > 0 && user.timestamp != null && user.timestamp <= note.timestamp
+        user.serverId > 0 && user.timestamp != null && user.timestamp <= observedAt
     }
     val latestTime = candidates.maxOfOrNull { history[it].timestamp!! }
     val sameTime = candidates.filter { history[it].timestamp == latestTime }
     val anchor = if (sameTime.size == 1) sameTime.single() else if (sameTime.isNotEmpty()) return -1 else {
         // A previously verified exact ID can survive a server temporarily omitting timestamps.
         // A repeated userText alone must never establish identity.
-        if (note.anchor <= 0 || note.userTimestamp == null || note.userTimestamp > note.timestamp) return -1
+        if (note.anchor <= 0 || note.userTimestamp == null || note.userTimestamp > observedAt) return -1
         val verified = users.singleOrNull { history[it].serverId == note.anchor && history[it].text.trim() == note.userText.trim() }
             ?: return -1
         if (history[verified].timestamp != null) return -1 // Known timestamps override a stale hint.
@@ -59,7 +66,7 @@ fun narrationAnchorIndex(history: List<HermesMessage>, note: AssistantNarration)
     val next = users.firstOrNull { it > anchor }
     if (next != null) {
         val nextTime = history[next].timestamp ?: return -1
-        if (nextTime <= note.timestamp) return -1 // May still be an optimistic user row awaiting history.
+        if (nextTime <= observedAt) return -1 // May still be an optimistic user row awaiting history.
     }
     return anchor
 }
@@ -168,11 +175,12 @@ internal fun terminalHistoryContainsAssistant(history: List<HermesMessage>, item
 }
 
 internal fun upsertAssistantNarration(existing: List<AssistantNarration>, incoming: AssistantNarration,
-    history: List<HermesMessage>): List<AssistantNarration> {
+    history: List<HermesMessage>, mergeByText: Boolean = true): List<AssistantNarration> {
     val anchor = narrationAnchorIndex(history, incoming)
     val index = existing.indexOfFirst { note -> note.session == incoming.session && (
-        note.key == incoming.key || incoming.messageId != null && note.messageId == incoming.messageId && note.run == incoming.run ||
-            incoming.run != null && incoming.run == note.run && anchor >= 0 && narrationAnchorIndex(history, note) == anchor &&
+        note.key == incoming.key || incoming.messageUid != null && incoming.messageUid == note.messageUid ||
+            incoming.messageId != null && note.messageId == incoming.messageId && note.run == incoming.run ||
+            mergeByText && incoming.messageUid == null && note.messageUid == null && incoming.run != null && incoming.run == note.run && anchor >= 0 && narrationAnchorIndex(history, note) == anchor &&
             (narrationCovers(note.text, incoming.text) || narrationCovers(incoming.text, note.text))) }
     if (index < 0) return existing + incoming
     val previous = existing[index]

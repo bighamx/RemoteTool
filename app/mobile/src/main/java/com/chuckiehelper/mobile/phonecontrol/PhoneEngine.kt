@@ -127,7 +127,7 @@ class PhoneEngine(val context: Context) {
                 journal.claim(requestId, digest, agentId)?.let { return it }
                 connectionSeen(agentId, agentName)
                 val epoch = generation
-                val hasIndicator = agentUi.toolStarted(agentId, name, explanation)
+                val hasIndicator = agentUi.toolStarted(agentId, name, explanation, requestId)
                 val startedAt = android.os.SystemClock.elapsedRealtime()
                 var attempted = false
                 val result = try {
@@ -162,11 +162,21 @@ class PhoneEngine(val context: Context) {
                     JSONObject().put("isError", failed).put("content", JSONArray().put(JSONObject().put("type", "text").put("text", data.toString())))
                         .put("structuredContent", data)
                 } catch (error: Exception) { errorResult(error) }
-                finally { if (hasIndicator) agentUi.toolFinished(agentId) }
                 val receipt = result.getJSONObject("structuredContent")
                 receipt.put("operation_id", requestId).put("execution", if (receipt.optString("code") == "delivery_unknown") "unknown" else if (!attempted) "not_started" else "receipt_available")
                     .put("metrics", JSONObject().put("device_ms", android.os.SystemClock.elapsedRealtime() - startedAt).put("queue_ms", queueMs.coerceAtLeast(0)))
                 if (receipt.optString("code") == "postcondition_timeout") result.put("isError", true)
+                if (hasIndicator) {
+                    val code = receipt.optString("code")
+                    val status = when {
+                        code in setOf("cancelled", "connection_closed_by_user") -> "cancelled"
+                        code == "delivery_unknown" -> "unknown"
+                        result.optBoolean("isError") -> "failed"
+                        else -> "completed"
+                    }
+                    agentUi.toolFinished(agentId, requestId, status,
+                        if (status in setOf("failed", "unknown")) receipt.optString("message", code) else "")
+                }
                 result.getJSONArray("content").getJSONObject(0).put("text", receipt.toString())
                 // Large image data is carried separately from structured metadata.
                 result.optJSONObject("structuredContent")?.optString("image_base64")?.takeIf { it.isNotBlank() }?.let { image ->

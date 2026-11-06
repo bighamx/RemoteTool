@@ -13,6 +13,9 @@ import androidx.core.app.NotificationCompat
 object BackgroundNotification {
     private const val ID = 41
     private const val CHANNEL = "remotetool-background"
+    // 焦点通知/超级岛走独立渠道：HyperOS 只把高优先级、非静默的通知提升到状态栏或岛上，
+    // 后台服务那种 IMPORTANCE_LOW + SILENT 的通知即使带了 miui.focus.param 也不会显示。
+    private const val FOCUS_CHANNEL = "remotetool-agent"
     private data class Feature(val service: Service, val text: String, val action: String?, val stop: PendingIntent?, val focus: android.os.Bundle? = null, val liveUpdate: Boolean = false, val liveStatus: String = "")
     private val features = linkedMapOf<String, Feature>()
     private var lastFocus: android.os.Bundle? = null
@@ -28,6 +31,9 @@ object BackgroundNotification {
     fun start(service: Service, owner: String, text: String, action: String? = null, stop: PendingIntent? = null) {
         val manager = service.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "后台服务", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
+        manager.createNotificationChannel(NotificationChannel(FOCUS_CHANNEL, "手机操控", NotificationManager.IMPORTANCE_HIGH).apply {
+            setShowBadge(false); setSound(null, null); enableVibration(false)
+        })
         val old = features.put(owner, Feature(service, text, action, stop))
         try { service.startForeground(ID, build(service)) }
         catch (error: RuntimeException) {
@@ -56,12 +62,14 @@ object BackgroundNotification {
             ?: Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${context.packageName}"))
         val open = PendingIntent.getActivity(context, 300, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val summary = features.values.joinToString(" · ") { it.text }
-        val builder = NotificationCompat.Builder(context, CHANNEL).setSmallIcon(android.R.drawable.stat_notify_sync)
+        val focus = features.values.firstNotNullOfOrNull { it.focus }
+        val builder = NotificationCompat.Builder(context, if (focus != null) FOCUS_CHANNEL else CHANNEL)
+            .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle(if (features.values.any { it.liveUpdate }) "正在操控手机" else "${context.applicationInfo.loadLabel(context.packageManager)} 后台服务").setContentText(summary)
             .setStyle(NotificationCompat.BigTextStyle().bigText(summary)).setContentIntent(open)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE).setOngoing(true).setOnlyAlertOnce(true).setSilent(true).setShowWhen(false)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE).setOngoing(true).setOnlyAlertOnce(true)
+            .setSilent(focus == null).setShowWhen(false)
         features.values.filter { it.action != null && it.stop != null }.forEach { builder.addAction(0, it.action, it.stop) }
-        val focus = features.values.firstNotNullOfOrNull { it.focus }
         if (focus != null) builder.addExtras(focus)
         else lastFocus?.let { previous ->
             // An ordinary foreground service notification may remain after the agent

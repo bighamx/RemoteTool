@@ -5,14 +5,14 @@ import org.junit.Test
 
 class CodexToolPreviewTest {
     @Test fun quotedWindowsLauncherLeavesTheActualCommandAndItsQuotes() {
-        assertEquals("pwsh Get-Content 'C:\\Users\\chuckie\\notes.txt'",
+        assertEquals("…/pwsh Get-Content 'C:\\Users\\chuckie\\notes.txt'",
             compactCodexToolPreview("\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -Command \"Get-Content 'C:\\Users\\chuckie\\notes.txt'\""))
     }
 
     @Test fun truncatedPreviewAndEscapedPathStillShowUsefulCommandText() {
-        assertEquals("pwsh rg -n 'Helper|8888' ../docs…",
+        assertEquals("…/pwsh rg -n 'Helper|8888' ../docs…",
             compactCodexToolPreview("\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"rg -n 'Helper|8888' ../docs…"))
-        assertEquals("pwsh Write-Output 'hello'",
+        assertEquals("…/pwsh Write-Output 'hello'",
             compactCodexToolPreview("pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -c \"Write-Output 'hello'\""))
     }
 

@@ -7,14 +7,15 @@ internal fun chatAssistantIdentity(run: String, item: String?, timestamp: Long?)
     item?.let { "server:${narrationMessageId(it)}" } ?: "stream:$run:$timestamp"
 
 internal data class ChatTextStream(val run: String, val item: String?, val text: String,
-    val timestamp: Long?, val completed: Boolean = false, val narration: Boolean = false) {
-    val identity get() = chatAssistantIdentity(run, item, timestamp)
+    val timestamp: Long?, val completed: Boolean = false, val narration: Boolean = false, val messageUid: String? = null) {
+    val identity get() = messageUid?.let { "hermes:$it" } ?: chatAssistantIdentity(run, item, timestamp)
 }
 
 internal fun chatMessageItems(rows: List<HermesMessage>, stream: ChatTextStream? = null,
     assistantIdentities: Map<String, String> = emptyMap()): List<ChatMessageItem> {
     fun identity(row: HermesMessage): String =
-        if (row.role == "assistant" && row.serverId > 0) "server:${row.serverId}"
+        if (row.messageUid != null) "hermes:${row.messageUid}"
+        else if (row.role == "assistant" && row.serverId > 0) "server:${row.serverId}"
         else if (row.role == "assistant" && assistantIdentities[row.localKey] != null) assistantIdentities.getValue(row.localKey!!)
         else row.localKey?.let { "local:$it" } ?: if (row.serverId > 0) "server:${row.serverId}" else
             "fallback:${row.role}:${row.timestamp}:${row.text.hashCode()}"

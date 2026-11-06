@@ -240,11 +240,14 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     val scroll = rememberLazyListState()
     // LazyColumn evaluates its content later, potentially after history/SSE updates.
     // Capture the row and key together; never index keys using a newer model list.
-    val messageRows = model.messages
+    val messageRows = model.messagesWithReasoning
     val textStream = model.chatTextStream
     val assistantIdentities = model.assistantRowIdentities
-    val messageItems = remember(messageRows, textStream, assistantIdentities) {
-        chatMessageItems(messageRows, textStream, assistantIdentities)
+    val reasoningKey = model.reasoningStreamingKey
+    val messageItems = remember(messageRows, textStream, assistantIdentities, reasoningKey) {
+        chatMessageItems(messageRows, textStream, assistantIdentities).map { item ->
+            if (item.message.messageType == "reasoning") item.copy(streaming = item.message.localKey == reasoningKey) else item
+        }
     }
     // Keep expansion outside the lazy row: offscreen row disposal must not collapse it.
     var activityExpanded by rememberSaveable(deviceId, agent, model.selectedId, model.executionKey) { mutableStateOf(false) }

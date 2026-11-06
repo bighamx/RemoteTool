@@ -58,6 +58,8 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
             if (!long.TryParse(row["id"]?.ToString(), out var id)) continue;
             var meta = active.FirstOrDefault(item => item.Id == id);
             if (meta == null) continue;
+            if (string.IsNullOrEmpty(row["message_uid"]?.ToString()) && !string.IsNullOrEmpty(meta.MessageUid))
+                row["message_uid"] = meta.MessageUid;
             row["display_order"] = meta.DisplayOrder;
             if (estimated.Contains(id)) row["time_estimated"] = true;
             present[meta.DisplayOrder] = "row";
@@ -71,7 +73,7 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
             if (text.Length == 0) continue;
             var item = new JsonObject {
                 ["id"] = row.Id, ["role"] = row.Role, ["content"] = text, ["timestamp"] = row.Timestamp,
-                ["display_order"] = row.DisplayOrder, ["compacted"] = true
+                ["display_order"] = row.DisplayOrder, ["message_uid"] = row.MessageUid, ["compacted"] = true
             };
             var index = data.Count;
             for (var at = 0; at < data.Count; at++) {

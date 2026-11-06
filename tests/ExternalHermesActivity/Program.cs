@@ -138,3 +138,33 @@ Check(HermesSessionActivity.ReadActiveRunCandidates(nativeRuns, "../other").Coun
     "invalid session identity cannot discover a run");
 Console.WriteLine($"External Hermes activity checks: {count} passed; temporary fixture: {root}");
 // sqlite-net's provider can retain handles until process exit; this is an isolated temp fixture.
+
+// The running native HTTP server can omit message_uid even with the new schema.
+// Exercise the actual read-only history annotation against an isolated native store.
+var identityHome = Path.Combine(root, "uid-history");
+Directory.CreateDirectory(identityHome);
+var identityDb = Path.Combine(identityHome, "state.db");
+using (var native = new SQLiteConnection(identityDb)) {
+    native.Execute("CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,display_order INTEGER,active INTEGER,compacted INTEGER,timestamp REAL,message_uid TEXT,role TEXT,content TEXT)");
+    native.Execute("INSERT INTO messages VALUES(1,'s',1,1,0,100,'uid-user','user','request')");
+    native.Execute("INSERT INTO messages VALUES(2,'s',2,1,0,100,'uid-assistant','assistant','reply')");
+    native.Execute("INSERT INTO messages VALUES(3,'s',3,0,1,100,'uid-compacted','assistant','archived reply')");
+    native.Execute("INSERT INTO messages VALUES(4,'s',4,1,0,100,'uid-tool','tool','output')");
+    native.Execute("INSERT INTO messages VALUES(5,'s',5,1,0,100,'uid-db','assistant','native uid wins')");
+    native.Execute("INSERT INTO messages VALUES(6,'other',6,1,0,100,'uid-private','assistant','other session')");
+}
+var identitySettings = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string> { ["Hermes:HomeDirectory"] = identityHome }).Build();
+var projection = new JsonObject { ["data"] = new JsonArray(
+    new JsonObject { ["id"] = 1, ["role"] = "user" },
+    new JsonObject { ["id"] = 2, ["role"] = "assistant" },
+    new JsonObject { ["id"] = 4, ["role"] = "tool" },
+    new JsonObject { ["id"] = 5, ["role"] = "assistant", ["message_uid"] = "uid-upstream" },
+    new JsonObject { ["id"] = 6, ["role"] = "assistant" }) };
+var identityHash = SHA256.HashData(File.ReadAllBytes(identityDb));
+new HermesSessionActivity(identitySettings).AnnotateHistory("s", projection);
+var projected = projection["data"].AsArray();
+Check(projected[0]["message_uid"].ToString() == "uid-user" && projected[1]["message_uid"].ToString() == "uid-assistant", "native user and assistant UID backfill");
+Check(projected[2]["message_uid"].ToString() == "uid-compacted" && projected[3]["message_uid"].ToString() == "uid-tool", "compacted and tool rows retain native identity and order");
+Check(projected[4]["message_uid"].ToString() == "uid-upstream" && projected[5]["message_uid"] == null, "upstream UID wins; another session is never exposed");
+Check(identityHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(identityDb))), "UID projection never writes the Hermes database");
+Console.WriteLine("Hermes UID history annotation checks passed.");

@@ -122,9 +122,7 @@ internal static class CodexRolloutSnapshot
                             if (preview.Length <= 65536 && JsonNode.Parse(preview) is JsonObject arguments)
                                 preview = arguments.S("cmd", arguments.S("command", arguments.S("code", arguments.S("path", preview))));
                         } catch (JsonException) { }
-                        if (preview.Length > 2048) preview = preview[..2048];
-                        preview = System.Text.RegularExpressions.Regex.Replace(preview, @"\s+", " ").Trim();
-                        if (preview.Length > 250) preview = preview[..250] + "…";
+                        preview = CodexToolEvent.Preview(preview);
                         state.Tools[id] = Obj(("id", id), ("tool", name), ("preview", preview), ("status", "running"), ("timestamp", timestamp));
                         state.ToolCount++; state.LastResponseAt = Math.Max(state.LastResponseAt, timestamp); state.ActivityRevision++;
                         if (state.Tools.Count > 128) state.Tools.Remove(state.Tools.Keys.First());

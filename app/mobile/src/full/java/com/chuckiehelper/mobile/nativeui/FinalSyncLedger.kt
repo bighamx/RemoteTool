@@ -5,10 +5,10 @@ import org.json.JSONObject
 
 internal data class FinalSyncState(val session: String, val run: String, val item: String?, val turn: String?,
     val text: String, val timestamp: Long?, val startedAt: Long?, val canConfirm: Boolean = true,
-    val flushedPrefix: String = "") {
+    val flushedPrefix: String = "", val messageUid: String? = null) {
     fun json() = JSONObject().put("session", session).put("run", run).put("item", item).put("turn", turn)
         .put("text", text).put("timestamp", timestamp).put("startedAt", startedAt).put("canConfirm", canConfirm)
-        .put("flushedPrefix", flushedPrefix)
+        .put("flushedPrefix", flushedPrefix).put("messageUid", messageUid)
 }
 
 internal data class OutgoingFiles(val session: String, val run: String, val item: String?, val turn: String?,
@@ -28,7 +28,8 @@ internal fun restoreFinalSyncStates(raw: String?): List<FinalSyncState> = runCat
             row.optString("item").takeUnless { it.isBlank() || it == "null" },
             row.optString("turn").takeUnless { it.isBlank() || it == "null" }, row.optString("text"),
             row.optLong("timestamp").takeIf { it > 0 }, row.optLong("startedAt").takeIf { it > 0 },
-            row.optBoolean("canConfirm", true), row.optString("flushedPrefix"))
+            row.optBoolean("canConfirm", true), row.optString("flushedPrefix"),
+            row.optString("messageUid").takeUnless { it.isBlank() || it == "null" })
     }
 }.getOrDefault(emptyList())
 
@@ -58,7 +59,7 @@ internal fun terminalSyncText(stream: String, phase: String, gap: Boolean, outpu
 // desktop/older receipts may insert blank lines. Native history owns the actual
 // message boundaries, including failed turns with commentary and no final answer.
 internal fun cumulativeRunOutputAlreadyInHistory(sync: FinalSyncState, history: List<HermesMessage>): Boolean {
-    if (sync.item != null || sync.turn == null || sync.text.isBlank()) return false
+    if (sync.messageUid != null || sync.item != null || sync.turn == null || sync.text.isBlank()) return false
     val items = history.filter { it.role == "assistant" && it.nativeTurnId == sync.turn }
     if (items.size < 2) return false
     val output = sync.text.trim()
@@ -67,7 +68,8 @@ internal fun cumulativeRunOutputAlreadyInHistory(sync: FinalSyncState, history: 
 }
 
 internal fun finalSyncAcknowledged(sync: FinalSyncState, history: List<HermesMessage>): Boolean =
-    cumulativeRunOutputAlreadyInHistory(sync, history) ||
+    if (sync.messageUid != null) sync.canConfirm && history.any { it.role == "assistant" && it.messageUid == sync.messageUid && it.text.trim() == sync.text.trim() }
+    else cumulativeRunOutputAlreadyInHistory(sync, history) ||
         sync.canConfirm && terminalHistoryContainsAssistant(history, sync.item, sync.text, sync.turn, sync.startedAt)
 
 internal fun retainFinalSync(states: List<FinalSyncState>, incoming: FinalSyncState): List<FinalSyncState> =
@@ -90,7 +92,8 @@ internal fun projectFinalSyncRows(rows: List<HermesMessage>, states: List<FinalS
     val result = rows.filterNot { it.localKey?.startsWith("final-sync-") == true }.toMutableList()
     states.filter { it.session == session && it.text.isNotBlank() }.sortedBy { it.timestamp ?: Long.MAX_VALUE }.forEach { sync ->
         if (cumulativeRunOutputAlreadyInHistory(sync, result)) return@forEach
-        val native = exactFinalAssistant(result, sync.item, sync.turn, sync.text, sync.startedAt)
+        val native = if (sync.messageUid != null) result.firstOrNull { it.role == "assistant" && it.messageUid == sync.messageUid }
+            else exactFinalAssistant(result, sync.item, sync.turn, sync.text, sync.startedAt)
         if (native != null) {
             if (native.text.trim() == sync.text.trim()) return@forEach
             if (sync.text.startsWith(native.text)) {
@@ -98,8 +101,9 @@ internal fun projectFinalSyncRows(rows: List<HermesMessage>, states: List<FinalS
                 result[position] = native.copy(text = sync.text)
                 return@forEach
             }
+            if (sync.messageUid != null) return@forEach // One native UID stays one row, including later native rewrites.
         }
-        val partial = result.filter { row -> row.role == "assistant" && !row.narration &&
+        val partial = result.filter { row -> sync.messageUid == null && row.role == "assistant" && !row.narration &&
             (sync.turn != null && row.nativeTurnId == sync.turn ||
                 sync.turn == null && sync.startedAt != null && row.timestamp?.let { it >= sync.startedAt } == true) &&
             row.text.isNotEmpty() && sync.text.startsWith(row.text) }.singleOrNull()
@@ -108,7 +112,7 @@ internal fun projectFinalSyncRows(rows: List<HermesMessage>, states: List<FinalS
             return@forEach
         }
         val pending = HermesMessage("assistant", sync.text, localKey = "final-sync-${sync.run}",
-            timestamp = sync.timestamp, editable = false)
+            timestamp = sync.timestamp, editable = false, messageUid = sync.messageUid)
         val next = sync.timestamp?.let { time -> result.indexOfFirst { it.timestamp?.let { at -> at > time } == true } } ?: -1
         if (next >= 0) result.add(next, pending) else result.add(pending)
     }
