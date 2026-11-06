@@ -304,16 +304,20 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var reasoningStartedAt: Long? = null
     var reasoningEnded by mutableStateOf(false)
         private set
+    /** 终止后让行再留一拍做收缩动画，动画结束由定时器清掉。 */
+    var reasoningClosing by mutableStateOf(false)
+        private set
     private val reasoningVisible get() = agent == "hermes" && reasoningSession == selectedId && !reasoningEnded && (runId == null || runId == reasoningRun)
     internal val reasoningText get() = if (reasoningVisible) reasoningRows.joinToString("") { it.text } else ""
     internal val reasoningStreamingKey get() = reasoningSegmentId.takeIf { reasoningVisible && !reasoningEnded }
-    internal val messagesWithReasoning get() = if (reasoningVisible) projectHermesReasoning(messages, reasoningRows) else messages
+    internal val messagesWithReasoning get() = if (reasoningVisible || (reasoningClosing && reasoningSession == selectedId)) projectHermesReasoning(messages, reasoningRows) else messages
 
     internal fun observeReasoningRun(run: String, session: String) {
         if (agent != "hermes" || reasoningRun == run && reasoningSession == session) return
         reasoningRenderJob?.cancel(); reasoningRenderJob = null
         reasoningRun = run; reasoningSession = session; reasoningBuffer.clear()
         reasoningRows = emptyList(); reasoningSegmentId = null; reasoningIndex = 0; reasoningStartedAt = null; reasoningEnded = false
+        reasoningClosing = false
     }
     internal fun flushReasoning() {
         reasoningRenderJob?.cancel(); reasoningRenderJob = null
@@ -332,6 +336,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private fun finishReasoning(run: String) {
         if (reasoningRun != run) return
         closeReasoningSegment(); reasoningEnded = true
+        // 收缩动画期间行仍保留, 240ms 后（与 AnimatedVisibility 的 shrinkVertically 同量级）一并撤掉。
+        reasoningClosing = true
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (reasoningEnded) { reasoningClosing = false; reasoningRows = emptyList() }
+        }, 260)
     }
     /** The SSE dispatcher uses this path; reasoning is never parsed as assistant markup/history. */
     internal fun receiveReasoningEvent(run: String, event: JSONObject): Boolean {

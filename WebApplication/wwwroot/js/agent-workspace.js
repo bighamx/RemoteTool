@@ -74,6 +74,7 @@
     let scrollRestoreTimer = null;
     let adminTimer = null;
     let reasoningTimer = null;
+    let reasoningCollapseTimer = null;
     let reasoningChunks = [];
     const readVersions = new Map();
     const app = Vue.createApp({
@@ -203,7 +204,10 @@
                     // live-only signal: once the turn is over (no active run, or the run ended)
                     // the thinking stream stops being displayed, like every mainstream agent UI —
                     // the reply and its tool card are what remain in the transcript.
-                    if(segment.reasoning){if(!this.activeRun||this.reasoningEnded)continue;if(this.asText(segment.text).trim())out.push({...segment});continue;}
+                    if(segment.reasoning){
+                        // 轮次结束后不再显示；正在收缩的那一份留到动画结束再移除。
+                        if((!this.activeRun||this.reasoningEnded)&&!segment.collapsing)continue;
+                        if(this.asText(segment.text).trim())out.push({...segment});continue;}
                     const text=this.agent==='hermes'?hermesAssistantText(this.asText(segment.text)):this.asText(segment.text);
                     if (!text.trim()) continue;
                     if(this.agent==='hermes'&&segment.messageUid){
@@ -849,7 +853,7 @@
             stopEventStream() {streamAbort?.abort();streamAbort=null;this.streamRun=null;this.streamConnected=false;},
             resetReasoning(runId=null) {
                 if(reasoningTimer!==null)clearTimeout(reasoningTimer);
-                reasoningTimer=null;reasoningChunks=[];this.reasoningRun=runId;this.reasoningEnded=false;this.reasoningSegmentId=null;this.reasoningIndex=0;this.reasoningStartedAt=0;
+                reasoningTimer=null;reasoningChunks=[];this.reasoningRun=runId;this.reasoningEnded=false;if(reasoningCollapseTimer!==null){clearTimeout(reasoningCollapseTimer);reasoningCollapseTimer=null;}this.reasoningSegmentId=null;this.reasoningIndex=0;this.reasoningStartedAt=0;
                 this.liveSegments=this.liveSegments.filter(segment=>!segment.reasoning);
             },
             flushReasoning() {
@@ -864,7 +868,15 @@
                 this.queueFollowLatest();
             },
             closeReasoningSegment() {this.flushReasoning();const segment=this.liveSegments.find(row=>row.id===this.reasoningSegmentId);if(segment)segment.complete=true;this.reasoningSegmentId=null;},
-            finishReasoning(runId) {if(this.reasoningRun!==runId)return;this.closeReasoningSegment();this.reasoningEnded=true;},
+            finishReasoning(runId) {if(this.reasoningRun!==runId)return;this.closeReasoningSegment();this.reasoningEnded=true;this.collapseReasoning();},
+            // 轮次结束:先让思考卡片收起淡出,动画结束再真正移除(直接删除会硬跳)。
+            collapseReasoning() {
+                const targets=this.liveSegments.filter(segment=>segment.reasoning&&!segment.collapsing);
+                if(!targets.length)return;
+                targets.forEach(segment=>segment.collapsing=true);
+                if(reasoningCollapseTimer!==null)clearTimeout(reasoningCollapseTimer);
+                reasoningCollapseTimer=setTimeout(()=>{reasoningCollapseTimer=null;this.liveSegments=this.liveSegments.filter(segment=>!segment.reasoning);},300);
+            },
             ensureEventStream(runId,run={}) {if(this.streamRun===runId)return;const sameReasoningRun=this.agent==='hermes'&&this.reasoningRun===runId;if(this.agent==='hermes'&&!sameReasoningRun)this.resetReasoning(runId);this.stopEventStream();this.streamRun=runId;if(!sameReasoningRun)this.streamSeq=0;this.streamGone=false;const started=Number(run.created_at||run.started_at||0)*1000;this.streamHistoryIds=this.messages.filter(m=>!started||this.messageStamp(m)<started).map(m=>String(m.id));if(!sameReasoningRun)this.liveSegments=this.liveSegments.filter(s=>s.complete).slice(-100);this.liveTools=[];this.watchEventStream(runId,this.epoch);},
             async watchEventStream(runId,epoch) {let failures=0;while(this.streamRun===runId&&this.epoch===epoch&&this.activeRun===runId){const controller=new AbortController();streamAbort=controller;const started=Date.now();try{await RemoteToolSse({url:`${base}/runs/${api.id(runId)}/events`,lastId:this.streamSeq,signal:controller.signal,onConnected:()=>{if(this.streamRun===runId)this.streamConnected=true;},onEvent:event=>{if(this.streamRun===runId&&this.epoch===epoch)this.onRunEvent(event);}});if(Date.now()-started>15000)failures=0;}catch(error){if(controller.signal.aborted)break;if(error.status===404){this.streamGone=true;await this.loadHistory(epoch);break;}}finally{if(streamAbort===controller)streamAbort=null;this.streamConnected=false;}if(this.streamRun!==runId||this.epoch!==epoch||this.activeRun!==runId)break;failures++;await new Promise(resolve=>setTimeout(resolve,Math.min(30000,1500*2**Math.min(failures-1,4))));}},
             onRunEvent(event) {const seq=Number(event.seq||0);const type=event.type||event.event||'';if(seq&&seq<=this.streamSeq)return;if(type==='stream.gap'||(seq&&this.streamSeq&&seq>this.streamSeq+1)){this.loadHistory();this.refreshActiveTools();}if(seq)this.streamSeq=seq;if(type==='stream.gap')return;

@@ -7,6 +7,12 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.draw.alpha
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -775,9 +781,11 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f))
                         }
                     } else {
+                    val reasoningRow = message.messageType == "reasoning"
+                    val bubble: @Composable () -> Unit = {
                     MessageBubble(message.role, message.text, message.attachments, api, model.files, agentName, message.delivery, message.timestamp,
                         narration = message.narration || message.localKey?.startsWith("narration-") == true, narrationTexts = model.narrationTexts,
-                        streaming = item.streaming,
+                        streaming = item.streaming, reasoning = reasoningRow,
                         forkDisabledReason = when {
                             !model.supportsMessageActions -> "当前连接尚未支持，请重新连接刷新或更新该设备服务端"
                             message.serverId <= 0 -> "消息尚未绑定已保存记录，请刷新历史"
@@ -799,6 +807,18 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                             editBoundary = messageEditBoundary(model.messages)
                             editAttachments = presentHermesMessage(message.text, message.attachments, model.files, message.role).files
                         }) else null)
+                    }
+                    // 轮次结束: 思考卡片向上收缩淡出(shrinkVertically+fadeOut), 由 model.reasoningClosing 驱动。
+                    if (reasoningRow) {
+                        // 顶层重载: 此处有隐式 ColumnScope, 裸调用会解析到 ColumnScope 版本而报错。
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = !model.reasoningClosing,
+                            enter = fadeIn(tween(160)) + expandVertically(tween(160)),
+                            exit = fadeOut(tween(200)) + shrinkVertically(tween(240)),
+                        ) { bubble() }
+                    } else {
+                        bubble()
+                    }
                     }
                 }
                 ChatRowKind.Execution -> {
@@ -1440,6 +1460,7 @@ private fun MessageBubble(
     forkDisabledReason: String? = null,
     editDisabledReason: String? = null,
     streaming: Boolean = false,
+    reasoning: Boolean = false,
 ) {
     val context = LocalContext.current
     var preview by remember { mutableStateOf<JSONObject?>(null) }
@@ -1500,7 +1521,11 @@ private fun MessageBubble(
                                 else if (part.text.isNotBlank()) HermesMarkdown(part.text.trim(), onBubbleTap = openActions)
                             }
                         }
-                    } else if (presentation.text.isNotBlank()) HermesMarkdown(
+                    } else if (presentation.text.isNotBlank()) {
+                        // 思考段: 卡片标注 🧠, 正文比正常消息小一号。
+                        if (reasoning) Text("🧠", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f))
+                        HermesMarkdown(
                         body,
                         footer = if (inlineTime) metadata else "",
                         onBubbleTap = openActions,
@@ -1514,7 +1539,9 @@ private fun MessageBubble(
                                 true
                             } else false
                         },
+                        textSizeSp = if (reasoning) 13.5f else 15f,
                     )
+                    }
                     if (!inlineTime) delivery?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     presentation.unavailable.forEach { name ->
                         Text("附件暂不可用：$name", style = MaterialTheme.typography.bodySmall)

@@ -71,7 +71,7 @@ private data class MarkdownFrame(val source: String, val parsed: Spanned)
 
 @Composable
 fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String = "", onBubbleTap: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
-    streaming: Boolean = false, onLinkTap: ((String) -> Boolean)? = null) {
+    streaming: Boolean = false, onLinkTap: ((String) -> Boolean)? = null, textSizeSp: Float = 15f) {
     val context = LocalContext.current
     val currentLinkTap by rememberUpdatedState(onLinkTap)
     val markwon = remember(context) { createMessageMarkwon(context) { currentLinkTap?.invoke(it) == true } }
@@ -96,7 +96,7 @@ fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String =
         modifier = modifier.clipToBounds(),
         factory = {
             MessageTextView(it).apply {
-                textSize = 15f
+                textSize = textSizeSp
                 includeFontPadding = false
                 setTextIsSelectable(true)
                 // MessageTextView owns short link taps; native selection keeps long presses.
