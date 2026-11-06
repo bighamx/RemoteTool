@@ -890,7 +890,7 @@
                     if(reasoningTimer===null)reasoningTimer=setTimeout(()=>this.flushReasoning(),100);
                     return;
                 }
-                if(['message.started','message.delta','message.snapshot','message.completed','message.interim','tool.started'].includes(type))this.closeReasoningSegment();
+                // 一轮内的思考合并成一张卡片: 正文/工具事件不再切段, 只有 run 结束才收尾(collapseReasoning)。
                 if(type==='message.started'||type==='message.delta'||type==='message.snapshot'||type==='message.completed'){
                     const last=this.liveSegments.at(-1);
                     const uid=this.agent==='hermes'?messageUid(event):null;

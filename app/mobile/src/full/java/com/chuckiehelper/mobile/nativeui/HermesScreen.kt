@@ -1508,7 +1508,7 @@ private fun MessageBubble(
             modifier = Modifier.widthIn(max = if (hasImages) 268.dp else 600.dp).bubbleTap(openActions),
         ) {
             SelectionContainer {
-                Column(Modifier.padding(14.dp)) {
+                Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp, top = if (reasoning) 8.dp else 14.dp)) {
                     val time = formatMessageTimestamp(timestamp)
                     val inlineTime = !hasQuestionReply && presentation.text.isNotBlank() && presentation.files.isEmpty() &&
                         presentation.unavailable.isEmpty()

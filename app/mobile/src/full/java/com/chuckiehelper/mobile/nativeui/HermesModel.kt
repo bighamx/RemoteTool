@@ -352,7 +352,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             return false // Preserve the existing terminal status/history handling.
         }
         if (type in setOf("message.started", "message.delta", "message.snapshot", "message.completed", "message.interim", "tool.started")) {
-            closeReasoningSegment()
+            // 一轮内的思考合并成一张卡片: 这里不再切段, 只在轮次结束(finishReasoning)时收尾。
             return false
         }
         if (type != "reasoning.delta") return false
