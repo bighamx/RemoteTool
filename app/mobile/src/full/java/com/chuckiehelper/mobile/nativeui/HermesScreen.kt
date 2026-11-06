@@ -1513,7 +1513,9 @@ private fun MessageBubble(
                     val inlineTime = !hasQuestionReply && presentation.text.isNotBlank() && presentation.files.isEmpty() &&
                         presentation.unavailable.isEmpty()
                     val metadata = listOfNotNull(delivery, time.takeIf { it.isNotBlank() }).joinToString(" · ")
-                    val body = if (role == "assistant") displayNarration(presentation.text, narration, narrationTexts) else presentation.text
+                    val body = if (role == "assistant")
+                        (if (reasoning) presentation.text else displayNarration(presentation.text, narration, narrationTexts))
+                    else presentation.text
                     if (hasQuestionReply) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             replyParts.forEach { part ->
