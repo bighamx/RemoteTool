@@ -983,13 +983,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                         }
                         ComposerMenu(commands, { commands = false }, onBounds = { commandPanelBounds = it }) {
                             DropdownMenuItem(
-                                text = {
-                                    Row(Modifier.widthIn(min = 210.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text("思考过程")
-                                        Text(if (model.showReasoning) "开" else "关",
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                },
+                                text = { Text(if (model.showReasoning) "思考过程：开" else "思考过程：关") },
                                 trailingIcon = {
                                     if (model.showReasoning) Icon(Icons.Outlined.Check, null, modifier = Modifier.size(18.dp))
                                 },
