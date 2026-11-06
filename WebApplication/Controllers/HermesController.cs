@@ -426,6 +426,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         json = AgentHistoryWindow.Select(json, limit, from_id, older_before);
         json = AgentInteractiveMessages.Present(json);
         json = activity.PresentMessageEditability(json);
+        if (json is System.Text.Json.Nodes.JsonObject document) activity.AnnotateHistory(id, document);
         return nativeAttachments.Present(id, json?.ToJsonString() ?? "{}");
     }
     [HttpPost("sessions/{id}/messages/{messageId}/attachments")] public IActionResult BindAttachments(string id, string messageId, [FromBody] JsonElement body)

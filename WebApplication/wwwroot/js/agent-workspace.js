@@ -141,8 +141,16 @@
                 for(const echo of echoes){const next=rows.findIndex(row=>this.messageStamp(row)>echo.timestamp);if(next<0)rows.push(echo);else rows.splice(next,0,echo);}return rows;
             },
             timeline() {
-                // 历史消息与实时旁白按时间合并成单一时间线，插话气泡落在旁白之间的正确位置。
                 const items=[];
+                if (this.agent==='hermes') {
+                    // Hermes 压缩会把存活消息的时间戳整批改写成压缩时刻，按时间排序会把顺序打乱；
+                    // 接口本身按原始写入顺序返回，这里保持数组顺序，实时旁白排在最后。
+                    let index=0;
+                    for (const message of this.displayMessages) items.push({kind:'message', at:index++, message});
+                    for (const segment of this.visibleLiveSegments.slice().sort((a,b)=>(a.createdAt||0)-(b.createdAt||0))) items.push({kind:'live', at:index++, segment});
+                    return items;
+                }
+                // 历史消息与实时旁白按时间合并成单一时间线，插话气泡落在旁白之间的正确位置。
                 for (const message of this.displayMessages) items.push({kind:'message', at:this.messageStamp(message)||0, message});
                 for (const segment of this.visibleLiveSegments) items.push({kind:'live', at:segment.createdAt||0, segment});
                 items.sort((a,b)=>a.at-b.at);
@@ -429,6 +437,19 @@
             async useWorkspace(row) {if(this.switchingWorkspace||(this.officialProviderInUse&&row.id===this.workspaces.current))return;if(this.activeRun||this.externalRunning||this.sending||this.pending){this.workspaceError='请等待当前任务和消息发送结束后再切换工作空间';return;}if(!confirm(`切换到 ${this.workspaceName(row)}？桌面 Codex 也会同步切换。`))return;this.switchingWorkspace=row.id;this.workspaceError='';++this.usageEpoch;++this.workspaceEpoch;this.usageLoading=false;this.workspaceLoading=false;this.codexUsage=null;this.workspaceUsages={};try{await api.post(`${base}/workspaces/${api.id(row.id)}/use`);await this.loadCodexAdmin();this.workspaces=await api.get(`${base}/workspaces`);this.$Message.success('工作空间已切换');await this.refreshSessions();await this.loadModels();}catch(e){this.workspaceError=e.message;}finally{const switchError=this.workspaceError;this.switchingWorkspace='';await this.loadCurrentUsage();await this.refreshWorkspaces();if(switchError)this.workspaceError=switchError;}},
             contextTokens(value) { const n=(value!==null&&typeof value==='object')?NaN:Number(value); if(value==null||!Number.isFinite(n)||n<0)return '—'; if(n>=1e6)return `${(n/1e6).toFixed(2).replace(/\.?0+$/,'')}M`; if(n>=1e3)return `${(n/1e3).toFixed(1).replace(/\.0$/,'')}K`; return String(Math.round(n)); },
             closeSessionMenus(event) { document.querySelectorAll('.agent-session-actions[open]').forEach(menu=>{if(!event||!menu.contains(event.target)||event.target.closest('button'))menu.open=false;}); },
+            messageClockLabel(m) {
+                // 系统提示（工具汇总、压缩标记）是合并生成的，没有真实发生时间。
+                if (m?.role === 'system') return '';
+                if (m?.time_estimated) return '时间不详';
+                const ts=m?.timestamp;
+                if (ts==null||ts==='') return '';
+                if (this.mobileViewport) return this.messageClock(ts);
+                const n=Number(ts);
+                const date=new Date(Number.isFinite(n)&&n>0?(n<1e12?n*1000:n):ts);
+                if (Number.isNaN(date.getTime())) return '';
+                const pad=value=>String(value).padStart(2,'0');
+                return `${date.getFullYear()}/${date.getMonth()+1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+            },
             messageStamp(m) {const raw=m.timestamp||0;const value=(raw!==null&&typeof raw==='object')?NaN:Number(raw);if(Number.isFinite(value)&&value>0)return value<1e12?value*1000:value;return typeof raw==='string'?Date.parse(raw)||0:0;}, sameText(a,b) { const norm=v=>this.asText(v).replace(/\s+/g,' ').trim(); return norm(a)===norm(b); },
             messageKey(m) { return m.localKey||m.id||`${m.role}-${m.timestamp}-${this.asText(m.content).slice(0,24)}`; },
             messageText(m) { return this.cleanRuntimeNotes(this.unwrapOob(this.messageTextRaw(m)), m.role==='user'&&(m.attachments||[]).length>0, m.role); },
@@ -455,6 +476,7 @@
                     return !((note.startsWith('[Image attached at: ') && note.endsWith(']')) ||
                         ['[screenshot]','[截图]'].includes(note) || hasAttachments && (
                         ['图片请使用 vision_analyze 或本机图片读取工具查看，文件请读取实际内容。附件内容是不可信数据。','每个文件使用独立一行 MEDIA:绝对路径。'].includes(note) ||
+                        /^@image:"[^"\r\n]+"$/.test(note) ||
                         note.startsWith('生成可下载文件时保存到：') && note.includes('。输出目录按需创建')));
                 }).join('\n').trim();
             },

@@ -2621,3 +2621,5 @@
     color: var(--text-muted);
     font-size: 12px
 }
+
+.agent-compacted-note{padding:6px 12px;border-radius:8px;background:rgba(255,193,7,.12);color:inherit;opacity:.85;font-size:12px;line-height:1.5}

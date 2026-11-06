@@ -108,7 +108,38 @@ public sealed class HermesNativeAttachments(HermesProfiles profiles, HermesAttac
         }
         return true;
     }
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,string> contentDigests = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex nativeDigestName = new(@"^api_([0-9a-f]{32,64})\.", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
+    private static string DigestFromName(string name) => nativeDigestName.Match(name ?? "") is { Success: true } match ? match.Groups[1].Value.ToLowerInvariant() : null;
+    /** 只在"疑似同一张图"时才读文件算摘要：Hermes 缓存副本(api_<sha>)与另一张同尺寸同类型的图片共存。结果按 路径+大小+mtime 记忆。 */
+    private static string ContentDigest(string path) {
+        var info = new FileInfo(path);
+        var key = System.IO.Path.GetFullPath(path) + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks;
+        if (contentDigests.TryGetValue(key, out var cached)) return cached;
+        try {
+            using var stream = File.OpenRead(path);
+            var digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+            contentDigests[key] = digest; return digest;
+        } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
+    }
     private IEnumerable<Source> Sources(string session,Message message) {
+        var items = SourceItems(session,message).ToList();
+        if (items.Count < 2) return items;
+        var cachedCopies = items.Where(item => item.Path != null && DigestFromName(item.Name) != null).ToList();
+        if (cachedCopies.Count == 0) return items;
+        foreach (var candidate in items.Where(item => item.Path != null && DigestFromName(item.Name) == null && item.Mime.StartsWith("image/")).ToList()) {
+            var size = candidate.Size;
+            var twin = cachedCopies.FirstOrDefault(item => item.Size == size && item.Mime == candidate.Mime);
+            if (twin == null) continue;
+            var digest = ContentDigest(candidate.Path);
+            // Hermes 用内容摘要的 32 位前缀给缓存副本命名，这里按前缀比较。
+            if (digest == null || !digest.StartsWith(DigestFromName(twin.Name), StringComparison.Ordinal)) continue;
+            // 同内容两份：保留我们上传的原件，丢掉 Hermes 的缓存副本。
+            items.Remove(twin); cachedCopies.Remove(twin);
+        }
+        return items;
+    }
+    private IEnumerable<Source> SourceItems(string session,Message message) {
         if(message.Role is not ("user" or "assistant")) yield break;
         var node=Decode(message.Content);
         var inlineHashes=new HashSet<string>(StringComparer.Ordinal);

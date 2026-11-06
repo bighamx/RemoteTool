@@ -75,6 +75,18 @@ internal static class HermesNativeChecks {
             }
             Check(View(5)["attachments"].AsArray().Count==1,"inline bytes and native path hints describe one picture, not duplicate cards");
             Check(View(5)["content"].ToString()=="caption","a deduplicated inline image also removes its resolved path hint");
+            // 历史消息：我们上传的副本 + Hermes 自己缓存副本(api_<sha>.png)，同内容只应剩一张卡片，
+            // 且不要求每次读取都重新算摘要（只有同尺寸同类型的疑似重复才读文件）。
+            var cachedDigest=upload["sha256"].ToString()[..32];
+            var cachedFolder=Path.Combine(home,"cache","documents","native-inputs",cachedDigest);
+            Directory.CreateDirectory(cachedFolder);
+            var cachedPath=Path.Combine(cachedFolder,"api_"+cachedDigest+".png");
+            File.WriteAllBytes(cachedPath,bytes);
+            var legacyText="pic\n\n"+HermesAttachments.NativeReference(path)+"\n[Image attached at: "+cachedPath+"]";
+            using(var db=new SQLiteConnection(Path.Combine(home,"state.db"))) db.Execute("INSERT INTO messages VALUES(20,'s','user',?)",legacyText);
+            var legacy=View(20,legacyText);
+            Check(legacy["attachments"].AsArray().Count==1,"uploaded copy and Hermes cache copy of one image collapse to a single card");
+            Check(legacy["attachments"][0]["uploadId"]?.ToString()==upload["id"].ToString(),"the surviving card is the uploaded original");
             // Real /v1/runs input -> Hermes text-only persistence -> a fresh
             // RemoteTool process. No private attachment binding is available.
             var request=JsonSerializer.SerializeToElement(new {session_id="s",input="reload picture",attachment_ids=new[]{upload["id"].ToString()}});

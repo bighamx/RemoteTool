@@ -32,6 +32,110 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
         return document;
     }
 
+    /**
+     * Hermes 压缩会删掉旧消息、并把存活消息的时间戳整批改写成压缩时刻（微秒递增）。
+     * 这里按 display_order 还原原始位置：标出时间戳不可信的消息，并在真正发生压缩的位置
+     * 插入一条 system 提示，而不是在列表顶部挂一条横幅。
+     */
+    public void AnnotateHistory(string session, JsonObject document) {
+        if (document?["data"] is not JsonArray data || data.Count == 0) return;
+        var rows = ReadTimeline(session);
+        if (rows.Count == 0) return;
+        var active = rows.Where(row => row.Active == 1).ToList();
+        var liveUids = active.Select(row => row.MessageUid).Where(uid => !string.IsNullOrEmpty(uid)).ToHashSet(StringComparer.Ordinal);
+        var omitted = rows.Where(row => row.Active == 0 && (string.IsNullOrEmpty(row.MessageUid) || !liveUids.Contains(row.MessageUid))).ToList();
+        // 时间戳批量改写检测：同一批内相邻间隔 <50ms 且连续 3 条以上。
+        var estimated = new HashSet<long>();
+        var ordered = active.OrderBy(row => row.DisplayOrder).ToList();
+        for (var start = 0; start < ordered.Count;) {
+            var stop = start + 1;
+            while (stop < ordered.Count && ordered[stop].Timestamp - ordered[stop - 1].Timestamp is > 0 and < 0.05) stop++;
+            if (stop - start >= 3) foreach (var row in ordered.Skip(start).Take(stop - start)) estimated.Add(row.Id);
+            start = stop;
+        }
+        var present = new Dictionary<long, string>();
+        foreach (var row in data.OfType<JsonObject>()) {
+            if (!long.TryParse(row["id"]?.ToString(), out var id)) continue;
+            var meta = active.FirstOrDefault(item => item.Id == id);
+            if (meta == null) continue;
+            row["display_order"] = meta.DisplayOrder;
+            if (estimated.Contains(id)) row["time_estimated"] = true;
+            present[meta.DisplayOrder] = "row";
+        }
+        // 被压缩掉却仍是完整对话的 user/assistant 消息补回来（工具输出仍由汇总行代替）。
+        var restored = 0;
+        // 只补回"被压缩掉"的消息（compacted=1）。回退/撤回（rewind）作废的消息在客户端里也不再显示，
+        // 这里补回来会让人看到已经撤掉的内容。
+        foreach (var row in omitted.Where(item => item.Compacted == 1 && item.Role is ("user" or "assistant") && !string.IsNullOrWhiteSpace(item.Content)).OrderBy(item => item.DisplayOrder)) {
+            var text = DecodeText(row.Content);
+            if (text.Length == 0) continue;
+            var item = new JsonObject {
+                ["id"] = row.Id, ["role"] = row.Role, ["content"] = text, ["timestamp"] = row.Timestamp,
+                ["display_order"] = row.DisplayOrder, ["compacted"] = true
+            };
+            var index = data.Count;
+            for (var at = 0; at < data.Count; at++) {
+                if (data[at] is JsonObject other && long.TryParse(other["display_order"]?.ToString(), out var order) && order > row.DisplayOrder) { index = at; break; }
+            }
+            data.Insert(index, item);
+            present[row.DisplayOrder] = "row";
+            restored++;
+        }
+        // 只有 Hermes 自己写了压缩摘要（[PRIOR CONTEXT]）才提示压缩，并插在摘要所在位置；
+        // 回退/重写留下的 inactive 行不冒充压缩。
+        var summary = rows.Where(item => item.Content != null && item.Content.Contains("[PRIOR CONTEXT", StringComparison.Ordinal))
+            .OrderBy(item => item.DisplayOrder).FirstOrDefault();
+        if (summary == null) return;
+        var markerAnchor = present.Keys.Where(order => order < summary.DisplayOrder).DefaultIfEmpty(0).Max();
+        var marker = new JsonObject {
+            ["id"] = "compaction-1", ["role"] = "system", ["display_kind"] = "compaction",
+            ["content"] = "会话已压缩", ["anchor"] = markerAnchor
+        };
+        var markerIndex = 0;
+        if (markerAnchor > 0) {
+            markerIndex = data.Count;
+            for (var at = 0; at < data.Count; at++)
+                if (data[at] is JsonObject other && long.TryParse(other["display_order"]?.ToString(), out var order) && order > markerAnchor) { markerIndex = at; break; }
+        }
+        data.Insert(markerIndex, marker);
+    }
+
+    private int RewindCount(string session) {
+        var database = DatabasePath;
+        if (!File.Exists(database)) return 0;
+        try {
+            SQLitePCL.Batteries_V2.Init();
+            using var db = new SQLiteConnection(database, SQLiteOpenFlags.ReadOnly | SQLiteOpenFlags.FullMutex);
+            db.BusyTimeout = TimeSpan.FromMilliseconds(250);
+            return (int)db.QueryScalars<long>("SELECT rewind_count FROM sessions WHERE id=?", session).FirstOrDefault();
+        } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException) { return 0; }
+    }
+
+    private static string DecodeText(string content) {
+        if (string.IsNullOrEmpty(content)) return "";
+        var value = content;
+        if (value[0] == '\0' && value.StartsWith("\0json:", StringComparison.Ordinal)) {
+            try {
+                if (JsonNode.Parse(value[6..]) is JsonArray parts)
+                    return string.Join("\n", parts.OfType<JsonObject>().Select(part => part["text"]?.ToString()).Where(text => !string.IsNullOrEmpty(text)));
+            } catch (JsonException) { return ""; }
+            return "";
+        }
+        return value.Trim();
+    }
+
+    private sealed class TimelineRow { public long Id { get; set; } public long DisplayOrder { get; set; } public long Active { get; set; } public double Timestamp { get; set; } public string MessageUid { get; set; } public string Role { get; set; } public string Content { get; set; } public long Compacted { get; set; } }
+    private List<TimelineRow> ReadTimeline(string session) {
+        var database = DatabasePath;
+        if (!File.Exists(database)) return new List<TimelineRow>();
+        try {
+            SQLitePCL.Batteries_V2.Init();
+            using var db = new SQLiteConnection(database, SQLiteOpenFlags.ReadOnly | SQLiteOpenFlags.FullMutex);
+            db.BusyTimeout = TimeSpan.FromMilliseconds(250);
+            return db.Query<TimelineRow>("SELECT id, display_order AS DisplayOrder, active, compacted, timestamp, message_uid AS MessageUid, role AS Role, CASE WHEN role IN ('user','assistant') THEN content ELSE NULL END AS Content FROM messages WHERE session_id=? ORDER BY display_order", session).ToList();
+        } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException) { return new List<TimelineRow>(); }
+    }
+
     // The native HTTP projection omits display_metadata. Return only the boolean
     // provenance decision, never expose the gateway input owner's identifier.
     internal static IReadOnlyDictionary<long, bool> ReadMessageEditability(string database, IEnumerable<long> ids) {
