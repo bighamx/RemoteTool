@@ -346,6 +346,7 @@
                 return data;
             },
             askApplyPatch(item) { this.patchConfirm = item; this.patchApplyLog = ''; this.patchAgentOffer = null; },
+            askAgentFix(item) { this.patchAgentOffer = { id: item.id, title: item.title || item.id, log: item.detail_text || '' }; this.patchError = ''; },
             async applyPatch(item) {
                 if (!item) return;
                 this.patchBusy = true; this.patchError = ''; this.patchApplyLog = '';

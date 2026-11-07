@@ -89,6 +89,7 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
         catch (failure: Exception) { patchLog = failure.message ?: "补丁应用失败" }
         finally { patchBusy = false }
     } }
+    fun offerAgentFix(item: JSONObject) { patchOffer = JSONObject(item.toString()).put("_log", item.optString("detail_text")) }
     fun agentFixPatch() { val item = patchOffer ?: return; scope.launch {
         patchBusy = true
         try {
@@ -142,35 +143,44 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
                     HorizontalDivider()
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text("补丁", style = MaterialTheme.typography.titleSmall)
-                        Text("待应用 ${patches.count { it.optString("state") != "applied" }}", style = MaterialTheme.typography.labelSmall)
+                        Text("可用 ${patches.count { it.optString("state") == "ready" }} · 已安装 ${patches.count { it.optString("state") == "applied" }}", style = MaterialTheme.typography.labelSmall)
                     }
-                    if (patches.isEmpty()) Text("没有补丁清单", style = MaterialTheme.typography.bodySmall)
+                    if (patches.isEmpty()) Text("当前 RemoteTool 版本没有随包发布补丁", style = MaterialTheme.typography.bodySmall)
                     patches.forEach { item ->
                         val state = item.optString("state")
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(item.optString("title").ifBlank { item.optString("id") }, style = MaterialTheme.typography.bodyMedium)
                                 val summary = item.optString("summary")
-                                if (summary.isNotBlank()) Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
-                                Text(item.optString("id"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (summary.isNotBlank()) Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3)
+                                val detail = item.optString("detail_text")
+                                if (detail.isNotBlank() && state != "applied") Text(detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                             }
                             Text(
-                                when (state) { "applied" -> "已应用"; "ready" -> "可应用"; else -> "需处理" },
+                                when (state) { "applied" -> "已安装"; "ready" -> "可安装"; "incompatible" -> "不适用"; else -> "需适配" },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = when (state) {
                                     "applied" -> MaterialTheme.colorScheme.primary
                                     "ready" -> MaterialTheme.colorScheme.tertiary
+                                    "incompatible" -> MaterialTheme.colorScheme.onSurfaceVariant
                                     else -> MaterialTheme.colorScheme.error
                                 },
                             )
-                            if (state != "applied") OutlinedButton(
-                                enabled = !patchBusy && !busy,
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                onClick = {
-                                    val label = item.optString("title").ifBlank { item.optString("id") }
-                                    confirm = "应用补丁「$label」？会先备份工作树差异，失败自动回滚。" to { applyPatch(item) }
-                                },
-                            ) { Text("应用", style = MaterialTheme.typography.bodySmall) }
+                            when (state) {
+                                "ready" -> OutlinedButton(
+                                    enabled = !patchBusy && !busy,
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    onClick = {
+                                        val label = item.optString("title").ifBlank { item.optString("id") }
+                                        confirm = "安装补丁「$label」？会先备份 Hermes 源码的工作树差异，失败自动回滚。" to { applyPatch(item) }
+                                    },
+                                ) { Text("安装", style = MaterialTheme.typography.bodySmall) }
+                                "conflict" -> OutlinedButton(
+                                    enabled = !patchBusy && !busy,
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    onClick = { offerAgentFix(item) },
+                                ) { Text("让 Hermes 实现", style = MaterialTheme.typography.bodySmall) }
+                            }
                         }
                     }
                     patchOffer?.let { offer ->

@@ -1,0 +1,28 @@
+diff --git a/gateway/platforms/api_server_runs.py b/gateway/platforms/api_server_runs.py
+index 599812a117..3cda53ad8b 100644
+--- a/gateway/platforms/api_server_runs.py
++++ b/gateway/platforms/api_server_runs.py
+@@ -1081,6 +1081,15 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
+             loop.call_soon_threadsafe(run.put_event, _run_event(
+                 run_id, "message.interim", text=text, already_streamed=bool(already_streamed)))
+ 
++    def _reasoning_cb(text: str) -> None:
++        # Live thinking-stream deltas (stream_delivery fans these out while the model streams;
++        # for narration-less thinking models this is the only progress signal). Best-effort like
++        # every other callback; clients that don't know the event ignore it.
++        if not isinstance(text, str) or not text or run_id not in self._run_streams:
++            return
++        with suppress(Exception):
++            loop.call_soon_threadsafe(run.put_event, _run_event(run_id, "reasoning.delta", delta=text))
++
+     def _finish(status: str, extra: Optional[dict] = None, **fields: Any) -> None:
+         """Terminal status, then best-effort ``run.<status>`` event; key order is wire shape."""
+         extra = extra or {}
+@@ -1126,6 +1135,7 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
+             with observe_api_controls(run.admission, _control_cb):
+                 result, usage = await observe_api_turn(
+                     run.admission, stream_delta_callback=_text_cb,
++                    reasoning_callback=_reasoning_cb,
+                     tool_start_callback=_tool_start, tool_complete_callback=_tool_complete)
+             # The canonical turn has no agent object here; the served pair rides on the
+             # committed usage/result runtime metadata when the turn recorded one.

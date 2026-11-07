@@ -1,0 +1,163 @@
+{
+  "_about": "RemoteTool 分发的 Hermes 补丁包。这里的补丁用于给用户的 Hermes 打上优化, 由 RemoteTool 检测版本后提示用户确认应用; 标准 patch 失败时会交给该用户的 Hermes 会话按 goal 自行实现。新增补丁: 把 .patch 放进 files/, 在下面追加一条。",
+  "schema": 1,
+  "patches": [
+    {
+      "id": "prompt-progress-notes",
+      "title": "让 Hermes 在干活时说话",
+      "summary": "模型每次调用工具前先用一两句说明自己在做什么。长任务期间不再干等, 也能看出它准备改哪些东西。",
+      "detail": "对应 Codex 的 Preamble messages 口径: 每次工具调用前 1-2 句, 相关操作合并成一句, 写文件/安装/部署这类耗时或不可逆操作前必须先说明。",
+      "hermes_version": "0.22",
+      "files": [
+        "agent/prompt_builder.py"
+      ],
+      "patch_files": [
+        "prompt-progress-notes.patch"
+      ],
+      "restart": true,
+      "goal": "在 agent/prompt_builder.py 的 TOOL_USE_ENFORCEMENT_GUIDANCE 里加入 # Preamble messages 段: 每次工具调用前先在正文用 1-2 句说明马上要做什么; 相关调用合并成一句; 后续调用要接上文; 长任务或不可逆操作(写文件/安装/部署/构建/杀进程)前必须先说明; 只有单次琐碎读取可以省略; 失败/换方案/受阻时各补一句; 附中英例句。并确保 PLATFORM_HINTS['api_server'] 保留『中途要让用户看到的内容必须写进正文, reasoning 不会渲染』。"
+    },
+    {
+      "id": "strip-reasoning-from-history",
+      "title": "历史不再下发思考内容",
+      "summary": "打开旧会话时不再把每条回复的思考原文一起拉下来。手机流量更省, 打开更快, 界面上本来也不显示这些内容。",
+      "detail": "实测一个 200 条消息的会话, 历史响应从 502KB 降到 290KB。思考过程仍然完整保存在本地数据库里。",
+      "hermes_version": "0.22",
+      "files": [
+        "gateway/platforms/api_server.py"
+      ],
+      "patch_files": [
+        "strip-reasoning-from-history.patch"
+      ],
+      "restart": true,
+      "goal": "在 gateway/platforms/api_server.py 的 APIServerAdapter._message_response 里把 reasoning / reasoning_content 从 safe_keys 白名单移除(历史 GET 与 run.completed transcripts 共用该投影), 不要动 /v1/chat/completions 那条兼容路径。"
+    },
+    {
+      "id": "api-runs-reasoning-stream",
+      "title": "运行中显示思考过程",
+      "summary": "Hermes 干活时把思考流实时推给客户端, 长任务期间能看到它正在想什么, 不再只有工具卡片。",
+      "detail": "新增 reasoning.delta 事件; 不识别该事件的客户端会忽略, 向后兼容。",
+      "hermes_version": "0.22",
+      "files": [
+        "gateway/platforms/api_server_runs.py"
+      ],
+      "patch_files": [
+        "api-runs-reasoning-stream.patch"
+      ],
+      "restart": true,
+      "goal": "在 gateway/platforms/api_server_runs.py 的 _execute_run 里定义 _reasoning_cb(delta) 把 {\"event\":\"reasoning.delta\",...} 推入该 run 的 SSE 队列, 并把 reasoning_callback=_reasoning_cb 传给 observe_api_turn; 保证 run 未结束时 transport 不被 TTL 回收。"
+    },
+    {
+      "id": "cron-empty-session-purge",
+      "title": "清理定时任务留下的空会话",
+      "summary": "定时任务没有实际执行时, 不再在会话列表里留下一条打不开的空会话。",
+      "detail": "在 cron 的终态与异常路径上清理空 session 行。",
+      "hermes_version": "0.22",
+      "files": [
+        "cron/scheduler.py",
+        "cron/scheduler_authority.py"
+      ],
+      "patch_files": [
+        "cron-empty-session-purge.patch"
+      ],
+      "restart": true,
+      "goal": "让 cron 在没有实际运行(monitor 闸门抑制/早退/异常)时不残留空 session: cron/scheduler.py 的 _finalize_cron_session 开头与早退返回前调用 session_db.delete_session_if_empty(cron_session_id); cron/scheduler_authority.py 的 run_canonical_job 里从 admission receipt 取 session_id 调 delete_session_if_empty, 异常分支与终态返回后各调一次。"
+    },
+    {
+      "id": "any-source-session-resume-2",
+      "title": "手机端可以继续任何来源的会话",
+      "summary": "在命令行或桌面端发起的会话, 手机/网页也能接着聊, 不再报权限拒绝。",
+      "detail": "放开 API 接续 cli/desktop/cron 来源会话的来源限制, 并对冲突打警告日志便于排查。",
+      "hermes_version": "0.22",
+      "files": [
+        "gateway/session_api_turn.py",
+        "gateway/session_api.py",
+        "gateway/session_authority.py",
+        "gateway/platforms/api_server_authority_runs.py"
+      ],
+      "patch_files": [
+        "any-source-session-resume-2.patch"
+      ],
+      "restart": true,
+      "goal": "放开 API 接续任意来源已有会话的限制: gateway/session_api_turn.py 去掉 source 白名单拒绝; gateway/session_api.py 允许 bind/restore 任意 source 行、非 API live entry 可被 API 接管; gateway/session_authority.py 允许 api 主体提交 LOCAL 会话; api_server_authority_runs.py 对 permission_denied/admission_conflict 打 warning。"
+    },
+    {
+      "id": "cursor-shape",
+      "title": "命令行光标形状可配",
+      "summary": "Hermes 命令行里的输入光标原本固定是方块，装完可以按配置改成竖线或下划线。",
+      "detail": "读取 display.cursor_shape（block/beam/underline），缺省仍是方块；改完重启命令行生效。",
+      "hermes_version": "0.22",
+      "files": [
+        "cli.py"
+      ],
+      "patch_files": [
+        "cursor-shape.patch"
+      ],
+      "restart": false,
+      "goal": "改 cli.py 里的 _STEADY_CURSOR：原来硬编码 CursorShape.BLOCK，改成读 display.cursor_shape（block/beam/underline，未知或缺省回落 block），在 CLI_CONFIG 加载后重算，并让 _tui_build_application 使用它。"
+    },
+    {
+      "id": "qq-and-gateway",
+      "title": "QQ 机器人不再被代理误拦",
+      "summary": "走 Clash 等 TUN 代理时，QQ 官方域名会被解析成假 IP 段而被安全防护拦掉，表现为机器人离线或发图静默失败。这个补丁放行这些地址。",
+      "detail": "只在始终拦截列表上做放行，不放开任意私网地址。",
+      "hermes_version": "0.22",
+      "files": [
+        "tools/url_safety.py"
+      ],
+      "patch_files": [
+        "qq-and-gateway.patch"
+      ],
+      "restart": true,
+      "goal": "在 tools/url_safety.py 里为本机代理/QQ 官方域名实际解析到的地址段做定向放行：修 is_always_blocked_url 与 _ALWAYS_BLOCKED_IPS 的判定，使 QQ 域名经 fake-ip 解析出的地址不被当作 SSRF 拦截，同时保持对其余私网地址的拦截。"
+    },
+    {
+      "id": "api-run-stream-ttl",
+      "title": "长任务的过程流保留更久",
+      "summary": "服务端把没人订阅的 run 事件流保留时间从 5 分钟延长到 30 分钟，客户端晚一点连上也能拿到完整过程。",
+      "detail": "_RUN_STREAM_TTL 300s → 30 分钟。",
+      "hermes_version": "0.22",
+      "files": [
+        "gateway/platforms/api_server.py"
+      ],
+      "patch_files": [
+        "api-run-stream-ttl.patch"
+      ],
+      "restart": true,
+      "goal": "把 gateway/platforms/api_server.py 里 _RUN_STREAM_TTL 从 300 秒改为 30 * 60，让未被订阅的 run 传输保留 30 分钟。"
+    },
+    {
+      "id": "run-stream-ttl-live-task",
+      "title": "长任务中途不再丢过程事件",
+      "summary": "任务还在执行时，事件流不会被清理器提前摘掉，工具进度不会中途消失。装了“运行中显示思考过程”那一项的话已经包含本改动，不用重复安装。",
+      "detail": "修 _sweep_orphaned_runs_once：任务未结束（仍有 live task）时跳过回收。",
+      "hermes_version": "0.22",
+      "files": [
+        "gateway/platforms/api_server_runs.py"
+      ],
+      "patch_files": [
+        "run-stream-ttl-live-task.patch"
+      ],
+      "restart": true,
+      "goal": "改 gateway/platforms/api_server_runs.py 的 _sweep_orphaned_runs_once：当 run 仍在执行（存在 live task）时不要按 TTL 摘除其 transport，避免后续 tool 事件被丢弃、客户端 /events 404。"
+    },
+    {
+      "id": "local-receipt-any-lane",
+      "title": "命令行能接续本地会话",
+      "summary": "在命令行里接续本地会话不再报 stored identity mismatch；手机端或网页交回的会话也能在本地恢复。",
+      "detail": "按会话实际的 source 放行本地收据，并在路由恢复时允许跨 lane 接管。",
+      "hermes_version": "0.22",
+      "files": [
+        "gateway/session_local_recovery.py",
+        "gateway/session_route_recovery.py",
+        "hermes_state_gateway.py",
+        "hermes_state_local.py"
+      ],
+      "patch_files": [
+        "local-receipt-any-lane.patch"
+      ],
+      "restart": true,
+      "goal": "修本地会话收据的身份校验：hermes_state_local.py 的 moved_receipts 按实际 source 放行；session_route_recovery.py 新增 _lane_left_local 允许跨 lane 恢复；session_local_recovery.py 的 release_handed_off_receipts 与 hermes_state_gateway.py 的 repoint 分支同步放行，使 hermes -r <local-id> 不再报 stored identity mismatch。"
+    }
+  ]
+}

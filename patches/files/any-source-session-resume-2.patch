@@ -1,0 +1,130 @@
+diff --git a/gateway/platforms/api_server_authority_runs.py b/gateway/platforms/api_server_authority_runs.py
+index ef229d9745..ba9d63f046 100644
+--- a/gateway/platforms/api_server_authority_runs.py
++++ b/gateway/platforms/api_server_authority_runs.py
+@@ -24,6 +24,12 @@ def store_error_response(_openai_error, exc):
+     (SQLite writer patience exhausted, I/O) is ``storage_unavailable``."""
+     from aiohttp import web
+     reason = exc.reason if isinstance(exc, RuntimeStoreError) else 'storage_unavailable'
++    if reason in ('permission_denied', 'admission_conflict'):
++        # LOCAL PATCH (any-source-session-resume-2): a 409 used to reach the client with no
++        # trace anywhere. Log the refusal's origin once so the gate is identifiable.
++        import logging
++        logging.getLogger('gateway.platforms.api_server').warning(
++            "API turn refused: %s", reason, exc_info=exc)
+     if reason == 'admission_queued':
+         # Accepted and still queued for the next owner, so not retryable: no Retry-After, and
+         # x-should-retry tells the OpenAI/Anthropic SDKs not to retry the 503 on their own.
+diff --git a/gateway/session_api.py b/gateway/session_api.py
+index 53e753189c..16c0109455 100644
+--- a/gateway/session_api.py
++++ b/gateway/session_api.py
+@@ -172,10 +172,9 @@ def bind_api_steps(authority, session_id, *, hosted_dispatch=None, declared_key=
+             raise RuntimeStoreError('admission_conflict')
+         storage_source, title = 'bot_room', f'Group: {dispatch.room_id}'
+     from gateway.session_history_mount import is_history_mount
+-    if session_id in authority.sessions and not is_history_mount(authority.sessions[session_id]):
+-        if (authority.sessions[session_id].source.platform != Platform.API_SERVER
+-                or authority.db.get_session(session_id)['source'] != storage_source):
+-            raise RuntimeStoreError('permission_denied')
++    # LOCAL PATCH (any-source-session-resume-2): no platform gate. A live entry of ANY
++    # surface (a Desktop/CLI chat the user still has open included) may be re-pointed at
++    # the API route; the row's own source is never rewritten. See patches/README.md.
+     # An API session is the shared-listener row of the transport matrix: the launch profile's
+     # ``api_server`` adapter receives ``/p/<name>/`` and answers it, while the turn RUNS under the
+     # authority's own profile. Both ride the persisted source — ``source.profile`` places the runtime
+@@ -224,9 +223,9 @@ def bind_api_steps(authority, session_id, *, hosted_dispatch=None, declared_key=
+                 raise RuntimeStoreError('admission_conflict')
+             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING',
+                          (_DECLARED_PREFIX + declared_key, session_id))
+-        row = conn.execute('SELECT source,session_key,title FROM sessions WHERE id=?', (session_id,)).fetchone()
+-        if row is not None and row['source'] != storage_source:
+-            raise RuntimeStoreError('permission_denied')
++        row = conn.execute('SELECT source,session_key,chat_id,title FROM sessions WHERE id=?', (session_id,)).fetchone()
++        # LOCAL PATCH (any-source-session-resume-2): an existing row of ANY source may be
++        # adopted by the API; the row's own source is never rewritten.
+         if storage_source == 'bot_room':
+             if row is not None and row['title'] != title:
+                 raise RuntimeStoreError('admission_conflict')
+@@ -237,7 +236,13 @@ def bind_api_steps(authority, session_id, *, hosted_dispatch=None, declared_key=
+         # the declared-key registry above already refused a key owned by another session, and any
+         # other stored key (another conversation's, a foreign route) still conflicts.
+         legacy_key = declared_key or caller_key
+-        if row is not None and row['session_key'] not in (None, '', route):
++        # LOCAL PATCH (any-source-session-resume-2): a row owned by another surface already
++        # carries that surface's route (cli/cron/desktop sessions all have one). Adopt it
++        # instead of refusing: the write below re-points the row at the API route.
++        foreign_row = row is not None and row['source'] != storage_source
++        if row is not None and row['chat_id'] not in (None, '', session_id):
++            foreign_row = True
++        if row is not None and row['session_key'] not in (None, '', route) and not foreign_row:
+             if not legacy_key or row['session_key'] != legacy_key:
+                 raise RuntimeStoreError('admission_conflict')
+             # The rewrite below replaces the stamped key with the route: the registry keeps it,
+@@ -313,7 +318,7 @@ def restore_api_session(authority, session_id):
+     row = authority.db.get_session(session_id)
+     if (receipt['session_id'] != session_id or entry.session_id != session_id
+             or source.platform != Platform.API_SERVER or source.chat_id != session_id
+-            or row is None or row['source'] != receipt.get('storage_source', 'api_server')
++            or row is None
+             or (row['session_key'], row['chat_id'], row['user_id']) != (entry.session_key, session_id, source.user_id)
+             or entry.session_key != authority.runner.session_store._generate_session_key(source)):
+         raise RuntimeStoreError('admission_conflict')
+@@ -341,4 +346,9 @@ def restore_api_session(authority, session_id):
+         # A read-only view opened while the row had no binding becomes the bound conversation in place,
+         # so its viewers keep their subscriptions and event stream.
+         live.source, live.route = source, entry.session_key
++    elif live.source.platform != Platform.API_SERVER:
++        # LOCAL PATCH (any-source-session-resume-2): take the id over from a live entry owned by
++        # another surface; keeping it would leave the turn without an API adapter (503
++        # runtime_draining).
++        authority.sessions[session_id] = LiveSession(source, entry.session_key)
+     return SessionRef(authority.profile_id, session_id)
+diff --git a/gateway/session_api_turn.py b/gateway/session_api_turn.py
+index 3b15bc312e..09501da986 100644
+--- a/gateway/session_api_turn.py
++++ b/gateway/session_api_turn.py
+@@ -47,8 +47,10 @@ def api_settings(authority, ref):
+ 
+ def check_api_turn(authority, ref, payload):
+     live = authority.sessions[ref.session_id]
+-    if live.source.platform == Platform.API_SERVER:
+-        restore_api_session(authority, ref.session_id)
++    # LOCAL PATCH (any-source-session-resume-2): re-point the live entry at the API binding
++    # whatever surface owns it — bind_api_steps just adopted it, so a cli/cron/desktop entry
++    # here has no adapter of its own and used to be refused as ``runtime_draining``.
++    restore_api_session(authority, ref.session_id)
+     adapter = authority.runner._adapter_for_source(live.source)
+     if adapter is None or getattr(adapter, 'gateway_runner', None) is not authority.runner:
+         raise RuntimeStoreError('runtime_draining')
+@@ -172,11 +174,9 @@ def admit_api_steps(adapter, **kwargs):
+         # This opaque namespace is persisted in the same row/transaction as
+         # admission. It is never a bearer credential or execution input.
+         payload['api_turn_v1']['run_owner_scope'] = run_owner_scope
+-    # Refuse a foreign-surface target before committing any media for it (a refused
+-    # admission otherwise retains its image bytes under native-inputs/ forever).
+-    existing = authority.db.get_session(sid)
+-    if existing is not None and existing['source'] not in ('api_server', 'bot_room'):
+-        raise RuntimeStoreError('permission_denied')
++    # LOCAL PATCH (any-source-session-resume-2): no surface gate. A session row owned by ANY
++    # surface (cli / desktop / tui / oneshot / telegram / qqbot ...) may be continued over the
++    # API; upstream refuses every source but api_server/bot_room. See patches/README.md.
+     if kwargs.get('turn_author') is not None:
+         from agent.turn_author import parse_turn_author
+         author = parse_turn_author(kwargs['turn_author'])
+diff --git a/gateway/session_authority.py b/gateway/session_authority.py
+index 0268bc5152..a0fab7e2af 100644
+--- a/gateway/session_authority.py
++++ b/gateway/session_authority.py
+@@ -233,7 +233,10 @@ class SessionAuthority:
+         source = self.sessions[ref.session_id].source
+         from gateway.owner_identity import same_owner
+         if (source is not None and source.platform == Platform.LOCAL
+-                and not same_owner(source.user_id, actor.subject) and 'session:operator' not in actor.capabilities):
++                and not same_owner(source.user_id, actor.subject) and 'session:operator' not in actor.capabilities
++                and actor.subject != 'api'):
++            # LOCAL PATCH (any-source-session-resume-2): the API principal ('api') is this host's
++            # operator, so it may submit into a LOCAL session owned by cli / cron / desktop.
+             raise RuntimeStoreError('permission_denied')
+         from gateway.session_retirement import touch_restored
+         touch_restored(self, ref.session_id)  # a rename or a read brought a retired one back

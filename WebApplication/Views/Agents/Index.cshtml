@@ -170,14 +170,15 @@
 
                 <template v-if="adminMode==='patches'">
                     <section class="workspace-panel agent-admin-card">
-                        <div class="panel-tools">补丁 · 待应用 {{patchPending}} 个 · 先标准 patch，失败可交给 Hermes 自行实现</div>
+                        <div class="panel-tools">补丁 · 可用 {{patchPending}} 个 · 给当前 Hermes 加优化（先标准 patch，失败可交给 Hermes 自行实现）</div>
                         <p v-if="patchError" class="workspace-alert">{{patchError}}</p>
-                        <p v-if="!patchManifestPresent" class="empty-state">还没有补丁清单：把 manifest.json 放到 Hermes 的 patches 目录。</p>
+                        <p v-if="!patchManifestPresent" class="empty-state">这个版本的 RemoteTool 没有随包发布补丁。</p>
                         <p v-else-if="!patches.length" class="empty-state">清单为空。</p>
                         <div v-for="item in patches" :key="item.id" class="agent-patch-row">
-                            <div class="agent-patch-main"><strong>{{item.title || item.id}}</strong><small>{{item.summary}}</small><code>{{item.id}}<template v-if="item.files && item.files.length"> · {{item.files.join(', ')}}</template></code></div>
-                            <span class="agent-patch-state" :class="'is-'+item.state">{{item.state==='applied'?'已应用':item.state==='ready'?'可应用':'需处理'}}</span>
-                            <i-button v-if="item.state!=='applied'" size="small" type="primary" :disabled="patchBusy" @@click="askApplyPatch(item)">应用</i-button>
+                            <div class="agent-patch-main"><strong>{{item.title || item.id}}</strong><small>{{item.summary}}</small><small v-if="item.detail_text" class="agent-patch-detail">{{item.detail_text}}</small><code>{{item.id}}<template v-if="item.requires"> · 适用于 Hermes {{item.requires}}</template></code></div>
+                            <span class="agent-patch-state" :class="'is-'+item.state">{{item.state==='applied'?'已安装':item.state==='ready'?'可安装':item.state==='incompatible'?'不适用':'需适配'}}</span>
+                            <i-button v-if="item.state==='ready'" size="small" type="primary" :disabled="patchBusy" @@click="askApplyPatch(item)">安装</i-button>
+                            <i-button v-else-if="item.state==='conflict'" size="small" :disabled="patchBusy" @@click="askAgentFix(item)">让 Hermes 实现</i-button>
                             <span v-else class="agent-patch-note">无需操作</span>
                         </div>
                         <div v-if="patchConfirm" class="agent-patch-confirm">

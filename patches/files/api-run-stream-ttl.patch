@@ -1,0 +1,13 @@
+diff --git a/gateway/platforms/api_server.py b/gateway/platforms/api_server.py
+index f8160def3d..ae9c875eaa 100644
+--- a/gateway/platforms/api_server.py
++++ b/gateway/platforms/api_server.py
+@@ -4339,7 +4339,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
+     # -- /v1/runs, room grants, room dispatch: thin delegators (real methods: tests assert
+     # __dict__ membership and patch the module-level implementations) ---------------------
+ 
+-    _RUN_STREAM_TTL = 300  # seconds before orphaned runs are swept
++    _RUN_STREAM_TTL = 30 * 60  # retain unsubscribed run transport for up to 30 minutes
+     _RUN_STATUS_TTL = 3600  # seconds to retain terminal run status for polling
+ 
+     def _set_run_status(self, run_id: str, status: str, **fields: Any) -> dict[str, Any]:

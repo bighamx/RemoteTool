@@ -1,0 +1,21 @@
+diff --git a/gateway/platforms/api_server_runs.py b/gateway/platforms/api_server_runs.py
+index bfb5b4dbee3..b78bde6c018 100644
+--- a/gateway/platforms/api_server_runs.py
++++ b/gateway/platforms/api_server_runs.py
+@@ -1289,8 +1289,15 @@ def _sweep_orphaned_runs_once(self, now: Optional[float] = None) -> None:
+         stream = self._run_streams.get(run_id)
+         if now - created_at <= self._RUN_STREAM_TTL or (stream is not None and stream.subscribers):
+             continue
+-        logger.debug("[api_server] sweeping expired run transport %s", run_id)
+         task = self._active_run_tasks.get(run_id)
++        if task is not None and not task.done():
++            # The run is still executing: dropping its transport now would silently discard
++            # every later tool.progress event (tool.started/tool.completed push via the
++            # buffer, q is None -> gone) and make /events 404 for the rest of the turn.
++            # Long silent-reasoning turns routinely exceed the TTL with zero subscribers.
++            # Keep buffering; the sweep will reclaim it once the task returns.
++            continue
++        logger.debug("[api_server] sweeping expired run transport %s", run_id)
+         # Transport TTL bounds buffering; live control state survives until the task returns.
+         _drop_run_transport(self, run_id)
+         if task is None or task.done():

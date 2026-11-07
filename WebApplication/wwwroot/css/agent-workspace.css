@@ -2650,3 +2650,5 @@
 .agent-patch-note{font-size:12px;opacity:.55;white-space:nowrap}
 .agent-patch-confirm{margin-top:14px;padding:12px;border:1px solid rgba(88,166,255,.35);border-radius:10px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
 .agent-patch-log{margin-top:12px;max-height:220px;overflow:auto;background:rgba(0,0,0,.25);padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap}
+.agent-patch-detail{opacity:.58;font-size:11px}
+.agent-patch-state.is-incompatible{color:#8b949e}

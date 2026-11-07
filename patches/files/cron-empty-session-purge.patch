@@ -1,0 +1,119 @@
+diff --git a/cron/scheduler.py b/cron/scheduler.py
+index ff780ef6ac..c0f17d13ac 100644
+--- a/cron/scheduler.py
++++ b/cron/scheduler.py
+@@ -2117,6 +2117,18 @@ def _final_response_from_result(result: dict, job_id: str, job_name: str, AIAgen
+ def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_session_id: str,
+                            workdir: Optional[str] = None) -> None:
+     """Title, classify, end and release the cron session after the agent turn has returned."""
++    # A silent tick (final answer "[SILENT]", or a turn that produced no text at all) still gets a
++    # session row from the unified runtime, so a 5-minute poller leaves an untitled empty session
++    # behind every run and the session list fills with them. Housekeeping, not a user delete:
++    # delete_session_if_empty refuses anything with a message, a lease, a title or children, and it
++    # retires the runtime ledger rows itself, so a run that really did work is never touched.
++    try:
++        _purge_empty = getattr(session_db, "delete_session_if_empty", None)
++        if _purge_empty is not None and _purge_empty(cron_session_id):
++            logger.debug("Job '%s': purged empty cron session %s", job_id, cron_session_id)
++            return
++    except (Exception, KeyboardInterrupt) as e:
++        logger.debug("Job '%s': empty cron session purge skipped: %s", job_id, e)
+     # Bound every DB op so storage failure cannot hold the dispatch guard.
+     _session_db = _BoundedCronSessionDB(session_db, job_id)
+     # Compression may have rotated the run onto a continuation: finalize that, not the stale cron
+@@ -2571,6 +2583,24 @@ def run_job(
+ 
+     early, prompt = _prepare_job_prompt(job, job_id, job_name, extra_prompt, cancel_event)
+     if early is not None:
++        # The monitor/wake/prompt gates short-circuit before any agent machinery runs, but the
++        # unified runtime has already admitted — and created — this fire's session row, so a
++        # suppressed run would otherwise leave an untitled empty session behind every tick
++        # (_finalize_cron_session below never runs on this path). Housekeeping, not a user delete:
++        # delete_session_if_empty refuses anything with messages, a lease or children.
++        if owner_execution is not None:
++            try:
++                _gate_db = _open_cron_session_db(job)
++                try:
++                    _purge_empty = getattr(_gate_db, "delete_session_if_empty", None)
++                    if _purge_empty is not None and _purge_empty(owner_execution[1]):
++                        logger.debug("Job '%s': purged gated empty cron session %s",
++                                     job_id, owner_execution[1])
++                finally:
++                    with contextlib.suppress(Exception):
++                        _gate_db.close()
++            except (Exception, KeyboardInterrupt) as e:
++                logger.debug("Job '%s': gated cron session purge skipped: %s", job_id, e)
+         return early
+     from run_agent import AIAgent
+ 
+diff --git a/cron/scheduler_authority.py b/cron/scheduler_authority.py
+index 9b5b5eca93..3389d5a86d 100644
+--- a/cron/scheduler_authority.py
++++ b/cron/scheduler_authority.py
+@@ -1,7 +1,9 @@
+ """Transport-only cron execution; output/delivery remain with the firing scheduler."""
+ import asyncio
++import contextlib
+ import hashlib
+ import json
++import logging
+ import uuid
+ 
+ 
+@@ -52,6 +54,35 @@ def _lift_pause(job_id, pause):
+             pass
+ 
+ 
++def _purge_empty_admitted_session(record, job):
++    """Delete this fire's admitted session row if the run left it completely empty.
++
++    Monitor/wake-gated fires short-circuit before any agent machinery runs, but the owner's
++    admission has already created the session row, so every suppressed tick of a 5-minute poller
++    used to pile up untitled empty sessions. Runs that produced anything (messages, title, a
++    continuation) are refused by ``delete_session_if_empty`` itself. Must run AFTER the fire is
++    terminal: the owner holds the row's turn lease until then, and a lease-guarded row is simply
++    not deleted.
++    """
++    try:
++        receipt = record.get('receipt') or {}
++        sid = receipt.get('session_id')
++        if not sid:
++            return
++        from hermes_constants import get_hermes_home
++        from hermes_state import SessionDB
++        db = SessionDB(get_hermes_home() / 'state.db')
++        try:
++            if db.delete_session_if_empty(sid):
++                logging.getLogger('cron.scheduler').debug(
++                    "Job '%s': purged empty admitted cron session %s", job['id'], sid)
++        finally:
++            with contextlib.suppress(Exception):
++                db.close()
++    except Exception:  # noqa: BLE001 — housekeeping must never fail the fire
++        pass
++
++
+ def run_canonical_job(job, *, extra_prompt=None, cancel_event=None, execution_id=None):
+     from gateway.session_cron import owner_for_home, operation
+     from hermes_cli.gateway_client import connect_gateway
+@@ -137,14 +168,18 @@ def run_canonical_job(job, *, extra_prompt=None, cancel_event=None, execution_id
+                 current = None
+             if current is loop:
+                 raise RuntimeError('cron synchronous execution must run off the owner event loop')
+-            return asyncio.run_coroutine_threadsafe(
++            result = asyncio.run_coroutine_threadsafe(
+                 observe(lambda op, data: operation(authority, op, data)), loop).result()
+-        return asyncio.run(remote())
++        else:
++            result = asyncio.run(remote())
+     except Exception as exc:
++        _purge_empty_admitted_session(record, job)
+         if attempted:
+             raise CronExecutionUnknown(f'Cron execution unverified; reconcile {journal}: {exc}') from exc
+         error = f'{type(exc).__name__}: {exc}'
+         return False, f'# Cron Job: {job["id"]} (FAILED)\n\n{error}\n', '', error
++    _purge_empty_admitted_session(record, job)
++    return result
+ 
+ def reconcile_pending(*, allow_connect=True):
+     """Observe prepared fires; never submit missing or interrupted work.

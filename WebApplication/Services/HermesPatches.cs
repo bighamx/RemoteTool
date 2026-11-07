@@ -12,17 +12,32 @@ namespace RemoteTool.WebApi.Services;
 /// 应用走标准 <c>git apply</c>（先 --check 探测，失败即不动工作树），成功后对受影响的 .py 做 py_compile。
 /// 标准应用失败时，用 <c>v1/runs</c> 起一个 Hermes 会话，把补丁意图和失败输出交给模型自行实现（agent-fix）。
 /// </summary>
-public sealed class HermesPatches(HermesProfiles profiles, IConfiguration configuration, HermesBridge bridge)
+public sealed class HermesPatches(HermesProfiles profiles, IConfiguration configuration, HermesBridge bridge, IWebHostEnvironment environment)
 {
     public sealed record Outcome(JsonObject Body, int Status);
 
     private string Home => profiles.Home;
     private string Repo => configuration["Hermes:SourceDirectory"] is { Length: > 0 } dir ? dir : Path.Combine(Home, "hermes-agent");
-    private string ManifestPath => Path.Combine(Home, "patches", "manifest.json");
-    private string PatchesDir => Path.Combine(Home, "patches");
+    // 补丁包随 RemoteTool 一起发布(仓库 patches/ 目录), 不是用户本机 patches 目录里的东西。
+    private string CatalogDir => Path.Combine(environment.ContentRootPath, "patches");
+    private string ManifestPath => Path.Combine(CatalogDir, "manifest.json");
+    private string PatchesDir => Path.Combine(CatalogDir, "files");
     private string Python => configuration["Hermes:PythonExecutable"] is { Length: > 0 } py
         ? py
         : Path.Combine(Repo, "venv", "Scripts", "python.exe");
+
+    /// <summary>本机 Hermes 版本, 取自网关状态文件; 取不到就返回空串(视为不限制)。</summary>
+    private string HermesVersion()
+    {
+        try {
+            var state = JsonNode.Parse(File.ReadAllText(Path.Combine(Home, "gateway_state.json")));
+            return state?["code_version"]?.ToString() ?? "";
+        } catch (Exception error) when (error is IOException or JsonException) { return ""; }
+    }
+
+    private static bool VersionMatches(string wanted, string actual) =>
+        wanted.Length == 0 || actual.Length == 0 ||
+        actual.StartsWith(wanted, StringComparison.OrdinalIgnoreCase);
 
     // ---------- 清单 ----------
 
@@ -48,12 +63,15 @@ public sealed class HermesPatches(HermesProfiles profiles, IConfiguration config
 
     // ---------- 状态 ----------
 
-    private sealed record PatchState(bool Applied, bool Applicable, string? Missing, string? Detail);
+    private sealed record PatchState(bool Applied, bool Applicable, string? Missing, string? Detail, bool Incompatible = false);
 
     private PatchState Inspect(JsonObject entry)
     {
         var names = Files(entry);
         if (names.Length == 0) return new PatchState(false, false, null, "清单条目缺少 patch_files");
+        var wants = entry["hermes_version"]?.ToString() ?? "";
+        if (!VersionMatches(wants, HermesVersion()))
+            return new PatchState(false, false, null, $"只适用于 Hermes {wants}（本机 {HermesVersion()}）", Incompatible: true);
         var appliedCount = 0;
         var applicableCount = 0;
         string? detail = null;
@@ -74,25 +92,30 @@ public sealed class HermesPatches(HermesProfiles profiles, IConfiguration config
     public JsonObject List()
     {
         var rows = new JsonArray();
+        var version = HermesVersion();
         foreach (var entry in Entries().OfType<JsonObject>()) {
             var state = Inspect(entry);
             rows.Add(new JsonObject {
                 ["id"] = entry["id"]?.ToString(),
                 ["title"] = entry["title"]?.ToString(),
                 ["summary"] = entry["summary"]?.ToString(),
-                ["state"] = state.Applied ? "applied" : state.Applicable ? "ready" : "conflict",
+                ["detail"] = entry["detail"]?.ToString(),
+                ["requires"] = entry["hermes_version"]?.ToString(),
+                ["state"] = state.Applied ? "applied" : state.Incompatible ? "incompatible" : state.Applicable ? "ready" : "conflict",
                 ["restart"] = entry["restart"]?.GetValue<bool>() == true,
                 ["files"] = new JsonArray(Targets(entry).Select(name => (JsonNode?)name).ToArray()),
                 ["patch_files"] = new JsonArray(Files(entry).Select(name => (JsonNode?)name).ToArray()),
-                ["detail"] = state.Detail ?? state.Missing,
+                ["detail_text"] = state.Detail ?? state.Missing,
             });
         }
         return new JsonObject {
             ["repo"] = Repo,
             ["manifest"] = ManifestPath,
             ["manifest_present"] = File.Exists(ManifestPath),
+            ["hermes_version"] = version,
             ["patches"] = rows,
             ["pending"] = rows.Count(row => row?["state"]?.ToString() == "ready"),
+            ["available"] = rows.Count(row => row?["state"]?.ToString() is "ready" or "conflict"),
         };
     }
 
@@ -104,6 +127,10 @@ public sealed class HermesPatches(HermesProfiles profiles, IConfiguration config
         var names = Files(entry);
         var state = Inspect(entry);
         if (state.Applied) return new Outcome(new JsonObject { ["ok"] = true, ["state"] = "applied", ["message"] = "补丁已是应用状态" }, StatusCodes.Status200OK);
+        if (state.Incompatible) return new Outcome(new JsonObject {
+            ["ok"] = false, ["state"] = "incompatible", ["needs_agent"] = false,
+            ["message"] = state.Detail ?? "此补丁不适用于当前 Hermes 版本",
+        }, StatusCodes.Status409Conflict);
 
         var log = new StringBuilder();
         Directory.CreateDirectory(Path.Combine(Home, "backups"));

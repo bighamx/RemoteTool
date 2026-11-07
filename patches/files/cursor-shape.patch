@@ -1,0 +1,29 @@
+diff --git a/cli.py b/cli.py
+index 23c7c5a40e..c19409c0f8 100644
+--- a/cli.py
++++ b/cli.py
+@@ -224,6 +224,7 @@ try:
+     from prompt_toolkit.cursor_shapes import CursorShape
+     _STEADY_CURSOR = CursorShape.BLOCK
+ except (ImportError, AttributeError):
++    CursorShape = None
+     _STEADY_CURSOR = None
+ 
+ try:
+@@ -342,6 +343,16 @@ load_hermes_dotenv(hermes_home=_hermes_home, project_env=_project_env)
+ 
+ CLI_CONFIG = load_cli_config()
+ 
++# LOCAL PATCH (cursor-shape): `display.cursor_shape` chooses the REPL input cursor shape
++# (block | beam | underline) instead of the hardcoded block. Unknown/missing → block.
++if CursorShape is not None:
++    _steady_shape = str((CLI_CONFIG.get("display") or {}).get("cursor_shape") or "block").strip().lower()
++    _STEADY_CURSOR = {
++        "block": CursorShape.BLOCK,
++        "beam": CursorShape.BEAM,
++        "underline": CursorShape.UNDERLINE,
++    }.get(_steady_shape, CursorShape.BLOCK)
++
+ 
+ _init_logging_and_display_from_config()
+ 

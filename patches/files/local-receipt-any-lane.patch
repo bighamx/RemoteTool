@@ -1,0 +1,115 @@
+diff --git a/gateway/session_local_recovery.py b/gateway/session_local_recovery.py
+index dd508484c9..36b246cf1b 100644
+--- a/gateway/session_local_recovery.py
++++ b/gateway/session_local_recovery.py
+@@ -426,19 +426,21 @@ def restore_completion_route(runner, session_key):
+ 
+ def release_handed_off_receipts(db, *, epoch):
+     """Boot heal for #143286: an older build's ``/handoff`` (or a platform ``/resume``) moved a local
+-    session onto a messaging lane but kept its local receipt, so every open, pin or rename refused it
++    session onto another lane but kept its local receipt, so every open, pin or rename refused it
+     (``stored identity mismatch``) and its title never resolved. Retire each such receipt, so the row
+     restores from its route like any other platform session, and move the rest of its conversation
+-    there with it (``hand_off_conversations``). Only receipts whose CURRENT target a messaging lane
+-    now holds: any other refused receipt stays as it is, logged when it is touched."""
+-    from gateway.session_route_recovery import _messaging_platform
++    there with it (``hand_off_conversations``). Any non-local lane counts — the API transport and
++    Desktop takeovers rewrite the row's identity exactly like a handoff and strand the same receipt —
++    while a receipt whose CURRENT target is still the local lane stays as it is, logged when it is
++    touched."""
++    from gateway.session_route_recovery import _lane_left_local
+     from hermes_state_local import hand_off_conversations, moved_receipts
+     from hermes_state_runtime import _epoch
+ 
+     def write(conn):
+         _epoch(conn, epoch)
+-        moved = {owner: (target, source) for owner, (target, source) in moved_receipts(conn).items()
+-                 if _messaging_platform(source) is not None}
++        moved = {owner: (target, source) for owner, (target, source, route) in moved_receipts(conn).items()
++                 if _lane_left_local(route)}
+         return hand_off_conversations(conn, moved)
+     for owner, (target, source) in db._execute_write(write).items():
+         logging.getLogger(__name__).info(
+diff --git a/gateway/session_route_recovery.py b/gateway/session_route_recovery.py
+index 592b65c98a..2844f57703 100644
+--- a/gateway/session_route_recovery.py
++++ b/gateway/session_route_recovery.py
+@@ -39,6 +39,21 @@ def _messaging_platform(label):
+     return None if platform in (Platform.LOCAL, Platform.API_SERVER) else platform
+ 
+ 
++def _lane_left_local(route):
++    """True when *route* names a lane other than LOCAL — every takeover that strands a local receipt.
++
++    ``_messaging_platform`` answers a narrower question (is this a messaging platform) and so misses
++    the lanes that rewrite a row's identity without being one: the API transport (``api_server``) and
++    labels no ``Platform`` answers to (``desktop``). Their takeover makes the local receipt just as
++    unusable as ``/handoff`` does — ``session_local_recovery._checked_entry`` compares the row's
++    ``session_key`` with the receipt's route, so every open, pin and rename refuses ``stored identity
++    mismatch`` while the receipt sits there forever (#143286 covers only the messaging half).
++    Unparseable keys and LOCAL's own keys never qualify: their conversation is still local."""
++    from gateway.run import _parse_session_key
++    platform = (_parse_session_key(route) or {}).get('platform')
++    return isinstance(platform, str) and platform != Platform.LOCAL.value
++
++
+ def _routed_entry(authority, sid, route):
+     """The routing entry that still names *sid* under *route*, else None."""
+     store = authority.runner.session_store
+diff --git a/hermes_state_gateway.py b/hermes_state_gateway.py
+index 3359e19655..8b25c7d841 100644
+--- a/hermes_state_gateway.py
++++ b/hermes_state_gateway.py
+@@ -269,12 +269,13 @@ class SessionGatewayMixin:
+             if ancestors:
+                 # An explicit repoint moved these rows to this lane: the local conversation whose receipt
+                 # names one of them goes with it in the same write, or it would match neither lane (#143286).
+-                from gateway.session_route_recovery import _messaging_platform
++                from gateway.session_route_recovery import _lane_left_local
+                 from hermes_state_local import hand_off_conversations, moved_receipts
+                 moved = {row[0] for row in conn.execute(
+                     f"{_COMPRESSION_LINEAGE_CTE} SELECT id FROM compression_lineage", (session_id,))}
+-                hand_off_conversations(conn, {owner: found for owner, found in moved_receipts(conn, moved).items()
+-                                              if _messaging_platform(found[1]) is not None})
++                hand_off_conversations(conn, {owner: (found[0], found[1])
++                                              for owner, found in moved_receipts(conn, moved).items()
++                                              if _lane_left_local(found[2])})
+                 return
+             # The UPDATE silently no-ops on a missing row — insert it with full identity.
+             if conn.execute("SELECT 1 FROM sessions WHERE id = ? LIMIT 1", (session_id,)).fetchone() is None:
+diff --git a/hermes_state_local.py b/hermes_state_local.py
+index fd39d4c1bf..e775746269 100644
+--- a/hermes_state_local.py
++++ b/hermes_state_local.py
+@@ -170,20 +170,22 @@ def retire_local_receipts(conn, session_ids):
+ 
+ 
+ def moved_receipts(conn, target_ids=None):
+-    """``{owner id: (moved row id, its source)}`` of local receipts whose current physical target row
+-    now carries another lane's route. An explicit repoint (``/handoff``, a platform ``/resume``)
+-    rewrote that row's routing identity, so the receipt can never restore the conversation again
+-    (the stored identity check in ``gateway.session_local_recovery._checked_entry``). Only the
+-    current target counts: an earlier ``/new`` segment that moved leaves the conversation the
+-    receipt guards local, and releasing it would strand that transcript. *target_ids* narrows the
+-    scan to the rows one repoint rewrote."""
++    """``{owner id: (moved row id, its source, the route that took it)}`` of local receipts whose
++    current physical target row now carries another lane's route. An explicit repoint (``/handoff``,
++    a platform ``/resume``), an API continuation or a Desktop takeover rewrote that row's routing
++    identity, so the receipt can never restore the conversation again (the stored identity check in
++    ``gateway.session_local_recovery._checked_entry``). The route travels with each entry because the
++    source label alone cannot tell the lanes apart (a Desktop row keeps ``source='desktop'`` while its
++    route is the API transport's). Only the current target counts: an earlier ``/new`` segment that
++    moved leaves the conversation the receipt guards local, and releasing it would strand that
++    transcript. *target_ids* narrows the scan to the rows one repoint rewrote."""
+     rows = conn.execute(
+-        "SELECT substr(m.key, ?), s.id, s.source FROM state_meta m JOIN sessions s "
++        "SELECT substr(m.key, ?), s.id, s.source, s.session_key FROM state_meta m JOIN sessions s "
+         "ON s.id = CASE WHEN json_valid(m.value) THEN json_extract(m.value, '$.entry.session_id') END "
+         "WHERE m.key GLOB ? AND s.session_key IS NOT NULL "
+         "AND s.session_key IS NOT CASE WHEN json_valid(m.value) THEN json_extract(m.value, '$.route') END",
+         (len(POLICY_PREFIX) + 1, POLICY_PREFIX + '*')).fetchall()
+-    return {owner: (target, source) for owner, target, source in rows
++    return {owner: (target, source, route) for owner, target, source, route in rows
+             if target_ids is None or target in target_ids}
+ 
+ 
