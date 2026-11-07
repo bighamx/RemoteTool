@@ -33,6 +33,12 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private readonly Dictionary<string, string> active = new();
     private readonly Dictionary<string, List<JsonObject>> events = new();
     private readonly Dictionary<string, string> itemTurns = new();
+
+    /// <summary>从 tokenUsage 里取上下文快照; 数值小到不可能是真实上下文(系统提示就有几 K)时返回 null。</summary>
+    private static JsonObject? ContextFromUsage(JsonNode? usage) {
+        var tokens = usage?["last"].L("totalTokens");
+        return tokens >= 1000 ? Obj(("available", true), ("tokens", tokens), ("limit", usage?["modelContextWindow"]), ("estimated", false)) : null;
+    }
     private sealed record ApprovalRequest(string Run, string Session, string NativeId, CodexRpc Origin, JsonObject Message);
     private readonly Dictionary<string, ApprovalRequest> approvals = new();
     private readonly HashSet<string> replyingApprovals = new();
@@ -759,8 +765,10 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             }
         }
         if (method == "thread/tokenUsage/updated") {
-            var usage = p["tokenUsage"];
-            lock (gate) contexts[p.S("threadId")] = Obj(("available", true), ("tokens", usage?["last"].L("totalTokens")), ("limit", usage?["modelContextWindow"]), ("estimated", false));
+            // 上游断流/空回合可能给出个位数伪快照, 会把真实上下文覆盖成 "2";
+            // 真实上下文不会低于系统提示的量级, 太小的值丢弃、留给 rollout 回读。
+            if (ContextFromUsage(p["tokenUsage"]) is { } snapshot)
+                lock (gate) contexts[p.S("threadId")] = snapshot;
         }
         string run; lock (gate) active.TryGetValue(p.S("threadId"), out run);
         if (message.ContainsKey("id")) {
@@ -1449,8 +1457,8 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                     lock (gate) runs[run]!["approval"] = approval.DeepClone();
                     if (changed) Emit(run, "approval.request", approval.Select(x => (x.Key, (object)x.Value)).ToArray());
                 } else lock (gate) runs[run]!.AsObject().Remove("approval");
-                var usage = snapshot["latestTokenUsageInfo"];
-                if (usage?["last"] != null) lock (gate) contexts[session] = Obj(("available", true), ("tokens", usage["last"].L("totalTokens")), ("limit", usage["modelContextWindow"]), ("estimated", false));
+                if (ContextFromUsage(snapshot["latestTokenUsageInfo"]) is { } usageSnapshot)
+                    lock (gate) contexts[session] = usageSnapshot;
                 var status = turn.S("status");
                 if (status is "completed" or "failed" or "interrupted") {
                     lock (gate) { runs[run]!["status"] = status; runs[run]!["error"] = turn["error"].S("message"); runs[run]!.AsObject().Remove("approval"); active.Remove(session); Persist(); }
