@@ -267,10 +267,12 @@ public sealed class HermesAttachments
                 foreach (var source in AssistantMediaPaths.Read(row["content"]?.ToString() ?? "").Distinct().Take(32)) {
                     try {
                         var info = new FileInfo(source);
-                        if (!info.Exists || info.Length > 500L * 1024 * 1024 || info.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+                        if (!info.Exists || info.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
                         var folder = Path.GetFullPath(Folder(session)) + Path.DirectorySeparatorChar;
                         var target = source;
                         if (!source.StartsWith(folder, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) {
+                            // 500MB 上限只约束需要快照复制的外部文件; outbox 里的交付文件不复制, 再大也给卡片。
+                            if (info.Length > 500L * 1024 * 1024) continue;
                             // Snapshot explicit delivery markers; never change or serve the project original directly.
                             var version = Identifier(source + "|" + info.LastWriteTimeUtc.Ticks + "|" + info.Length)[..32];
                             target = Path.Combine(folder, "media", version + "_" + info.Name);

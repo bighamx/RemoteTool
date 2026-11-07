@@ -101,7 +101,8 @@ public sealed class HermesNativeAttachments(HermesProfiles profiles, HermesAttac
         if(allowed==null && !delivered) return false;
         if(allowed==root && System.IO.Path.GetRelativePath(root,full).Split(System.IO.Path.DirectorySeparatorChar).Any(part=>part.StartsWith('.'))) return false;
         var info=new FileInfo(full);
-        if(!info.Exists || info.Length>500L*1024*1024) return false;
+        // 500MB 上限只约束非交付引用; 助理用 MEDIA: 明确交付的文件(如大压缩包)不该因此丢卡片。
+        if(!info.Exists || (!delivered && info.Length>500L*1024*1024)) return false;
         for(FileSystemInfo current=info;current!=null;current=current is FileInfo f?f.Directory:((DirectoryInfo)current).Parent) {
             if((current.Attributes&FileAttributes.ReparsePoint)!=0) return false;
             if(allowed!=null && current.FullName.Equals(System.IO.Path.GetFullPath(allowed),comparison)) break;
