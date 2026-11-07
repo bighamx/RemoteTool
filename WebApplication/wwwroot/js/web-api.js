@@ -13,7 +13,7 @@ window.RemoteToolApi = {
             const detail = payload.message ?? payload.error?.message ?? payload.error ?? payload.title;
             const text = typeof detail === 'string' ? detail
                 : detail && typeof detail === 'object' && typeof detail.message === 'string' ? detail.message : '';
-            throw Object.assign(new Error(text || `请求失败 (${response.status})`), { status: response.status, code: payload.code ?? payload.error?.code, delivery: payload.delivery });
+            throw Object.assign(new Error(text || `请求失败 (${response.status})`), { status: response.status, code: payload.code ?? payload.error?.code, delivery: payload.delivery, payload });
         }
         return payload;
     },

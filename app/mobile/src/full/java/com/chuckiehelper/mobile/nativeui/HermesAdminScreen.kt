@@ -18,6 +18,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.util.UUID
 
 @Composable
 internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, onModels: () -> Unit,
@@ -86,14 +87,23 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
             patchOffer = if (result.optBoolean("needs_agent")) JSONObject(item.toString()).put("_log", result.optString("log")) else null
             refreshPatches()
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { patchLog = failure.message ?: "补丁应用失败" }
+        catch (failure: Exception) {
+            val payload = (failure as? ApiRequestFailure)?.payload
+            patchOffer = item.takeIf { payload?.optBoolean("needs_agent") == true }?.let {
+                JSONObject(it.toString()).put("_log", payload?.optString("log").orEmpty())
+            }
+            patchLog = listOf(payload?.optString("message").orEmpty(), payload?.optString("log").orEmpty(), failure.message ?: "补丁应用失败")
+                .filter { it.isNotBlank() }.distinct().joinToString("\n")
+        }
         finally { patchBusy = false }
     } }
     fun offerAgentFix(item: JSONObject) { patchOffer = JSONObject(item.toString()).put("_log", item.optString("detail_text")) }
     fun agentFixPatch() { val item = patchOffer ?: return; scope.launch {
         patchBusy = true
         try {
-            val result = api.json("/api/hermes/admin/patches/${item.optString("id")}/agent-fix", obj("log" to item.optString("_log")))
+            val request = api.request("/api/hermes/admin/patches/${item.optString("id")}/agent-fix", obj("log" to item.optString("_log")))
+                .newBuilder().header("Idempotency-Key", UUID.randomUUID().toString()).build()
+            val result = api.json(request)
             patchLog = result.optString("message") + if (result.optString("run_id").isNotBlank()) "\n运行 ${result.optString("run_id")}" else ""
             patchOffer = null
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -261,8 +271,8 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
     if (patchPrompt.isNotEmpty()) AlertDialog(
         onDismissRequest = { patchPrompt = emptyList() },
         title = { Text("检测到可应用补丁") },
-        text = { Text("以下补丁尚未应用：\n" + patchPrompt.joinToString("\n") { "· " + it.optString("title").ifBlank { it.optString("id") } } + "\n\n应用会先备份工作树差异，失败自动回滚；语法检查不过也会回滚。") },
-        confirmButton = { TextButton(onClick = { val todo = patchPrompt; patchPrompt = emptyList(); todo.firstOrNull()?.let { applyPatch(it) } }) { Text("应用") } },
+        text = { Text("以下补丁尚未应用：\n" + patchPrompt.joinToString("\n") { "· " + it.optString("title").ifBlank { it.optString("id") } } + "\n\n接下来只安装第一个。全部检查通过后才写入，失败只撤销本次改动并保留原有工作树。") },
+        confirmButton = { TextButton(onClick = { val todo = patchPrompt; patchPrompt = emptyList(); todo.firstOrNull()?.let { applyPatch(it) } }) { Text("安装第一个") } },
         dismissButton = { TextButton(onClick = { patchPrompt = emptyList() }) { Text("稍后") } },
     )
     if (backups) AlertDialog(onDismissRequest = { backups = false }, title = { Text("文件备份") }, text = {

@@ -1,11 +1,12 @@
 package com.chuckiehelper.mobile.nativeui
 
 import java.io.IOException
+import org.json.JSONObject
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
-class ApiRequestFailure(message: String, val status: Int, val code: String = "", val delivery: String = "") : IOException(message)
+class ApiRequestFailure(message: String, val status: Int, val code: String = "", val delivery: String = "", val payload: JSONObject? = null) : IOException(message)
 
 fun writeWasRejected(error: Exception): Boolean = error is ApiRequestFailure &&
     when (error.delivery) {

@@ -231,7 +231,7 @@ class NativeApi(
                         val raw = res.body?.string().orEmpty()
                         val value = runCatching { JSONObject(raw) }.getOrNull()
                         if (!res.isSuccessful) throw ApiRequestFailure(value?.optString("message")?.takeIf { it.isNotBlank() } ?: "请求失败 HTTP ${res.code}", res.code,
-                            value?.optString("code").orEmpty(), value?.optString("delivery").orEmpty())
+                            value?.optString("code").orEmpty(), value?.optString("delivery").orEmpty(), value)
                         if (value == null) throw ApiRequestFailure("服务返回了非 JSON 响应", res.code)
                         if (value.has("success") && !value.optBoolean("success")) throw ApiRequestFailure(value.optString("message", "操作失败"), res.code)
                         if (value.optJSONObject("data")?.optInt("fail", 0)?.let { it > 0 } == true) throw ApiRequestFailure(value.optString("message", "部分项目操作失败"), res.code)

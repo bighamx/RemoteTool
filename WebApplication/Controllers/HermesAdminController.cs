@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RemoteTool.WebApi.Services;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace RemoteTool.WebApi.Controllers;
 
@@ -35,15 +36,18 @@ public sealed class HermesAdminController(HermesAdminFiles files, HermesGatewayA
     }
     // 补丁: 清单/状态、标准 git apply、失败后交给 Hermes 会话自行实现
     [HttpGet("patches")] public IActionResult PatchList() { Response.Headers.CacheControl = "no-store"; return Ok(patches.List()); }
-    [HttpPost("patches/{id}/apply")] public IActionResult PatchApply(string id) {
+    [HttpPost("patches/{id}/apply")] public async Task<IActionResult> PatchApply(string id, CancellationToken ct) {
         Response.Headers.CacheControl = "no-store";
-        var outcome = patches.Apply(id);
+        var outcome = await patches.ApplyAsync(id, ct);
         return StatusCode(outcome.Status, outcome.Body);
     }
     [HttpPost("patches/{id}/agent-fix")] public async Task<IActionResult> PatchAgentFix(string id, [FromBody] JsonObject? body, CancellationToken ct) {
         Response.Headers.CacheControl = "no-store";
+        var key = Request.Headers["Idempotency-Key"].ToString();
+        if (!Regex.IsMatch(key, "^[a-zA-Z0-9_-]{16,120}$"))
+            return BadRequest(new { message = "补丁兜底任务需要唯一的 Idempotency-Key" });
         try {
-            var outcome = await patches.AgentFix(id, body?["log"]?.ToString(), ct);
+            var outcome = await patches.AgentFix(id, body?["log"]?.ToString(), key, ct);
             return StatusCode(outcome.Status, outcome.Body);
         } catch (HermesSetupRequired error) { return Conflict(new { message = error.Message, needs_setup = true }); }
     }

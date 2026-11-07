@@ -1,4 +1,5 @@
 #nullable enable
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -26,7 +27,7 @@ public sealed class HermesPatches(HermesProfiles profiles, IConfiguration config
         ? py
         : Path.Combine(Repo, "venv", "Scripts", "python.exe");
 
-    /// <summary>本机 Hermes 版本, 取自网关状态文件; 取不到就返回空串(视为不限制)。</summary>
+    /// <summary>本机 Hermes 版本, 取自网关状态文件; 取不到就返回空串。</summary>
     private string HermesVersion()
     {
         try {
@@ -35,9 +36,21 @@ public sealed class HermesPatches(HermesProfiles profiles, IConfiguration config
         } catch (Exception error) when (error is IOException or JsonException) { return ""; }
     }
 
+    // 版本拿不到时必须失败关闭。把所有补丁当作可用会在未知版本上直接修改源码。
     private static bool VersionMatches(string wanted, string actual) =>
-        wanted.Length == 0 || actual.Length == 0 ||
+        wanted.Length == 0 || actual.Length > 0 &&
         actual.StartsWith(wanted, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsInside(string root, string relative, out string full)
+    {
+        full = "";
+        if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative)) return false;
+        var rootFull = Path.GetFullPath(root);
+        full = Path.GetFullPath(Path.Combine(rootFull, relative));
+        var rel = Path.GetRelativePath(rootFull, full);
+        return rel != ".." && !rel.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+            !rel.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
+    }
 
     // ---------- 清单 ----------
 
@@ -69,6 +82,15 @@ public sealed class HermesPatches(HermesProfiles profiles, IConfiguration config
     {
         var names = Files(entry);
         if (names.Length == 0) return new PatchState(false, false, null, "清单条目缺少 patch_files");
+        foreach (var name in names) {
+            if (!IsInside(PatchesDir, name, out _))
+                return new PatchState(false, false, null, $"补丁文件路径越界: {name}");
+        }
+        var targets = Targets(entry);
+        foreach (var target in targets) {
+            if (!IsInside(Repo, target, out _))
+                return new PatchState(false, false, null, $"目标文件路径越界: {target}");
+        }
         var wants = entry["hermes_version"]?.ToString() ?? "";
         if (!VersionMatches(wants, HermesVersion()))
             return new PatchState(false, false, null, $"只适用于 Hermes {wants}（本机 {HermesVersion()}）", Incompatible: true);
@@ -76,8 +98,8 @@ public sealed class HermesPatches(HermesProfiles profiles, IConfiguration config
         var applicableCount = 0;
         string? detail = null;
         foreach (var name in names) {
-            var path = Path.Combine(PatchesDir, name);
-            if (!File.Exists(path)) return new PatchState(false, false, name, "补丁文件不存在");
+            if (!IsInside(PatchesDir, name, out var path) || !File.Exists(path))
+                return new PatchState(false, false, name, "补丁文件不存在");
             var reverse = Git(["apply", "--reverse", "--check", path], Repo);
             if (reverse.Exit == 0) { appliedCount++; continue; }
             var forward = Git(["apply", "--check", path], Repo);
@@ -121,61 +143,102 @@ public sealed class HermesPatches(HermesProfiles profiles, IConfiguration config
 
     // ---------- 标准应用 ----------
 
-    public Outcome Apply(string id)
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> ApplyGates =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public async Task<Outcome> ApplyAsync(string id, CancellationToken ct = default)
+    {
+        var gate = ApplyGates.GetOrAdd(Path.GetFullPath(Repo), _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try { return ApplyLocked(id); }
+        finally { gate.Release(); }
+    }
+
+    private Outcome ApplyLocked(string id)
     {
         if (Entry(id) is not { } entry) return new Outcome(new JsonObject { ["message"] = "未知补丁: " + id }, StatusCodes.Status404NotFound);
         var names = Files(entry);
+        if (names.Length == 0) return new Outcome(new JsonObject {
+            ["ok"] = false, ["state"] = "conflict", ["needs_agent"] = false,
+            ["message"] = "清单条目缺少 patch_files",
+        }, StatusCodes.Status409Conflict);
         var state = Inspect(entry);
         if (state.Applied) return new Outcome(new JsonObject { ["ok"] = true, ["state"] = "applied", ["message"] = "补丁已是应用状态" }, StatusCodes.Status200OK);
         if (state.Incompatible) return new Outcome(new JsonObject {
-            ["ok"] = false, ["state"] = "incompatible", ["needs_agent"] = false,
+            ["ok"] = false, ["state"] = "incompatible", ["needs_agent"] = true,
             ["message"] = state.Detail ?? "此补丁不适用于当前 Hermes 版本",
+        }, StatusCodes.Status409Conflict);
+        if (!state.Applicable) return new Outcome(new JsonObject {
+            ["ok"] = false, ["state"] = "conflict", ["needs_agent"] = true,
+            ["message"] = state.Detail ?? "补丁上下文不匹配，可让 Hermes 自行实现",
         }, StatusCodes.Status409Conflict);
 
         var log = new StringBuilder();
-        Directory.CreateDirectory(Path.Combine(Home, "backups"));
-        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        var backup = Path.Combine(Home, "backups", $"patches-apply-{stamp}.patch");
-        var diff = Git(["diff"], Repo);
-        if (diff.Exit == 0 && diff.Output.Length > 0) File.WriteAllText(backup, diff.Output);
-        log.AppendLine($"备份工作树差异: {(diff.Exit == 0 && diff.Output.Length > 0 ? backup : $"(无改动 rc={diff.Exit})")}");
-        if (diff.Exit != 0) log.AppendLine($"  git diff 失败: {FirstLine(diff.Error)}");
-
+        var patchPaths = new List<(string Name, string Path)>();
+        // Check the complete set before writing anything. A later patch failing after an early
+        // patch was applied used to trigger a checkout that also wiped pre-existing user edits.
         foreach (var name in names) {
-            var path = Path.Combine(PatchesDir, name);
+            if (!IsInside(PatchesDir, name, out var path)) return new Outcome(new JsonObject {
+                ["ok"] = false, ["state"] = "conflict", ["needs_agent"] = false,
+                ["message"] = "补丁文件路径越界: " + name,
+            }, StatusCodes.Status409Conflict);
             var check = Git(["apply", "--check", path], Repo);
             if (check.Exit != 0) {
                 log.AppendLine($"[check 失败] {name}: {FirstLine(check.Error) ?? FirstLine(check.Output)}");
-                Rollback(Targets(entry), log);
                 return new Outcome(new JsonObject {
                     ["ok"] = false, ["state"] = "conflict", ["needs_agent"] = true,
                     ["message"] = "补丁无法直接应用，可让 Hermes 自行实现", ["log"] = log.ToString(),
                 }, StatusCodes.Status409Conflict);
             }
-            var apply = Git(["apply", path], Repo);
-            log.AppendLine($"[apply rc={apply.Exit}] {name}");
+            patchPaths.Add((name, path));
+        }
+
+        Directory.CreateDirectory(Path.Combine(Home, "backups"));
+        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
+        var backup = Path.Combine(Home, "backups", $"patches-apply-{stamp}.patch");
+        var diff = Git(["diff", "--binary"], Repo);
+        if (diff.Exit != 0) return new Outcome(new JsonObject {
+            ["ok"] = false, ["state"] = "failed",
+            ["message"] = "无法备份现有工作树，未修改任何文件", ["log"] = FirstLine(diff.Error) ?? "",
+        }, StatusCodes.Status500InternalServerError);
+        var hasBackup = diff.Output.Length > 0;
+        if (hasBackup) File.WriteAllText(backup, diff.Output);
+        log.AppendLine($"备份工作树差异: {(hasBackup ? backup : "(无改动)")}");
+
+        // Exact bytes are the last-resort rollback if the patch cannot be reversed cleanly.
+        var snapshots = new Dictionary<string, byte[]?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var target in Targets(entry)) {
+            if (!IsInside(Repo, target, out var full)) continue;
+            snapshots[full] = File.Exists(full) ? File.ReadAllBytes(full) : null;
+        }
+
+        var applied = new List<string>();
+        foreach (var patch in patchPaths) {
+            var apply = Git(["apply", patch.Path], Repo);
+            log.AppendLine($"[apply rc={apply.Exit}] {patch.Name}");
             if (apply.Exit != 0) {
                 log.AppendLine(FirstLine(apply.Error) ?? "");
-                Rollback(Targets(entry), log);
+                RollbackApplied(applied, snapshots, log);
                 return new Outcome(new JsonObject {
                     ["ok"] = false, ["state"] = "conflict", ["needs_agent"] = true,
-                    ["message"] = "补丁应用失败，可让 Hermes 自行实现", ["log"] = log.ToString(),
+                    ["message"] = "补丁应用失败，本次改动已撤销，可让 Hermes 自行实现", ["log"] = log.ToString(),
                 }, StatusCodes.Status409Conflict);
             }
+            applied.Add(patch.Path);
         }
 
         var compileFailed = new List<string>();
         foreach (var file in Targets(entry).Where(name => name.EndsWith(".py", StringComparison.OrdinalIgnoreCase))) {
-            if (!File.Exists(Path.Combine(Repo, file))) continue;
+            if (!IsInside(Repo, file, out var full) || !File.Exists(full)) continue;
             var compile = Git(["-m", "py_compile", file], Repo, Python);
             log.AppendLine($"[py_compile rc={compile.Exit}] {file}");
             if (compile.Exit != 0) { compileFailed.Add(file); log.AppendLine(FirstLine(compile.Error) ?? ""); }
         }
         if (compileFailed.Count > 0) {
-            Rollback(Targets(entry), log);
+            RollbackApplied(applied, snapshots, log);
             return new Outcome(new JsonObject {
                 ["ok"] = false, ["state"] = "rolled_back", ["needs_agent"] = true,
-                ["message"] = "语法检查未通过，已回滚: " + string.Join(", ", compileFailed), ["log"] = log.ToString(),
+                ["message"] = "语法检查未通过，本次改动已撤销: " + string.Join(", ", compileFailed), ["log"] = log.ToString(),
             }, StatusCodes.Status409Conflict);
         }
 
@@ -188,16 +251,34 @@ public sealed class HermesPatches(HermesProfiles profiles, IConfiguration config
         }, StatusCodes.Status200OK);
     }
 
-    private void Rollback(string[] targets, StringBuilder log)
+    // Reverse only the patches this request successfully applied. checkout would restore HEAD
+    // and erase unrelated edits that existed before the request.
+    private void RollbackApplied(IReadOnlyList<string> applied, IReadOnlyDictionary<string, byte[]?> snapshots, StringBuilder log)
     {
-        if (targets.Length == 0) return;
-        var restore = Git(["checkout", "--", .. targets], Repo);
-        log.AppendLine($"[rollback rc={restore.Exit}] {string.Join(", ", targets)}");
+        var clean = true;
+        for (var i = applied.Count - 1; i >= 0; i--) {
+            var restore = Git(["apply", "--reverse", applied[i]], Repo);
+            log.AppendLine($"[rollback rc={restore.Exit}] {Path.GetFileName(applied[i])}");
+            if (restore.Exit != 0) { clean = false; log.AppendLine(FirstLine(restore.Error) ?? ""); }
+        }
+        if (clean) return;
+        foreach (var (path, bytes) in snapshots) {
+            try {
+                if (bytes == null) { if (File.Exists(path)) File.Delete(path); }
+                else {
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    File.WriteAllBytes(path, bytes);
+                }
+                log.AppendLine($"[rollback snapshot] {Path.GetRelativePath(Repo, path)}");
+            } catch (Exception error) when (error is IOException or UnauthorizedAccessException) {
+                log.AppendLine($"[rollback snapshot 失败] {Path.GetRelativePath(Repo, path)}: {error.Message}");
+            }
+        }
     }
 
     // ---------- 交给 agent 自行实现 ----------
 
-    public async Task<Outcome> AgentFix(string id, string? failureLog, CancellationToken ct)
+    public async Task<Outcome> AgentFix(string id, string? failureLog, string idempotencyKey, CancellationToken ct)
     {
         if (Entry(id) is not { } entry) return new Outcome(new JsonObject { ["message"] = "未知补丁: " + id }, StatusCodes.Status404NotFound);
         var goal = entry["goal"]?.ToString();
@@ -221,7 +302,7 @@ public sealed class HermesPatches(HermesProfiles profiles, IConfiguration config
             ["input"] = prompt.ToString(),
             ["title"] = "补丁兜底实现: " + (entry["title"]?.ToString() ?? id),
         });
-        using var response = await bridge.SendAsync(HttpMethod.Post, "v1/runs", body, null, ct);
+        using var response = await bridge.SendAsync(HttpMethod.Post, "v1/runs", body, idempotencyKey, ct);
         var text = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
             return new Outcome(new JsonObject {

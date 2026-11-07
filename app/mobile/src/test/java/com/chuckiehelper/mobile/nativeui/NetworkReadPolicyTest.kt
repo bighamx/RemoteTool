@@ -28,6 +28,12 @@ class NetworkReadPolicyTest {
         assertTrue(mayRetryRead("GET", false, 0, ApiRequestFailure("recycling", 503)))
         assertFalse(mayRetryRead("GET", false, 0, abort, noRetry = true))
     }
+    @Test fun requestFailureRetainsStructuredErrorPayloadForPatchFallback() {
+        val body = obj("ok" to false, "state" to "conflict", "needs_agent" to true, "log" to "context mismatch")
+        val error = ApiRequestFailure("补丁无法直接应用", 409, payload = body)
+        assertTrue(error.payload?.optBoolean("needs_agent") == true)
+        assertEquals("context mismatch", error.payload?.optString("log"))
+    }
     @Test fun writeAcknowledgementSeparatesRejectionFromLostAcknowledgement() {
         assertTrue(writeWasRejected(ApiRequestFailure("未写入", 503, delivery = "rejected")))
         assertFalse(writeWasRejected(ApiRequestFailure("等待核对", 409, delivery = "unknown")))

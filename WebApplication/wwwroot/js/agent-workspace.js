@@ -364,14 +364,22 @@
                         this.$Message.error(result.message || '应用失败');
                     }
                     await this.loadPatches();
-                } catch (error) { this.patchError = error.message || String(error); }
+                } catch (error) {
+                    const payload = error.payload || {};
+                    if (payload.needs_agent) {
+                        this.patchAgentOffer = { id: item.id, title: item.title || item.id, log: payload.log || '' };
+                        this.patchApplyLog = [payload.message || error.message || '', payload.log || ''].filter(Boolean).join('\n');
+                        this.$Message.error(payload.message || '应用失败，可让 Hermes 自行实现');
+                    } else this.patchError = payload.message || error.message || String(error);
+                    try { await this.loadPatches(); } catch (ignored) {}
+                }
                 finally { this.patchBusy = false; this.patchConfirm = null; }
             },
             async agentFixPatch() {
                 const offer = this.patchAgentOffer; if (!offer) return;
                 this.patchBusy = true; this.patchError = '';
                 try {
-                    const result = await api.post(`${base}/admin/patches/${encodeURIComponent(offer.id)}/agent-fix`, { log: offer.log });
+                    const result = await api.post(`${base}/admin/patches/${encodeURIComponent(offer.id)}/agent-fix`, { log: offer.log }, { 'Idempotency-Key': newKey() });
                     if (result.ok) {
                         this.patchAgentRunId = result.run_id || '';
                         this.patchAgentOffer = null;
