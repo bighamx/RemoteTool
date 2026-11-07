@@ -1,1 +1,3 @@
 tests/*.sh text eol=lf
+patches/files/*.patch -text -diff
+patches/*.json text eol=lf
