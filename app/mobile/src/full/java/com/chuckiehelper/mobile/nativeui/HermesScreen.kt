@@ -479,7 +479,8 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             val error = friendlyAgentFailure(rawError)
             Surface(color = MaterialTheme.colorScheme.errorContainer) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                    Text(error, style = MaterialTheme.typography.bodySmall)
+                    // 错误全文可长按选择复制, 便于把原始报错发给排查方。
+                    SelectionContainer { Text(error, style = MaterialTheme.typography.bodySmall) }
                     FlowRow {
                         TextButton(onClick = { model.reconnect() }) { Text("重新连接") }
                         if (model.hasPendingSubmission)
