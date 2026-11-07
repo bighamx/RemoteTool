@@ -136,6 +136,7 @@
                 <template v-if="agent==='hermes'">
                     <div class="panel-tools">全部 Profile</div>
                     <button type="button" :class="{'active':adminMode==='gateway'}" :disabled="adminBusy" @@click="openAdminSettings('gateway')">网关管理</button>
+                    <button type="button" :class="{'active':adminMode==='patches'}" :disabled="adminBusy" @@click="openAdminSettings('patches')">补丁<template v-if="patchPending"> · {{patchPending}}</template></button>
                 </template>
             </aside>
             <div class="agent-admin-content">
@@ -165,6 +166,34 @@
                         </div>
                     </section>
                     <section v-else class="workspace-panel agent-admin-card"><div class="empty-state">选择左侧要管理的文件。</div></section>
+                </template>
+
+                <template v-if="adminMode==='patches'">
+                    <section class="workspace-panel agent-admin-card">
+                        <div class="panel-tools">补丁 · 待应用 {{patchPending}} 个 · 先标准 patch，失败可交给 Hermes 自行实现</div>
+                        <p v-if="patchError" class="workspace-alert">{{patchError}}</p>
+                        <p v-if="!patchManifestPresent" class="empty-state">还没有补丁清单：把 manifest.json 放到 Hermes 的 patches 目录。</p>
+                        <p v-else-if="!patches.length" class="empty-state">清单为空。</p>
+                        <div v-for="item in patches" :key="item.id" class="agent-patch-row">
+                            <div class="agent-patch-main"><strong>{{item.title || item.id}}</strong><small>{{item.summary}}</small><code>{{item.id}}<template v-if="item.files && item.files.length"> · {{item.files.join(', ')}}</template></code></div>
+                            <span class="agent-patch-state" :class="'is-'+item.state">{{item.state==='applied'?'已应用':item.state==='ready'?'可应用':'需处理'}}</span>
+                            <i-button v-if="item.state!=='applied'" size="small" type="primary" :disabled="patchBusy" @@click="askApplyPatch(item)">应用</i-button>
+                            <span v-else class="agent-patch-note">无需操作</span>
+                        </div>
+                        <div v-if="patchConfirm" class="agent-patch-confirm">
+                            <p>确认应用「{{patchConfirm.title || patchConfirm.id}}」？会先备份当前工作树差异，失败自动回滚。</p>
+                            <i-button size="small" type="primary" :loading="patchBusy" @@click="applyPatch(patchConfirm)">确认应用</i-button>
+                            <i-button size="small" :disabled="patchBusy" @@click="patchConfirm=null">取消</i-button>
+                        </div>
+                        <div v-if="patchAgentOffer" class="agent-patch-confirm">
+                            <p>「{{patchAgentOffer.title}}」无法直接应用。可以让 Hermes 起一个会话，按意图自己改代码（读完会自动按目标文件实现并 py_compile）。</p>
+                            <i-button size="small" :loading="patchBusy" @@click="agentFixPatch">让 Hermes 自行实现</i-button>
+                            <i-button size="small" :disabled="patchBusy" @@click="patchAgentOffer=null">先不用</i-button>
+                        </div>
+                        <p v-if="patchAgentRunId" class="agent-create-hint">已创建运行 {{patchAgentRunId}}，可在会话里查看进度。</p>
+                        <p v-if="patchRestartHint" class="agent-create-hint">补丁已写入，重启网关后生效。</p>
+                        <pre v-if="patchApplyLog" class="agent-patch-log">{{patchApplyLog}}</pre>
+                    </section>
                 </template>
 
                 <template v-if="adminMode==='models'">

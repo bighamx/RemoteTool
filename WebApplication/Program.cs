@@ -147,6 +147,7 @@ namespace RemoteTool.WebApi
             builder.Services.AddSingleton<HermesProfiles>();
             builder.Services.AddSingleton<HermesAdminFiles>();
             builder.Services.AddSingleton<HermesGatewayAdmin>();
+            builder.Services.AddSingleton<HermesPatches>();
             builder.Services.AddTransient<HermesProfileFilter>();
             builder.Services.AddSingleton<HermesBridge>();
             builder.Services.AddSingleton<HermesTitleService>();

@@ -79,7 +79,7 @@
     const readVersions = new Map();
     const app = Vue.createApp({
         data: () => ({ agent, profile, agentSetup:null,setupBusy:false,setupDetails:false,setupNotice:'',profiles: [], profileError: '', sessionDetails: null, markdownReady: !!markdown, inspectorOpen: false, sessions: [], selected: null, selectedId: '', search: '', listError: '', error: '', loadingList: false, sessionStatusRefreshing: false, sessionStatusRefreshAt: 0, selectedStatusKnown: false, hasMore: false, nextCursor: null, offset: 0, sessionsOpen: isMobile()&&!requestedSession(), mobileViewport: isMobile(), mobileComposerOpen: false,
-            adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminUpdate:{},adminSettings:{},adminProvider:{},adminProviderDialog:false,adminEndpoints:[],adminProviders:[],adminShowDisabled:false,adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,
+            adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminUpdate:{},adminSettings:{},adminProvider:{},adminProviderDialog:false,adminEndpoints:[],adminProviders:[],adminShowDisabled:false,adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,patches:[],patchPending:0,patchManifestPresent:true,patchBusy:false,patchError:'',patchConfirm:null,patchApplyLog:'',patchAgentOffer:null,patchAgentRunId:'',patchRestartHint:false,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyCacheState: '', historyLoadedEpoch: -1, historyFailedEpoch: -1, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [], schedules: [], showSchedule: false, scheduleText: '', scheduleAt: '', scheduleError: '', scheduleBusy: false, scheduleSession: '', scheduleClientKey: '', scheduleRequest: null,
             approvalBusy:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsInfo:'',permissionsError:'',showPermissionsDialog:false, activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelDefaults: {}, modelsError: '', modelSessionSupported: true, providersState: {}, globalModelOptions: {}, providerSwitch: {provider:'',model:'',effort:'',tier:''}, codexProviderEdit: null, modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
@@ -332,10 +332,53 @@
                     if(mode==='title') {this.adminSettings={...await api.get(`${base}/title-model`),api_key:''};}
                     this.adminMode=mode;
                     if(mode==='gateway') { void this.pollAdminGateway(); void this.loadAdminUpdate(); }
+                    if(mode==='patches') { await this.loadPatches(); }
                     this.adminSettingsOriginal=mode==='models'||mode==='title'?JSON.stringify(this.adminSettings):'';this.adminProviderOriginal=mode==='models'?JSON.stringify(this.adminProvider):'';
                 });
             },
             async saveAdminSettings() { await this.adminAction(async()=>{const result=await api.post(`${base}/${this.adminMode==='models'?'default-model':'title-model'}`,this.adminSettings);if(result.confirm_required){this.adminError='模型配置需要额外确认，请在电脑上完成。';return;}this.adminSettings.api_key='';this.adminSettingsOriginal=JSON.stringify(this.adminSettings);this.$Message.success('已保存');}); },
+            async loadPatches() {
+                const data = await api.get(`${base}/admin/patches`);
+                this.patches = data.patches || [];
+                this.patchPending = data.pending || 0;
+                this.patchManifestPresent = data.manifest_present !== false;
+                this.patchError = '';
+                return data;
+            },
+            askApplyPatch(item) { this.patchConfirm = item; this.patchApplyLog = ''; this.patchAgentOffer = null; },
+            async applyPatch(item) {
+                if (!item) return;
+                this.patchBusy = true; this.patchError = ''; this.patchApplyLog = '';
+                try {
+                    const result = await api.post(`${base}/admin/patches/${encodeURIComponent(item.id)}/apply`, {});
+                    this.patchApplyLog = [result.message || '', result.log || ''].filter(Boolean).join('\n');
+                    if (result.ok) {
+                        this.patchRestartHint = result.restart === true;
+                        this.$Message.success(result.message || '补丁已应用');
+                        this.patchAgentOffer = null;
+                    } else if (result.needs_agent) {
+                        this.patchAgentOffer = { id: item.id, title: item.title || item.id, log: result.log || '' };
+                        this.$Message.error(result.message || '应用失败');
+                    } else {
+                        this.$Message.error(result.message || '应用失败');
+                    }
+                    await this.loadPatches();
+                } catch (error) { this.patchError = error.message || String(error); }
+                finally { this.patchBusy = false; this.patchConfirm = null; }
+            },
+            async agentFixPatch() {
+                const offer = this.patchAgentOffer; if (!offer) return;
+                this.patchBusy = true; this.patchError = '';
+                try {
+                    const result = await api.post(`${base}/admin/patches/${encodeURIComponent(offer.id)}/agent-fix`, { log: offer.log });
+                    if (result.ok) {
+                        this.patchAgentRunId = result.run_id || '';
+                        this.patchAgentOffer = null;
+                        this.$Message.success('已交给 Hermes 自行实现，可在会话里跟进度');
+                    } else { this.patchError = result.message || '无法启动 Hermes 会话'; }
+                } catch (error) { this.patchError = error.message || String(error); }
+                finally { this.patchBusy = false; }
+            },
             async reloadAdminProviders() {
                 const [result,catalog]=await Promise.all([api.get(`${base}/providers?include_disabled=${this.adminShowDisabled}`),api.get(`${base}/model-options`)]);
                 this.adminEndpoints=result.endpoints||[];

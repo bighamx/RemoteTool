@@ -6,7 +6,7 @@ using System.Text.Json.Nodes;
 namespace RemoteTool.WebApi.Controllers;
 
 [ApiController, Authorize, Route("api/hermes/admin"), Route("api/hermes/profiles/{profile}/admin"), ServiceFilter(typeof(HermesProfileFilter))]
-public sealed class HermesAdminController(HermesAdminFiles files, HermesGatewayAdmin gateway) : ControllerBase
+public sealed class HermesAdminController(HermesAdminFiles files, HermesGatewayAdmin gateway, HermesPatches patches) : ControllerBase
 {
     [HttpGet("files")] public IActionResult Files() => FileResult(files.List);
     [HttpGet("files/{id}")] public IActionResult Read(string id) => FileResult(() => files.Read(id));
@@ -32,5 +32,19 @@ public sealed class HermesAdminController(HermesAdminFiles files, HermesGatewayA
     }
     [HttpPost("gateway/cancel")] public async Task<IActionResult> Cancel(CancellationToken ct) {
         try { return Ok(await gateway.Cancel(ct)); } catch (InvalidOperationException error) { return Conflict(new { message = error.Message }); }
+    }
+    // 补丁: 清单/状态、标准 git apply、失败后交给 Hermes 会话自行实现
+    [HttpGet("patches")] public IActionResult PatchList() { Response.Headers.CacheControl = "no-store"; return Ok(patches.List()); }
+    [HttpPost("patches/{id}/apply")] public IActionResult PatchApply(string id) {
+        Response.Headers.CacheControl = "no-store";
+        var outcome = patches.Apply(id);
+        return StatusCode(outcome.Status, outcome.Body);
+    }
+    [HttpPost("patches/{id}/agent-fix")] public async Task<IActionResult> PatchAgentFix(string id, [FromBody] JsonObject? body, CancellationToken ct) {
+        Response.Headers.CacheControl = "no-store";
+        try {
+            var outcome = await patches.AgentFix(id, body?["log"]?.ToString(), ct);
+            return StatusCode(outcome.Status, outcome.Body);
+        } catch (HermesSetupRequired error) { return Conflict(new { message = error.Message, needs_setup = true }); }
     }
 }

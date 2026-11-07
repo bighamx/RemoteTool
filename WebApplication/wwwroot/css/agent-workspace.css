@@ -2637,3 +2637,16 @@
 .agent-reasoning-toggle:hover{opacity:.8}
 .agent-reasoning-toggle.on{opacity:1;border-color:color-mix(in srgb,var(--accent-primary) 45%,var(--border-color));background:color-mix(in srgb,var(--accent-primary) 10%,transparent)}
 .agent-reasoning-toggle input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+
+/* 补丁管理 */
+.agent-patch-row{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.07)}
+.agent-patch-main{flex:1;display:flex;flex-direction:column;gap:4px;min-width:0}
+.agent-patch-main small{opacity:.72;line-height:1.5}
+.agent-patch-main code{font-size:11px;opacity:.6;word-break:break-all}
+.agent-patch-state{font-size:12px;padding:2px 8px;border-radius:10px;border:1px solid currentColor;opacity:.85;white-space:nowrap}
+.agent-patch-state.is-applied{color:#3fb950}
+.agent-patch-state.is-ready{color:#58a6ff}
+.agent-patch-state.is-conflict{color:#d29922}
+.agent-patch-note{font-size:12px;opacity:.55;white-space:nowrap}
+.agent-patch-confirm{margin-top:14px;padding:12px;border:1px solid rgba(88,166,255,.35);border-radius:10px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.agent-patch-log{margin-top:12px;max-height:220px;overflow:auto;background:rgba(0,0,0,.25);padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap}

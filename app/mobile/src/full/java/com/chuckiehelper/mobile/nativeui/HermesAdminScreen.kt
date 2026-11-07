@@ -40,6 +40,11 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
     val logScroll = rememberScrollState()
     var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var backups by remember { mutableStateOf(false) }
+    var patches by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var patchBusy by remember { mutableStateOf(false) }
+    var patchLog by remember { mutableStateOf("") }
+    var patchOffer by remember { mutableStateOf<JSONObject?>(null) }
+    var patchPrompt by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     val dirty = content != saved
     fun run(action: suspend () -> Unit) { scope.launch {
         busy = true; error = null
@@ -62,10 +67,43 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
             accept(api.json("/api/hermes/admin/files/${doc.getString("id")}", body))
         }
     }
+    fun refreshPatches(prompt: Boolean = false) { scope.launch {
+        try {
+            val rows = api.json("/api/hermes/admin/patches").array("patches").objects()
+            patches = rows
+            if (prompt) {
+                val ready = rows.filter { it.optString("state") == "ready" }
+                if (ready.isNotEmpty()) patchPrompt = ready
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { patchLog = failure.message ?: "补丁清单读取失败" }
+    } }
+    fun applyPatch(item: JSONObject) { scope.launch {
+        patchBusy = true; patchLog = ""
+        try {
+            val result = api.json("/api/hermes/admin/patches/${item.optString("id")}/apply", obj())
+            patchLog = listOf(result.optString("message"), result.optString("log")).filter { it.isNotBlank() }.joinToString("\n")
+            patchOffer = if (result.optBoolean("needs_agent")) JSONObject(item.toString()).put("_log", result.optString("log")) else null
+            refreshPatches()
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { patchLog = failure.message ?: "补丁应用失败" }
+        finally { patchBusy = false }
+    } }
+    fun agentFixPatch() { val item = patchOffer ?: return; scope.launch {
+        patchBusy = true
+        try {
+            val result = api.json("/api/hermes/admin/patches/${item.optString("id")}/agent-fix", obj("log" to item.optString("_log")))
+            patchLog = result.optString("message") + if (result.optString("run_id").isNotBlank()) "\n运行 ${result.optString("run_id")}" else ""
+            patchOffer = null
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { patchLog = failure.message ?: "无法启动 Hermes 会话" }
+        finally { patchBusy = false }
+    } }
     LaunchedEffect(api) {
         try { files = api.json("/api/hermes/admin/files").array("data").objects() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { error = failure.message }
+        refreshPatches(prompt = true)
         try { updateInfo = api.json("/api/hermes/admin/gateway/update") }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { updateInfo = JSONObject() }
@@ -101,6 +139,45 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
                             if (row.size == 1) Spacer(Modifier.weight(1f))
                         }
                     }
+                    HorizontalDivider()
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("补丁", style = MaterialTheme.typography.titleSmall)
+                        Text("待应用 ${patches.count { it.optString("state") != "applied" }}", style = MaterialTheme.typography.labelSmall)
+                    }
+                    if (patches.isEmpty()) Text("没有补丁清单", style = MaterialTheme.typography.bodySmall)
+                    patches.forEach { item ->
+                        val state = item.optString("state")
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(item.optString("title").ifBlank { item.optString("id") }, style = MaterialTheme.typography.bodyMedium)
+                                val summary = item.optString("summary")
+                                if (summary.isNotBlank()) Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                                Text(item.optString("id"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text(
+                                when (state) { "applied" -> "已应用"; "ready" -> "可应用"; else -> "需处理" },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = when (state) {
+                                    "applied" -> MaterialTheme.colorScheme.primary
+                                    "ready" -> MaterialTheme.colorScheme.tertiary
+                                    else -> MaterialTheme.colorScheme.error
+                                },
+                            )
+                            if (state != "applied") OutlinedButton(
+                                enabled = !patchBusy && !busy,
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                onClick = {
+                                    val label = item.optString("title").ifBlank { item.optString("id") }
+                                    confirm = "应用补丁「$label」？会先备份工作树差异，失败自动回滚。" to { applyPatch(item) }
+                                },
+                            ) { Text("应用", style = MaterialTheme.typography.bodySmall) }
+                        }
+                    }
+                    patchOffer?.let { offer ->
+                        Text("「${offer.optString("title")}」无法直接应用", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        OutlinedButton(enabled = !patchBusy, onClick = { agentFixPatch() }) { Text("让 Hermes 自行实现") }
+                    }
+                    if (patchLog.isNotBlank()) Text(patchLog, style = MaterialTheme.typography.labelSmall)
                     HorizontalDivider()
                     Text("网关管理 · 影响全部 Profile", style = MaterialTheme.typography.titleSmall)
                     val live = gateway.optJSONObject("gateway")
@@ -171,6 +248,13 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
             }
     }
     confirm?.let { pending -> AlertDialog(onDismissRequest = { confirm = null }, text = { Text(pending.first) }, confirmButton = { TextButton(onClick = { confirm = null; pending.second() }) { Text("确定") } }, dismissButton = { TextButton(onClick = { confirm = null }) { Text("取消") } }) }
+    if (patchPrompt.isNotEmpty()) AlertDialog(
+        onDismissRequest = { patchPrompt = emptyList() },
+        title = { Text("检测到可应用补丁") },
+        text = { Text("以下补丁尚未应用：\n" + patchPrompt.joinToString("\n") { "· " + it.optString("title").ifBlank { it.optString("id") } } + "\n\n应用会先备份工作树差异，失败自动回滚；语法检查不过也会回滚。") },
+        confirmButton = { TextButton(onClick = { val todo = patchPrompt; patchPrompt = emptyList(); todo.firstOrNull()?.let { applyPatch(it) } }) { Text("应用") } },
+        dismissButton = { TextButton(onClick = { patchPrompt = emptyList() }) { Text("稍后") } },
+    )
     if (backups) AlertDialog(onDismissRequest = { backups = false }, title = { Text("文件备份") }, text = {
         Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
             val rows = document?.array("backups")?.objects().orEmpty()
