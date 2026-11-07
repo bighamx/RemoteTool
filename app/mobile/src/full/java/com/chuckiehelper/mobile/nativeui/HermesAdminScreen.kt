@@ -175,7 +175,7 @@ internal fun HermesAdminScreen(api: NativeApi, device: String, profile: String, 
                                         confirm = "安装补丁「$label」？会先备份 Hermes 源码的工作树差异，失败自动回滚。" to { applyPatch(item) }
                                     },
                                 ) { Text("安装", style = MaterialTheme.typography.bodySmall) }
-                                "conflict" -> OutlinedButton(
+                                "conflict", "incompatible" -> OutlinedButton(
                                     enabled = !patchBusy && !busy,
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                     onClick = { offerAgentFix(item) },

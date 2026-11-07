@@ -209,6 +209,8 @@ public sealed class HermesPatches(HermesProfiles profiles, IConfiguration config
         prompt.AppendLine($"补丁名：{entry["title"]?.ToString()}");
         prompt.AppendLine($"意图：{goal}");
         if (files.Length > 0) prompt.AppendLine($"目标文件：{string.Join(", ", files)}");
+        if (Inspect(entry).Incompatible)
+            prompt.AppendLine($"注意：这是跨版本适配（补丁针对 Hermes {entry["hermes_version"]}，本机 {HermesVersion()}）。按本机实际代码结构实现同等效果，不要照抄旧版本的行号或字段名；如果该行为在本机版本里已经存在，直接说明并不要改动。");
         prompt.AppendLine("要求：只改实现该意图所必需的代码；改完对每个改动的 .py 执行 py_compile 验证；不要改动其他本地补丁的区域；最后列出改了哪些位置以及为什么。");
         if (!string.IsNullOrWhiteSpace(failureLog)) {
             prompt.AppendLine("标准 patch 应用失败的输出如下，供定位上下文差异：");
