@@ -784,7 +784,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             return;
         }
         if (method == "thread/compacted" && runs[run].S("kind") == "compact") {
-            lock (gate) { runs[run]!["status"] = "completed"; runs[run]!["output"] = "上下文已压缩"; active.Remove(p.S("threadId")); contexts.Remove(p.S("threadId")); Persist(); }
+            lock (gate) { runs[run]!["status"] = "completed"; runs[run]!["output"] = ""; active.Remove(p.S("threadId")); contexts.Remove(p.S("threadId")); Persist(); }
             Emit(run, "run.completed"); _ = ReleaseAndNotify(p.S("threadId")); return;
         }
         var item = p["item"];
@@ -983,7 +983,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             while (DateTime.UtcNow < deadline) {
                 var result = CodexRollout.CompactResult(home, path, offset);
                 if (result.Length > 0) {
-                    lock (gate) { runs[run]!["status"] = result; runs[run]!["output"] = result == "completed" ? "上下文已压缩" : ""; active.Remove(id); contexts.Remove(id); Persist(); }
+                    lock (gate) { runs[run]!["status"] = result; runs[run]!["output"] = ""; active.Remove(id); contexts.Remove(id); Persist(); }
                     Emit(run, result == "completed" ? "run.completed" : "run.failed"); return;
                 }
                 await Task.Delay(1000);

@@ -62,8 +62,12 @@ fun successfulCompaction(run: String, result: JSONObject): Boolean =
 
 /** Codex returns native compaction items in history order; discard legacy local overlays. */
 internal fun mergeAgentCompactionNotices(agent: String, history: List<HermesMessage>, notices: List<AgentCompactionNotice>): List<HermesMessage> =
-    if (agent == "codex") history.filterNot { it.localKey?.startsWith("compaction-") == true }
-    else mergeCompactionNotices(history, notices)
+    if (agent == "codex") history.filterNot { it.localKey?.startsWith("compaction-") == true }.distinctBy { row ->
+        // One native item is one operation. The same item can be observed through
+        // a page boundary and a history refresh; serverId is its canonical identity.
+        if (row.messageType == "contextCompaction" && row.serverId > 0) "compaction:${row.serverId}"
+        else "${row.role}:${row.serverId}:${row.localKey}:${row.timestamp}:${row.text}"
+    } else mergeCompactionNotices(history, notices)
 
 fun mergeCompactionNotices(history: List<HermesMessage>, notices: List<AgentCompactionNotice>): List<HermesMessage> {
     val rows = history.filterNot { it.localKey?.startsWith("compaction-") == true }

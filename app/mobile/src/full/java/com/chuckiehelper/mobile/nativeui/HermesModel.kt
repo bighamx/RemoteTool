@@ -2139,6 +2139,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (id != selectedId || api !== connection || generation != openingGeneration) return
         // Native order and content are authoritative. Local snapshots never contribute rows.
         var history = withConfirmedKeys(id, response.array("data").objects().mapNotNull { row -> agentHistoryMessage(agent, row) })
+        history = mergeAgentCompactionNotices(agent, history, compactionNotices.filter { it.session == id })
         historyHasMore = response.optBoolean("has_more", false)
         historyOldestId = response.optString("oldest_id").takeIf { it.isNotBlank() && it != "null" }
         val bindings = mutableListOf<Pair<Long, List<String>>>()

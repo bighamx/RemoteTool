@@ -28,6 +28,13 @@ class NativeCompactionHistoryTest {
         assertEquals(native, mergeAgentCompactionNotices("codex", displayed, emptyList()))
     }
 
+    @Test fun duplicateNativeCompactionRowsCollapseByServerIdentity() {
+        val first = obj("id" to 2, "role" to "system", "type" to "contextCompaction", "content" to "上下文压缩完成")
+        val second = org.json.JSONObject(first.toString()).put("timestamp", 1791590000000L)
+        val rows = listOf(first, second).mapNotNull { agentHistoryMessage("codex", it) }
+        assertEquals(2, rows.size)
+        assertEquals(1, mergeAgentCompactionNotices("codex", rows, emptyList()).size)
+    }
     @Test fun completionTimeComesFromServerAndOtherSystemItemsStayHidden() {
         val row = obj("id" to 4, "role" to "system", "type" to "contextCompaction",
             "content" to "上下文压缩完成", "timestamp" to 1791590000000L)
