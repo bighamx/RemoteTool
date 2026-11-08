@@ -73,13 +73,14 @@ class HermesTranscriptTest {
         assertTrue(event("reasoning.delta", "最终片段"))
         assertFalse(event("run.completed"))
         assertTrue(model.reasoningEnded)
-        assertEquals("<think>先检查🙂\n再确认</think>最终片段", model.reasoningText)
+        // 完成即停止渲染思考(run.completed 后卡片收缩退场), 已发布的行仍在但不再作为流输出。
+        assertEquals("", model.reasoningText)
         assertEquals(2, model.messagesWithReasoning.count { it.messageType == "reasoning" })
         assertTrue(event("reasoning.delta", "迟到"))
         model.flushReasoning()
-        assertFalse(model.reasoningText.endsWith("迟到"))
-        model.observeReasoningRun("r", "s") // A reconnect must preserve the completed buffer.
-        assertTrue(model.reasoningText.isNotEmpty())
+        assertEquals("", model.reasoningText)
+        model.observeReasoningRun("r", "s") // A reconnect must not resurrect the finished card.
+        assertEquals("", model.reasoningText)
         state(model, "runId", "next")
         model.observeReasoningRun("next", "s")
         assertEquals("", model.reasoningText); assertFalse(model.reasoningEnded)
@@ -113,7 +114,8 @@ class HermesTranscriptTest {
         history(model, JSONArray().put(user).put(answer).put(steer))
         model.receiveReasoningEvent("r", obj("event" to "reasoning.delta", "run_id" to "r", "timestamp" to (base + 5000) / 1000.0, "delta" to "插话后的思考"))
         model.flushReasoning()
-        assertEquals(listOf("请求", "第一段思考", "第二段思考", "最终回复", "插话", "插话后的思考"), model.messagesWithReasoning.map { it.text })
+        // 工具事件不再切段: 同一轮里被 tool.started 隔开的思考合并成一张卡片。
+        assertEquals(listOf("请求", "第一段思考第二段思考", "最终回复", "插话", "插话后的思考"), model.messagesWithReasoning.map { it.text })
         assertEquals(listOf(1L, 2L, 3L), model.messages.map { it.serverId })
         assertTrue(model.messagesWithReasoning.filter { it.messageType == "reasoning" }.all { it.narration && it.serverId == 0L })
     }

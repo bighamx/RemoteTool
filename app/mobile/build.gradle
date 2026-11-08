@@ -83,7 +83,12 @@ android {
     testOptions {
         unitTests.includeAndroidResources = true
         // Local/Robolectric tests must never send production usage statistics.
-        unitTests.all { systemProperty 'remotetool.telemetry.disabled', 'true' }
+        unitTests.all {
+            systemProperty 'remotetool.telemetry.disabled', 'true'
+            // Robolectric + Compose 在同一 JVM 里跑满一百多个类后, 后面的 UI 用例会
+            // 卡在 "Compose did not get idle"; 每 16 个类换一个 JVM 隔离掉残留状态。
+            forkEvery = 16
+        }
     }
     // Deliverable naming follows the project name (RemoteTool), not the legacy package.
     applicationVariants.all { variant ->

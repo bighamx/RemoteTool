@@ -55,15 +55,14 @@ class AssistantNarrationTest {
         assertEquals(emoji.repeat(100) + "…" + han + emoji.repeat(100) + "…",
             truncateNarration(emoji.repeat(140) + han + emoji.repeat(140)))
     }
-    @Test fun KnownNarrationIsShortenedWithoutEditingTheFinalReplyOrTheRawText() {
+    @Test fun KnownNarrationIsShownVerbatimWithoutEditingTheFinalReplyOrTheRawText() {
         val note = "先检查" + "x".repeat(140) + "再继续"
         val final = note + "\n\n完整结果\n" + "y".repeat(80)
-        assertEquals("先检查" + "x".repeat(100) + "…再继续\n\n完整结果\n" + "y".repeat(80),
-            displayNarration(final, false, listOf(note)))
+        // 展示层不再截断旁白(截断后每张卡都以省略号结尾, 看着像模型只说了一半),
+        // 因此已知旁白 span 也原样输出, 最终回复和原文都不被改写。
+        assertEquals(final, displayNarration(final, false, listOf(note)))
         assertEquals(final, displayNarration(final, false))
         assertEquals(140, note.count { it == 'x' })
-        val clipped = displayNarration(final, false, listOf(note))
-        assertEquals(clipped, displayNarration(clipped, false, listOf(note)))
     }
     @Test fun HistoryUsesToolMetadataInsteadOfGuessingFromCodeKeywords() {
         val row = org.json.JSONObject("""{"role":"assistant","tool_calls":[{"type":"function"}]}""")
@@ -78,8 +77,9 @@ class AssistantNarrationTest {
         val preview = "# 先检查 office 的配置：" + "python import subprocess ".repeat(20) + "然后验证服务"
         val raw = terminalNarration("terminal", preview)!!
         assertTrue(raw.endsWith("然后验证服务"))
-        assertTrue(displayNarration(raw, true).endsWith("…然后验证服务"))
-        assertTrue(raw.length > displayNarration(raw, true).length)
+        // 不截断: 长脚本后的中文收尾不能被省略号替换。
+        assertEquals(raw, displayNarration(raw, true))
+        assertTrue(displayNarration(raw, true).endsWith("然后验证服务"))
     }
     private fun history() = listOf(
         HermesMessage("user", "继续", serverId = 900, timestamp = 1000),
