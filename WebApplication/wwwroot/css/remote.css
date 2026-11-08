@@ -3857,6 +3857,15 @@ input.multi-select-row {
 }
 .preview-content{min-height:0;overflow:hidden;padding:10px}.preview-container{height:90dvh;max-height:90dvh}.preview-header{padding:10px 16px;gap:12px}.preview-header h3{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.preview-image,.preview-video{width:100%;height:100%;object-fit:contain}.preview-image{touch-action:none;user-select:none;cursor:grab}.preview-image:active{cursor:grabbing}.preview-media-error{font-size:12px;color:var(--accent-danger);flex:1;overflow-wrap:anywhere}.preview-footer{gap:12px;flex-wrap:wrap}@media(max-width:600px){.file-preview .preview-container{width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0}.preview-nav-btn{width:36px;height:36px}.preview-prev-btn{left:5px}.preview-next-btn{right:5px}.preview-header{padding:8px 12px}.preview-footer{padding:10px 12px}}
 /* Mobile file browser: high-specificity final rules independent of CSS load order. */
+/* Shared mobile table rules are specificity-overridden below; load order is irrelevant. */
+@media(max-width:768px),(max-width:1000px) and (max-height:500px) and (pointer:coarse){
+  body #remote-page #files-tab .files-table thead{display:none!important}
+  body #remote-page #files-tab #files-list>tr.file-row{display:flex!important;grid-template-columns:none!important;padding:0 4px 0 8px!important;border:0!important;border-bottom:1px solid var(--border-color)!important;border-radius:0!important}
+  body #remote-page #files-tab #files-list>tr.file-row>td{display:flex!important;grid-column:auto!important;grid-row:auto!important;white-space:nowrap!important;overflow-wrap:normal!important}
+  body #remote-page #files-tab #files-list>tr.file-row .file-name-column{grid-column:auto!important;font-size:14px!important;line-height:normal!important}
+  body #remote-page #files-tab #files-list>tr.file-row .file-date-column{display:none!important;grid-column:auto!important}
+  body #remote-page #files-tab #files-list>tr.file-row .file-actions-column{grid-column:auto!important;padding:0!important}
+}
 body #remote-page .file-mobile-summary,
 body #remote-page .file-mobile-dock,
 body #remote-page .file-mobile-empty,
@@ -3886,7 +3895,7 @@ body #remote-page .file-row-more{display:none}
   body #remote-page #files-tab #files-list>tr.file-row{display:flex!important;flex-direction:row!important;align-items:center!important;float:none!important;width:100%!important;min-height:56px!important;height:56px!important;gap:0!important;margin:0!important;padding:0 4px 0 8px!important;border:0!important;border-bottom:1px solid var(--border-color)!important;border-radius:0!important;background:var(--bg-primary)!important;box-shadow:none!important;box-sizing:border-box!important}
   body #remote-page #files-tab #files-list>tr.file-row:last-child{border-bottom:0!important}
   body #remote-page #files-tab #files-list>tr.file-row>td{display:flex!important;align-items:center!important;float:none!important;width:auto!important;min-width:0!important;max-width:none!important;height:100%!important;padding:0!important;border:0!important;font-size:12px!important;white-space:nowrap!important;overflow-wrap:normal!important;grid-column:auto!important;grid-row:auto!important;box-sizing:border-box!important;vertical-align:middle!important}
-  body #remote-page #files-tab #files-list>tr.file-row .file-name-column{display:flex!important;float:none!important;flex:1 1 auto!important;width:auto!important;min-width:0!important;max-width:none!important;gap:9px!important;font-size:14px!important;line-height:normal!important;white-space:normal!important;color:var(--text-primary)!important}
+  body #remote-page #files-tab #files-list>tr.file-row .file-name-column{display:flex!important;float:none!important;flex:1 1 auto!important;width:auto!important;min-width:0!important;max-width:none!important;gap:9px!important;font-size:14px!important;line-height:normal!important;white-space:normal!important;color:var(--text-primary)!important;text-align:left!important}
   body #remote-page #files-tab #files-list>tr.file-row .file-name-column .multi-select-row{flex:0 0 19px!important;width:19px!important;height:19px!important;margin:0!important}
   body #remote-page #files-tab #files-list>tr.file-row .file-row-icon{display:grid!important;place-items:center!important;width:31px!important;height:31px!important;flex:0 0 31px!important;border-radius:0!important;background:transparent!important;font-size:29px!important;color:#588a80}
   body #remote-page #files-tab #files-list>tr.file-row .file-row-main{display:flex!important;flex:1!important;flex-direction:column!important;min-width:0!important;gap:0!important;justify-content:center!important}
