@@ -427,7 +427,7 @@
 
         <!-- Files Tab -->
         <div id="files-tab" class="tab-content">
-            <div class="files-container">
+            <div class="files-container" id="file-manager-container">
 
 
                 <div class="files-toolbar">
@@ -447,6 +447,12 @@
                         <button type="button" id="breadcrumb-refresh-btn" class="breadcrumb-refresh-btn btn-refresh"
                                 title="刷新当前目录">
                             <span class="refresh-icon"><svg aria-hidden="true"><use href="#icon-refresh" /></svg></span>
+                        </button>
+                    </div>
+                    <div class="file-mobile-summary" role="status">
+                        <span id="file-mobile-count">正在读取…</span>
+                        <button type="button" id="file-mobile-settings-btn" class="file-mobile-settings" aria-label="视图设置" title="视图设置">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h18M3 12h12M3 17h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                         </button>
                     </div>
                     <div class="files-controls">
@@ -516,13 +522,22 @@
                                 <th class="file-date-column sortable" data-sort="date">
                                     修改时间 <span class="sort-arrow"></span>
                                 </th>
-                                <th class="file-actions-column">操作</th>
+                                <th class="file-actions-column"><span class="file-actions-desktop">操作</span></th>
                             </tr>
                         </thead>
                         <tbody id="files-list"></tbody>
                     </table>
                 </div>
-
+                <div id="file-mobile-empty" class="file-mobile-empty" hidden>
+                    <span>📂</span><strong>此目录为空</strong><small>可以从底部工具栏新建文件或上传内容</small>
+                </div>
+            </div>
+            <div class="file-mobile-dock" id="file-mobile-dock" aria-label="文件操作">
+                <button type="button" id="mobile-file-disks" class="file-dock-btn"><span>▤</span><small>磁盘</small></button>
+                <button type="button" id="mobile-file-up" class="file-dock-btn"><span>↑</span><small>上级</small></button>
+                <button type="button" id="mobile-file-create" class="file-dock-btn"><span>＋</span><small>新建</small></button>
+                <button type="button" id="mobile-file-upload" class="file-dock-btn"><span>⇧</span><small>上传</small></button>
+                <button type="button" id="mobile-file-refresh" class="file-dock-btn"><span>↻</span><small>刷新</small></button>
             </div>
         </div>
     </main>

@@ -26,10 +26,9 @@ class RemoteControl {
         /** 当前目录文件列表（用于排序与重绘） */
         this.files = [];
         /** 文件列表排序：'name' | 'type' | 'size' | 'date' | null */
-        this.fileSortColumn = 'type';
+        this.fileSortColumn = 'name';
         this.fileSortAsc = true;
-        /** 名称列四种模式：0=文件夹在前+升序 1=文件夹在前+降序 2=混合+升序 3=混合+降序 */
-        this.fileSortNameMode = 0;
+        this.fileGroupFolders = localStorage.getItem('fileGroupFolders') !== 'false';
         /** 当前目录下的图片文件列表，用于预览上一张/下一张 */
         this.currentDirImageFiles = [];
         this.previewImageIndex = -1;
@@ -110,6 +109,8 @@ class RemoteControl {
     init() {
         this.bindEvents();
         this.checkAuth();
+        // The file dock is static HTML; populate it before auth/network settles.
+        this.updateMultiSelectToolbar();
 
         this.initDialog();
         this.initFilePicker();
@@ -153,7 +154,6 @@ class RemoteControl {
                 inputEl.type = options.inputType === 'password' ? 'password' : 'text';
                 inputEl.value = options.defaultValue ?? '';
                 inputEl.placeholder = options.placeholder ?? '';
-                inputEl.focus();
             } else {
                 inputWrap.style.display = 'none';
             }
@@ -216,6 +216,7 @@ class RemoteControl {
             }
 
             dialog.style.display = 'flex';
+            if (isPrompt && inputEl) requestAnimationFrame(() => inputEl.focus());
         });
     }
 
@@ -234,8 +235,28 @@ class RemoteControl {
         this.updateMultiSelectToolbar();
     }
     /** 更新多选工具栏按钮 */
+    isPhoneFileLayout() {
+        return matchMedia('(max-width: 768px), (max-width: 1000px) and (max-height: 500px) and (pointer: coarse)').matches;
+    }
+
+    updateFileMobileChrome() {
+        const count = document.getElementById('file-mobile-count');
+        if (count) {
+            const dirs = this.files.filter(item => item.isDirectory).length;
+            count.textContent = `${this.currentPath || '服务器磁盘'} · ${dirs} 个文件夹 · ${this.files.length - dirs} 个文件`;
+        }
+        const empty = document.getElementById('file-mobile-empty');
+        if (empty) empty.hidden = this.files.length > 0;
+        const up = document.getElementById('mobile-file-up');
+        if (up) up.disabled = !this.currentPath;
+        const isRoot = this.currentPath === null || this.currentPath === '';
+        const isWindowsRoot = isRoot && this.platform && this.platform.toLowerCase().includes('windows');
+        for (const id of ['mobile-file-create', 'mobile-file-upload']) {
+            const button = document.getElementById(id); if (button) button.disabled = isWindowsRoot;
+        }
+    }
+
     updateMultiSelectToolbar() {
-        // 直接操作html中的多选操作按钮
         const multiBtns = document.getElementById('multi-action-btns');
         if (multiBtns) {
             multiBtns.style.display = this.multiSelectMode ? 'inline-flex' : 'none';
@@ -244,6 +265,38 @@ class RemoteControl {
             document.getElementById('multi-copy-btn').onclick = () => this.handleMultiCopy();
             document.getElementById('multi-move-btn').onclick = () => this.handleMultiMove();
             document.getElementById('multi-cancel-btn').onclick = () => this.toggleMultiSelectMode(false);
+        }
+        const mobile = document.getElementById('file-mobile-dock');
+        if (mobile) {
+            if (mobile._selectionMode !== this.multiSelectMode) {
+                mobile.classList.toggle('selection-mode', this.multiSelectMode);
+                const buttons = this.multiSelectMode
+                    ? [
+                        ['mobile-file-cancel','×','取消'], ['mobile-file-copy','⧉','复制'],
+                        ['mobile-file-move','↗','移动'], ['mobile-file-compress','⌑','压缩'],
+                        ['mobile-file-delete','⌫','删除'],
+                    ]
+                    : [
+                        ['mobile-file-disks','▤','磁盘'], ['mobile-file-up','↑','上级'],
+                        ['mobile-file-create','＋','新建'], ['mobile-file-upload','⇧','上传'],
+                        ['mobile-file-refresh','↻','刷新'],
+                    ];
+                mobile.innerHTML = buttons.map(([id,icon,label]) =>
+                    `<button type="button" id="${id}" class="file-dock-btn${id==='mobile-file-delete'?' danger':''}"><span>${icon}</span><small>${label}</small></button>`
+                ).join('');
+                const actions = {
+                    'mobile-file-disks': () => this.navigateToHome(), 'mobile-file-up': () => this.navigateBack(),
+                    'mobile-file-create': () => this.showMobileCreateSheet(), 'mobile-file-upload': () => this.showUploadPanel(),
+                    'mobile-file-refresh': () => this.loadFiles(this.currentPath || null), 'mobile-file-cancel': () => this.toggleMultiSelectMode(false),
+                    'mobile-file-copy': () => Array.from(this.selectedFiles).length ? this.handleMultiCopy() : this.showToast('先选择文件', 'info'),
+                    'mobile-file-move': () => Array.from(this.selectedFiles).length ? this.handleMultiMove() : this.showToast('先选择文件', 'info'),
+                    'mobile-file-compress': () => Array.from(this.selectedFiles).length ? this.handleCompress(Array.from(this.selectedFiles)) : this.showToast('先选择文件', 'info'),
+                    'mobile-file-delete': () => Array.from(this.selectedFiles).length ? this.handleMultiDelete() : this.showToast('先选择文件', 'info'),
+                };
+                Object.entries(actions).forEach(([id, action]) => document.getElementById(id)?.addEventListener('click', action));
+                mobile._selectionMode = this.multiSelectMode;
+            }
+            this.updateFileMobileChrome();
         }
     }
     /** 批量删除（只弹一次确认，调用后端批量接口） */
@@ -986,6 +1039,14 @@ class RemoteControl {
             });
             breadcrumbInput.addEventListener('blur', () => this.exitBreadcrumbEditMode());
         }
+
+        // The fixed dock is rebuilt when selection mode changes. Its buttons bind
+        // in updateMultiSelectToolbar and only need this view button bound once.
+        const mobileSettings = document.getElementById('file-mobile-settings-btn');
+        if (mobileSettings && !mobileSettings._binded) {
+            mobileSettings.addEventListener('click', () => this.showFileViewMenu(mobileSettings));
+            mobileSettings._binded = true;
+        }
         const breadcrumbRefreshBtn = document.getElementById('breadcrumb-refresh-btn');
         if (breadcrumbRefreshBtn) {
             breadcrumbRefreshBtn.addEventListener('click', () => {
@@ -998,9 +1059,9 @@ class RemoteControl {
                 if (col === 'name') {
                     if (this.fileSortColumn !== 'name') {
                         this.fileSortColumn = 'name';
-                        this.fileSortNameMode = 0;
+                        this.fileSortAsc = true;
                     } else {
-                        this.fileSortNameMode = (this.fileSortNameMode + 1) % 4;
+                        this.fileSortAsc = !this.fileSortAsc;
                     }
                 } else {
                     if (this.fileSortColumn === col) {
@@ -1288,7 +1349,8 @@ class RemoteControl {
             this.loadComposeStatus();
             this.renderComposeHistory();
         } else if (tabName === 'files') {
-            if (loadTab) this.loadFiles();
+            this.updateFileMobileChrome();
+            if (loadTab) this.loadFiles(this.currentPath || null);
         }
 
         // 更新 URL hash（除非是从 hash 恢复时调用）
@@ -4277,6 +4339,77 @@ volumes:
         const dropdown = document.getElementById('create-dropdown');
         if (dropdown) dropdown.style.display = 'none';
     }
+    toggleCreateDropdown() {
+        const dropdown = document.getElementById('create-dropdown');
+        if (!dropdown) return;
+        dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+    }
+
+    showMobileCreateSheet() {
+        if (!this.currentPath) { this.showToast('根目录不支持新建，请先进入某个磁盘或文件夹', 'info'); return; }
+        this.hideContextMenu();
+        const menu = document.createElement('div');
+        menu.id = 'context-menu';
+        menu.className = 'context-menu file-context-menu file-mobile-sheet';
+        menu.innerHTML = `
+            <div class="file-sheet-handle"></div>
+            <div class="file-sheet-head"><strong>新建</strong><button type="button" data-close aria-label="关闭">×</button></div>
+            <div class="file-sheet-actions">
+                <button type="button" data-create="file"><span>📄</span><span>新建文件</span></button>
+                <button type="button" data-create="folder"><span>📁</span><span>新建文件夹</span></button>
+            </div>
+            <button type="button" class="file-sheet-done" data-close>取消</button>`;
+        document.body.appendChild(menu);
+        menu.querySelectorAll('[data-create]').forEach(button => button.addEventListener('click', async () => {
+            this.hideContextMenu();
+            const folder = button.dataset.create === 'folder';
+            const name = await this.showDialog('输入名称：', folder ? '新建文件夹' : '新建文件', {type:'prompt', placeholder:'名称'});
+            if (!name) return;
+            if (folder) this.createFolder(name); else this.createFile(name);
+        }));
+        menu.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => this.hideContextMenu()));
+        requestAnimationFrame(() => menu.classList.add('open'));
+    }
+
+    showFileViewMenu(anchor) {
+        if (!anchor) return;
+        if (this.isPhoneFileLayout()) { this.showFileViewSheet(); return; }
+        this.hideContextMenu();
+        const menu = document.createElement('div');
+        menu.id = 'context-menu';
+        menu.className = 'context-menu file-view-menu';
+        menu.innerHTML = `
+            <div class="file-menu-title">视图设置</div>
+            <div class="file-menu-section">排序</div>
+            ${[['name','名称'],['type','类型'],['size','大小'],['date','修改时间']].map(([key,label]) =>
+                `<button type="button" class="context-menu-item${this.fileSortColumn===key?' active':''}" data-sort="${key}"><span class="menu-icon">${key==='name'?'A':key==='type'?'#':key==='size'?'⇅':'◷'}</span><span>${label}</span><span class="menu-check">${this.fileSortColumn===key?'✓':''}</span></button>`).join('')}
+            <div class="file-menu-section">顺序</div>
+            <button type="button" class="context-menu-item" data-order="asc"><span class="menu-icon">↑</span><span>升序</span><span class="menu-check">${this.fileSortAsc?'✓':''}</span></button>
+            <button type="button" class="context-menu-item" data-order="desc"><span class="menu-icon">↓</span><span>降序</span><span class="menu-check">${!this.fileSortAsc?'✓':''}</span></button>
+            <div class="context-menu-separator"></div>
+            <button type="button" class="context-menu-item" data-folder="1"><span class="menu-icon">▤</span><span>文件夹置顶</span><span class="menu-check">${this.fileGroupFolders?'✓':''}</span></button>
+        `;
+        document.body.appendChild(menu);
+        menu.querySelectorAll('[data-sort]').forEach(button => button.addEventListener('click', () => {
+            this.fileSortColumn = button.dataset.sort;
+            this.renderFilesList(); this.updateFilesSortArrows(); this.showFileViewMenu(anchor);
+        }));
+        menu.querySelectorAll('[data-order]').forEach(button => button.addEventListener('click', () => {
+            this.fileSortAsc = button.dataset.order === 'asc';
+            this.renderFilesList(); this.updateFilesSortArrows(); this.showFileViewMenu(anchor);
+        }));
+        const folder = menu.querySelector('[data-folder]');
+        folder?.addEventListener('click', () => {
+            this.fileGroupFolders = !this.fileGroupFolders;
+            localStorage.setItem('fileGroupFolders', String(this.fileGroupFolders));
+            this.renderFilesList(); this.updateFilesSortArrows(); this.showFileViewMenu(anchor);
+        });
+        const rect = anchor.getBoundingClientRect();
+        const width = menu.offsetWidth || 220;
+        const height = menu.offsetHeight;
+        menu.style.left = Math.max(8, Math.min(rect.left, innerWidth - width - 8)) + 'px';
+        menu.style.top = (rect.bottom + 6 + height > innerHeight - 8 ? Math.max(8, rect.top - height - 6) : rect.bottom + 6) + 'px';
+    }
 
     renderBookmarkDropdown() {
         const dropdown = document.getElementById('bookmark-dropdown');
@@ -4369,9 +4502,12 @@ volumes:
                 const result = await response.json();
                 this.currentPath = path || null;
                 this.files = result.data || [];
+                if (this.multiSelectMode) { this.multiSelectMode = false; this.selectedFiles.clear(); }
                 this.renderFilesList();
+                this.updateMultiSelectToolbar();
                 this.updateBreadcrumb(path);
                 this.updateFilesToolbarState();
+                this.updateFileMobileChrome();
                 // 更新 hash 以记住文件路径
                 this.updateHash();
             }
@@ -4446,6 +4582,10 @@ volumes:
         const createWrap = document.querySelector('.create-dropdown-wrapper');
         const uploadBtnEl = document.getElementById('upload-btn');
         const terminalBtnEl = document.getElementById('open-terminal-here-btn');
+        for (const [id, disabled] of [['mobile-file-create', disableToolbar], ['mobile-file-upload', disableToolbar], ['mobile-file-up', !this.currentPath]]) {
+            const button = document.getElementById(id);
+            if (button) button.disabled = disabled;
+        }
         if (createBtn) {
             createBtn.disabled = disableToolbar;
             createBtn.classList.toggle('file-toolbar-disabled', disableToolbar);
@@ -4498,25 +4638,25 @@ volumes:
 
     /** 更新文件表头排序箭头 */
     updateFilesSortArrows() {
-        const nameModeTitles = ['文件夹在前，名称 A→Z', '文件夹在前，名称 Z→A', '混合，名称 A→Z', '混合，名称 Z→A'];
+        const nameModeTitles = ['点击切换名称排序方向'];
         document.querySelectorAll('.files-table th.sortable').forEach(th => {
             const arrow = th.querySelector('.sort-arrow');
             if (!arrow) return;
             arrow.className = 'sort-arrow';
             if (th.dataset.sort === this.fileSortColumn) {
                 if (this.fileSortColumn === 'name') {
-                    const nameAsc = this.fileSortNameMode === 0 || this.fileSortNameMode === 2;
-                    const folderFirst = this.fileSortNameMode <= 1;
+                    const nameAsc = this.fileSortAsc;
+                    const folderFirst = this.fileGroupFolders;
                     if (folderFirst) arrow.classList.add('sort-folder');
                     arrow.classList.add(nameAsc ? 'sort-asc' : 'sort-desc');
-                    th.title = nameModeTitles[this.fileSortNameMode];
+                    th.title = nameModeTitles[0];
                 } else {
                     arrow.classList.add(this.fileSortAsc ? 'sort-asc' : 'sort-desc');
                     th.title = '';
                 }
                 th.classList.add('sorted');
             } else {
-                th.title = th.dataset.sort === 'name' ? '点击在四种排序方式间切换' : '';
+                th.title = th.dataset.sort === 'name' ? '点击切换名称排序方向' : '';
                 th.classList.remove('sorted');
             }
         });
@@ -4541,14 +4681,13 @@ volumes:
             };
             files = [...files].sort((a, b) => {
                 let cmp = 0;
+                if (this.fileGroupFolders) {
+                    const aDir = a.isDirectory ? 0 : 1;
+                    const bDir = b.isDirectory ? 0 : 1;
+                    if (aDir !== bDir) return aDir - bDir;
+                }
                 if (col === 'name') {
-                    const foldersFirst = this.fileSortNameMode <= 1;
-                    const nameAsc = this.fileSortNameMode === 0 || this.fileSortNameMode === 2;
-                    if (foldersFirst) {
-                        const aDir = a.isDirectory ? 0 : 1;
-                        const bDir = b.isDirectory ? 0 : 1;
-                        if (aDir !== bDir) return aDir - bDir;
-                    }
+                    const nameAsc = this.fileSortAsc;
                     cmp = (a.name || '').localeCompare(b.name || '', undefined, { numeric: true });
                     return nameAsc ? cmp : -cmp;
                 }
@@ -4570,6 +4709,8 @@ volumes:
             });
         }
 
+        const phoneLayout = this.isPhoneFileLayout();
+        // 手机单击行打开操作面板；文件夹通过面板的“打开文件夹”进入。
         // 工具栏多选复选框（直接绑定html）
         const multiBox = document.getElementById('multi-select-toggle-btn');
         if (multiBox) {
@@ -4600,12 +4741,13 @@ volumes:
                 sizeCell = file.isDirectory ? '-' : this.formatFileSize(file.size);
             }
             const rowClass = file.isDirectory ? 'file-row folder-row' : 'file-row';
-            const isImage = this.isImageFile(file.name);
-            const isVideo = this.isVideoFile(file.name);
             const isCompose = !file.isDirectory && this.isDockerComposeFile(file.name);
             const isDrive = file.isDirectory && file.totalBytes != null && file.totalBytes > 0;
             // 多选复选框
             const multiBox = this.multiSelectMode ? `<input type="checkbox" class="multi-select-row" data-path="${this.escapeHtml(file.path)}" ${this.selectedFiles.has(file.path) ? 'checked' : ''} />` : '';
+            const kind = file.isDirectory ? (isDrive ? '磁盘' : '文件夹') : (isCompose ? 'Compose' : (file.name.split('.').pop() || '文件'));
+            const modified = file.modified ? new Date(file.modified).toLocaleString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+            const meta = `${kind}${modified ? ' · ' + modified : ''}${file.isDirectory || file.size == null ? '' : ' · ' + this.formatFileSize(file.size)}`;
             return `
                 <tr class="${rowClass}" 
                     data-path="${this.escapeHtml(file.path)}" 
@@ -4614,19 +4756,12 @@ volumes:
                     data-name="${this.escapeHtml(file.name)}"
                     data-file-size="${file.isDirectory ? '' : (file.size || 0)}"
                     >
-                    <td class="file-name-column">${multiBox}${file.isDirectory ? '📁' : this.getFileIcon(file.name)} ${this.escapeHtml(file.name)}</td>
-                    <td class="file-type-column">${file.isDirectory ? (file.totalBytes != null && file.totalBytes > 0 ? '磁盘' : '文件夹') : (isCompose ? 'Compose' : (file.name.split('.').pop() || '文件'))}</td>
+                    <td class="file-name-column">${multiBox}<span class="file-row-icon">${file.isDirectory ? '📁' : this.getFileIcon(file.name)}</span><span class="file-row-main"><strong>${this.escapeHtml(file.name)}</strong><small>${meta}</small></span></td>
+                    <td class="file-type-column">${kind}</td>
                     <td class="file-size-column">${sizeCell}</td>
-                    <td class="file-date-column">${new Date(file.modified).toLocaleString()}</td>
+                    <td class="file-date-column">${modified}</td>
                     <td class="file-actions-column file-actions">
-                        ${!file.isDirectory
-                    ? `${isCompose ? '<button class="btn-small btn-compose-manage" title="在 Compose 管理器中打开">🐳 管理</button>' : ''}
-                               ${isImage ? `<button class="btn-small btn-preview">🖼️ 预览</button>` : isVideo ? `<button class="btn-small btn-preview">🎬 预览</button>` : ''}
-                               ${this.isTextFile(file.name) ? '<button class="btn-small btn-edit">编辑</button>' : ''}
-                               <button class="btn-small btn-download">下载</button>`
-                    : ''
-                }
-                        ${!isDrive ? '<button class="btn-small danger btn-delete">删除</button>' : ''}
+                        <button type="button" class="file-row-more" title="更多操作" aria-label="打开 ${this.escapeHtml(file.name)} 的操作菜单">⋯</button>
                     </td>
                 </tr>
             `;
@@ -4642,10 +4777,15 @@ volumes:
                     } else {
                         this.selectedFiles.delete(path);
                     }
+                    this.updateFileMobileChrome();
                 };
             });
         }
         this.updateMultiSelectToolbar();
+        this.updateFilesToolbarState();
+        if (typeof this.updateFileMobileChrome === 'function') this.updateFileMobileChrome();
+        const mobileEmpty = document.getElementById('file-mobile-empty');
+        if (mobileEmpty) mobileEmpty.hidden = files.length > 0;
 
         // 保存当前目录图片列表，供预览上一张/下一张使用
         this.currentDirImageFiles = files
@@ -4656,87 +4796,67 @@ volumes:
             .filter(f => !f.isDirectory && this.isVideoFile(f.name))
             .map(f => ({ path: f.path, name: f.name }));
 
-        // 添加事件监听器
         tbody.querySelectorAll('tr.file-row').forEach(row => {
-            row.addEventListener('click', (e) => {
-                if (e.target.closest('.file-actions')) return;
+            let longPressTimer = 0;
+            let pointerStartX = 0, pointerStartY = 0;
+            const openMenu = (event) => {
+                const isDrive = row.dataset.isDrive === 'true';
+                const fileSize = row.dataset.fileSize ? parseInt(row.dataset.fileSize, 10) : 0;
+                this.showContextMenu(event, row.dataset.path, row.dataset.isDirectory === 'true', row.dataset.name, fileSize, isDrive);
+            };
+            row.addEventListener('contextmenu', (e) => { e.preventDefault(); openMenu(e); });
+            row.addEventListener('pointerdown', (event) => {
+                if (event.pointerType === 'mouse' || event.target.closest('button,input')) return;
+                pointerStartX = event.clientX; pointerStartY = event.clientY;
+                longPressTimer = window.setTimeout(() => {
+                    longPressTimer = 0;
+                    if (row.dataset.isDrive === 'true' || !row.dataset.path) return;
+                    row.dataset.longPressed = 'true';
+                    this.selectedFiles.add(row.dataset.path);
+                    this.multiSelectMode = true;
+                    this.renderFilesList();
+                }, 480);
+            });
+            row.addEventListener('pointermove', (event) => {
+                if (Math.hypot(event.clientX - pointerStartX, event.clientY - pointerStartY) > 10) {
+                    clearTimeout(longPressTimer); longPressTimer = 0;
+                }
+            });
+            ['pointerup','pointercancel','pointerleave'].forEach(name => row.addEventListener(name, () => {
+                clearTimeout(longPressTimer); longPressTimer = 0;
+            }));
+            const more = row.querySelector('.file-row-more');
+            if (more) more.addEventListener('click', (event) => {
+                event.preventDefault(); event.stopPropagation(); openMenu(event);
+            });
+            row.addEventListener('click', (event) => {
+                if (event.target.closest('.file-actions')) return;
+                if (row.dataset.longPressed === 'true') { row.dataset.longPressed = 'false'; return; }
                 if (this.multiSelectMode) {
-                    // 多选模式：点击行切换选中状态
-                    if (e.target.classList.contains('multi-select-row')) return; // checkbox 自身处理
-                    const path = row.dataset.path;
+                    if (event.target.classList.contains('multi-select-row')) return;
+                    const target = row.dataset.path;
                     const checkbox = row.querySelector('.multi-select-row');
-                    if (this.selectedFiles.has(path)) {
-                        this.selectedFiles.delete(path);
+                    if (this.selectedFiles.has(target)) {
+                        this.selectedFiles.delete(target);
                         if (checkbox) checkbox.checked = false;
                     } else {
-                        this.selectedFiles.add(path);
+                        this.selectedFiles.add(target);
                         if (checkbox) checkbox.checked = true;
                     }
+                    this.updateFileMobileChrome();
+                } else if (phoneLayout) {
+                    openMenu(event);
                 } else if (row.classList.contains('folder-row')) {
-                    // 非多选模式：文件夹才可点击导航
                     this.selectedFiles = new Set();
                     this.loadFiles(row.dataset.path);
                 }
             });
         });
 
-        tbody.querySelectorAll('tr').forEach(row => {
-            // 右键菜单
-            row.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
-                const path = row.dataset.path;
-                const isDirectory = row.dataset.isDirectory === 'true';
-                const isDrive = row.dataset.isDrive === 'true';
-                const name = row.dataset.name;
-                const fileSize = row.dataset.fileSize ? parseInt(row.dataset.fileSize, 10) : 0;
-                this.showContextMenu(e, path, isDirectory, name, fileSize, isDrive);
-            });
-
-            // 按钮事件 - Compose 管理按钮
-            const composeManageBtn = row.querySelector('.btn-compose-manage');
-            if (composeManageBtn) {
-                composeManageBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.openComposeManager(row.dataset.path);
-                });
-            }
-
-            const previewBtn = row.querySelector('.btn-preview');
-            if (previewBtn) {
-                previewBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.previewFile(row.dataset.path, row.dataset.name);
-                });
-            }
-
-            const editBtn = row.querySelector('.btn-edit');
-            if (editBtn) {
-                editBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.editFile(row.dataset.path);
-                });
-            }
-
-            const downloadBtn = row.querySelector('.btn-download');
-            if (downloadBtn) {
-                downloadBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.downloadFile(row.dataset.path);
-                });
-            }
-
-            const deleteBtn = row.querySelector('.btn-delete');
-            if (deleteBtn) {
-                deleteBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const isDirectory = row.dataset.isDirectory === 'true';
-                    this.deleteFile(row.dataset.path, isDirectory);
-                });
-            }
-        });
     }
 
     formatFileSize(bytes) {
+        if (!Number.isFinite(Number(bytes)) || Number(bytes) < 0) return '-';
         if (bytes === 0) return '0 B';
         const k = 1024;
         const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -5785,10 +5905,54 @@ volumes:
         // 移除已存在的菜单
         this.hideContextMenu();
 
+        if (this.isPhoneFileLayout()) {
+            const menu = document.createElement('div');
+            menu.id = 'context-menu';
+            menu.className = 'context-menu file-context-menu file-mobile-sheet';
+            const label = this.escapeHtml(name || '项目');
+            const actions = [];
+            if (isDirectory) {
+                actions.push(['open','📂','打开文件夹']);
+                if (!isDrive) actions.push(['rename','✏️','重命名']);
+            } else {
+                if (this.isDockerComposeFile(name)) actions.push(['compose-manage','🐳','Compose 管理']);
+                if (this.isTextFile(name)) actions.push(['edit','📝','编辑']);
+                if (this.isArchiveFile(name)) actions.push(['decompress','📦','解压']);
+                actions.push(['download','💾','下载'], ['rename','✏️','重命名']);
+            }
+            if (!isDrive) actions.push(['compress','🗜️','压缩']);
+            actions.push(['copy','⧉','复制'], ['move','↗','移动'], ['copy-path','⧉','复制路径']);
+            if (!isDrive) actions.push(['delete','⌫','删除']);
+            menu.innerHTML = `<div class="file-sheet-handle"></div><div class="file-sheet-head"><strong>${label}</strong><button type="button" data-close aria-label="关闭">×</button></div><div class="file-sheet-actions">` +
+                actions.map(([action,icon,text]) => `<button type="button" data-menu-action="${action}" class="${action==='delete'?'danger':''}"><span>${icon}</span><span>${text}</span></button>`).join('') +
+                `</div><button type="button" class="file-sheet-done" data-close>取消</button>`;
+            const run = (action) => {
+                this.hideContextMenu();
+                switch(action) {
+                    case 'open': this.loadFiles(path); break;
+                    case 'compose-manage': this.openComposeManager(path); break;
+                    case 'edit': this.editFile(path); break;
+                    case 'download': this.downloadFile(path); break;
+                    case 'rename': this.renameFile(path,isDirectory,name,isDrive); break;
+                    case 'compress': this.handleCompress([path]); break;
+                    case 'decompress': this.handleDecompress(path); break;
+                    case 'copy': this.setClipboardAction('copy',path,isDirectory); break;
+                    case 'move': this.setClipboardAction('move',path,isDirectory); break;
+                    case 'delete': this.deleteFile(path,isDirectory); break;
+                    case 'copy-path': this.copyFilePath(path); break;
+                }
+            };
+            menu.querySelectorAll('[data-menu-action]').forEach(button => button.addEventListener('click', () => run(button.dataset.menuAction)));
+            menu.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => this.hideContextMenu()));
+            document.body.appendChild(menu);
+            requestAnimationFrame(() => menu.classList.add('open'));
+            return;
+        }
+
         // 创建右键菜单
         const contextMenu = document.createElement('div');
         contextMenu.id = 'context-menu';
-        contextMenu.className = 'context-menu';
+        contextMenu.className = 'context-menu file-context-menu';
 
         // 存储路径信息到 data 属性
         contextMenu.dataset.path = path;
@@ -5819,6 +5983,9 @@ volumes:
                 <div class="context-menu-item" data-action="move">
                     <span class="menu-icon">✂️</span>
                     <span>剪切${multiLabel}</span>
+                </div>
+                <div class="context-menu-item" data-action="copy-path">
+                    <span class="menu-icon">⧉</span><span>复制路径</span>
                 </div>
                 <div class="context-menu-separator"></div>
                 <div class="context-menu-item" data-action="rename">
@@ -5873,6 +6040,9 @@ volumes:
                     <span class="menu-icon">💾</span>
                     <span>下载</span>
                 </div>
+                <div class="context-menu-item" data-action="copy-path">
+                    <span class="menu-icon">⧉</span><span>复制路径</span>
+                </div>
                 <div class="context-menu-separator"></div>
                 <div class="context-menu-item" data-action="rename">
                     <span class="menu-icon">✏️</span>
@@ -5885,6 +6055,8 @@ volumes:
             `;
         }
 
+        const mobile = this.isPhoneFileLayout();
+        if (mobile) menuItems = `<div class="file-menu-title">${this.escapeHtml(name)}</div>` + menuItems;
         contextMenu.innerHTML = menuItems;
         document.body.appendChild(contextMenu);
 
@@ -5948,25 +6120,81 @@ volumes:
                     case 'decompress':
                         this.handleDecompress(menuPath);
                         break;
+                    case 'copy-path':
+                        this.copyFilePath(menuPath);
+                        break;
                 }
                 this.hideContextMenu();
             });
         });
 
-        // 定位菜单
-        const x = event.clientX;
-        const y = event.clientY;
-        const menuWidth = 200;
-        const menuHeight = contextMenu.offsetHeight;
-        const windowWidth = window.innerWidth;
-        const windowHeight = window.innerHeight;
-
-        // 确保菜单不会超出屏幕
-        const left = (x + menuWidth > windowWidth) ? windowWidth - menuWidth - 10 : x;
-        const top = (y + menuHeight > windowHeight) ? windowHeight - menuHeight - 10 : y;
-
+        // 菜单靠近触发位置；右侧空间不足时向左展开，下方不足时向上展开。
+        const trigger = event.target?.closest?.('.file-row-more') || event.currentTarget;
+        const rect = trigger?.getBoundingClientRect?.() || { left:event.clientX, right:event.clientX, top:event.clientY, bottom:event.clientY };
+        const menuWidth = Math.min(300, Math.max(220, contextMenu.offsetWidth));
+        const menuHeight = Math.min(innerHeight - 16, contextMenu.offsetHeight);
+        const safeTop = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--mobile-top')) || 0;
+        const preferLeft = rect.right + menuWidth + 8 > innerWidth;
+        const left = preferLeft ? Math.max(8, rect.right - menuWidth) : Math.min(innerWidth - menuWidth - 8, rect.left);
+        const spaceBelow = innerHeight - rect.bottom - 8;
+        const top = spaceBelow >= menuHeight ? rect.bottom + 8 : Math.max(safeTop + 8, rect.top - menuHeight - 8);
+        contextMenu.style.width = menuWidth + 'px';
         contextMenu.style.left = left + 'px';
         contextMenu.style.top = top + 'px';
+    }
+
+    showFileViewSheet() {
+        const current = this.fileSortColumn;
+        const nextView = (sort) => {
+            this.fileSortColumn = sort;
+            this.renderFilesList(); this.updateFilesSortArrows();
+            requestAnimationFrame(() => this.showFileViewSheet());
+        };
+        const menu = document.createElement('div');
+        menu.id = 'context-menu';
+        menu.className = 'context-menu file-view-menu file-mobile-sheet';
+        menu.innerHTML = `
+            <div class="file-sheet-handle" aria-hidden="true"></div>
+            <div class="file-sheet-head"><strong>视图设置</strong><button type="button" data-close aria-label="关闭">×</button></div>
+            <div class="file-sheet-section"><span>排序方式</span><div class="file-sheet-grid">
+                ${[['name','名称'],['type','类型'],['size','大小'],['date','修改时间']].map(([key,label]) => `<button type="button" data-sort="${key}" class="${current===key?'active':''}">${label}</button>`).join('')}
+            </div></div>
+            <div class="file-sheet-section"><span>顺序</span><div class="file-sheet-grid">
+                <button type="button" data-order="asc" class="${this.fileSortAsc?'active':''}">↑ 升序</button>
+                <button type="button" data-order="desc" class="${!this.fileSortAsc?'active':''}">↓ 降序</button>
+            </div></div>
+            <button type="button" class="file-sheet-row" data-folder><span>▤ 文件夹始终置顶</span><span class="file-sheet-check">${this.fileGroupFolders?'✓':''}</span></button>
+            <button type="button" class="file-sheet-done" data-close>完成</button>`;
+        document.body.appendChild(menu);
+        menu.querySelectorAll('[data-sort]').forEach(button => button.addEventListener('click', () => nextView(button.dataset.sort)));
+        menu.querySelectorAll('[data-order]').forEach(button => button.addEventListener('click', () => {
+            this.fileSortAsc = button.dataset.order === 'asc';
+            this.renderFilesList(); this.updateFilesSortArrows();
+            requestAnimationFrame(() => this.showFileViewSheet());
+        }));
+        menu.querySelector('[data-folder]').addEventListener('click', () => {
+            this.fileGroupFolders = !this.fileGroupFolders;
+            localStorage.setItem('fileGroupFolders', String(this.fileGroupFolders));
+            this.renderFilesList(); this.updateFilesSortArrows();
+            requestAnimationFrame(() => this.showFileViewSheet());
+        });
+        menu.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => this.hideContextMenu()));
+        requestAnimationFrame(() => menu.classList.add('open'));
+    }
+
+    copyFilePath(path) {
+        if (!path) return;
+        const fallback = () => {
+            const input = document.createElement('textarea');
+            input.value = path; input.style.position = 'fixed'; input.style.opacity = '0';
+            document.body.appendChild(input); input.select();
+            try { document.execCommand('copy'); this.showToast('路径已复制', 'success'); }
+            catch { this.showToast(path, 'info'); }
+            input.remove();
+        };
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(path).then(() => this.showToast('路径已复制', 'success')).catch(fallback);
+        } else fallback();
     }
 
     hideContextMenu() {
@@ -6053,7 +6281,6 @@ let app;
 (window.RemoteToolOnReady || (callback => document.addEventListener('DOMContentLoaded', callback))) (() => {
     app = new RemoteControl();
     window.remoteControl = app;
-    // 文件管理器“在当前目录运行控制台”按钮功能
     app.loadSystemInfo();
 
 
