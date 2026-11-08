@@ -4844,8 +4844,6 @@ volumes:
                         if (checkbox) checkbox.checked = true;
                     }
                     this.updateFileMobileChrome();
-                } else if (phoneLayout) {
-                    openMenu(event);
                 } else if (row.classList.contains('folder-row')) {
                     this.selectedFiles = new Set();
                     this.loadFiles(row.dataset.path);
