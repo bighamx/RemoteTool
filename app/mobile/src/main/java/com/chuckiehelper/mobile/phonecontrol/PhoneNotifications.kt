@@ -33,7 +33,7 @@ class PhoneNotifications : NotificationListenerService() {
                     RemoteInput.addResultsToIntent(inputs, intent, Bundle().apply { inputs.forEach { putCharSequence(it.resultKey, a.getString("text")) } })
                 }
                 action.actionIntent.send(this, 0, intent)
-            }; JSONObject().put("accepted", true).put("verified", false)
+            }; JSONObject().put("accepted", true)
         }
         else -> fail("invalid_arguments", "action: list/dismiss/open/action/reply")
     }

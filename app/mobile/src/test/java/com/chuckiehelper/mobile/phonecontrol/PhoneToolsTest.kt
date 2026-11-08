@@ -84,6 +84,47 @@ class PhoneToolsTest {
         assertEquals("invalid_arguments", result.getJSONObject("structuredContent").getString("code"))
         assertTrue(engine.invoke("phone_tap", JSONObject().put("unknown", true), "bad-arg").getBoolean("isError"))
     }
+    @Test fun invalidArgumentsExplainTheAcceptedShapeAndLikelyFix() {
+        val unknown = engine.invoke("phone_observe", JSONObject().put("selector", JSONObject().put("text", "设置")), "bad-observe-selector")
+            .getJSONObject("structuredContent")
+        assertEquals("invalid_arguments", unknown.getString("code"))
+        assertTrue(unknown.getJSONObject("details").getJSONArray("accepted_arguments").toString().contains("filter"))
+        assertTrue(unknown.getJSONObject("details").getString("suggestion").contains("filter"))
+        assertFalse(unknown.getJSONObject("details").getString("suggestion").contains("phone_find_nodes"))
+
+        val topLevelResource = engine.invoke("phone_input_text", JSONObject().put("resource_id", "pkg:id/input").put("text", "x"), "bad-input-resource")
+            .getJSONObject("structuredContent")
+        assertTrue(topLevelResource.getJSONObject("details").getString("suggestion").contains("selector"))
+
+        val tapWithoutTarget = engine.invoke("phone_tap", JSONObject(), "bad-tap-target").getJSONObject("structuredContent")
+        assertTrue(tapWithoutTarget.getString("message").contains("exactly one target"))
+
+        val wrongType = engine.invoke("phone_tap", JSONObject().put("selector", JSONObject().put("text", "确定")).put("return_state", true), "bad-return-type")
+            .getJSONObject("structuredContent")
+        assertTrue(wrongType.getString("message").contains("received boolean"))
+    }
+    @Test fun screenshotRuntimeOptionsRejectOutOfRangeValuesBeforeDeviceWork() {
+        for ((arguments, message) in listOf(
+            JSONObject().put("max_edge", 100) to "max_edge must be 320–4096",
+            JSONObject().put("max_edge", 5000) to "max_edge must be 320–4096",
+            JSONObject().put("quality", 29) to "quality must be 30–100",
+            JSONObject().put("quality", 101) to "quality must be 30–100",
+        )) {
+            val result = engine.invoke("phone_screenshot", arguments, "bad-screenshot-${message.hashCode()}")
+                .getJSONObject("structuredContent")
+            assertEquals("invalid_arguments", result.getString("code"))
+            assertTrue(result.getString("message").contains(message))
+        }
+    }
+    @Test fun actionResultsDoNotExposeAnUndefinedGenericVerifiedFlag() {
+        val accepted = JSONObject().put("accepted", true).put("backend", "accessibility")
+        assertFalse(accepted.has("verified"))
+        val launch = PhoneAppLaunch.settle("target", "caller", "target", { 0L }, {}, {
+            JSONObject().put("foreground_package", "target")
+        }, { _, _ -> false }, { _, _ -> })
+        assertTrue(launch.getBoolean("verified"))
+        assertTrue(launch.has("verified"))
+    }
     @Test fun mcpNegotiatesAndDoesNotConflateJsonRpcIdsAcrossClients() {
         val keys = mutableListOf<String>()
         val protocol = PhoneMcp({ PhoneToolCatalog.tools(it) }, { _, _, id, _ -> keys.add(id); JSONObject().put("content", org.json.JSONArray()) })

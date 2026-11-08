@@ -41,7 +41,9 @@ class PhoneEfficiencyTest {
     @Test fun selectorsRejectAmbiguityAndInvalidGeometry() {
         val selector = JSONObject().put("resource_id", "input")
         assertThrows(PhoneToolError::class.java) { PhoneSelectors.unique(state(row("a"), row("b")), selector) }
-        assertThrows(PhoneToolError::class.java) { PhoneSelectors.unique(state(row("a", false)), selector) }
+        assertEquals("invalid_bounds", assertThrows(PhoneToolError::class.java) {
+            PhoneSelectors.unique(state(row("a", false)), selector)
+        }.details!!.getString("reason"))
         assertEquals("a", PhoneSelectors.unique(state(row("a")), selector).getString("node_id"))
     }
     @Test fun clickPointsAvoidOverlaysAndDoNotExistWhenFullyObscured() {
@@ -68,6 +70,11 @@ class PhoneEfficiencyTest {
     @Test fun waitConditionsAreValidatedBeforeAnyUiWork() {
         for (bad in listOf(JSONObject(), JSONObject().put("stable_ms", -1), JSONObject().put("text_regex", "["), JSONObject().put("absent", true), JSONObject().put("text", "x").put("unknown", true)))
             assertThrows(Exception::class.java) { PhoneExecution.validateWait(bad) }
+        val returned = try { PhoneExecution.validateWait(JSONObject().put("text", "x").put("return_state", "compact")); null }
+            catch (error: PhoneToolError) { error }
+        assertEquals("invalid_arguments", returned?.code)
+        assertEquals("return_state", returned?.details?.getString("argument"))
+        assertTrue(returned?.details?.getString("suggestion")?.contains("always fresh") == true)
     }
     @Test fun batchesValidateAllStepsAndDoNotPermitShellOrLifecycleOrRecursion() {
         for (tool in listOf("phone_shell", "phone_disconnect", "phone_begin_ui", "phone_execute", "phone_files")) {

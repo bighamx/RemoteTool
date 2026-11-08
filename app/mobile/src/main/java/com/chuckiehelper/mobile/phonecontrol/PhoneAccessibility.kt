@@ -61,7 +61,7 @@ class PhoneAccessibility : AccessibilityService() {
             JSONObject().put("event_revision", eventRevision.get())
         }
     }
-    private data class Snapshot(val owner: String, val created: Long, val nodes: Map<String, AccessibilityNodeInfo>, val rows: Map<String, JSONObject>, val scope: String)
+    private data class Snapshot(val owner: String, val created: Long, val nodes: Map<String, AccessibilityNodeInfo>, val rows: Map<String, JSONObject>, val stable: Map<String, JSONObject>, val scope: String)
     private val snapshots = linkedMapOf<String, Snapshot>()
     @Synchronized fun clearSnapshots(owner: String? = null) {
         snapshots.entries.removeAll { entry ->
@@ -71,8 +71,10 @@ class PhoneAccessibility : AccessibilityService() {
     @Synchronized fun observe(limit: Int = 400, owner: String = "direct", options: JSONObject = JSONObject()): JSONObject {
         val now = android.os.SystemClock.elapsedRealtime()
         snapshots.entries.filter { now - it.value.created > 30_000 }.map { it.key }.forEach(::removeSnapshot)
-        while (snapshots.values.count { it.owner == owner } >= 4) removeSnapshot(snapshots.entries.first { it.value.owner == owner }.key)
-        while (snapshots.size >= 32) removeSnapshot(snapshots.keys.first())
+        // Keep enough short-lived history that ordinary reads between two delta calls do
+        // not silently evict the changed_since baseline.
+        while (snapshots.values.count { it.owner == owner } >= 16) removeSnapshot(snapshots.entries.first { it.value.owner == owner }.key)
+        while (snapshots.size >= 64) removeSnapshot(snapshots.keys.first())
         val nodes = linkedMapOf<String, AccessibilityNodeInfo>()
         val snapshot = UUID.randomUUID().toString()
         val rows = JSONArray()
@@ -84,8 +86,9 @@ class PhoneAccessibility : AccessibilityService() {
         val contains = options.optJSONObject("_find")
         var occluders: List<Rect> = emptyList()
         var visited = 0; var truncated = false
+        val maxVisited = options.optInt("max_visited", 2400).coerceIn(100, 20_000)
         fun visit(node: AccessibilityNodeInfo, depth: Int) {
-            if (rows.length() >= limit || visited >= 2400 || depth > 35) { truncated = true; return }
+            if (rows.length() >= limit || visited >= maxVisited || depth > 35) { truncated = true; return }
             visited++
             val id = "n${nodes.size + 1}"; val rect = Rect(); node.getBoundsInScreen(rect)
             val visible = PhoneScreen.visible(rect, screen)
@@ -107,7 +110,7 @@ class PhoneAccessibility : AccessibilityService() {
                 nodes[id] = copy; rows.put(row)
             }
             for (i in 0 until node.childCount) {
-                if (rows.length() >= limit || visited >= 2400) { truncated = true; break }
+                if (rows.length() >= limit || visited >= maxVisited) { truncated = true; break }
                 val child = node.getChild(i) ?: continue
                 try { visit(child, depth + 1) } finally { @Suppress("DEPRECATION") child.recycle() }
             }
@@ -119,17 +122,22 @@ class PhoneAccessibility : AccessibilityService() {
             applications.firstOrNull { window -> window.root?.let { root -> try { root.packageName?.toString() == target } finally { @Suppress("DEPRECATION") root.recycle() } } == true }
                 ?: fail("window_not_found", "目标应用窗口不可见")
         } ?: foreground
-        occluders = if (selected != null && !options.optBoolean("include_system")) windows.filter { it.layer > selected.layer }
-            .map { Rect().also(it::getBoundsInScreen) }.filter { it.width() > 0 && it.height() > 0 } else emptyList()
+        // Our own agent overlay is presentation, not an interaction blocker. Focused
+        // system dialogs still count, while passive status bars/system surfaces do not.
+        val ownPackages = setOf(packageName, com.chuckiehelper.mobile.BuildConfig.SIBLING_PACKAGE)
+        occluders = if (selected != null && !options.optBoolean("include_system")) blockersAbove(selected.layer, ownPackages) else emptyList()
         val roots = if (options.optBoolean("include_system")) windows.mapNotNull { it.root }
             else listOfNotNull(selected?.root ?: rootInActiveWindow)
         val pkg = roots.firstOrNull()?.packageName?.toString().orEmpty()
         val foregroundPackage = foreground?.root?.let { root -> try { root.packageName?.toString() } finally { @Suppress("DEPRECATION") root.recycle() } }.orEmpty()
         roots.forEach { try { visit(it, 0) } finally { @Suppress("DEPRECATION") it.recycle() } }
         val scope = JSONObject(options.toString()).apply { remove("changed_since"); remove("screenshot"); put("selected_window", selected?.id ?: -1); put("selected_package", pkg) }.toString()
-        val old = snapshots[options.optString("changed_since")]?.takeIf { it.owner == owner && it.scope == scope }
+        val baseId = options.optString("changed_since")
+        val base = if (baseId.isBlank()) null else snapshots[baseId]
+        val old = base?.takeIf { it.owner == owner && it.scope == scope }
         val indexed = (0 until rows.length()).associate { rows.getJSONObject(it).getString("node_id") to rows.getJSONObject(it) }
-        snapshots[snapshot] = Snapshot(owner, now, nodes, indexed, scope)
+        val stable = stableIndex(rows)
+        snapshots[snapshot] = Snapshot(owner, now, nodes, indexed, stable, scope)
         val signature = java.security.MessageDigest.getInstance("SHA-256").digest(rows.toString().toByteArray()).joinToString("") { "%02x".format(it) }
         val result = info.put("snapshot_id", snapshot).put("package", pkg).put("foreground_package", foregroundPackage.ifBlank { pkg }).put("nodes", rows)
             .put("backend", "accessibility").put("include_unimportant", options.optBoolean("include_unimportant", true)).put("node_actions", true)
@@ -140,8 +148,18 @@ class PhoneAccessibility : AccessibilityService() {
         if (options.has("changed_since")) {
             result.put("delta", old != null).put("reset", old == null)
             if (old != null) {
-                result.put("nodes", JSONArray(indexed.values.filter { old.rows[it.getString("node_id")]?.toString() != it.toString() }))
-                    .put("removed_nodes", JSONArray(old.rows.keys.filter { it !in indexed })).put("base_snapshot_id", options.getString("changed_since"))
+                val changed = stable.entries.filter { (key, row) -> old.stable[key]?.let { !sameNodeContent(it, row) } ?: true }.map { it.value }
+                val removed = old.stable.filterKeys { it !in stable }.values.map { it.optString("node_id") }
+                result.put("nodes", JSONArray(changed)).put("removed_nodes", JSONArray(removed))
+                    .put("added_nodes", stable.size - old.stable.keys.count { it in stable })
+                    .put("base_snapshot_id", baseId)
+            } else {
+                val reason = when {
+                    base == null -> "expired_or_evicted"
+                    base.owner != owner -> "owner_mismatch"
+                    else -> "scope_mismatch"
+                }
+                result.put("reset_reason", reason)
             }
         }
         options.optJSONArray("fields")?.let { requested ->
@@ -154,7 +172,28 @@ class PhoneAccessibility : AccessibilityService() {
         }
         return result
     }
+    private fun stableKey(row: JSONObject): String = listOf("package_name", "resource_id", "class", "text", "description", "bounds", "depth")
+        .joinToString("\u0000") { row.opt(it)?.toString().orEmpty() }
+    private fun stableIndex(rows: JSONArray): Map<String, JSONObject> {
+        val result = linkedMapOf<String, JSONObject>(); val duplicates = mutableMapOf<String, Int>()
+        for (i in 0 until rows.length()) {
+            val row = rows.getJSONObject(i); val base = stableKey(row)
+            val occurrence = (duplicates[base] ?: 0) + 1; duplicates[base] = occurrence
+            result[base + "\u0000#" + occurrence] = row
+        }
+        return result
+    }
+    private fun sameNodeContent(previous: JSONObject, current: JSONObject): Boolean =
+        listOf("package_name", "resource_id", "class", "text", "description", "bounds", "depth", "clickable", "editable", "enabled", "visible", "occluded", "tap_point")
+            .all { previous.opt(it)?.toString().orEmpty() == current.opt(it)?.toString().orEmpty() }
     private fun removeSnapshot(id: String) { snapshots.remove(id)?.nodes?.values?.forEach { @Suppress("DEPRECATION") it.recycle() } }
+    private fun windowPackage(window: AccessibilityWindowInfo): String = window.root?.let { root ->
+        try { root.packageName?.toString().orEmpty() } finally { @Suppress("DEPRECATION") root.recycle() }
+    }.orEmpty()
+    private fun blockersAbove(layer: Int, ownPackages: Set<String>): List<Rect> = windows.filter {
+        it.layer > layer && windowPackage(it) !in ownPackages &&
+            (it.type != AccessibilityWindowInfo.TYPE_SYSTEM || it.isFocused || it.isActive)
+    }.map { Rect().also(it::getBoundsInScreen) }.filter { it.width() > 0 && it.height() > 0 }
     @Synchronized fun node(id: String, snapshotId: String, owner: String = "direct"): AccessibilityNodeInfo {
         val snapshot = snapshots[snapshotId]
         if (snapshot == null || snapshot.owner != owner || android.os.SystemClock.elapsedRealtime() - snapshot.created > 30_000)
@@ -175,7 +214,7 @@ class PhoneAccessibility : AccessibilityService() {
             if (!target.isVisibleToUser || !target.isEnabled || PhoneScreen.visible(rect, Rect(0, 0, screen.getInt("screen_width"), screen.getInt("screen_height"))) == null)
                 fail("target_not_visible", "目标没有有效可见区域，请先滚动或重新观察")
             val targetWindow = windows.firstOrNull { it.id == target.windowId }
-            val blockers = if (targetWindow != null) windows.filter { it.layer > targetWindow.layer }.map { Rect().also(it::getBoundsInScreen) } else emptyList()
+            val blockers = if (targetWindow != null) blockersAbove(targetWindow.layer, setOf(packageName, com.chuckiehelper.mobile.BuildConfig.SIBLING_PACKAGE)) else emptyList()
             if (PhoneScreen.tapArea(PhoneScreen.visible(rect, Rect(0, 0, screen.getInt("screen_width"), screen.getInt("screen_height")))!!, blockers) == null)
                 fail("target_obscured", "目标被其他窗口完全遮挡，请先处理遮挡窗口")
             val action = if (args.optBoolean("long_press")) AccessibilityNodeInfo.ACTION_LONG_CLICK else AccessibilityNodeInfo.ACTION_CLICK
@@ -269,12 +308,12 @@ class PhoneAccessibility : AccessibilityService() {
         if (!done.await(5, TimeUnit.SECONDS)) fail("delivery_unknown", "手势回执超时，请观察后核对")
         return ok
     }
-    fun screenshot(): ByteArray {
-        if (Build.VERSION.SDK_INT >= 30) return screenshot30()
+    fun screenshot(maxEdge: Int = 1600, quality: Int = 80): ByteArray {
+        if (Build.VERSION.SDK_INT >= 30) return screenshot30(maxEdge, quality)
         fail("backend_unavailable", "无障碍截图需要 Android 11+")
     }
     @androidx.annotation.RequiresApi(30)
-    private fun screenshot30(): ByteArray {
+    private fun screenshot30(maxEdge: Int, quality: Int): ByteArray {
         val done = CountDownLatch(1); var result: ByteArray? = null; var error = -1
         takeScreenshot(0, mainExecutor, object : TakeScreenshotCallback {
             override fun onSuccess(shot: ScreenshotResult) {
@@ -282,9 +321,12 @@ class PhoneAccessibility : AccessibilityService() {
                     val wrapped = Bitmap.wrapHardwareBuffer(shot.hardwareBuffer, shot.colorSpace)
                     val bitmap = wrapped?.copy(Bitmap.Config.ARGB_8888, false)
                     wrapped?.recycle()
-                    if (bitmap != null) { val scale = minOf(1.0, 1600.0 / maxOf(bitmap.width, bitmap.height))
+                    if (bitmap != null) { val edge = maxEdge.coerceIn(320, 4096)
+                        val scale = minOf(1.0, edge.toDouble() / maxOf(bitmap.width, bitmap.height))
                         val small = Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
-                        result = java.io.ByteArrayOutputStream().use { small.compress(Bitmap.CompressFormat.JPEG, 80, it); it.toByteArray() }
+                        // Keep the requested resolution; repeated full-resolution captures
+                        // may hit the platform screenshot quota and surface screenshot_failed.
+                        result = java.io.ByteArrayOutputStream().use { small.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(30, 100), it); it.toByteArray() }
                         if (small !== bitmap) small.recycle(); bitmap.recycle()
                     }
                 } catch (_: Exception) { error = -1 }

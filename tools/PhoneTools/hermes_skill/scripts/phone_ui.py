@@ -1,5 +1,6 @@
 """RemoteTool schema 3 UI helpers. Actions return settled state; uncertain writes are never replayed."""
 import argparse
+import base64
 import json
 import re
 import sys
@@ -132,6 +133,7 @@ class UI:
             raise ValueError("timeout 必须大于零")
         if pattern is not None:
             condition["text_regex"] = pattern
+        # changed=True is a standalone wait: the server establishes its own baseline.
         deadline = time.monotonic() + timeout
         while True:
             remaining = max(1, int((deadline - time.monotonic()) * 1000))
@@ -233,12 +235,30 @@ class UI:
         return self._action("phone_key", {"key": name})
 
     def launch(self, package_name):
+        # Relaunching an app already in the foreground legitimately leaves the screen unchanged.
         return self._action("phone_launch_app", {"package_name": package_name},
-                            {"package_name": package_name, "stable_ms": 250, "timeout_ms": 10000})
+                            {"package_name": package_name, "stable_ms": 250, "timeout_ms": 10000,
+                             "require_change": False})
 
     def dump_text(self, minlen=1, backend="auto", include_unimportant=True):
         result = self.observe(mode="text", backend=backend, include_unimportant=include_unimportant)
         return [line for line in result.get("text", "").splitlines() if len(line) >= minlen]
+
+    def screenshot(self, path=None, backend="auto", **options):
+        """一次调用取图：服务端把图放在 content[type=image]，Phone.call 已并进 image_base64。"""
+        self.ensure_ui()
+        args = {"backend": backend, "explanation": "截取当前屏幕", **options}
+        result = self.p.call("phone_screenshot", args)
+        raw = result.get("image_base64") if isinstance(result, dict) else None
+        if not raw:
+            raise PhoneError("no_image", "截图没有图像数据；核对回执与后端权限", receipt=result)
+        data = base64.b64decode(raw)
+        if path:
+            with open(path, "wb") as fh:
+                fh.write(data)
+        return {"path": path, "bytes": len(data), "image_mime": result.get("image_mime"),
+                "image_width": result.get("image_width"), "image_height": result.get("image_height"),
+                "image_to_screen": result.get("image_to_screen")}
 
     def execute(self, steps, max_ms=15000, request_id=None):
         self.ensure_ui()

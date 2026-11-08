@@ -1,7 +1,7 @@
 ---
 name: android-phone-ui-automation
 description: 使用 RemoteTool 手机 MCP 操作 Android 应用，读取界面、点击、输入、滚动和验证结果。
-version: 3.1.2
+version: 3.1.5
 author: Hermes Agent
 license: MIT
 tags: [android, ui-automation, remote-tool, accessibility, mcp]
@@ -15,6 +15,8 @@ metadata:
 适用于用户授权的手机应用操作、页面读取、查询和消息处理。使用 RemoteTool schema 3 的 HTTP MCP；脚本不兼容旧服务。先读 references/protocol.md 了解身份、回执和错误处理。
 
 动作附带 wait_for 默认要求窗口或内容相对 state_before 发生变化，再判断条件；用目标页独有控件验证跳转。仅在预期界面不变时显式 require_change=false。独立 phone_wait 默认允许当前条件立即命中。revision 是同一 revision_epoch 内的跨窗口观察序号，增加不证明内容改变；查看 window_id/signature 和 state_changed。
+
+参数形状是最常见的误用来源：phone_observe 用 filter 缩小节点，不接受 selector；phone_find_nodes 同样接受 filter，也可用顶层 text/resource_id/description，不接受 selector，默认排除被遮挡节点，诊断时才传 include_occluded=true。动作优先使用唯一 selector，例如 {"selector":{"resource_id":"pkg:id/button"}}；不要把 resource_id/text 放在 phone_tap 或 phone_input_text 顶层。phone_tap 只能选择 selector、node_id+snapshot_id、x+y 三者之一；node_id 和 snapshot_id 必须成对来自同一次最新观察。return_state 只能是字符串 none/compact/text/raw；phone_wait 没有 return_state，总是返回新状态，并支持 changed=true 等待任意窗口/内容变化；独立等待会自行采集基线，不依赖 require_change。UI 调用必须串行，device_busy 时等待，不并发、不新建身份。invalid_arguments 的 details 会给出 accepted_arguments 和 suggestion，按建议修正后只重发一次。node_not_found 的 details.reason 区分 not_in_snapshot/not_visible/invalid_bounds；被遮挡目标返回 target_obscured，并带 candidates_found 与 occluded_candidates。深页面可用 max_visited 提高遍历预算；截图可用 max_edge/quality/full_resolution 提高小字清晰度。changed_since 使用内容稳定键对齐，node_id 重排不再造成全量差量；每个 owner 保留最多 16 份、总计 64 份快照（仍受 30 秒 TTL），reset=true 时查看 reset_reason 区分 expired_or_evicted/owner_mismatch/scope_mismatch。
 
 ## 接入
 

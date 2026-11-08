@@ -166,7 +166,7 @@ class PhoneAndroidActions(private val context: Context) {
         val output = java.io.ByteArrayOutputStream(); val buffer = ByteArray(8192)
         while (true) { val n = input.read(buffer); if (n < 0) break; if (output.size() + n > 2 * 1024 * 1024) fail("invalid_arguments", "File exceeds 2 MiB"); output.write(buffer, 0, n) }; return output.toByteArray()
     }
-    private fun accepted() = JSONObject().put("accepted", true).put("verified", false)
+    private fun accepted() = JSONObject().put("accepted", true)
     private fun onMain(action: () -> JSONObject): JSONObject {
         val done = java.util.concurrent.CountDownLatch(1); var result: JSONObject? = null; var error: Exception? = null
         Handler(Looper.getMainLooper()).post { try { result = action() } catch (e: Exception) { error = e } finally { done.countDown() } }

@@ -43,6 +43,7 @@ android {
             versionCode appBuildCode
             versionName appVersionName(versioning.fullVersionName)
             buildConfigField 'boolean', 'PHONE_COMPANION', 'false'
+            buildConfigField 'String', 'SIBLING_PACKAGE', '"com.chuckiehelper.phonecontrol"'
             manifestPlaceholders = [appLabel: 'RemoteTool', appIcon: '@mipmap/ic_launcher',
                 siblingPackage: 'com.chuckiehelper.phonecontrol', accessibilityLabel: 'RemoteTool 手机操控', notificationLabel: 'RemoteTool 手机通知',
                 xiaomiAppId: providers.gradleProperty('mobileXiaomiAppId').orElse('').get(),
@@ -54,6 +55,7 @@ android {
             versionCode appBuildCode
             versionName appVersionName(versioning.phoneVersionName)
             buildConfigField 'boolean', 'PHONE_COMPANION', 'true'
+            buildConfigField 'String', 'SIBLING_PACKAGE', '"com.chuckiehelper.mobile"'
             manifestPlaceholders = [appLabel: '手机操控', appIcon: '@drawable/ic_phone_control',
                 siblingPackage: 'com.chuckiehelper.mobile', accessibilityLabel: '手机操控 · 无障碍', notificationLabel: '手机操控 · 通知读取',
                 xiaomiAppId: providers.gradleProperty('phonecontrolXiaomiAppId').orElse('').get(),

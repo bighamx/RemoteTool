@@ -56,6 +56,68 @@ class PhoneObservationTest {
         assertFalse(result.toString().contains("Agent overlay"))
         assertTrue(service.observe(owner = "a", options = JSONObject().put("include_system", true)).toString().contains("Agent overlay"))
     }
+    @Test fun ownOverlayAndSystemWindowsDoNotMakeApplicationTargetsOccluded() {
+        val ownOverlay = node("Agent overlay").apply {
+            packageName = com.chuckiehelper.mobile.BuildConfig.APPLICATION_ID
+            setBoundsInScreen(Rect(0, 0, 1080, 2400))
+        }
+        val ownWindow = window(ownOverlay, 9, AccessibilityWindowInfo.TYPE_SYSTEM)
+        shadowOf(ownWindow).setBoundsInScreen(Rect(0, 0, 1080, 2400))
+        val system = window(node("System").apply { packageName = "android" }, 12, AccessibilityWindowInfo.TYPE_SYSTEM)
+        shadowOf(system).setBoundsInScreen(Rect(0, 0, 1080, 2400)); shadowOf(system).setFocused(false); shadowOf(system).setActive(false)
+        shadowOf(service).setWindows(listOf(ownWindow, system, window))
+        val row = service.observe(owner = "a").getJSONArray("nodes").getJSONObject(0)
+        assertFalse(row.getBoolean("occluded"))
+        assertTrue(row.has("tap_point"))
+    }
+    @Test fun focusedSystemDialogStillCountsAsAnOccluder() {
+        val dialog = node("始终允许").apply {
+            packageName = "com.miui.securitycenter"
+            setBoundsInScreen(Rect(0, 0, 1080, 2400))
+        }
+        val dialogWindow = window(dialog, 12, AccessibilityWindowInfo.TYPE_SYSTEM)
+        shadowOf(dialogWindow).setBoundsInScreen(Rect(0, 0, 1080, 2400))
+        shadowOf(service).setWindows(listOf(dialogWindow, window))
+        val row = service.observe(owner = "a").getJSONArray("nodes").getJSONObject(0)
+        assertTrue(row.getBoolean("occluded"))
+        assertFalse(row.has("tap_point"))
+    }
+    @Test fun selectorExplainsMissingInvisibleInvalidAndOccludedTargets() {
+        fun error(rows: List<JSONObject>): PhoneToolError = assertThrows(PhoneToolError::class.java) {
+            PhoneSelectors.unique(JSONObject().put("nodes", org.json.JSONArray(rows)).put("package", "target.app"), JSONObject().put("text", "目标"))
+        }
+        val missing = error(emptyList())
+        assertEquals("node_not_found", missing.code)
+        assertEquals("not_in_snapshot", missing.details!!.getString("reason"))
+        assertEquals(0, missing.details!!.getInt("candidates_found"))
+
+        val invisible = error(listOf(JSONObject().put("text", "目标").put("visible", false).put("bounds_valid", true).put("occluded", false)))
+        assertEquals("not_visible", invisible.details!!.getString("reason"))
+        assertEquals(1, invisible.details!!.getInt("candidates_found"))
+
+        val invalid = error(listOf(JSONObject().put("text", "目标").put("visible", true).put("bounds_valid", false).put("occluded", false)))
+        assertEquals("invalid_bounds", invalid.details!!.getString("reason"))
+
+        val covered = error(listOf(JSONObject().put("text", "目标").put("visible", true).put("bounds_valid", true).put("occluded", true)))
+        assertEquals("target_obscured", covered.code)
+        assertEquals("occluded", covered.details!!.getString("reason"))
+        assertEquals(1, covered.details!!.getInt("occluded_candidates"))
+    }
+    @Test fun deltaUsesStableContentWhenNodeIdsShiftAfterInsertion() {
+        val first = node("第一项")
+        val second = node("第二项")
+        shadowOf(first).setAccessibilityWindowInfo(window); shadowOf(second).setAccessibilityWindowInfo(window)
+        shadowOf(root).addChild(first); shadowOf(root).addChild(second)
+        val before = service.observe(owner = "a", options = JSONObject().put("mode", "raw"))
+        val inserted = node("新增项")
+        shadowOf(inserted).setAccessibilityWindowInfo(window); shadowOf(root).addChild(inserted)
+        val after = service.observe(owner = "a", options = JSONObject().put("mode", "raw").put("changed_since", before.getString("snapshot_id")))
+        assertTrue(after.getBoolean("delta"))
+        val changed = after.getJSONArray("nodes")
+        assertTrue(changed.toString(), changed.length() < 3)
+        assertEquals("新增项", (0 until changed.length()).map { changed.getJSONObject(it).getString("text") }.single { it == "新增项" })
+        assertEquals(0, after.getJSONArray("removed_nodes").length())
+    }
     @Test fun filteredObservationProjectionAndDeltaPreserveFreshOwnership() {
         val child = node("价格5999")
         shadowOf(child).setAccessibilityWindowInfo(window); shadowOf(root).addChild(child)
@@ -130,6 +192,51 @@ class PhoneObservationTest {
         val third = service.observe(owner = "a")
         assertTrue(third.getLong("revision") > second.getLong("revision"))
         assertFalse(PhoneExecution.changed(second, third))
+    }
+    @Test fun standaloneWaitChangedCreatesItsOwnBaseline() {
+        engine.invoke("phone_begin_ui", JSONObject(), "begin", agentId = "a")
+        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val changed = worker.submit {
+            Thread.sleep(350)
+            shadowOf(service).setWindows(listOf(window(node("等待后变化"), 7, AccessibilityWindowInfo.TYPE_APPLICATION)))
+        }
+        try {
+            val receipt = engine.invoke("phone_wait", JSONObject().put("changed", true).put("timeout_ms", 3000), "wait-any-change", agentId = "a")
+            assertFalse(receipt.toString(), receipt.getBoolean("isError"))
+            val result = receipt.getJSONObject("structuredContent")
+            assertTrue(result.toString(), result.getBoolean("matched"))
+            assertTrue(result.getBoolean("state_changed"))
+            assertEquals(7, result.getInt("window_id"))
+        } finally { changed.get(); worker.shutdownNow() }
+    }
+    @Test fun deltaBaselineSurvivesInterveningObservationsAndExplainsReset() {
+        val baseline = service.observe(owner = "a", options = JSONObject().put("mode", "raw"))
+        repeat(6) { service.observe(owner = "a", options = JSONObject().put("mode", "raw")) }
+        val kept = service.observe(owner = "a", options = JSONObject().put("mode", "raw").put("changed_since", baseline.getString("snapshot_id")))
+        assertTrue(kept.getBoolean("delta")); assertFalse(kept.getBoolean("reset"))
+        val other = service.observe(owner = "b", options = JSONObject().put("mode", "raw").put("changed_since", baseline.getString("snapshot_id")))
+        assertTrue(other.getBoolean("reset")); assertEquals("owner_mismatch", other.getString("reset_reason"))
+        val missing = service.observe(owner = "a", options = JSONObject().put("mode", "raw").put("changed_since", "missing-snapshot"))
+        assertTrue(missing.getBoolean("reset")); assertEquals("expired_or_evicted", missing.getString("reset_reason"))
+    }
+    @Test fun waitChangedMatchesAnyWindowChangeWithoutAPattern() {
+        engine.invoke("phone_begin_ui", JSONObject(), "begin", agentId = "a")
+        val next = window(node("加载完成后的页面"), 7, AccessibilityWindowInfo.TYPE_APPLICATION)
+        shadowOf(root).setOnPerformActionListener { _, _ -> clicks.incrementAndGet(); shadowOf(service).setWindows(listOf(next)); true }
+        val args = JSONObject().put("selector", JSONObject().put("text", "点击"))
+            .put("wait_for", JSONObject().put("changed", true).put("timeout_ms", 3000))
+        val result = engine.invoke("phone_tap", args, "changed-any", agentId = "a").getJSONObject("structuredContent")
+        assertTrue(result.getBoolean("matched"))
+        assertEquals(7, result.getJSONObject("state").getInt("window_id"))
+    }
+    @Test fun findNodesAcceptsFilterAndRaisesTraversalBudget() {
+        engine.invoke("phone_begin_ui", JSONObject(), "begin", agentId = "a")
+        val found = engine.invoke("phone_find_nodes", JSONObject().put("filter", JSONObject().put("text", "点击")).put("max_visited", 5000), "find-filter", agentId = "a")
+            .getJSONObject("structuredContent")
+        assertEquals(1, found.getJSONArray("nodes").length())
+        assertEquals("点击", found.getJSONArray("nodes").getJSONObject(0).getString("text"))
+        val invalid = engine.invoke("phone_observe", JSONObject().put("max_visited", 20), "bad-visited", agentId = "a")
+        assertEquals("invalid_arguments", invalid.getJSONObject("structuredContent").getString("code"))
     }
     @Test fun observationBudgetsReportNormalizationWithoutIntegerOverflow() {
         engine.invoke("phone_begin_ui", JSONObject(), "begin", agentId = "a")

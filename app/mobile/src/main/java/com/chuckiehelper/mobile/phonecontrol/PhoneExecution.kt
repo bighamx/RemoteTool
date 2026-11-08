@@ -7,6 +7,7 @@ internal object PhoneExecution {
     val actions = setOf("phone_tap", "phone_input_text", "phone_key", "phone_swipe", "phone_gesture", "phone_ui_action", "phone_launch_app")
     val batchTools = actions + setOf("phone_observe", "phone_find_nodes", "phone_wait", "phone_get_capabilities")
     fun validateObservation(args: JSONObject) {
+        if (args.has("max_visited")) require(args.get("max_visited") is Number && args.getInt("max_visited") in 100..20000) { "max_visited must be 100–20000" }
         if (args.has("backend")) require(args.getString("backend") in setOf("auto", "accessibility", "uiautomator")) { "backend must be auto/accessibility/uiautomator" }
         if (args.has("privilege_backend")) require(args.getString("privilege_backend") in setOf("auto", "shizuku", "root")) { "privilege_backend must be auto/shizuku/root" }
         if (args.has("include_unimportant")) require(args.get("include_unimportant") is Boolean)
@@ -37,10 +38,19 @@ internal object PhoneExecution {
         }
         args.optJSONObject("wait_for")?.let(::validateWait)
         if (args.has("return_state")) require(args.getString("return_state") in setOf("none", "compact", "text", "raw")) { "Invalid return_state" }
+        if (args.has("screenshot")) require(args.get("screenshot") is Boolean) { "screenshot must be boolean" }
+        if (args.has("full_resolution")) require(args.get("full_resolution") is Boolean) { "full_resolution must be boolean" }
+        if (args.has("max_edge")) require(args.get("max_edge") is Number && args.getInt("max_edge") in 320..4096) { "max_edge must be 320–4096" }
+        if (args.has("quality")) require(args.get("quality") is Number && args.getInt("quality") in 30..100) { "quality must be 30–100" }
     }
     fun validateWait(args: JSONObject) {
-        require(args.keys().asSequence().all { it in setOf("text", "text_regex", "package_name", "selector", "absent", "stable_ms", "timeout_ms", "require_change", "explanation") }) { "Unknown wait condition" }
+        val accepted = setOf("text", "text_regex", "package_name", "selector", "absent", "stable_ms", "timeout_ms", "require_change", "changed", "explanation")
+        val unknown = args.keys().asSequence().filter { it !in accepted }.toList()
+        if (unknown.isNotEmpty()) throw PhoneToolError("invalid_arguments", "Unknown wait condition: ${unknown.joinToString(", ")}", JSONObject()
+            .put("accepted_arguments", JSONArray(accepted.sorted().toList())).put("argument", unknown.first())
+            .put("suggestion", if ("return_state" in unknown) "Remove return_state from wait_for/phone_wait; the returned state is always fresh." else "Use only documented wait conditions."))
         if (args.has("require_change")) require(args.get("require_change") is Boolean)
+        if (args.has("changed")) require(args.get("changed") is Boolean)
         for (key in listOf("text", "text_regex", "package_name")) if (args.has(key)) require(args.get(key) is String)
         if (args.has("text_regex")) PhoneSelectors.validate(JSONObject().put("text_regex", args.getString("text_regex")))
         args.optJSONObject("selector")?.let(PhoneSelectors::validate)
@@ -48,7 +58,9 @@ internal object PhoneExecution {
         if (args.has("absent")) require(args.get("absent") is Boolean && args.has("selector")) { "absent requires selector" }
         for ((key, range) in listOf("stable_ms" to 0..2000, "timeout_ms" to 1..10000)) if (args.has(key))
             require(args.get(key) is Number && args.getDouble(key) == args.getInt(key).toDouble() && args.getInt(key) in range) { "Invalid $key" }
-        require(args.has("text") || args.has("text_regex") || args.has("selector") || args.has("package_name") || args.optInt("stable_ms") > 0) { "需要等待条件或 stable_ms" }
+        if (!(args.has("text") || args.has("text_regex") || args.has("selector") || args.has("package_name") || args.optBoolean("changed") || args.optInt("stable_ms") > 0))
+            throw PhoneToolError("invalid_arguments", "wait_for requires text, text_regex, package_name, selector, changed=true, or stable_ms > 0", JSONObject()
+                .put("accepted_arguments", JSONArray(accepted.sorted().toList())).put("suggestion", "Use changed=true to wait for any window/content change, or provide a destination-specific condition."))
     }
     fun validateBatch(args: JSONObject): List<Pair<String, JSONObject>> {
         val steps = args.getJSONArray("steps")

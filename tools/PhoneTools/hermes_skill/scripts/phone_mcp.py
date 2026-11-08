@@ -256,7 +256,14 @@ class Phone:
             params = {"protocolVersion": PROTO, "capabilities": {}, "clientInfo": {"name": self.client_name, "version": "1.2"}}
             if cached.get("resume_token"):
                 params["_meta"] = {"remotetool/resume_token": cached["resume_token"]}
-            _, headers, body = self._http({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params})
+            # Connection-level failure before any tool call is safe to retry once.
+            try:
+                _, headers, body = self._http({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params})
+            except PhoneError as error:
+                if error.code != "unreachable":
+                    raise
+                time.sleep(0.8)
+                _, headers, body = self._http({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params})
             msg = _parse(body)
             if "error" in msg:
                 error = msg["error"]
@@ -306,8 +313,15 @@ class Phone:
             raise PhoneError(str((err.get("data") or {}).get("code") or err.get("code")),
                              err.get("message", ""), receipt={"operation_id": request_id, **(err.get("data") or {})})
         res = msg.get("result", {})
+        # 服务端把截图放在 content[type=image]，structuredContent 只有元数据；
+        # 不取的话看起来就像「截图只回元数据」，其实图在 content 里。
+        images = [c for c in (res.get("content") or []) if c.get("type") == "image" and c.get("data")]
         if res.get("structuredContent") is not None:
             sc = res["structuredContent"]
+            if images:
+                sc = dict(sc)
+                sc["image_base64"] = images[0]["data"]
+                sc.setdefault("image_mime", images[0].get("mimeType") or "image/jpeg")
             # 服务端把部分失败也放在 structuredContent 里（如 ui_ownership_required），统一转成异常
             if sc.get("connection_closed_by_user"):
                 raise PhoneError("connection_closed_by_user", sc.get("connection_message", "用户已断开"), receipt=sc)
@@ -318,6 +332,9 @@ class Phone:
         text = "\n".join(c.get("text", "") for c in res.get("content", []) if c.get("type") == "text")
         if res.get("isError"):
             raise PhoneError("operation_failed", text, receipt={"operation_id": request_id})
+        if images:
+            return {"text": text, "image_base64": images[0]["data"],
+                    "image_mime": images[0].get("mimeType") or "image/jpeg"}
         return text
 
     def dispose(self, end_ui=True, disconnect=True):

@@ -68,8 +68,28 @@ internal object PhoneSelectors {
     fun rows(data: JSONObject): List<JSONObject> = data.getJSONArray("nodes").let { rows -> (0 until rows.length()).map { rows.getJSONObject(it) } }
     fun unique(data: JSONObject, selector: JSONObject): JSONObject {
         validate(selector)
-        val matches = rows(data).filter { matches(it, selector) && it.optBoolean("visible") && it.optBoolean("bounds_valid") && !it.optBoolean("occluded") }
-        if (matches.isEmpty()) fail("node_not_found", "未找到可见且边界有效的目标，请重新观察或滚动")
+        val candidates = rows(data).filter { matches(it, selector) }
+        val matches = candidates.filter { it.optBoolean("visible") && it.optBoolean("bounds_valid") && !it.optBoolean("occluded") }
+        if (matches.isEmpty()) {
+            val details = JSONObject().put("candidates_found", candidates.size)
+                .put("visible_candidates", candidates.count { it.optBoolean("visible") })
+                .put("bounds_valid_candidates", candidates.count { it.optBoolean("bounds_valid") })
+                .put("occluded_candidates", candidates.count { it.optBoolean("occluded") })
+            if (candidates.isEmpty()) {
+                details.put("reason", "not_in_snapshot")
+                throw PhoneToolError("node_not_found", "当前快照中没有匹配的节点；目标可能不在屏幕内、被过滤或需要滚动", details)
+            }
+            if (candidates.none { it.optBoolean("visible") }) {
+                details.put("reason", "not_visible")
+                throw PhoneToolError("node_not_found", "匹配节点当前不可见；请滚动、切换窗口或重新观察", details)
+            }
+            if (candidates.none { it.optBoolean("bounds_valid") }) {
+                details.put("reason", "invalid_bounds")
+                throw PhoneToolError("node_not_found", "匹配节点的屏幕边界无效；请重新观察，不要按旧坐标点击", details)
+            }
+            details.put("reason", "occluded")
+            throw PhoneToolError("target_obscured", "匹配节点被其他窗口遮挡；请先处理遮挡窗口或改用可见目标", details)
+        }
         if (matches.size != 1) fail("ambiguous_target", "匹配到 ${matches.size} 个目标，请补充 resource_id、文字或窗口条件")
         return matches.single()
     }

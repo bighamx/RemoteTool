@@ -19,12 +19,14 @@ class PhoneShellService : IPhoneShell.Stub() {
     override fun destroy() { kotlin.system.exitProcess(0) }
     override fun execute(argv: Array<out String>, timeoutMs: Int): String = PhoneProcesses.run(argv.toList(), timeoutMs).toString()
     override fun screenshot(): ByteArray = PhoneProcesses.capture(listOf("screencap", "-p"))
+    override fun screenshotWithOptions(maxEdge: Int, quality: Int): ByteArray =
+        PhoneProcesses.capture(listOf("screencap", "-p"), maxEdge, quality)
     override fun installApk(source: ParcelFileDescriptor, length: Long, timeoutMs: Int): String =
         ParcelFileDescriptor.AutoCloseInputStream(source).use { PhoneProcesses.install(it, length, timeoutMs, false).toString() }
 }
 
 internal object PhoneProcesses {
-    fun capture(argv: List<String>): ByteArray {
+    fun capture(argv: List<String>, maxEdge: Int = 1280, quality: Int = 65): ByteArray {
         val process = ProcessBuilder(argv).start(); var data: ByteArray? = null; var failure: Exception? = null
         val reader = thread(isDaemon = true) {
             try { process.inputStream.use { input ->
@@ -42,9 +44,10 @@ internal object PhoneProcesses {
         if (process.exitValue() != 0 || data?.isNotEmpty() != true) fail("screenshot_failed", "特权截图失败")
         // Binder transactions are bounded: resize/compress inside the privileged process.
         val bitmap = android.graphics.BitmapFactory.decodeByteArray(data, 0, data!!.size) ?: fail("screenshot_failed", "截图格式无效")
-        val scale = minOf(1.0, 1280.0 / maxOf(bitmap.width, bitmap.height))
+        val edge = maxEdge.coerceIn(320, 4096)
+        val scale = minOf(1.0, edge.toDouble() / maxOf(bitmap.width, bitmap.height))
         val small = android.graphics.Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
-        return java.io.ByteArrayOutputStream().use { out -> small.compress(android.graphics.Bitmap.CompressFormat.JPEG, 65, out)
+        return java.io.ByteArrayOutputStream().use { out -> small.compress(android.graphics.Bitmap.CompressFormat.JPEG, quality.coerceIn(30, 100), out)
             if (small !== bitmap) small.recycle(); bitmap.recycle(); out.toByteArray() }
     }
     fun run(argv: List<String>, timeoutMs: Int): JSONObject {
@@ -104,12 +107,12 @@ class PhonePrivilege(private val context: Context, private val settings: PhoneSe
     @Synchronized fun close() { if (bound) runCatching { Shizuku.unbindUserService(args, connection, true) }; bound = false; shell = null }
     fun status() = JSONObject().put("shizuku", available()).put("shizuku_uid", runCatching { if (available()) Shizuku.getUid() else -1 }.getOrDefault(-1))
         .put("root_enabled", settings.root).put("user_service", shell != null)
-    fun screenshot(backend: String): ByteArray {
+    fun screenshot(backend: String, maxEdge: Int = 1280, quality: Int = 65): ByteArray {
         if (backend != "root" && available()) {
             if (shell == null) execute(listOf("true"), "shizuku")
-            return shell?.screenshot() ?: fail("backend_unavailable", "Shizuku 未就绪")
+            return shell?.screenshotWithOptions(maxEdge, quality) ?: fail("backend_unavailable", "Shizuku 未就绪")
         }
-        if (settings.root && backend != "shizuku") return PhoneProcesses.capture(listOf("su", "-c", "screencap -p"))
+        if (settings.root && backend != "shizuku") return PhoneProcesses.capture(listOf("su", "-c", "screencap -p"), maxEdge, quality)
         fail("backend_unavailable", "没有可用截图后端")
     }
     fun install(file: java.io.File, backend: String, timeoutMs: Int): JSONObject {

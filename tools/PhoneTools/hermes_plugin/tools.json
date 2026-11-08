@@ -22,7 +22,7 @@
   },
   {
     "name": "phone_begin_ui",
-    "description": "Acquire exclusive UI ownership on your EXISTING connection before reading or operating the screen. Declare your own client_name so the phone identifies the actual agent\/task. Reuse this same session for all UI calls; do not initialize a new session for each batch. On ui_busy wait or report the conflict, never create another identity to bypass it. Ends explicitly or after 5 idle minutes; duration_seconds is ignored.",
+    "description": "Acquire exclusive UI ownership on your EXISTING connection before reading or operating the screen. Do not send UI tools in parallel; device_busy means another call is still running. Declare your own client_name so the phone identifies the actual agent\/task. Reuse this same session for all UI calls; do not initialize a new session for each batch. On ui_busy wait or report the conflict, never create another identity to bypass it. Ends explicitly or after 5 idle minutes; duration_seconds is ignored.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -169,7 +169,7 @@
   },
   {
     "name": "phone_get_capabilities",
-    "description": "Get Android backend availability and screen information.",
+    "description": "Get Android backend availability, permission state, screen size and app version. Call once at task start; no UI ownership is required. This is a read-only call and may be retried once after a timeout with a new request_id if the original receipt is unavailable.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -239,11 +239,22 @@
         },
         "guard": {
           "type": "object",
-          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+          "description": "Precondition before acting: {package_name?: string, selector?: object}. A mismatch prevents execution.",
+          "examples": [
+            {
+              "package_name": "com.example.app"
+            }
+          ]
         },
         "return_state": {
           "type": "string",
-          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+          "description": "none\/compact\/text\/raw. Use compact normally; action returns a fresh state only when requested.",
+          "enum": [
+            "none",
+            "compact",
+            "text",
+            "raw"
+          ]
         }
       },
       "required": [
@@ -259,7 +270,7 @@
   },
   {
     "name": "phone_observe",
-    "description": "Read target application UI on your current UI ownership. Choose backend for collection and mode for output; these are independent. Compact\/text do not invent missing content. Coordinates are physical screen pixels; Accessibility node\/snapshot IDs expire in 30 seconds. UiAutomation IDs are read-only and cannot be used for node actions.",
+    "description": "Read target application UI on your current UI ownership. Use filter (not selector) to narrow nodes. Choose backend for collection and mode for output; these are independent. Compact\/text do not invent missing content. Coordinates are physical screen pixels; Accessibility node\/snapshot IDs expire in 30 seconds. UiAutomation IDs are read-only and cannot be used for node actions.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -269,10 +280,17 @@
         },
         "limit": {
           "type": "integer",
-          "description": "Output node budget, 1–600; filters apply before this limit. Response reports requested_limit/effective_limit; raw out-of-range requests are clamped.",
+          "description": "Output node budget, 1–600; filters apply before this limit. Response reports requested_limit\/effective_limit; raw out-of-range requests are clamped.",
           "minimum": 1,
           "maximum": 600,
           "default": 400
+        },
+        "max_visited": {
+          "type": "integer",
+          "description": "Maximum nodes traversed before stopping, 100–20000; default 2400. Raise for very deep pages when a filtered target is below the default traversal budget.",
+          "minimum": 100,
+          "maximum": 20000,
+          "default": 2400
         },
         "mode": {
           "type": "string",
@@ -293,7 +311,12 @@
         },
         "filter": {
           "type": "object",
-          "description": "Server filter: exact text\/description\/resource_id\/class\/package_name, text_contains\/text_regex, clickable\/editable\/visible."
+          "description": "Server-side node filter. Exact: text\/description\/resource_id\/class\/package_name. Contains\/regex: text_contains\/text_regex. Boolean: clickable\/editable\/visible. This is not an action selector.",
+          "examples": [
+            {
+              "resource_id": "com.example.app:id\/title"
+            }
+          ]
         },
         "changed_since": {
           "type": "string",
@@ -346,7 +369,7 @@
   },
   {
     "name": "phone_find_nodes",
-    "description": "Find UI nodes by text\/resource_id\/description; returns a fresh snapshot. Select backend and include_unimportant just as phone_observe; UiAutomation handles are read-only.",
+    "description": "Find UI nodes using the same filter syntax as phone_observe, optionally combined with top-level text\/resource_id\/description (case-insensitive contains). This tool does not accept selector. By default occluded matches are excluded so the result can be used as an action target; set include_occluded=true only for diagnostics. Select backend and include_unimportant just as phone_observe; UiAutomation handles are read-only.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -362,20 +385,41 @@
           "type": "string",
           "description": ""
         },
+        "filter": {
+          "type": "object",
+          "description": "Same server-side filter as phone_observe: exact text\/description\/resource_id\/class\/package_name, text_contains\/text_regex, clickable\/editable\/visible. Can be used alone or with the top-level contains conditions.",
+          "examples": [
+            {
+              "editable": true
+            }
+          ]
+        },
         "mode": {
           "type": "string",
           "description": "compact\/text\/raw output, independent of collection backend."
         },
         "limit": {
           "type": "integer",
-          "description": "Maximum 600 matching nodes. Response reports requested_limit/effective_limit; raw out-of-range requests are clamped.",
+          "description": "Maximum 600 matching nodes. Response reports requested_limit\/effective_limit; raw out-of-range requests are clamped.",
           "minimum": 1,
           "maximum": 600,
           "default": 400
         },
+        "max_visited": {
+          "type": "integer",
+          "description": "Maximum nodes traversed before stopping, 100–20000; default 2400. Raise when a filtered target is below the default traversal budget.",
+          "minimum": 100,
+          "maximum": 20000,
+          "default": 2400
+        },
         "package_name": {
           "type": "string",
           "description": ""
+        },
+        "include_occluded": {
+          "type": "boolean",
+          "description": "Default false: omit matches marked occluded so they are valid action candidates. true keeps them for diagnostics; such matches may be rejected by phone_tap.",
+          "default": false
         },
         "backend": {
           "type": "string",
@@ -417,7 +461,7 @@
   },
   {
     "name": "phone_tap",
-    "description": "Tap a unique fresh selector, node+snapshot, or physical screen x\/y. Invalid\/invisible bounds are rejected. Non-clickable labels may use their nearest valid clickable ancestor; no blind coordinate fallback. Use wait_for and return_state to combine action, conditional waiting and observation.",
+    "description": "Tap exactly one target mode: selector, node_id+snapshot_id, or x+y. Prefer a unique selector. Invalid\/invisible bounds are rejected. Non-clickable labels may use their nearest valid clickable ancestor; no blind coordinate fallback. Use wait_for and return_state to combine action, conditional waiting and observation.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -431,7 +475,13 @@
         },
         "selector": {
           "type": "object",
-          "description": ""
+          "description": "Unique target resolved on the phone immediately before tapping.",
+          "examples": [
+            {
+              "resource_id": "com.example.app:id\/button",
+              "text": "确定"
+            }
+          ]
         },
         "x": {
           "type": "number",
@@ -452,15 +502,32 @@
         },
         "guard": {
           "type": "object",
-          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+          "description": "Precondition before acting: {package_name?: string, selector?: object}. A mismatch prevents execution.",
+          "examples": [
+            {
+              "package_name": "com.example.app"
+            }
+          ]
         },
         "return_state": {
           "type": "string",
-          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+          "description": "none\/compact\/text\/raw. Use compact normally; action returns a fresh state only when requested.",
+          "enum": [
+            "none",
+            "compact",
+            "text",
+            "raw"
+          ]
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
+          "description": "Postcondition after the action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change(default true). Matching starts only after the window\/content changes from state_before unless require_change=false. Returns matched plus a fresh state. matched=false means timeout; the action is not replayed. Use a destination-specific condition.",
+          "examples": [
+            {
+              "text": "结果",
+              "timeout_ms": 6000
+            }
+          ]
         }
       },
       "required": [],
@@ -505,15 +572,32 @@
         },
         "guard": {
           "type": "object",
-          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+          "description": "Precondition before acting: {package_name?: string, selector?: object}. A mismatch prevents execution.",
+          "examples": [
+            {
+              "package_name": "com.example.app"
+            }
+          ]
         },
         "return_state": {
           "type": "string",
-          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+          "description": "none\/compact\/text\/raw. Use compact normally; action returns a fresh state only when requested.",
+          "enum": [
+            "none",
+            "compact",
+            "text",
+            "raw"
+          ]
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
+          "description": "Postcondition after the action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change(default true). Matching starts only after the window\/content changes from state_before unless require_change=false. Returns matched plus a fresh state. matched=false means timeout; the action is not replayed. Use a destination-specific condition.",
+          "examples": [
+            {
+              "text": "结果",
+              "timeout_ms": 6000
+            }
+          ]
         }
       },
       "required": [
@@ -532,7 +616,7 @@
   },
   {
     "name": "phone_input_text",
-    "description": "Set Unicode text using a unique selector, fresh node or focused input. append defaults to false. Use wait_for\/return_state for readback without a separate call.",
+    "description": "Set Unicode text using exactly one of: unique selector, node_id+snapshot_id, or the currently focused input. Do not pass top-level resource_id; wrap it in selector. append defaults to false. Use wait_for\/return_state for readback without a separate call.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -546,7 +630,12 @@
         },
         "selector": {
           "type": "object",
-          "description": ""
+          "description": "Unique editable target resolved on the phone immediately before typing.",
+          "examples": [
+            {
+              "resource_id": "com.example.app:id\/input"
+            }
+          ]
         },
         "text": {
           "type": "string",
@@ -563,15 +652,32 @@
         },
         "guard": {
           "type": "object",
-          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+          "description": "Precondition before acting: {package_name?: string, selector?: object}. A mismatch prevents execution.",
+          "examples": [
+            {
+              "package_name": "com.example.app"
+            }
+          ]
         },
         "return_state": {
           "type": "string",
-          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+          "description": "none\/compact\/text\/raw. Use compact normally; action returns a fresh state only when requested.",
+          "enum": [
+            "none",
+            "compact",
+            "text",
+            "raw"
+          ]
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
+          "description": "Postcondition after the action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change(default true). Matching starts only after the window\/content changes from state_before unless require_change=false. Returns matched plus a fresh state. matched=false means timeout; the action is not replayed. Use a destination-specific condition.",
+          "examples": [
+            {
+              "text": "结果",
+              "timeout_ms": 6000
+            }
+          ]
         }
       },
       "required": [
@@ -602,15 +708,32 @@
         },
         "guard": {
           "type": "object",
-          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+          "description": "Precondition before acting: {package_name?: string, selector?: object}. A mismatch prevents execution.",
+          "examples": [
+            {
+              "package_name": "com.example.app"
+            }
+          ]
         },
         "return_state": {
           "type": "string",
-          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+          "description": "none\/compact\/text\/raw. Use compact normally; action returns a fresh state only when requested.",
+          "enum": [
+            "none",
+            "compact",
+            "text",
+            "raw"
+          ]
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
+          "description": "Postcondition after the action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change(default true). Matching starts only after the window\/content changes from state_before unless require_change=false. Returns matched plus a fresh state. matched=false means timeout; the action is not replayed. Use a destination-specific condition.",
+          "examples": [
+            {
+              "text": "结果",
+              "timeout_ms": 6000
+            }
+          ]
         }
       },
       "required": [
@@ -641,15 +764,32 @@
         },
         "guard": {
           "type": "object",
-          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+          "description": "Precondition before acting: {package_name?: string, selector?: object}. A mismatch prevents execution.",
+          "examples": [
+            {
+              "package_name": "com.example.app"
+            }
+          ]
         },
         "return_state": {
           "type": "string",
-          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+          "description": "none\/compact\/text\/raw. Use compact normally; action returns a fresh state only when requested.",
+          "enum": [
+            "none",
+            "compact",
+            "text",
+            "raw"
+          ]
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
+          "description": "Postcondition after the action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change(default true). Matching starts only after the window\/content changes from state_before unless require_change=false. Returns matched plus a fresh state. matched=false means timeout; the action is not replayed. Use a destination-specific condition.",
+          "examples": [
+            {
+              "text": "结果",
+              "timeout_ms": 6000
+            }
+          ]
         }
       },
       "required": [
@@ -665,7 +805,7 @@
   },
   {
     "name": "phone_wait",
-    "description": "Wait for text\/regex, target foreground package, selector presence\/absence, and\/or stable UI signature. Checks only the application window; returns matched, matched_nodes and fresh state. Prefer this to fixed sleeps. Timeout never means success.",
+    "description": "Wait for text\/regex, target foreground package, selector presence\/absence, any window\/content change, and\/or stable UI signature. Checks only the application window; returns matched, matched_nodes and a fresh state. This tool has no return_state argument. Prefer this to fixed sleeps. Timeout never means success.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -683,11 +823,20 @@
         },
         "selector": {
           "type": "object",
-          "description": ""
+          "description": "Presence by default; set absent=true to wait for disappearance.",
+          "examples": [
+            {
+              "text": "加载完成"
+            }
+          ]
         },
         "absent": {
           "type": "boolean",
           "description": ""
+        },
+        "changed": {
+          "type": "boolean",
+          "description": "true waits for any window\/content signature change relative to the first observation; use when the destination content is unknown. A changed flag alone proves change, not that loading\/business work finished."
         },
         "stable_ms": {
           "type": "integer",
@@ -699,7 +848,7 @@
         },
         "require_change": {
           "type": "boolean",
-          "description": "Default false for standalone wait; true waits for window/content to change after its initial observation."
+          "description": "Default false for standalone wait; true waits for window\/content to change after its initial observation."
         },
         "explanation": {
           "type": "string",
@@ -1148,13 +1297,32 @@
   },
   {
     "name": "phone_screenshot",
-    "description": "Capture screen using accessibility or authorized Shizuku\/root. Returns JPEG image. backend: auto\/accessibility\/shizuku\/root. Protected windows may be unavailable.",
+    "description": "Capture screen using accessibility or authorized Shizuku\/root. Requires phone_begin_ui (screen reads are UI operations). Returns JPEG image. backend: auto\/accessibility\/shizuku\/root. max_edge defaults to 1600 (long edge); use full_resolution=true for OCR\/detail at the cost of bandwidth. Protected windows may be unavailable.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "backend": {
           "type": "string",
           "description": ""
+        },
+        "max_edge": {
+          "type": "integer",
+          "description": "Long-edge pixel limit, 320–4096; default 1600. Ignored when full_resolution=true.",
+          "minimum": 320,
+          "maximum": 4096,
+          "default": 1600
+        },
+        "quality": {
+          "type": "integer",
+          "description": "JPEG quality, 30–100; default 80.",
+          "minimum": 30,
+          "maximum": 100,
+          "default": 80
+        },
+        "full_resolution": {
+          "type": "boolean",
+          "description": "Default false. true uses the largest supported long edge (up to 4096) for OCR\/detail.",
+          "default": false
         },
         "explanation": {
           "type": "string",
@@ -1204,15 +1372,32 @@
         },
         "guard": {
           "type": "object",
-          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+          "description": "Precondition before acting: {package_name?: string, selector?: object}. A mismatch prevents execution.",
+          "examples": [
+            {
+              "package_name": "com.example.app"
+            }
+          ]
         },
         "return_state": {
           "type": "string",
-          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+          "description": "none\/compact\/text\/raw. Use compact normally; action returns a fresh state only when requested.",
+          "enum": [
+            "none",
+            "compact",
+            "text",
+            "raw"
+          ]
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
+          "description": "Postcondition after the action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change(default true). Matching starts only after the window\/content changes from state_before unless require_change=false. Returns matched plus a fresh state. matched=false means timeout; the action is not replayed. Use a destination-specific condition.",
+          "examples": [
+            {
+              "text": "结果",
+              "timeout_ms": 6000
+            }
+          ]
         }
       },
       "required": [
@@ -1248,15 +1433,32 @@
         },
         "guard": {
           "type": "object",
-          "description": "Precondition: package_name and\/or selector. A mismatch prevents execution."
+          "description": "Precondition before acting: {package_name?: string, selector?: object}. A mismatch prevents execution.",
+          "examples": [
+            {
+              "package_name": "com.example.app"
+            }
+          ]
         },
         "return_state": {
           "type": "string",
-          "description": "none\/compact\/text\/raw; action returns a fresh state when requested."
+          "description": "none\/compact\/text\/raw. Use compact normally; action returns a fresh state only when requested.",
+          "enum": [
+            "none",
+            "compact",
+            "text",
+            "raw"
+          ]
         },
         "wait_for": {
           "type": "object",
-          "description": "After action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change (default true). Requires window/content change from state_before before matching; set false only for intentionally unchanged UI. Returns matched + fresh state; timeout never repeats the action. Use destination-specific conditions; any content change does not prove navigation succeeded."
+          "description": "Postcondition after the action: text, text_regex, package_name, selector, absent, stable_ms(0..2000), timeout_ms(1..10000), require_change(default true). Matching starts only after the window\/content changes from state_before unless require_change=false. Returns matched plus a fresh state. matched=false means timeout; the action is not replayed. Use a destination-specific condition.",
+          "examples": [
+            {
+              "text": "结果",
+              "timeout_ms": 6000
+            }
+          ]
         }
       },
       "required": [

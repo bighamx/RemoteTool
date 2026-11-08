@@ -27,8 +27,11 @@ phone_observe 和 phone_find_nodes 将采集与输出分开：
 本项目统一使用 schema_version=3 的手机端、服务端和配套脚本，不保留旧服务执行分支。首次读取能力确认版本，版本不符时明确提示更新，不回退到旧接口。标准 MCP 协议仍协商 2025-11-25/06-18/03-26；协议版本协商与手机工具 Schema 是不同维度，扩展使用普通工具和 _meta。
 
 - phone_observe 默认 mode=compact，优先目标应用窗口，只输出有语义且可见的节点。mode=text 同时返回可读文本，mode=raw 用于诊断，include_system=true 显式包含系统及悬浮窗口。package_name 选择窗口，filter 做服务端过滤，fields 投影字段。truncated=true 表示达到输出或遍历上限，不能把“未返回”当作不存在。
+- phone_observe 使用 filter 过滤节点，不接受 selector；phone_find_nodes 使用顶层 text/resource_id/description（不区分大小写的包含匹配），也不接受 selector。selector 只用于 phone_tap、phone_input_text 等动作和 guard/wait_for 中的目标条件。
+- phone_find_nodes 默认不返回被遮挡节点，可直接作为动作目标；诊断遮挡时才传 include_occluded=true。响应中的 excluded_occluded 表示被排除数量。
 - 屏幕、截图和节点统一使用物理屏幕坐标。截图缩放后通过 image_to_screen.scale_x/scale_y 转换。raw_bounds 保留原始几何，bounds 是有效屏幕交集；bounds_valid=false 不可点击。occluded、tap_point 表示遮挡情况及未遮挡位置。不要把非法矩形强行钳制成点击点。
 - phone_tap、phone_input_text 支持 selector，由手机重新定位。选择器支持精确 text/description/resource_id/class/package_name、text_contains（文字或描述）、text_regex（文字或描述）、clickable/editable/visible。动作目标必须唯一，unique=false 不受支持；找不到、多个匹配、非法或遮挡目标均应重新观察，不自动猜坐标。
+- phone_tap 只能选择一种目标方式：selector、node_id+snapshot_id、或 x+y。node_id 和 snapshot_id 必须来自同一次最新观察并成对传入。不要把 resource_id 或 text 直接放在 phone_tap/phone_input_text 顶层；应写成 selector.resource_id 或 selector.text。
 - 点击、输入、滑动、按键、启动应用及节点动作支持 guard、wait_for、return_state。guard 是执行前条件，支持 package_name、selector；wait_for 是执行后条件，支持文字、正则、前台包名、选择器出现/消失及 stable_ms。return_state 为 none/compact/text/raw。
 
 一次点击、条件等待和回读的参数示例（替换为真实界面的选择器）：
@@ -43,11 +46,39 @@ phone_observe 和 phone_find_nodes 将采集与输出分开：
 
 phone_wait 可单独使用相同条件；selector 配合 absent=true 等待消失，stable_ms 范围 0–2000，timeout_ms 范围 1–10000。只判断目标窗口的快照签名，本应用面板刷新不影响它。稳定不等于业务成功，优先指定业务后置条件。返回 matched、新快照、wait_ms，选择器等待另带 matched_nodes。matched=false 表示超时，不代表前一个动作未执行。等待已返回新状态，不要再 sleep 后无条件重复 observe。
 
+phone_wait 没有 return_state 参数，它总是返回新状态。动作的 wait_for 是动作后的后置条件；单独 phone_wait 默认允许当前条件立即命中，只有显式 require_change=true 才要求页面从等待开始后发生变化。
+
+## 读取与截图选项
+
+- `phone_find_nodes` 也接受与 `phone_observe` 相同的 `filter`，可与顶层 `text/resource_id/description` 组合；默认排除遮挡节点。
+- `phone_observe` / `phone_find_nodes` 的 `max_visited` 控制遍历预算，范围 100–20000，默认 2400。深页面中 filter 目标未命中且 `truncated=true` 时可提高该值，而不是把“未返回”当成不存在。
+- `phone_screenshot` 支持 `max_edge`（320–4096，默认 1600）、`quality`（30–100，默认 80）和 `full_resolution=true`。默认省带宽；需要 OCR 小字时显式提高清晰度，并核对返回的实际图像尺寸与 `image_to_screen`。
+- `phone_wait` 支持 `changed=true`：只等待窗口或内容相对首次观察发生变化，适合不知道目标文案的加载结束场景。独立等待会自行采集基线；动作里的 `wait_for{changed:true}` 使用动作前快照。它只证明发生了变化，不证明业务完成。
+
+## 常见误用与修正
+
+| 现象 | 原因 | 正确做法 |
+| --- | --- | --- |
+| `invalid_arguments: Unknown argument: selector` | 把动作 selector 传给了 phone_observe | 改用 `filter`；需要查找时用 phone_find_nodes。 |
+| `invalid_arguments: Unknown argument: resource_id` | 把 resource_id 直接放在动作顶层 | 改为 `{"selector":{"resource_id":"pkg:id/control"}}`。 |
+| `invalid_arguments: return_state must be string` | 给 return_state 传了布尔值 | 传 `"compact"`、`"text"`、`"raw"` 或 `"none"`。 |
+| `invalid_arguments: Unknown argument: return_state` | 给 phone_wait 传了 return_state | 删除该参数；phone_wait 已返回新状态。 |
+| `device_busy` | 同一手机已有 UI/文件调用在执行，或调用被并发发出 | 串行等待后重试；不要新建 MCP 身份或抢占其他 Agent。 |
+| `ui_ownership_required` | 读取/操作界面前没有取得 UI 占用 | 在同一会话先调用 phone_begin_ui。 |
+| `window_not_found` | 目标应用未打开或不在可见窗口 | 先 phone_launch_app，再 observe；不要在应用未打开时反复带 package_name 读取。 |
+| `node_not_found` / `stale_snapshot` | 目标不存在、页面变化或快照超过 30 秒 | 重新 phone_observe，使用新 snapshot_id/node_id；补充唯一 selector 或滚动后重试。 |
+| `node_not_found` 且 `details.reason=not_visible/invalid_bounds` | 有匹配节点，但不可见或边界无效 | 滚动/切换窗口或重新观察；不要用旧坐标点击。 |
+| `target_obscured` | 匹配节点被其他应用窗口遮挡 | 查看 `details.candidates_found/occluded_candidates`；先返回或关闭遮挡窗口。 |
+| `postcondition_timeout` | 动作已提交，但未等到 wait_for 条件 | 检查返回 state 和 matched；用 phone_get_operation 或重新观察核对，不要重放动作。 |
+| `delivery_unknown` / 超时 | 操作可能已执行 | 用原 operation_id 查询回执或观察真实状态；禁止换 request_id 重放写操作。 |
+
+参数错误返回的 `structuredContent.details` 会包含 `accepted_arguments`，并对常见错误给出 `suggestion`。按建议修正后只重发一次；`invalid_arguments` 表示操作未开始，可安全修正重试。
+
 动作附带 wait_for 默认 require_change=true，先采集 state_before，再执行动作；执行后窗口或内容签名有变化且条件成立才命中。预期界面不变时显式设 false。独立 phone_wait 默认 false；显式 true 以等待开始时的观察为基线。条件应选择目标页面独有元素，宽泛的 WLAN|网络 等正则即使在变化后匹配也不能证明跳转完成。
 
 Accessibility revision 是同一 revision_epoch 内跨窗口递增的观察序号，不代表内容变化；窗口局部事件数另见 window_revision。核对动作前后使用 state_before 和 state 的 window_id/signature，观察先后使用 revision；不同 epoch、后端或查询范围不可直接比较。
 
-changed_since 接受本操作者的旧 snapshot_id。窗口和查询范围一致时返回 delta=true、变化的 nodes 和 removed_nodes；旧快照失效、窗口或范围变化时返回完整状态及 reset=true。后续动作使用新 snapshot_id，节点引用仍是 30 秒有效的临时引用。
+changed_since 接受本操作者的旧 snapshot_id。窗口和查询范围一致时返回 delta=true；差量按内容稳定键（package/resource_id/class/text/description/bounds/depth）对齐，不依赖每次重排的 node_id，返回变化的 nodes、removed_nodes 和 added_nodes。每个 owner 保留最多 16 份快照、总计 64 份，普通观察不会轻易挤掉短期基线；快照仍受 30 秒 TTL。reset=true 时 `reset_reason` 为 `expired_or_evicted`、`owner_mismatch` 或 `scope_mismatch`，据此重新观察，不要把 reset 当成页面变化。后续动作使用新 snapshot_id，节点引用仍是 30 秒有效的临时引用。
 
 ## 短流程与回执
 

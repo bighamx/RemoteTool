@@ -17,9 +17,10 @@ internal object PhoneUiDump {
         val mode = options.optString("mode", "compact")
         val target = options.optString("package_name")
         var pkg = ""; var visited = 0; var truncated = false
+        val maxVisited = options.optInt("max_visited", 2400).coerceIn(100, 20_000)
         while (parser.eventType != XmlPullParser.END_DOCUMENT) {
             if (parser.eventType == XmlPullParser.START_TAG && parser.name == "node") {
-                if (nodes.length() >= limit || visited >= 2400) { truncated = true; break }
+                if (nodes.length() >= limit || visited >= maxVisited) { truncated = true; break }
                 visited++
                 fun attr(key: String) = parser.getAttributeValue(null, key).orEmpty()
                 if (pkg.isEmpty()) pkg = attr("package")

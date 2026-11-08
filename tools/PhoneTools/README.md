@@ -6,7 +6,7 @@ Agent 可在 MCP initialize 中通过 clientInfo.name 声明显示名称，或�
 
 超级岛/Live Update 的短文本随当前动作更新，展开通知显示 Agent 名称、任务和操作说明。小米摘要模板左区只显示 Agent 名称（约 4 个汉字），右区显示动作（约 6 个汉字），小岛保留图标。有活跃小米岛模板时关闭 Android 通用 promotion，避免系统优先使用“图标 + 短文本”布局；没有活跃小米岛模板时再使用通用 Live Update（最多提交 7 个字符，左侧图标及可见长度由系统控制）。小米官方建议每区约 4 个中文字，本项目按实机空间放宽右区预算，超长仍可能缩小或裁切，不应将完整任务描述塞进摘要。小米模板是否生效取决于平台授权和系统渲染。参考：[Android Live Updates](https://developer.android.com/reference/android/app/Notification.Builder#setShortCriticalText(java.lang.String))、[小米摘要态设计规范](https://dev.mi.com/xiaomihyperos/documentation/detail?pId=2143)。
 
-新增 phone_execute 和 phone_get_operation，总目录为 30 个工具；以连接设备实际公布的工具为准。观察默认读取应用窗口的精简节点，可切换 text/raw、服务端过滤、字段投影及快照差量。屏幕与截图使用统一物理坐标，非法矩形不可点击，目标歧义或被完全遮挡时返回明确错误。
+新增 phone_execute 和 phone_get_operation，总目录为 30 个工具；以连接设备实际公布的工具为准。观察默认读取应用窗口的精简节点，可切换 text/raw、服务端过滤、字段投影及内容稳定键差量；node_id 重排不再造成全量返回。phone_find_nodes 支持 filter 和 max_visited；phone_wait 支持 changed=true；截图支持 max_edge/quality/full_resolution。屏幕与截图使用统一物理坐标，非法矩形不可点击，目标歧义或被完全遮挡时返回明确错误。
 
 `phone_launch_app` 启动后立即检查小米跨应用启动确认框，检测窗口为 600ms，界面事件唤醒并以最长 50ms 的间隔复查；只读取系统确认框窗口，不扫描底层应用。识别到系统“启动应用”弹窗、当前操控 App 和本次目标应用时直接点击“始终允许”。不固定屏幕坐标，不处理其他权限弹窗。回执 `launch_confirmation` 包含 `status`、`auto_approved`、`verified`；`verified` 仅表示目标已进入前台。无障碍不可用、没有该系统组件或未识别到弹窗时，不自动点击，原启动请求不会重发。主 App 和独立操控端共用此实现。
 

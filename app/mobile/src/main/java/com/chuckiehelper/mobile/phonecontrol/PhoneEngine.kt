@@ -78,11 +78,24 @@ class PhoneEngine(val context: Context) {
             if (!data.has("execution")) data.put("execution", if (data.optString("code") == "delivery_unknown") "unknown" else fallback)
             if (result.optBoolean("isError") && !data.has("retryable")) data.put("retryable", data.optString("code") in setOf("device_busy", "ui_busy") && data.optString("execution") == "not_started")
             if (result.optBoolean("isError") && !data.has("hint")) data.put("hint", when (data.optString("code")) {
-                "stale_snapshot", "node_not_found", "ambiguous_target", "target_not_visible", "node_not_actionable", "precondition_failed" -> "重新观察目标应用，选择唯一且可见的控件；不要猜坐标或盲目重发。"
-                "postcondition_timeout", "delivery_unknown" -> "动作可能已发生，请使用 operation_id 查询回执并核对界面，不要换新 ID 重发。"
+                "device_busy" -> "同一设备已有调用在执行。等待并串行重试；不要并发调用、新建身份或抢占其他 Agent。"
+                "ui_ownership_required" -> "先在同一 MCP 会话调用 phone_begin_ui，再读取或操作界面；不要新建会话绕过。"
+                "window_not_found" -> "目标应用当前不在可见窗口。先用 phone_launch_app 打开它，再观察；不要在应用未打开时带 package_name 反复读取。"
+                "stale_snapshot" -> "节点或快照已过期（30 秒）或页面已变化。重新 phone_observe，使用新 snapshot_id/node_id，不要沿用旧 ID。"
+                "node_not_found" -> "当前快照中没有匹配或可见的目标。查看 details.reason/candidates_found；先确认前台应用，用 filter/find 缩小范围、滚动后重新观察；不要猜坐标。"
+                "target_obscured" -> "目标被其他应用窗口遮挡。查看 details 的候选数量；先关闭/返回遮挡窗口或重新观察，不要按旧坐标点击。"
+                "ambiguous_target", "target_not_visible", "node_not_actionable" -> "目标不唯一、不可见或不可操作。重新观察并补充 resource_id/text，或使用可见的可点击祖先；不要猜坐标。"
+                "precondition_failed" -> "guard 条件不满足，操作未执行。重新观察当前前台应用和控件后再决定；不要绕过 guard 重试。"
+                "postcondition_timeout" -> "动作已提交但未等到目标条件。检查返回的 state/matched；用 phone_get_operation 或重新观察核对，不要重放动作。"
+                "delivery_unknown" -> "操作结果未知，可能已执行。先用同一 operation_id 查询回执或观察真实状态；不要换 request_id 重放写操作。"
+                "permission_required" -> "缺少对应 Android 权限或无障碍服务。读取 phone_get_capabilities 并向用户说明需要开启的具体权限；不要反复调用。"
+                "backend_unavailable" -> "所选后端不可用。读取 phone_get_capabilities；必要时改用 auto/accessibility，或请求用户启用 Shizuku/Root。"
+                "read_only_backend" -> "UiAutomation 节点只读。改用 backend=accessibility 重新观察后再执行节点动作。"
                 "connection_closed_by_user" -> "用户已断开，请停止；仅在用户明确要求继续后开始新任务。"
+                "invalid_arguments" -> "参数不符合工具 Schema。查看 details.accepted_arguments/suggestion，修正后只重发一次；未执行的操作可安全重试。"
                 else -> "核对返回的 code、权限及当前状态后再决定下一步。"
             })
+            if (result.optBoolean("isError") && data.optString("code") == "device_busy") data.put("retry_after_ms", 500)
             result.optJSONArray("content")?.optJSONObject(0)?.takeIf { it.optString("type") == "text" }?.put("text", data.toString())
         }
     }
@@ -198,7 +211,7 @@ class PhoneEngine(val context: Context) {
         } catch (error: Exception) { return errorResult(error) }
     }
     private fun execute(name: String, a: JSONObject, epoch: Long, deadline: Long, agentId: String): JSONObject {
-        fun accepted(ok: Boolean) = JSONObject().put("accepted", ok).put("verified", false).put("backend", "accessibility")
+        fun accepted(ok: Boolean) = JSONObject().put("accepted", ok).put("backend", "accessibility")
         fun service() = PhoneAccessibility.requireService()
         return when (name) {
             "phone_disconnect" -> {
@@ -241,20 +254,23 @@ class PhoneEngine(val context: Context) {
                 val query = JSONObject(a.toString())
                 if (name == "phone_find_nodes") {
                     val fields = listOf("text", "resource_id", "description").filter { a.has(it) }
-                    if (fields.isEmpty()) fail("invalid_arguments", "至少提供一个查询条件")
-                    query.put("_find", JSONObject().apply { fields.forEach { put(it, a.getString(it)) } })
+                    if (fields.isEmpty() && !a.has("filter")) fail("invalid_arguments", "至少提供一个 text/resource_id/description 或 filter 查询条件")
+                    if (fields.isNotEmpty()) query.put("_find", JSONObject().apply { fields.forEach { put(it, a.getString(it)) } })
                 }
                 val data = observe(agentId, query)
                 if (name == "phone_find_nodes") {
                     val fields = listOf("text", "resource_id", "description").filter { a.has(it) }
-                    if (fields.isEmpty()) fail("invalid_arguments", "至少提供一个查询条件")
-                    val rows = data.getJSONArray("nodes"); val matches = JSONArray()
+                    val rows = data.getJSONArray("nodes"); val matches = JSONArray(); var excluded = 0
                     for (i in 0 until rows.length()) { val row = rows.getJSONObject(i)
-                        if (fields.all { row.optString(it).contains(a.getString(it), true) }) matches.put(row) }
-                    data.put("nodes", matches)
+                        if (!fields.all { row.optString(it).contains(a.getString(it), true) }) continue
+                        if (row.optBoolean("occluded") && !a.optBoolean("include_occluded")) excluded++
+                        else matches.put(row) }
+                    data.put("nodes", matches).put("matched_nodes", matches.length())
+                        .put("excluded_occluded", excluded).put("include_occluded", a.optBoolean("include_occluded"))
                 }
                 if (a.optBoolean("screenshot")) {
-                    val bytes = if (PhoneAccessibility.current != null && android.os.Build.VERSION.SDK_INT >= 30) service().screenshot() else privilege.screenshot("auto")
+                    val edge = screenshotEdge(a); val quality = screenshotQuality(a)
+                    val bytes = if (PhoneAccessibility.current != null && android.os.Build.VERSION.SDK_INT >= 30) service().screenshot(edge, quality) else privilege.screenshot("auto", edge, quality)
                     data.put("image_base64", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("image_mime", "image/jpeg")
                 }
                 data
@@ -275,7 +291,8 @@ class PhoneEngine(val context: Context) {
                 val backend = a.optString("backend", "auto")
                 if (backend !in setOf("auto", "accessibility", "shizuku", "root")) fail("invalid_arguments", "Invalid screenshot backend")
                 val accessibility = backend == "accessibility" || backend == "auto" && PhoneAccessibility.current != null && android.os.Build.VERSION.SDK_INT >= 30
-                val bytes = if (accessibility) service().screenshot() else privilege.screenshot(backend)
+                val edge = screenshotEdge(a); val quality = screenshotQuality(a)
+                val bytes = if (accessibility) service().screenshot(edge, quality) else privilege.screenshot(backend, edge, quality)
                 JSONObject().put("image_base64", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("image_mime", "image/jpeg").put("coordinate_space", "original_screen_pixels")
                     .apply { val screen = PhoneScreen.info(context); screen.keys().forEach { put(it, screen.get(it)) } }
             }
@@ -295,8 +312,7 @@ class PhoneEngine(val context: Context) {
                 val intent = context.packageManager.getLaunchIntentForPackage(pkg) ?: fail("not_found", "应用不可见或没有启动入口")
                 context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 val confirmation = settleAppLaunch(pkg, agentId, epoch, deadline)
-                JSONObject().put("accepted", true).put("verified", confirmation.optBoolean("verified"))
-                    .put("package", pkg).put("launch_confirmation", confirmation)
+                JSONObject().put("accepted", true).put("package", pkg).put("launch_confirmation", confirmation)
             }
             "phone_wait" -> {
                 waitFor(a, agentId, epoch, deadline)
@@ -353,6 +369,9 @@ class PhoneEngine(val context: Context) {
                 .put("node_id", button.getString("node_id")), owner) },
             pause = { snapshot, ms -> accessibility.awaitChange(snapshot.optLong("event_revision"), ms) })
     }
+    private fun screenshotEdge(args: JSONObject): Int =
+        if (args.optBoolean("full_resolution")) 4096 else args.optInt("max_edge", 1600).coerceIn(320, 4096)
+    private fun screenshotQuality(args: JSONObject): Int = args.optInt("quality", 80).coerceIn(30, 100)
     private fun observe(owner: String, options: JSONObject = JSONObject()): JSONObject {
         PhoneExecution.validateObservation(options)
         val requestedLimit = options.optLong("limit", 400)
@@ -386,8 +405,8 @@ class PhoneEngine(val context: Context) {
         val end = minOf(deadline, System.currentTimeMillis() + condition.optLong("timeout_ms", 5000))
         var lastSignature = ""; var stableSince = android.os.SystemClock.elapsedRealtime()
         val begin = stableSince
-        val baseline = before ?: if (condition.optBoolean("require_change")) observe(owner) else null
         val requireChange = condition.optBoolean("require_change", before != null)
+        val baseline = before ?: if (requireChange || condition.optBoolean("changed")) observe(owner) else null
         while (true) {
             connectionLog.requireOpen(owner)
             if (generation != epoch || !settings.enabled) fail("cancelled", "控制已停止")
@@ -400,7 +419,9 @@ class PhoneEngine(val context: Context) {
             val signature = data.optString("signature", data.getJSONArray("nodes").toString())
             if (signature != lastSignature) { stableSince = now; lastSignature = signature }
             val changed = baseline != null && PhoneExecution.changed(baseline, data)
-            val matched = (!requireChange || changed) && PhoneExecution.matched(data, condition) && now - stableSince >= condition.optLong("stable_ms", 0)
+            val changedOnly = condition.optBoolean("changed")
+            val matched = if (changedOnly) changed && now - stableSince >= condition.optLong("stable_ms", 0)
+                else (!requireChange || changed) && PhoneExecution.matched(data, condition) && now - stableSince >= condition.optLong("stable_ms", 0)
             if (matched || System.currentTimeMillis() >= end) {
                 condition.optJSONObject("selector")?.let { selector -> data.put("matched_nodes", JSONArray(PhoneSelectors.rows(data).filter { PhoneSelectors.matches(it, selector) })) }
                 return data.put("matched", matched).put("wait_ms", now - begin).put("require_change", requireChange).put("state_changed", changed)

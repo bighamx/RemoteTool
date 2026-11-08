@@ -47,6 +47,15 @@ class PhoneReadingOptionsTest {
                 20, JSONObject().put("package_name", "target.app"), screen, "root")
         }
     }
+    @Test fun uiAutomationHonorsTraversalBudgetAndScreenshotOptionsAreValidated() {
+        val xml = """<hierarchy><node package="app" text="a" bounds="[0,0][10,10]"/><node package="app" text="b" bounds="[0,10][10,20]"/><node package="app" text="c" bounds="[0,20][10,30]"/></hierarchy>"""
+        val all = PhoneUiDump.parse(xml, 20, JSONObject().put("mode", "raw").put("max_visited", 100), screen, "root")
+        assertEquals(3, all.getJSONArray("nodes").length())
+        assertFalse(all.getBoolean("truncated"))
+        PhoneExecution.validateOptions(JSONObject().put("max_edge", 2400).put("quality", 92))
+        assertThrows(Exception::class.java) { PhoneExecution.validateOptions(JSONObject().put("max_edge", 100)) }
+        assertThrows(Exception::class.java) { PhoneExecution.validateOptions(JSONObject().put("quality", 101)) }
+    }
     @Test fun accessibilityCanRetainUnimportantTextWithoutExposingEmptyLayoutNoise() {
         val service = Robolectric.buildService(PhoneAccessibility::class.java).create().get()
         val root = AccessibilityNodeInfo.obtain().apply {
