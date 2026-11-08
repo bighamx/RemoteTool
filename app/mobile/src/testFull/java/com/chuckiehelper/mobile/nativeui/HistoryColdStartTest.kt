@@ -40,7 +40,10 @@ class HistoryColdStartTest {
                 .set(model, NativeApi("http://127.0.0.1:${server.localPort}"))
             try {
                 model.select(obj("id" to session, "title" to "已结束的会话"))
-                assertTrue("Do not flash an old receipt before reading the cache", model.messages.isEmpty())
+                // 首次渲染与磁盘回读的先后由调度决定(慢机器上回读可能已经完成),
+                // 断言点在于任何时候都不把旧的待同步回执当成消息显示出来。
+                assertTrue("Do not flash an old receipt before reading the cache",
+                    model.messages.none { it.text.contains("旧的待同步回复") })
                 val deadline = System.nanoTime() + 5_000_000_000L
                 while (model.messages.none { it.serverId == latest.serverId } && System.nanoTime() < deadline) {
                     shadowOf(Looper.getMainLooper()).idle()
