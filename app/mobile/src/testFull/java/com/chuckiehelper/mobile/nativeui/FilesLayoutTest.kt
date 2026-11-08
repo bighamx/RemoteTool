@@ -36,15 +36,18 @@ class FilesLayoutTest {
         val directory = JSONObject().put("data", JSONArray((0..99).map { index -> JSONObject()
             .put("name", "file-%03d.txt".format(index)).put("path", "D:/files/$index.txt")
             .put("isDirectory", false).put("size", index).put("modified", "2026-10-18T10:00:00") })).toString()
+        val bookmarks = JSONObject().put("items", JSONArray()).put("revision", 0).toString()
+        val responses = ArrayDeque(listOf(bookmarks, drive, directory))
         val responder = thread(isDaemon = true) {
-            try { listOf(drive, directory).forEach { response -> server.accept().use { socket ->
+            try { while (responses.isNotEmpty()) server.accept().use { socket ->
                 socket.soTimeout = 5000
                 val reader = socket.getInputStream().bufferedReader()
                 while (!reader.readLine().isNullOrEmpty()) { }
+                val response = responses.removeFirst()
                 socket.getOutputStream().apply {
                     write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${response.toByteArray().size}\r\nConnection: close\r\n\r\n" + response).toByteArray()); flush()
                 }
-            } } } catch (_: java.io.IOException) { }
+            } } catch (_: java.io.IOException) { }
         }
         try {
             val api = NativeApi("http://127.0.0.1:${server.localPort}")

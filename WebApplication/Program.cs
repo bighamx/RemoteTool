@@ -159,6 +159,7 @@ builder.Services.AddSingleton<HermesSessionActivity>();
 builder.Services.AddSingleton<CodexSessionActivity>();
 builder.Services.AddSingleton<HermesCompaction>();
             builder.Services.AddSingleton<HermesAttachments>();
+            builder.Services.AddSingleton<Services.RemoteControl.FileBookmarkStore>();
             builder.Services.AddSingleton<HermesNativeAttachments>();
             builder.Services.AddSingleton<CodexBridge>();
             builder.Services.AddSingleton<ITitleModelGateway>(services => services.GetRequiredService<CodexBridge>());

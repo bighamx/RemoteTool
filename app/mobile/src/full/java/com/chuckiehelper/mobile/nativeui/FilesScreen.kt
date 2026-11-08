@@ -73,6 +73,8 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onClose: (() -> Unit)
     var media by remember { mutableStateOf<JSONObject?>(null) }
     var menuFile by remember { mutableStateOf<JSONObject?>(null) }
     var gitOperation by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var bookmarks by remember { mutableStateOf<List<String>>(emptyList()) }
+    var bookmarksOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val fileRowHeight = (52f * androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)).dp
@@ -96,6 +98,17 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onClose: (() -> Unit)
             .putBoolean("descending", value.descending)
             .putBoolean("secondaryDescending", value.secondaryDescending)
             .putBoolean("foldersFirst", value.foldersFirst).apply()
+    }
+    fun applyBookmarks(value: JSONObject) {
+        bookmarks = value.optJSONArray("items")?.objects().orEmpty()
+            .mapNotNull { it.optString("path").takeIf(String::isNotBlank) }
+            .distinctBy { it.trimEnd('/', '\\').lowercase(java.util.Locale.ROOT) }
+            .take(100)
+    }
+    LaunchedEffect(api) {
+        try { applyBookmarks(api.json("/api/files/bookmarks")) }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { if (e !is LoginRequired) onError(e.message ?: "书签读取失败") }
     }
     var directoryPositions by rememberSaveable { mutableStateOf(hashMapOf<String, ArrayList<Int>>()) }
     val fileScroll = rememberSaveable(path, saver = LazyListState.Saver) {
@@ -512,6 +525,7 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onClose: (() -> Unit)
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                 if (selected.isEmpty()) {
                     FileToolbarButton("磁盘", Icons.Outlined.Storage, !busy, Modifier.weight(1f)) { navigate("") }
+                    FileToolbarButton("书签", Icons.Outlined.BookmarkBorder, !busy, Modifier.weight(1f)) { bookmarksOpen = true }
                     FileToolbarButton("上级", Icons.Outlined.ArrowUpward, !busy && path.isNotEmpty(), Modifier.weight(1f)) { navigate(parentPath(path)) }
                     FileToolbarButton("新建", Icons.Outlined.CreateNewFolder, !busy && path.isNotBlank(), Modifier.weight(1f)) { createKind = true }
                     FileToolbarButton("上传", Icons.Outlined.UploadFile, !busy && path.isNotBlank(), Modifier.weight(1f)) { uploader.launch(arrayOf("*/*")) }
@@ -530,6 +544,42 @@ fun FilesScreen(api: NativeApi, onError: (String) -> Unit, onClose: (() -> Unit)
                     }
                 }
             }
+        }
+    }
+    if (bookmarksOpen) {
+        ModalBottomSheet(onDismissRequest = { bookmarksOpen = false }) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text("书签", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                TextButton(enabled = !busy && path.isNotBlank(), onClick = {
+                    task {
+                        applyBookmarks(api.json(api.request("/api/files/bookmarks", obj("path" to path))))
+                        onError("已添加书签")
+                    }
+                }) { Text("添加当前路径") }
+            }
+            if (bookmarks.isEmpty()) Text("还没有书签", Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
+                items(bookmarks, key = { it }) { bookmark ->
+                    Row(Modifier.fillMaxWidth().heightIn(min = 50.dp).clickable {
+                        bookmarksOpen = false
+                        navigate(bookmark)
+                    }.padding(start = 18.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Folder, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text(bookmark, Modifier.weight(1f).padding(horizontal = 10.dp), maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        IconButton(enabled = !busy, onClick = {
+                            task {
+                                val target = "/api/files/bookmarks?path=${q(bookmark)}"
+                                applyBookmarks(api.json(api.request(target, null).newBuilder().delete().build()))
+                                onError("已移除书签")
+                            }
+                        }) { Icon(Icons.Outlined.Close, "移除书签") }
+                    }
+                    HorizontalDivider()
+                }
+            }
+            Spacer(Modifier.height(16.dp))
         }
     }
     if (editingPath) InputDialog("前往目录", "服务器上的目录路径", inputPath, { editingPath = false }) {

@@ -45,6 +45,18 @@
     <symbol id="icon-chevron-right" viewBox="0 0 24 24">
         <polyline points="9 18 15 12 9 6" />
     </symbol>
+    <symbol id="icon-file-storage" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="4" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="11" width="18" height="4" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="17" width="18" height="4" rx="2" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="icon-file-bookmark" viewBox="0 0 24 24"><path d="M6 4.5A1.5 1.5 0 0 1 7.5 3h9A1.5 1.5 0 0 1 18 4.5V21l-6-4-6 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-file-up" viewBox="0 0 24 24"><path d="M12 20V5M6.5 10.5 12 5l5.5 5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-file-create" viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 10v6M9 13h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="icon-file-upload" viewBox="0 0 24 24"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M12 16V3M7.5 7.5 12 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-file-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M18.5 12A7.5 7.5 0 0 0 6 7.5L4 10M5.5 12A7.5 7.5 0 0 0 18 16.5l2-2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="icon-file-folder" viewBox="0 0 24 24"><path d="M3.5 7A1.5 1.5 0 0 1 5 5.5h4l2 2h8A1.5 1.5 0 0 1 20.5 9v8A1.5 1.5 0 0 1 19 18.5H5A1.5 1.5 0 0 1 3.5 17z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-file-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="icon-file-move" viewBox="0 0 24 24"><path d="M3 12h14M13 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 5h3v14h-3" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="icon-file-compress" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM12 3v4M12 9v4M12 15v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="icon-file-delete" viewBox="0 0 24 24"><path d="M4 7h16M9 3h6l1 4H8zM7 7l1 14h8l1-14M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-file-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
 </svg>
 
 <div id="remote-page" class="page active">
@@ -532,12 +544,13 @@
                     <span>📂</span><strong>此目录为空</strong><small>可以从底部工具栏新建文件或上传内容</small>
                 </div>
             </div>
-            <div class="file-mobile-dock" id="file-mobile-dock" aria-label="文件操作">
-                <button type="button" id="mobile-file-disks" class="file-dock-btn"><span>▤</span><small>磁盘</small></button>
-                <button type="button" id="mobile-file-up" class="file-dock-btn"><span>↑</span><small>上级</small></button>
-                <button type="button" id="mobile-file-create" class="file-dock-btn"><span>＋</span><small>新建</small></button>
-                <button type="button" id="mobile-file-upload" class="file-dock-btn"><span>⇧</span><small>上传</small></button>
-                <button type="button" id="mobile-file-refresh" class="file-dock-btn"><span>↻</span><small>刷新</small></button>
+            <div class="file-mobile-dock" id="file-mobile-dock" aria-label="文件操作" aria-busy="false">
+                <button type="button" id="mobile-file-disks" class="file-dock-btn"><span class="file-dock-svg" aria-hidden="true"><svg><use href="#icon-file-storage"/></svg></span><small>磁盘</small></button>
+                <button type="button" id="mobile-file-bookmarks" class="file-dock-btn"><span class="file-dock-svg" aria-hidden="true"><svg><use href="#icon-file-bookmark"/></svg></span><small>书签</small></button>
+                <button type="button" id="mobile-file-up" class="file-dock-btn"><span class="file-dock-svg" aria-hidden="true"><svg><use href="#icon-file-up"/></svg></span><small>上级</small></button>
+                <button type="button" id="mobile-file-create" class="file-dock-btn"><span class="file-dock-svg" aria-hidden="true"><svg><use href="#icon-file-create"/></svg></span><small>新建</small></button>
+                <button type="button" id="mobile-file-upload" class="file-dock-btn"><span class="file-dock-svg" aria-hidden="true"><svg><use href="#icon-file-upload"/></svg></span><small>上传</small></button>
+                <button type="button" id="mobile-file-refresh" class="file-dock-btn"><span class="file-dock-svg" aria-hidden="true"><svg><use href="#icon-file-refresh"/></svg></span><small>刷新</small></button>
             </div>
         </div>
     </main>

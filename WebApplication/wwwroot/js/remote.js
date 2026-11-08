@@ -29,6 +29,10 @@ class RemoteControl {
         this.fileSortColumn = 'name';
         this.fileSortAsc = true;
         this.fileGroupFolders = localStorage.getItem('fileGroupFolders') !== 'false';
+        /** Authoritative bookmark list is scoped to this RemoteTool login on the server. */
+        this.serverBookmarks = [];
+        this.bookmarkRevision = 0;
+        this.bookmarkBusy = false;
         /** 当前目录下的图片文件列表，用于预览上一张/下一张 */
         this.currentDirImageFiles = [];
         this.previewImageIndex = -1;
@@ -111,6 +115,7 @@ class RemoteControl {
         this.checkAuth();
         // The file dock is static HTML; populate it before auth/network settles.
         this.updateMultiSelectToolbar();
+        void this.loadFileBookmarks();
 
         this.initDialog();
         this.initFilePicker();
@@ -272,21 +277,22 @@ class RemoteControl {
                 mobile.classList.toggle('selection-mode', this.multiSelectMode);
                 const buttons = this.multiSelectMode
                     ? [
-                        ['mobile-file-cancel','×','取消'], ['mobile-file-copy','⧉','复制'],
-                        ['mobile-file-move','↗','移动'], ['mobile-file-compress','⌑','压缩'],
-                        ['mobile-file-delete','⌫','删除'],
+                        ['mobile-file-cancel','close','取消'], ['mobile-file-copy','copy','复制'],
+                        ['mobile-file-move','move','移动'], ['mobile-file-compress','compress','压缩'],
+                        ['mobile-file-delete','delete','删除'],
                     ]
                     : [
-                        ['mobile-file-disks','▤','磁盘'], ['mobile-file-up','↑','上级'],
-                        ['mobile-file-create','＋','新建'], ['mobile-file-upload','⇧','上传'],
-                        ['mobile-file-refresh','↻','刷新'],
+                        ['mobile-file-disks','storage','磁盘'], ['mobile-file-bookmarks','bookmark','书签'],
+                        ['mobile-file-up','up','上级'], ['mobile-file-create','create','新建'],
+                        ['mobile-file-upload','upload','上传'], ['mobile-file-refresh','refresh','刷新'],
                     ];
                 mobile.innerHTML = buttons.map(([id,icon,label]) =>
-                    `<button type="button" id="${id}" class="file-dock-btn${id==='mobile-file-delete'?' danger':''}"><span>${icon}</span><small>${label}</small></button>`
+                    `<button type="button" id="${id}" class="file-dock-btn${id==='mobile-file-delete'?' danger':''}"><span class="file-dock-svg" aria-hidden="true"><svg><use href="#icon-file-${icon}"/></svg></span><small>${label}</small></button>`
                 ).join('');
                 const actions = {
-                    'mobile-file-disks': () => this.navigateToHome(), 'mobile-file-up': () => this.navigateBack(),
-                    'mobile-file-create': () => this.showMobileCreateSheet(), 'mobile-file-upload': () => this.showUploadPanel(),
+                    'mobile-file-disks': () => this.navigateToHome(), 'mobile-file-bookmarks': () => this.showMobileBookmarksSheet(),
+                    'mobile-file-up': () => this.navigateBack(), 'mobile-file-create': () => this.showMobileCreateSheet(),
+                    'mobile-file-upload': () => this.showUploadPanel(),
                     'mobile-file-refresh': () => this.loadFiles(this.currentPath || null), 'mobile-file-cancel': () => this.toggleMultiSelectMode(false),
                     'mobile-file-copy': () => Array.from(this.selectedFiles).length ? this.handleMultiCopy() : this.showToast('先选择文件', 'info'),
                     'mobile-file-move': () => Array.from(this.selectedFiles).length ? this.handleMultiMove() : this.showToast('先选择文件', 'info'),
@@ -4296,34 +4302,80 @@ volumes:
 
     // ============ 路径收藏夹 ============
 
-    addBookmark() {
+    fileBookmarks() {
+        return this.serverBookmarks || [];
+    }
+
+    applyFileBookmarks(payload) {
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+        this.serverBookmarks = items
+            .map(item => typeof item === 'string' ? item : item?.path)
+            .filter(path => typeof path === 'string' && path.trim())
+            .slice(0, 100);
+        this.bookmarkRevision = Number(payload?.revision) || 0;
+    }
+
+    async loadFileBookmarks() {
+        try {
+            this.applyFileBookmarks(await window.RemoteToolApi.get('/api/files/bookmarks'));
+        } catch (error) {
+            if (error.status !== 401) this.showToast(error.message || '书签读取失败，继续显示上次结果', 'error');
+        }
+        this.renderBookmarkDropdown();
+    }
+
+    setBookmarkBusy(busy) {
+        document.getElementById('mobile-file-dock')?.setAttribute('aria-busy', String(busy));
+        document.getElementById('bookmark-add-btn')?.toggleAttribute('disabled', busy);
+    }
+
+    async saveBookmark(path, add) {
+        if (this.bookmarkBusy) return false;
+        this.bookmarkBusy = true;
+        this.setBookmarkBusy(true);
+        try {
+            const result = add
+                ? await window.RemoteToolApi.post('/api/files/bookmarks', { path })
+                : await window.RemoteToolApi.delete('/api/files/bookmarks?path=' + encodeURIComponent(path));
+            this.applyFileBookmarks(result);
+            this.renderBookmarkDropdown();
+            return true;
+        } catch (error) {
+            this.showToast(error.message || (add ? '书签添加失败' : '书签移除失败'), 'error');
+            return false;
+        } finally {
+            this.bookmarkBusy = false;
+            this.setBookmarkBusy(false);
+        }
+    }
+
+    async addBookmark() {
         const path = this.currentPath;
         if (!path) {
             this.showToast('当前在根目录，无需收藏', 'info');
             return;
         }
-        let bookmarks = JSON.parse(localStorage.getItem('fileBookmarks') || '[]');
-        if (bookmarks.includes(path)) {
+        const bookmarks = this.fileBookmarks();
+        if (bookmarks.some(value => this.sameBookmarkPath(value, path))) {
             this.showToast('该路径已在收藏夹中', 'info');
             return;
         }
-        bookmarks.unshift(path);
-        bookmarks = bookmarks.slice(0, 20); // 最多20个
-        localStorage.setItem('fileBookmarks', JSON.stringify(bookmarks));
-        this.showToast('已收藏当前路径', 'success');
+        if (await this.saveBookmark(path, true)) this.showToast('已添加书签', 'success');
     }
 
-    removeBookmark(path) {
-        let bookmarks = JSON.parse(localStorage.getItem('fileBookmarks') || '[]');
-        bookmarks = bookmarks.filter(b => b !== path);
-        localStorage.setItem('fileBookmarks', JSON.stringify(bookmarks));
-        this.renderBookmarkDropdown();
+    async removeBookmark(path) {
+        if (await this.saveBookmark(path, false)) this.showToast('已移除书签', 'info');
     }
 
-    toggleBookmarkDropdown() {
+    sameBookmarkPath(left, right) {
+        const normalize = value => String(value || '').trimEnd('/\\').toLocaleLowerCase();
+        return normalize(left) === normalize(right);
+    }
+
+    async toggleBookmarkDropdown() {
         const dropdown = document.getElementById('bookmark-dropdown');
         if (dropdown.style.display === 'none') {
-            this.renderBookmarkDropdown();
+            await this.loadFileBookmarks();
             dropdown.style.display = 'block';
         } else {
             dropdown.style.display = 'none';
@@ -4343,6 +4395,45 @@ volumes:
         const dropdown = document.getElementById('create-dropdown');
         if (!dropdown) return;
         dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+    }
+
+    async showMobileBookmarksSheet() {
+        await this.loadFileBookmarks();
+        this.hideContextMenu();
+        this.openMobileBookmarksSheet();
+    }
+
+    openMobileBookmarksSheet() {
+        const bookmarks = this.fileBookmarks();
+        const menu = document.createElement('div');
+        menu.id = 'context-menu';
+        menu.className = 'context-menu file-context-menu file-mobile-sheet';
+        const rows = bookmarks.length ? bookmarks.map(path => `
+            <div class="file-bookmark-row">
+                <button type="button" class="file-bookmark-open" data-path="${this.escapeHtml(path)}"><span class="file-bookmark-svg" aria-hidden="true"><svg><use href="#icon-file-folder"/></svg></span><span>${this.escapeHtml(path)}</span></button>
+                <button type="button" class="file-bookmark-remove" data-remove="${this.escapeHtml(path)}" aria-label="移除书签">×</button>
+            </div>`).join('') : '<p class="file-bookmark-empty">还没有书签</p>';
+        menu.innerHTML = `
+            <div class="file-sheet-handle"></div>
+            <div class="file-sheet-head"><strong>书签</strong><button type="button" data-close aria-label="关闭">×</button></div>
+            <div class="file-bookmark-list">${rows}</div>
+            <div class="file-sheet-actions file-bookmark-actions">
+                <button type="button" data-add-bookmark ${this.currentPath ? '' : 'disabled'}><span class="file-bookmark-svg" aria-hidden="true"><svg><use href="#icon-file-bookmark"/></svg></span><span>添加当前路径</span></button>
+            </div>
+            <button type="button" class="file-sheet-done" data-close>关闭</button>`;
+        document.body.appendChild(menu);
+        menu.querySelectorAll('[data-path]').forEach(button => button.addEventListener('click', () => {
+            this.hideContextMenu();
+            this.loadFiles(button.dataset.path);
+        }));
+        menu.querySelectorAll('[data-remove]').forEach(button => button.addEventListener('click', async () => {
+            if (await this.removeBookmark(button.dataset.remove)) await this.showMobileBookmarksSheet();
+        }));
+        menu.querySelector('[data-add-bookmark]')?.addEventListener('click', async () => {
+            if (await this.addBookmark()) await this.showMobileBookmarksSheet();
+        });
+        menu.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => this.hideContextMenu()));
+        requestAnimationFrame(() => menu.classList.add('open'));
     }
 
     showMobileCreateSheet() {
@@ -4413,7 +4504,7 @@ volumes:
 
     renderBookmarkDropdown() {
         const dropdown = document.getElementById('bookmark-dropdown');
-        const bookmarks = JSON.parse(localStorage.getItem('fileBookmarks') || '[]');
+        const bookmarks = this.fileBookmarks();
 
         if (bookmarks.length === 0) {
             dropdown.innerHTML = '<div class="bookmark-empty">暂无收藏</div>';
@@ -4439,9 +4530,9 @@ volumes:
             });
         });
         dropdown.querySelectorAll('.bookmark-remove').forEach(el => {
-            el.addEventListener('click', (e) => {
+            el.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                this.removeBookmark(el.dataset.path);
+                await this.removeBookmark(el.dataset.path);
             });
         });
     }
