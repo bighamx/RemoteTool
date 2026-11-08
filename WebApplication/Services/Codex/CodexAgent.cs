@@ -233,11 +233,14 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         return rows;
     }
 
-    private CodexRpc NewRuntime(string catalog = null, JsonObject metadata = null) {
+    private CodexRpc NewRuntime(string catalog = null, JsonObject metadata = null, string provider = null) {
         var environment = new Dictionary<string, string>();
         foreach (var entry in providers) if (entry.Value.S("api_key").Length > 0) environment["CHUCKIE_CODEX_" + entry.Key.ToUpperInvariant() + "_KEY"] = entry.Value.S("api_key");
         CodexRpc client = null;
         var overrides = new List<string> { "cli_auth_credentials_store=\"file\"" };
+        // codex 用运行时自身的 model_provider 与会话归属比对; 每个会话的运行时按目标 Provider 启动,
+        // 否则切到非全局默认 Provider 的会话会被 “This chat uses X, but your current provider is Y” 挡下。
+        if (provider is { Length: > 0 }) overrides.Add("model_provider=" + JsonValue.Create(provider)!.ToJsonString());
         if (catalog != null) {
             overrides.Add("model_catalog_json=" + JsonValue.Create(catalog.Replace('\\', '/'))!.ToJsonString());
             var context = new JsonObject(); CodexRuntimeCatalog.ApplyContext(context, metadata);
@@ -250,7 +253,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var config = await Config();
         selection ??= Obj(("model", config.S("model")), ("modelProvider", config.S("model_provider", "openai")));
         var provider = selection.S("modelProvider"); var model = selection.S("model");
-        if (CodexProviderModels.IsOfficial(provider, config["model_providers"]?[provider]) || model.Length == 0) return NewRuntime();
+        if (CodexProviderModels.IsOfficial(provider, config["model_providers"]?[provider]) || model.Length == 0) return NewRuntime(provider: provider);
         var metadata = selection["modelMetadata"] as JsonObject;
         if (CodexRuntimeCatalog.Window(metadata) == 0) {
             var catalog = await ProviderCatalog(provider);
@@ -258,7 +261,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             if (CodexRuntimeCatalog.Window(metadata) > 0) selection["modelMetadata"] = metadata.DeepClone();
         }
         var path = CodexRuntimeCatalog.Write(folder, provider, model, metadata);
-        return NewRuntime(path, metadata);
+        return NewRuntime(path, metadata, provider);
     }
     private async Task<CodexRpc> EnsureRuntime(string id, JsonObject selection = null) {
         var inherited = selection == null;
@@ -1891,6 +1894,13 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                         // config/batchWrite reloads its own connection only. An idle
                         // session runtime may predate the newly added provider/key.
                         await ReleaseSessionCore(session);
+                        // 跨 Provider 切换: codex 会拿 rollout 记录的 provider 和当前 provider 比对并拒绝,
+                        // 这里先把会话归属改写到目标 Provider(备份原文件), 再恢复。
+                        var recordedThread = (await ReadThread(session, false))["thread"]!;
+                        if (recordedThread.S("modelProvider") is { Length: > 0 } recorded && recorded != selection.S("modelProvider")) {
+                            CodexRollout.RehomeProvider(home, RolloutPath(recordedThread), selection.S("modelProvider"));
+                            CodexThreadProvider.Rehome(home, session, selection.S("modelProvider"), selection.S("model"));
+                        }
                         var resumed = await (await EnsureRuntime(session, selection)).Call("thread/resume", request);
                         lock (gate) loaded[session] = resumed;
                         if (File.Exists(resumed["thread"].S("path"))) await ReleaseSessionCore(session);
