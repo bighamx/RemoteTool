@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json.Nodes;
 
 namespace RemoteTool.WebApi.Services.PhoneControl;
@@ -22,7 +21,6 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
         var root = configuration["PhoneTools:CallbackBaseUrl"] ?? $"{request.Scheme}://{request.Host}{request.PathBase}";
         binding["url"] = root.TrimEnd('/') + "/api/phone/v1/bound/" + binding["id"];
         try {
-            if (agent == "hermes" && mode == "tools") await EnsureHermesPlugin(ct);
             var description = BuildDescription(phone, binding);
             if (agent == "codex") { body["phone_binding"] = binding.DeepClone(); body["phone_description"] = description; }
             else body["system_prompt"] = (body["system_prompt"]?.ToString() ?? "") + "\n\n" + description;
@@ -31,17 +29,8 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
     }
     public void Complete(JsonObject? binding, string session, string agent) {
         if (binding == null) return;
+        // 绑定会话后 MCP 端点才接受该令牌；本服务不向 Hermes 写任何文件或插件。
         gateway.BindSession(binding["id"]!.ToString(), session);
-        if (agent == "hermes" && binding["mode"]?.ToString() == "tools") {
-            var path = Path.Combine(new HermesProfiles(configuration).Home, "remotetool-phone-bindings.json");
-            lock (fileLock) {
-                var rows = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path))!.AsObject() : new JsonObject();
-                rows[session] = new JsonObject { ["url"] = binding["url"]!.ToString(), ["token"] = binding["token"]!.ToString() };
-                var tmp = path + ".tmp-" + Guid.NewGuid().ToString("N");
-                try { File.WriteAllText(tmp, rows.ToJsonString()); if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite); File.Move(tmp, path, true); }
-                finally { if (File.Exists(tmp)) File.Delete(tmp); }
-            }
-        }
     }
     public void Abort(JsonObject? binding) { if (binding != null) gateway.RemoveBinding(binding["id"]!.ToString()); }
     private static string BuildDescription(string phone, JsonObject binding) {
@@ -54,8 +43,9 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
         text.AppendLine($"本会话已绑定一部 Android 手机，设备标识：{phone}。这部手机与运行 Agent 的电脑是不同的设备。");
         text.AppendLine("开始手机 UI 会话时，通过 phone_begin_ui(client_name=自己的名称,message=任务目标) 声明真实 Agent 名称。HTTP MCP 也应在 initialize.clientInfo.name 声明名称，名称不用于鉴权。UI 工具必须串行，不要并发调用；device_busy 表示已有调用在执行，应等待而不是新建身份。读屏的 backend=auto/accessibility/uiautomator 选择采集通道；include_unimportant 默认 true，保留可能承载聊天正文的节点；mode=compact/text/raw 只决定输出。UiAutomation 是慢速诊断路径，节点只读，不作为每步动作后的默认回读。");
         text.AppendLine(enabled
-            ? "你可以通过本会话已注册的 phone_* 工具查看和操作这部手机。用户要求处理手机上的任务时，请结合下列能力执行任务，而不只是提供手动操作步骤。RemoteTool 负责将工具请求经服务端转发到手机，手机与电脑无需处于同一局域网。"
-            : "当前仅注入手机能力说明，尚未为本会话启用可调用的 phone_* 工具。下列内容描述可提供的能力，不代表当前已能执行；需要直接操作时，应在新建会话时选择“启用工具”，或使用用户另行配置的可用 MCP 连接。");
+            ? "你可以通过下面这个 MCP 服务查看和操作这部手机。用户要求处理手机上的任务时，请结合下列能力执行任务，而不只是提供手动操作步骤。RemoteTool 负责把 MCP 请求转发到手机，手机与电脑无需处于同一局域网。"
+            : "当前仅注入手机能力说明，尚未为本会话启用可调用的手机工具。下列内容描述可提供的能力，不代表当前已能执行；需要直接操作时，应在新建会话时选择“启用工具”，或使用用户另行配置的可用 MCP 连接。");
+        if (enabled) text.AppendLine(BuildMcpGuide(binding));
         text.AppendLine(enabled ? "本会话提供的能力（实际执行取决于手机状态及已授予的权限）：" : "可提供的手机能力：");
         void Capability(string description, params string[] candidates) {
             var available = candidates.Where(names.Contains).ToArray();
@@ -79,7 +69,7 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
         if (enabled) {
             text.AppendLine("使用流程：");
             if (names.Contains("phone_execute")) text.AppendLine("效率与准确性：优先 phone_observe(mode=compact/text) 或 phone_find_nodes。phone_observe 用 filter 缩小节点，不接受 selector；phone_find_nodes 用顶层 text/resource_id/description，也不接受 selector。动作工具优先用唯一 selector，例如 {\"selector\":{\"resource_id\":\"pkg:id/button\"}} 或 {\"selector\":{\"text\":\"确定\"}}；不要把 resource_id 直接放在动作顶层。可用 guard 校验前台应用，并在动作中带 wait_for 与 return_state，一次完成操作、条件等待和回读。确定的短流程用 phone_execute（最多20步/30秒）；失败立即停止，按每步回执核对，不把部分执行的批次换新ID重发。phone_wait 已返回匹配结果和新快照，不要等待后无条件再次 observe；phone_wait 不接受 return_state。不用固定 sleep 或 shell dump 作为常规读屏。");
-            text.AppendLine("连接复用：在整个持续任务中复用本会话已有的 phone_* 工具身份，包括观察、多轮 UI、文件操作、等待协助及核验。不要为每一步另写脚本、新建 MCP 客户端或重新 initialize；本集成已处理身份与认证，不需要手动建连。同一名字不代表同一连接。若用户另行配置 HTTP MCP，则只 initialize 一次，保存响应头 Mcp-Session-Id，后续所有请求携带同一个头和协商的 MCP-Protocol-Version；短命脚本须跨进程复用受保护且按端点、凭据身份、逻辑 Agent 隔离的缓存，并串行首次初始化，做不到时使用常驻 MCP 客户端或 stdio 适配器。独立 Agent 不共享会话。不要在有会话后改用无头旧接口。");
+            text.AppendLine("连接复用：在整个持续任务中复用本会话已有的 phone_* 工具身份，包括观察、多轮 UI、文件操作、等待协助及核验。不要为每一步另写脚本、新建 MCP 客户端或重新 initialize；连接信息就在上面，initialize 只在首次连接时调用一次。同一名字不代表同一连接。短命脚本须跨进程复用受保护且按端点、凭据身份、逻辑 Agent 隔离的缓存，并串行首次初始化，做不到时使用常驻 MCP 客户端或 stdio 适配器。独立 Agent 不共享会话。不要在有会话后改用无头旧接口。");
             text.AppendLine("UI 占用、节点快照和 notice_id 都归属当前连接。phone_end_ui 只释放 UI，不断开连接；后续批次仍用同一连接重新 phone_begin_ui。遇到 ui_busy/device_busy 时等待或说明冲突，不能新建连接绕过，也不能释放其他 Agent 的占用。node_id 与 snapshot_id 必须来自同一次最新观察并成对使用，30 秒后或页面变化后必须重新观察；stale_snapshot、node_not_found、window_not_found 不是可盲目重试的传输错误。只有 HTTP 404 session_not_found 才丢弃过期会话并重新 initialize 一次，重新检查能力、获取 UI 并观察后继续，不盲目重放原操作。收到 connection_closed_by_user 必须停止并说明用户已断开，用户明确允许继续后才能新建连接，不能自动重连。");
             if (tools.Any(tool => tool["inputSchema"]?["properties"]?["explanation"] != null)) text.AppendLine("工具支持可选 explanation 参数：每次调用可直接用用户的语言简短说明正在做什么、为什么做（最多 240 字符），会随本次操作显示在手机悬浮提示中，无需为普通操作说明额外调用 phone_notify_user。只写面向用户的目的或动作摘要，不写敏感输入、凭据或内部推理。需要用户回应的协助请求仍使用 phone_notify_user(kind=help)。未提供该参数的工具不要传入；phone_disconnect 仍会立即撤下提示。");
             text.AppendLine("1. 首次操作先调用 phone_get_capabilities 核对实际能力；以本次返回的设备、权限和可用后端为准，不把连接成功当成操作成功。");
@@ -88,99 +78,30 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
             text.AppendLine("3. 操作后重新观察或读取相关状态，核验实际结果；动作自带 wait_for/return_state 时优先复用其返回状态，需要单独等待页面变化时使用 phone_wait。返回的截图可用于视觉判断，文字和结构化结果可用于状态判断。accepted 只表示动作已提交，不等于业务完成；matched=false 是超时，不代表成功。");
             if (names.Contains("phone_notify_user") && names.Contains("phone_get_user_reply")) text.AppendLine("需要用户解锁、重开应用或其他协助时，用 phone_notify_user(kind=help) 明确请求，保存 notice_id，再用 phone_get_user_reply 核对回执；pending、过期、取消或超时都不代表用户完成。等待用户手动处理时先释放 UI，保留当前连接并以合理间隔查询同一 notice_id，恢复操作前重新获取 UI 并观察。在收到回复前不要继续依赖该操作的步骤。普通提示使用 kind=info。");
             text.AppendLine("4. 遇到 phone_offline、权限不足或后端不可用时，根据返回原因说明当前阻碍。delivery_unknown、超时或响应丢失表示操作可能已经执行，禁止自动重发写操作或换 request_id 绕过去重；先重新观察或查询回执核对结果。request_id 标识一次逻辑操作，不是连接 ID 或 JSON-RPC 消息 ID。");
-            text.AppendLine("5. 工具调用已由 RemoteTool 处理连接与认证。不要向用户索要内部令牌，也不要将执行结果不明或失败的操作描述为已完成。");
+            text.AppendLine("5. 工具请求由 RemoteTool 转发到手机；上面的令牌只用于本会话的 MCP 端点，不要向用户索要其他凭据，也不要将执行结果不明或失败的操作描述为已完成。");
             if (names.Contains("phone_end_ui")) text.AppendLine("6. 界面操作完成先调用 phone_end_ui，结束 UI 声明；它不会断开连接。后续若仍需文件、命令或结果核验，可继续使用已开放工具。");
             if (names.Contains("phone_disconnect")) text.AppendLine("7. 所有手机操作、截图核验及可选完成提示都结束后，必须最后调用 phone_disconnect，立即撤下本 Agent 的连接／操作提示并取消其待处理消息。即使任务受阻、失败或提前结束也需清理；不要在每条工具或每个 UI 批次后断开。HTTP MCP 客户端可随后携带自己的 Mcp-Session-Id 对同一 MCP URL 执行 DELETE 以销毁传输会话；只结束脚本或 TCP 连接不会清理身份，不要撤销整台设备绑定或断开其他 Agent。之后不要再调用手机工具、发完成通知或重新 initialize，否则会重新连接；ping 和工具发现不会重新连接。不要为了验证断开再调用手机截图工具。");
         }
         return text.ToString().TrimEnd();
     }
-    private static readonly object fileLock = new();
-    private async Task EnsureHermesPlugin(CancellationToken ct) {
-        await installLock.WaitAsync(ct);
-        try {
-            var profiles = new HermesProfiles(configuration); var source = configuration["Hermes:SourceDirectory"] ?? Path.Combine(profiles.Root, "hermes-agent");
-            var python = configuration["Hermes:PythonExecutable"] ?? Path.Combine(source, "venv", OperatingSystem.IsWindows() ? "Scripts/python.exe" : "bin/python");
-            var shipped = Path.Combine(AppContext.BaseDirectory, "phone-tools");
-            if (!File.Exists(python) || !File.Exists(Path.Combine(shipped, "install_hermes.py"))) throw new InvalidOperationException("Hermes 手机工具适配器尚未随服务安装");
-            var job = Path.Combine(profiles.Root, "cache", "remotetool-phone-install", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(job);
-            var resultPath = Path.Combine(job, "result.json");
-            var arguments = new[] { Path.Combine(shipped, "install_hermes.py"), "--home", profiles.Home, "--source", source, "--result", resultPath };
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(50));
-            Process? process = null;
-            Task<string>? output = null, errors = null;
-            try {
-                // Hermes authenticates its control pipe by user SID. IIS LocalSystem must not
-                // install as itself and then try to control the desktop user's gateway.
-                if (OperatingSystem.IsWindows() && System.Security.Principal.WindowsIdentity.GetCurrent().IsSystem) {
-                    var command = string.Join(" ", new[] { python }.Concat(arguments).Select(QuotePathOrArgument));
-                    // Hermes 网关的控制管道只接受同一 Windows 会话里的同用户客户端；网关可能由开机任务
-                    // 运行在会话 0，而不是交互桌面会话。优先用网关自己的令牌启动安装器，再退回交互会话。
-                    var gatewayPid = HermesGatewayPid(profiles.Root);
-                    var launched = gatewayPid > 0
-                        ? RemoteControl.InteractiveProcessLauncher.LaunchAsProcessOwner(gatewayPid, command, source)
-                        : (Success: false, ProcessId: 0);
-                    if (!launched.Success) launched = RemoteControl.InteractiveProcessLauncher.LaunchInInteractiveSession(command, source);
-                    if (!launched.Success) throw new InvalidOperationException("无法在 Hermes 用户环境中加载手机工具，请确认电脑用户已登录");
-                    try { process = Process.GetProcessById(launched.ProcessId); }
-                    catch (ArgumentException) when (File.Exists(resultPath)) { }
-                } else {
-                    var info = new ProcessStartInfo(python) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = source, RedirectStandardOutput = true, RedirectStandardError = true };
-                    foreach (var argument in arguments) info.ArgumentList.Add(argument);
-                    info.Environment["PYTHONIOENCODING"] = "utf-8";
-                    process = Process.Start(info)!;
-                    output = process.StandardOutput.ReadToEndAsync(); errors = process.StandardError.ReadToEndAsync();
-                }
-                if (process != null) await process.WaitForExitAsync(timeout.Token);
-                if (output != null) await output;
-                if (errors != null) await errors;
-                var result = File.Exists(resultPath) ? JsonNode.Parse(await File.ReadAllTextAsync(resultPath, ct))?.AsObject() : null;
-                if (result?["ready"]?.GetValue<bool>() != true) {
-                    var detail = (result?["error"]?.ToString() ?? "no-result") + ": " + (result?["message"]?.ToString() ?? "");
-                    logger.LogWarning("Hermes phone plugin activation failed for Profile {Profile}: {Error} {Message}", HermesProfileScope.Name, result?["error"]?.ToString(), result?["message"]?.ToString());
-                    // 服务端是后台进程, 没有可翻的日志; 失败原因落到数据目录, 供「请检查服务端日志」真正可查。
-                    WriteActivationFailure(profiles.Root, detail, errors?.Result, output?.Result);
-                    throw new InvalidOperationException("Hermes 手机工具加载失败，网关未确认工具注册；请检查服务端日志");
-                }
-            } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
-                throw new InvalidOperationException("Hermes 手机工具加载超时，请稍后重试");
-            } finally {
-                if (process != null) {
-                    try { if (!process.HasExited) { process.Kill(true); await process.WaitForExitAsync(); } }
-                    finally { process.Dispose(); }
-                }
-                try {
-                    foreach (var file in new[] { resultPath, Path.ChangeExtension(resultPath, ".tmp") }) if (File.Exists(file)) File.Delete(file);
-                    Directory.Delete(job);
-                } catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) {
-                    logger.LogWarning(cleanup, "Unable to clean Hermes phone plugin activation job");
-                }
-            }
-        } finally { installLock.Release(); }
-    }
-    /** 网关进程号：Hermes 在数据目录写 gateway_state.json；读不到或进程已退出时返回 0。 */
-    private static int HermesGatewayPid(string root) {
-        try {
-            var path = Path.Combine(root, "gateway_state.json");
-            if (!File.Exists(path)) return 0;
-            var pid = JsonNode.Parse(File.ReadAllText(path))?["pid"]?.GetValue<int>() ?? 0;
-            if (pid <= 0) return 0;
-            using var process = System.Diagnostics.Process.GetProcessById(pid);
-            return process.HasExited ? 0 : pid;
-        } catch (Exception error) when (error is IOException or System.Text.Json.JsonException or ArgumentException or InvalidOperationException) { return 0; }
-    }
-    private static void WriteActivationFailure(string root, string detail, string? stderr, string? stdout) {
-        try {
-            var dir = Path.Combine(root, "logs");
-            Directory.CreateDirectory(dir);
-            var text = string.Join(Environment.NewLine, new[] {
-                DateTimeOffset.Now.ToString("O"), detail,
-                "--- stderr ---", (stderr ?? "").Trim(), "--- stdout ---", (stdout ?? "").Trim() });
-            File.AppendAllText(Path.Combine(dir, "phone-plugin.log"), text + Environment.NewLine + Environment.NewLine);
-        } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
-    }
-    private static string QuotePathOrArgument(string value) {
-        if (value.IndexOfAny(['"', '\r', '\n']) >= 0) throw new InvalidOperationException("Hermes 安装路径无效");
-        return "\"" + value + new string('\\', value.Reverse().TakeWhile(c => c == '\\').Count()) + "\"";
+    /** MCP 连接信息与工具目录：服务端不向 Hermes 安装插件，Agent 自行按此连接。 */
+    private static string BuildMcpGuide(JsonObject binding) {
+        var url = binding["url"]!.ToString();
+        var token = binding["token"]!.ToString();
+        var tools = binding["tools"]!.AsArray().OfType<JsonObject>().ToArray();
+        var text = new System.Text.StringBuilder();
+        text.AppendLine("【MCP 连接】");
+        text.AppendLine($"- 端点：{url}/mcp（Streamable HTTP，POST JSON-RPC 2.0）");
+        text.AppendLine($"- 鉴权：Authorization: Bearer {token}");
+        text.AppendLine($"- 目录：MCP tools/list；或 POST {url}，请求体 {{\"action\":\"list\"}}");
+        text.AppendLine("- 传输会话：initialize 只调用一次，保存响应头 Mcp-Session-Id 和结果里的 protocolVersion；后续请求带同一个 Mcp-Session-Id 与 MCP-Protocol-Version 头。结束时 DELETE 该 MCP 端点。");
+        text.AppendLine("- 独立客户端：本机 phone-tools 目录随服务发布，可用 python remotetool_phone.py --url <端点> --token <令牌> call <工具> --args '{...}'，无需安装任何 Python 包。");
+        text.AppendLine($"工具目录（{tools.Length} 项，参数以 tools/list 返回的 inputSchema 为准）：");
+        foreach (var tool in tools) {
+            var description = (tool["description"]?.ToString() ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+            if (description.Length > 110) description = description[..110] + "…";
+            text.AppendLine($"- {tool["name"]} — {description}");
+        }
+        return text.ToString().TrimEnd();
     }
 }

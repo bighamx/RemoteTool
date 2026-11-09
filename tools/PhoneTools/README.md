@@ -153,7 +153,7 @@ App 在 Codex/Hermes 新建和分享创建中提供“关闭 / 注入说明 / �
 
 Codex 使用 app-server 动态工具及图片结果回传，绑定保存在原桥接受保护状态目录，恢复时由 app-server 还原工具元数据。桌面接管需要另外配置 MCP，不保证桌面客户端继承手机 handler。
 
-Hermes 工具模式在当前 Profile 中安装本目录 `hermes_plugin`，使用 Hermes 自身 enable/reload-plugins 接口加载，不改 Hermes 源码、不重启网关；旧版缺少接口时返回插件未就绪。Windows IIS LocalSystem 会沿用现有交互用户启动机制，以桌面用户身份执行安装检查，避免网关管道的用户 SID 校验失败；工具就绪以网关实际确认完整工具注册为准，不依赖旧标记文件或 stdout 文本。插件从运行时取得真实 session ID，再读取该 Profile 的 `remotetool-phone-bindings.json`；未绑定的会话拒绝调用。已加载的 Profile 工具目录中可能仍显示手机工具，调用权限由绑定检查落实。
+Hermes 工具模式不向 Hermes 安装插件，也不改 Hermes 的配置或数据目录：服务端只创建一次会话绑定，把 MCP 端点、令牌、传输说明和工具目录（名称+简述，完整 schema 用 tools/list 取）注入会话的系统提示，由 Agent 自行连接。新建会话因此不再受网关所在 Windows 会话/用户校验影响，也不需要重载或重启网关。注入的令牌只对该会话绑定有效，会话删除即失效。
 
 新建会话的能力提示词会说明可直接操作绑定的 Android 手机、通过服务端转发的连接关系、按本次绑定实际工具生成的能力分组、当前高级工具范围和手机端授权条件，并引导 Agent 先检查能力与观察界面、按工具参数操作、核验结果以及处理离线和不确定回执。Hermes 追加到会话 system_prompt，Codex 使用 developerInstructions；工具参数定义仍单独注册。“注入说明”会明确当前没有启用可调用工具，提示词不包含内部接口地址或令牌。新提示词适用于更新后新建的会话，已有会话保持原提示词。
 

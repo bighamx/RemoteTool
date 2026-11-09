@@ -498,41 +498,6 @@ public static class InteractiveProcessLauncher
     /// 若未取得高完整性令牌则回退到普通用户令牌启动。
     /// </summary>
     /// <param name="useElevatedTokenIfAvailable">为 true 时先尝试用本会话内高完整性令牌启动，若无则用普通用户令牌。</param>
-    /// <summary>以 targetPid 所属用户的身份启动进程（同用户、同会话）。
-    /// IIS/服务账户（SYSTEM）拉起 Hermes 手机工具安装器时必须这样启动：Hermes 网关的控制管道
-    /// 只接受同一 Windows 会话里的同用户客户端，跨会话会被拒绝（RefusedOwner），
-    /// 而「交互会话」不一定是网关所在的会话（网关可能由开机任务运行在会话 0）。</summary>
-    public static (bool Success, int ProcessId) LaunchAsProcessOwner(int targetPid, string commandLine, string? workingDirectory = null)
-    {
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) { Log("仅支持 Windows 平台"); return (false, 0); }
-        IntPtr processHandle = IntPtr.Zero, token = IntPtr.Zero, duplicate = IntPtr.Zero, environment = IntPtr.Zero;
-        try
-        {
-            processHandle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, targetPid);
-            if (processHandle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
-            if (!OpenProcessToken(processHandle, TOKEN_ALL_ACCESS, out token))
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-            if (!DuplicateTokenEx(token, TOKEN_ALL_ACCESS, IntPtr.Zero, SecurityImpersonation, TokenPrimary, out duplicate))
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-            CreateEnvironmentBlock(out environment, duplicate, false);
-            var startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>() };
-            if (!CreateProcessAsUser(duplicate, null, commandLine, IntPtr.Zero, IntPtr.Zero, false,
-                    CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, environment, workingDirectory, ref startup, out var process))
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-            CloseHandle(process.hThread); CloseHandle(process.hProcess);
-            Log($"Started process as owner of PID {targetPid}, PID={process.dwProcessId}");
-            return (true, process.dwProcessId);
-        }
-        catch (Exception ex) { LogException($"Launch as owner of PID {targetPid} failed", ex); return (false, 0); }
-        finally
-        {
-            if (environment != IntPtr.Zero) DestroyEnvironmentBlock(environment);
-            if (duplicate != IntPtr.Zero) CloseHandle(duplicate);
-            if (token != IntPtr.Zero) CloseHandle(token);
-            if (processHandle != IntPtr.Zero) CloseHandle(processHandle);
-        }
-    }
-
     public static (bool Success, int ProcessId) LaunchInInteractiveSession(string commandLine, string? workingDirectory = null, bool useElevatedTokenIfAvailable = false)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
