@@ -114,7 +114,13 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
                 // install as itself and then try to control the desktop user's gateway.
                 if (OperatingSystem.IsWindows() && System.Security.Principal.WindowsIdentity.GetCurrent().IsSystem) {
                     var command = string.Join(" ", new[] { python }.Concat(arguments).Select(QuotePathOrArgument));
-                    var launched = RemoteControl.InteractiveProcessLauncher.LaunchInInteractiveSession(command, source);
+                    // Hermes 网关的控制管道只接受同一 Windows 会话里的同用户客户端；网关可能由开机任务
+                    // 运行在会话 0，而不是交互桌面会话。优先用网关自己的令牌启动安装器，再退回交互会话。
+                    var gatewayPid = HermesGatewayPid(profiles.Root);
+                    var launched = gatewayPid > 0
+                        ? RemoteControl.InteractiveProcessLauncher.LaunchAsProcessOwner(gatewayPid, command, source)
+                        : (Success: false, ProcessId: 0);
+                    if (!launched.Success) launched = RemoteControl.InteractiveProcessLauncher.LaunchInInteractiveSession(command, source);
                     if (!launched.Success) throw new InvalidOperationException("无法在 Hermes 用户环境中加载手机工具，请确认电脑用户已登录");
                     try { process = Process.GetProcessById(launched.ProcessId); }
                     catch (ArgumentException) when (File.Exists(resultPath)) { }
@@ -130,7 +136,10 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
                 if (errors != null) await errors;
                 var result = File.Exists(resultPath) ? JsonNode.Parse(await File.ReadAllTextAsync(resultPath, ct))?.AsObject() : null;
                 if (result?["ready"]?.GetValue<bool>() != true) {
+                    var detail = (result?["error"]?.ToString() ?? "no-result") + ": " + (result?["message"]?.ToString() ?? "");
                     logger.LogWarning("Hermes phone plugin activation failed for Profile {Profile}: {Error} {Message}", HermesProfileScope.Name, result?["error"]?.ToString(), result?["message"]?.ToString());
+                    // 服务端是后台进程, 没有可翻的日志; 失败原因落到数据目录, 供「请检查服务端日志」真正可查。
+                    WriteActivationFailure(profiles.Root, detail, errors?.Result, output?.Result);
                     throw new InvalidOperationException("Hermes 手机工具加载失败，网关未确认工具注册；请检查服务端日志");
                 }
             } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
@@ -148,6 +157,27 @@ public sealed class PhoneSessionIntegration(PhoneGateway gateway, IConfiguration
                 }
             }
         } finally { installLock.Release(); }
+    }
+    /** 网关进程号：Hermes 在数据目录写 gateway_state.json；读不到或进程已退出时返回 0。 */
+    private static int HermesGatewayPid(string root) {
+        try {
+            var path = Path.Combine(root, "gateway_state.json");
+            if (!File.Exists(path)) return 0;
+            var pid = JsonNode.Parse(File.ReadAllText(path))?["pid"]?.GetValue<int>() ?? 0;
+            if (pid <= 0) return 0;
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            return process.HasExited ? 0 : pid;
+        } catch (Exception error) when (error is IOException or System.Text.Json.JsonException or ArgumentException or InvalidOperationException) { return 0; }
+    }
+    private static void WriteActivationFailure(string root, string detail, string? stderr, string? stdout) {
+        try {
+            var dir = Path.Combine(root, "logs");
+            Directory.CreateDirectory(dir);
+            var text = string.Join(Environment.NewLine, new[] {
+                DateTimeOffset.Now.ToString("O"), detail,
+                "--- stderr ---", (stderr ?? "").Trim(), "--- stdout ---", (stdout ?? "").Trim() });
+            File.AppendAllText(Path.Combine(dir, "phone-plugin.log"), text + Environment.NewLine + Environment.NewLine);
+        } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
     }
     private static string QuotePathOrArgument(string value) {
         if (value.IndexOfAny(['"', '\r', '\n']) >= 0) throw new InvalidOperationException("Hermes 安装路径无效");
