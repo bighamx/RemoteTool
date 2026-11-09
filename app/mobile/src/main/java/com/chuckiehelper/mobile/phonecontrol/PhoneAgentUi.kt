@@ -23,6 +23,7 @@ import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.chuckiehelper.mobile.background.BackgroundNotification
@@ -48,6 +49,8 @@ class PhoneAgentUi(private val context: Context) {
     private var rendered: AgentDisplayState? = null
     private var renderedNotice: String? = null
     private var scope: CoroutineScope? = null
+    /** 用户点悬浮窗里的断开：由 PhoneEngine 接上，写入 blocked，后续调用返回 connection_closed_by_user。 */
+    var onDisconnect: ((String) -> Unit)? = null
     @Volatile private var running = false
     @Volatile private var island = HyperIslandStatus()
     private val settings = PhoneSettings(context)
@@ -142,6 +145,10 @@ class PhoneAgentUi(private val context: Context) {
         renderNotice(state.notice)
         if (!show) { removeOverlay(); return }
         val maximumContentHeight = minOf(dp(280), (context.resources.displayMetrics.heightPixels * .4f).toInt())
+        // 悬浮窗按内容取宽：固定 340dp 会让只有一行标题的窗口也占掉大半个屏幕。
+        val maximum = (context.resources.displayMetrics.widthPixels - dp(24)).coerceAtLeast(1)
+        val maximumWidth = minOf(if (minimized) dp(240) else dp(340), maximum)
+        val minimumWidth = minOf(if (minimized) dp(150) else dp(180), maximumWidth)
         val single = state.connections.size == 1
         val groups = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -189,6 +196,15 @@ class PhoneAgentUi(private val context: Context) {
                                 }}，$line，$error"
                         }
                     } else if (client.operation.isNotBlank()) information("▸ ${client.operation}")
+                    addView(LinearLayout(context).apply {
+                        gravity = Gravity.END
+                        addView(text("✕ 断开", 11f, Color.rgb(255, 181, 171), true).apply {
+                            setPadding(dp(8), dp(3), dp(2), dp(1))
+                            contentDescription = "断开 ${client.name}"
+                            isClickable = true
+                            setOnClickListener { disconnectClient(client.id, client.name) }
+                        })
+                    }, LinearLayout.LayoutParams(-1, -2))
                 }, LinearLayout.LayoutParams(-1, -2))
                 if (index < clients.lastIndex) addView(android.view.View(context).apply {
                     setBackgroundColor(Color.argb(35, 255, 255, 255))
@@ -222,7 +238,8 @@ class PhoneAgentUi(private val context: Context) {
                 val heading = "● $title"
                 addView(text(if (single) heading else "$heading · ${state.connections.size} 个连接", 11f, Color.rgb(136, 234, 206), true).apply {
                     maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                }, LinearLayout.LayoutParams(0, -2, 1f))
+                    maxWidth = (maximumWidth - dp(64)).coerceAtLeast(dp(80))
+                }, LinearLayout.LayoutParams(-2, -2))
                 addView(button(if (minimized) "展开" else "收起") { toggleMinimized() })
                 enableDragging(this)
             }, LinearLayout.LayoutParams(-1, -2))
@@ -255,8 +272,9 @@ class PhoneAgentUi(private val context: Context) {
             PixelFormat.TRANSLUCENT).apply {
                 gravity = Gravity.TOP or Gravity.LEFT
             }
-        val maximum = (context.resources.displayMetrics.widthPixels - dp(24)).coerceAtLeast(1)
-        val desired = if (minimized) minOf(dp(210), maximum) else minOf(dp(340), maximum)
+        panel.measure(android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED),
+            android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED))
+        val desired = panel.measuredWidth.coerceIn(minimumWidth, maximumWidth)
         panel.measure(android.view.View.MeasureSpec.makeMeasureSpec(desired, android.view.View.MeasureSpec.EXACTLY),
             android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED))
         val existing = overlay
@@ -377,6 +395,13 @@ class PhoneAgentUi(private val context: Context) {
             if (notice.help) "等待协助" else "Agent 消息", notice.message, notice.help, actions,
             summaryName = notice.agent, summaryAction = if (notice.help) "等待你的协助" else "有新的消息")?.let(builder::addExtras)
         runCatching { notifications.notify(42, builder.build()); renderedNotice = notice.id }
+    }
+    /** 用户手动断开：连接立刻下线并阻止该 Agent 自动重连，后续调用返回「用户已断开」。 */
+    private fun disconnectClient(id: String, name: String) {
+        val disconnect = onDisconnect ?: return
+        disconnect(id)
+        Toast.makeText(context, "已断开 $name；该 Agent 后续调用会收到「用户已断开」", Toast.LENGTH_LONG).show()
+        rendered = null; render()
     }
     private fun text(value: String, size: Float, color: Int, bold: Boolean = false) = TextView(context).apply {
         text = value; textSize = size; setTextColor(color)

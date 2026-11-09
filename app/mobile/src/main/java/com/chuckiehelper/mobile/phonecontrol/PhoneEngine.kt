@@ -21,6 +21,10 @@ class PhoneEngine(val context: Context) {
     private val connectionGate = Any()
     private val declaredNames = java.util.concurrent.ConcurrentHashMap<String, String>()
     @Volatile var generation = 0L; private set
+    init {
+        // 悬浮窗的断开按钮：按用户断开处理，写入 blocked 后该 owner 的后续调用返回 connection_closed_by_user。
+        agentUi.onDisconnect = { owner -> disconnect(owner, byUser = true) }
+    }
     fun stop() { generation++; settings.enabled = false; declaredNames.clear(); connectionLog.disconnectAll("service_stopped"); agentUi.close(); PhoneAccessibility.current?.clearSnapshots(); privilege.close() }
     fun connectionSeen(owner: String, name: String, details: JSONObject = JSONObject()) {
         synchronized(connectionGate) {

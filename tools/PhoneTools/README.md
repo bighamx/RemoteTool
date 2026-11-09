@@ -129,7 +129,7 @@ UI 占用由当前连接独享，无需续期；调用 phone_end_ui、断开或�
 
 悬浮窗按连接分组展示各自信息，使用半透明背景；整个区域可拖动并记住位置，点击标题或“收起”立即以约 180ms 动画最小化，点击“展开”恢复。长内容自动缓慢滚动，无需手动滚动。操作状态显示“正在操控手机”。连接调用时间线采用紧凑列表，查看调用详情后返回保留滚动位置，并短暂高亮刚查看的条目 0.5 秒。
 
-通过 phone_shell 读写屏幕或 UI 状态时须传 ui_operation=true，并先获得 UI 占用。APK 经 exchange 分块上传后，安装通过一次进程标准输入流传输，预算 120 秒；普通工具仍为 35 秒、Shell 最长 30 秒。节点快照按客户端隔离，30 秒有效，每客户端最多保留 4 份、总计 32 份。悬浮窗列出各连接，宽度通过 400ms 动画适应内容，收窄延迟 1.2 秒；超过屏幕宽度的文字换行，长说明可滚动查看。
+通过 phone_shell 读写屏幕或 UI 状态时须传 ui_operation=true，并先获得 UI 占用。APK 经 exchange 分块上传后，安装通过一次进程标准输入流传输，预算 120 秒；普通工具仍为 35 秒、Shell 最长 30 秒。节点快照按客户端隔离，30 秒有效，每客户端最多保留 4 份、总计 32 份。悬浮窗列出各连接，窗口宽度按内容测量（最宽 340dp，无内容时不再固定撑满），宽度变化用 400ms 动画，收窄延迟 1.2 秒；超过屏幕宽度的文字换行，长说明可滚动查看。每个连接右侧有「✕ 断开」，点击即按用户手动断开处理：连接立即下线，该 Agent 之后的调用返回 connection_closed_by_user（retryable=false、requires_reinitialize=true），不自动重连。
 
 HyperOS 使用小米官方 `miui.focus.param` 客户端接口、系统 `notification_focus_protocol` 版本查询与 `canShowFocus` 开关查询：OS2 对应焦点通知，协议 3 及以上对应超级岛。`canShowFocus=true` 仅表示系统开关开启，不证明应用鉴权或上岛成功；系统日志 `FocusPlugin: onAuthFailed` 表示焦点通知鉴权失败。两个包必须分别在小米平台开通服务、配置 App ID 与签名指纹，并完成场景审核，或使用官方设备白名单联调。是否上岛仍取决于平台授权、用户通知设置及系统实际渲染；未通过时保留普通通知和悬浮窗。参考[官方接入流程](https://dev.mi.com/xiaomihyperos/documentation/detail?pId=2132)及[开发指南](https://dev.mi.com/xiaomihyperos/documentation/detail?pId=2131)。
 
