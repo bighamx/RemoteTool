@@ -1,11 +1,14 @@
 import json
+import os
 import sys
+import tempfile
 import threading
 import types
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
+os.environ['HERMES_HOME'] = tempfile.mkdtemp(prefix='hermes-context-test-')
 sys.path.insert(0, str(Path('WebApplication/Tools/HermesManagement').resolve()))
 from hermes_context import bounded_context_metadata, endpoint_context, selected_endpoint
 

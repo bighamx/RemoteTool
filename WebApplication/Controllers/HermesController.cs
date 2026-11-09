@@ -108,9 +108,18 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
     }
     private async Task<JsonObject> ContextAsync(string id, CancellationToken ct) {
         var result = JsonNode.Parse((await management.Invoke("session_context", JsonSerializer.SerializeToElement(new { session_id = id }), ct)).GetRawText())!.AsObject();
-        // 与 WindowFrom 同一纠错：自定义网关上 hermes 无法得知真实窗口，已知模型用真实值。
-        if (KnownModelWindows.TryGetValue(result["model"]?.ToString() ?? "", out var window) &&
-            (result["limit"]?.GetValue<long>() ?? 0) < window) result["limit"] = window;
+        // 详情与列表(context-bulk)必须同一套窗口口径：自定义网关上 hermes 常常在 3 秒预算内
+        // 解析不出窗口(返回 limit 缺失)，这里补上已学习值和 1M 兜底，避免详情显示「未返回上限」。
+        var provider = "";
+        SessionReadIsolation.Try("context", "models", () =>
+            provider = activity.SessionModelInfo(new[] { id }).GetValueOrDefault(id)?.Provider ?? "");
+        var (tokens, limit) = WindowFrom(result, provider, result["model"]?.ToString() ?? "");
+        if (result["tokens"] is null) result["tokens"] = tokens;
+        var resolved = Long(result["limit"]);
+        if (resolved != limit) {
+            result["limit"] = limit;
+            result["limit_source"] = resolved <= 0 ? "fallback" : "known_model";
+        }
         try {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(2));
             using var info = await bridge.SendAsync(HttpMethod.Get, "api/sessions/" + id, null, null, timeout.Token);
@@ -240,8 +249,8 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         ["k3"] = 1_048_576, ["kimi-k3-1"] = 1_048_576,
     };
     private (long Tokens,long Limit) WindowFrom(JsonNode result, string provider, string model) {
-        var tokens = result["tokens"]?.GetValue<long>() ?? 0;
-        var limit = result["limit"]?.GetValue<long>() ?? 0;
+        var tokens = Long(result["tokens"]);
+        var limit = Long(result["limit"]);
         var name = result["model"]?.ToString();
         if (!string.IsNullOrEmpty(name)) model = name;
         var key = HermesProfileScope.Key((provider ?? "") + "/" + (model ?? ""));
@@ -255,6 +264,9 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         if (limit <= 0) limit = 1_000_000;
         return (tokens, limit);
     }
+    /** 网关缺字段或显式 null 时按 0 处理，别让详情接口 500。 */
+    private static long Long(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<long>(out var number) ? number : 0;
     private async Task<(long Tokens,long Limit)> ContextUsageAsync(string id, string provider, string model, CancellationToken ct) {
         var raw = await management.Invoke("session_context", JsonSerializer.SerializeToElement(new { session_id = id }), ct);
         return WindowFrom(JsonNode.Parse(raw.GetRawText())!, provider, model);
