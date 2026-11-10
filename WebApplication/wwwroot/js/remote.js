@@ -1134,7 +1134,7 @@ class RemoteControl {
         // 右键菜单 - 点击外部关闭
         document.addEventListener('click', (e) => {
             const contextMenu = document.getElementById('context-menu');
-            if (contextMenu && !contextMenu.contains(e.target)) {
+            if (contextMenu && !contextMenu.contains(e.target) && !e.target.closest?.('#context-menu, #file-mobile-settings-btn')) {
                 this.hideContextMenu();
             }
         });
@@ -6233,6 +6233,7 @@ volumes:
     }
 
     showFileViewSheet() {
+        this.hideContextMenu();
         const current = this.fileSortColumn;
         const nextView = (sort) => {
             this.fileSortColumn = sort;

@@ -5,8 +5,9 @@
         system: 'controls', processes: 'processes', desktop: 'screenshot', terminal: 'terminal',
         docker: 'docker', 'docker/images': 'images', 'docker/compose': 'compose', files: 'files'
     };
-    const sources = { storage:'/storage', cloudflare: '/cloudflare', home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
+    const sources = { 'phone-tools':'/phone-tools', storage:'/storage', cloudflare: '/cloudflare', home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
     const assets = {
+        'phone-tools':{styles:['workspace-pages.css','phone-tools.css'],scripts:['web-api.js','phone-tools.js']},
         storage: {styles:['workspace-pages.css','storage.css'],scripts:['web-api.js','storage.js']},
         cloudflare: { styles: ['workspace-pages.css', 'cloudflare.css'], scripts: ['web-api.js', 'cloudflare.js'] },
         remote: { styles: ['remote.css', 'performance.css', 'vendor/xterm/xterm.css'], scripts: ['remote-nav.js', 'mp4box.all.min.js', 'performance.js', 'media-preview.js', 'vendor/xterm/xterm.js', 'vendor/xterm/addon-fit.js', 'remote.js'] },
@@ -15,7 +16,7 @@
         hermes: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-history-cache.js', 'agent-workspace.js'] },
         identity: { styles: ['workspace-pages.css', 'identity-settings.css'], scripts: ['web-api.js', 'oidc-settings.js'] }
     };
-    const titles = { storage:'空间管理', cloudflare: 'Cloudflare', home: '总览', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes', identity: '身份验证' };
+    const titles = { 'phone-tools':'手机工具', storage:'空间管理', cloudflare: 'Cloudflare', home: '总览', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes', identity: '身份验证' };
     const loadedScripts = new Set([...document.scripts].map(script => new URL(script.src, location.href).pathname));
     const loadedStyles = new Set([...document.querySelectorAll('link[rel="stylesheet"]')].map(link => new URL(link.href, location.href).pathname));
     const pendingScripts = new Map();
@@ -28,6 +29,7 @@
 
     const legacy = () => {
         const path = location.pathname.toLowerCase();
+        if (path === '/phone-tools') return 'phone-tools';
         if (path === '/storage') return 'storage';
         if (path === '/cloudflare') return 'cloudflare';
         if (path === '/settings/auth') return 'identity';
@@ -193,7 +195,7 @@
             event.preventDefault(); window.RemoteToolWorkspace.remote(params.get('tab') || 'controls', params.get('path') || params.get('composePath'));
         } else {
             const path = url.pathname.toLowerCase();
-            const route = path === '/storage' ? 'storage' : path === '/cloudflare' ? 'cloudflare' : path === '/settings/auth' ? 'identity' : path === '/hangfire' ? 'jobs' : path.startsWith('/agents/') ? (path.includes('hermes') ? 'hermes' : 'codex') : null;
+            const route = path === '/phone-tools' ? 'phone-tools' : path === '/storage' ? 'storage' : path === '/cloudflare' ? 'cloudflare' : path === '/settings/auth' ? 'identity' : path === '/hangfire' ? 'jobs' : path.startsWith('/agents/') ? (path.includes('hermes') ? 'hermes' : 'codex') : null;
             if (route) { event.preventDefault(); location.hash = `/${route}`; }
         }
     });

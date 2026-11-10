@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
             { title: '概览', items: [{ key: 'home', href: '/#/', icon: '/icons/home.svg', label: '总览' }] },
             { title: '设备管理', items: [
                 { key: 'controls', href: '/#/system', icon: '/icons/speed.svg', label: '系统与监控' },
+                { key: 'phone-tools', href: '/#/phone-tools', icon: '/icons/smartphone.svg', label: '手机工具' },
                 { key: 'processes', href: '/#/processes', icon: '/icons/memory.svg', label: '进程' },
                 { key: 'screenshot', href: '/#/desktop', icon: '/icons/desktop_windows.svg', label: '远程桌面' },
                 { key: 'terminal', href: '/#/terminal', icon: '/icons/terminal.svg', label: '终端' },
@@ -32,7 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
             methods: {
                 sync() {
                     const route = location.hash.match(/^#\/([^?]*)/)?.[1] || 'home';
-                    this.currentTitle = ({ storage:'空间管理', home:'总览', cloudflare:'Cloudflare', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes', identity:'身份验证' })[route] || 'RemoteTool';
+                    this.currentTitle = ({ 'phone-tools':'手机工具', storage:'空间管理', home:'总览', cloudflare:'Cloudflare', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes', identity:'身份验证' })[route] || 'RemoteTool';
                 }
             },
             mounted() { this.sync(); window.addEventListener('hashchange', this.sync); window.addEventListener('workspace-route-change', this.sync); },
@@ -187,7 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const path = location.pathname.toLowerCase();
         let current = 'home';
         const route = location.hash.match(/^#\/([^?]*)/)?.[1];
-        if (route) current = ({home:'home',storage:'storage',cloudflare:'cloudflare',identity:'identity',system:'controls',processes:'processes',desktop:'screenshot',terminal:'terminal',docker:'docker','docker/images':'docker','docker/compose':'docker',files:'files',jobs:'hangfire',codex:'codex',hermes:'hermes'})[route] || 'home';
+        if (route) current = ({home:'home','phone-tools':'phone-tools',storage:'storage',cloudflare:'cloudflare',identity:'identity',system:'controls',processes:'processes',desktop:'screenshot',terminal:'terminal',docker:'docker','docker/images':'docker','docker/compose':'docker',files:'files',jobs:'hangfire',codex:'codex',hermes:'hermes'})[route] || 'home';
         else if (path.startsWith('/agents/')) current = path.includes('hermes') ? 'hermes' : 'codex';
         else if (path.startsWith('/hangfire')) current = 'hangfire';
         else if (path.startsWith('/remote')) {

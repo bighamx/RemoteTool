@@ -40,14 +40,14 @@ test('Hermes reasoning streams through the actual byte/SSE parser and consumer w
  assert.equal(s.messages.length,0);assert.equal(s.liveSegments.length,2);assert.equal(s.liveSegments[1].text,'正常回答');
 });
 
-test('terminal events flush pending reasoning, reconnect retains it, and a new run clears it before any tokens arrive',()=>{
+test('terminal events flush reasoning before collapse, and reconnect/new runs cannot resurrect ended reasoning',()=>{
  const h=fixture(),s=h.state;
  s.onRunEvent({seq:1,event:'reasoning.delta',run_id:'r',delta:'一'});
  s.onRunEvent({seq:1,event:'reasoning.delta',run_id:'r',delta:'重复'});
  s.onRunEvent({seq:2,event:'run.completed',run_id:'r'});
- assert.equal(reasoningText(s),'一');assert.equal(s.reasoningEnded,true);assert.equal(h.timers.size,0);
- s.onRunEvent({seq:3,event:'reasoning.delta',run_id:'r',delta:'迟到'});h.tick();assert.equal(reasoningText(s),'一');
- s.stopEventStream();s.ensureEventStream('r');assert.equal(reasoningText(s),'一');
+ assert.equal(reasoningText(s),'一');assert.equal(s.reasoningEnded,true);assert.equal(h.timers.size,1);assert.ok(s.liveSegments[0].collapsing);
+ s.onRunEvent({seq:3,event:'reasoning.delta',run_id:'r',delta:'迟到'});h.tick();assert.equal(reasoningText(s),'');
+ s.stopEventStream();s.ensureEventStream('r');assert.equal(reasoningText(s),'');
  s.activeRun='next';s.ensureEventStream('next');
  assert.equal(reasoningText(s),'');assert.equal(s.reasoningEnded,false);
  s.onRunEvent({event:'reasoning.delta',run_id:'r',delta:'旧轮迟到'});
@@ -78,9 +78,9 @@ test('reasoning follows existing narration bubbles across tools and interjection
  s.messages.push({id:3,role:'user',content:'插话',timestamp:1004});
  emit('reasoning.delta','插话后的思考',1005);h.tick();
  const items=h.options.computed.timeline.call(s);
- assert.deepEqual(Array.from(items,item=>item.message?.id||item.segment.text),[1,'第一段思考','第二段思考',2,3,'插话后的思考']);
+ assert.deepEqual(Array.from(items,item=>item.message?.id||item.segment.text),[1,'第一段思考第二段思考',2,3,'插话后的思考']);
  assert.equal(reasoningText(s),'第一段思考第二段思考插话后的思考');
- assert.equal(s.visibleLiveSegments.filter(row=>row.reasoning).length,3,'token fragments update a bubble; tool boundaries start a new narration');
+ assert.equal(s.visibleLiveSegments.filter(row=>row.reasoning).length,2,'tool boundaries retain reasoning; real assistant narration starts a new card');
 });
 
 test('reconnecting an active run keeps its growing narration and sequence cursor',()=>{
