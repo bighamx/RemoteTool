@@ -208,6 +208,9 @@ html.ui-m3 .context-menu, html.ui-m3 .bookmark-dropdown, html.ui-m3 .create-drop
     border: 0; border-radius: var(--md-radius-s); background: var(--md-surface-2); box-shadow: var(--shadow);
 }
 html.ui-m3 .dialog-container { border: 0; border-radius: 28px; background: var(--md-surface-2); box-shadow: var(--shadow); }
+html.ui-m3 .compose-picker-container { border: 0; border-radius: 24px; background: var(--md-surface-1); color: var(--md-on-surface); }
+html.ui-m3 .compose-picker-header, html.ui-m3 .compose-picker-footer { background: var(--md-surface-1); border-color: var(--md-outline-variant); }
+html.ui-m3 .picker-enter-btn, html.ui-m3 .picker-select-btn { padding: 0 10px; white-space: nowrap; }
 html.ui-m3 .processes-header h2, html.ui-m3 .docker-section h2, html.ui-m3 .docker-section h3, html.ui-m3 .files-header h2 { font-weight: 500; }
 
 /* ---------- Tables (files, processes, docker) ---------- */

@@ -557,12 +557,13 @@
 </div>
 
 <!-- 通用文件选择对话框 -->
-<div id="file-picker-dialog" class="compose-picker-dialog" style="display: none;">
+<div id="file-picker-dialog" class="compose-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="picker-dialog-title" style="display: none;">
     <div class="compose-picker-container">
         <div class="compose-picker-header">
             <h3 id="picker-dialog-title">选择文件</h3>
-            <button type="button" id="picker-close-btn" class="btn btn-secondary">✕</button>
+            <button type="button" id="picker-close-btn" class="btn btn-secondary" aria-label="关闭文件选择">✕</button>
         </div>
+        <p id="picker-description" class="picker-description" hidden></p>
         <div id="picker-breadcrumb" class="picker-breadcrumb"></div>
         <div class="picker-toolbar">
             <button type="button" id="picker-home-btn" class="btn btn-secondary btn-sm">🏠 根</button>
@@ -588,6 +589,7 @@
             <div id="picker-empty" class="picker-empty" style="display: none;">暂无文件</div>
         </div>
         <div class="compose-picker-footer">
+            <p id="picker-message" class="picker-message" role="status" hidden></p>
             <!-- 用于文件夹选择模式的确认按钮 -->
             <button type="button" id="picker-confirm-btn" class="btn btn-primary">确定选择</button>
             <button type="button" id="picker-cancel-btn" class="btn btn-secondary" style="margin-left:10px;">取消</button>
