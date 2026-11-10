@@ -5,8 +5,8 @@
         system: 'controls', processes: 'processes', desktop: 'screenshot', terminal: 'terminal',
         docker: 'docker', 'docker/images': 'images', 'docker/compose': 'compose', files: 'files'
     };
-    const sources = { 'phone-tools':'/phone-tools', storage:'/storage', cloudflare: '/cloudflare', home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
-    const assets = {
+    const sources = { claude:'/agents/claude', 'phone-tools':'/phone-tools', storage:'/storage', cloudflare: '/cloudflare', home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
+    const assets = { claude:{styles:['claude.css'],scripts:['web-api.js','claude.js']},
         'phone-tools':{styles:['workspace-pages.css','phone-tools.css'],scripts:['web-api.js','phone-tools.js']},
         storage: {styles:['workspace-pages.css','storage.css'],scripts:['web-api.js','storage.js']},
         cloudflare: { styles: ['workspace-pages.css', 'cloudflare.css'], scripts: ['web-api.js', 'cloudflare.js'] },
@@ -16,7 +16,7 @@
         hermes: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-history-cache.js', 'agent-workspace.js'] },
         identity: { styles: ['workspace-pages.css', 'identity-settings.css'], scripts: ['web-api.js', 'oidc-settings.js'] }
     };
-    const titles = { 'phone-tools':'手机工具', storage:'空间管理', cloudflare: 'Cloudflare', home: '总览', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes', identity: '身份验证' };
+    const titles = { claude:'Claude Code', 'phone-tools':'手机工具', storage:'空间管理', cloudflare: 'Cloudflare', home: '总览', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes', identity: '身份验证' };
     const loadedScripts = new Set([...document.scripts].map(script => new URL(script.src, location.href).pathname));
     const loadedStyles = new Set([...document.querySelectorAll('link[rel="stylesheet"]')].map(link => new URL(link.href, location.href).pathname));
     const pendingScripts = new Map();
@@ -33,7 +33,7 @@
         if (path === '/storage') return 'storage';
         if (path === '/cloudflare') return 'cloudflare';
         if (path === '/settings/auth') return 'identity';
-        if (path.startsWith('/agents/')) return path.includes('hermes') ? 'hermes' : 'codex';
+        if (path.startsWith('/agents/')) return path.includes('claude') ? 'claude' : path.includes('hermes') ? 'hermes' : 'codex';
         if (path === '/hangfire') return 'jobs';
         if (path.startsWith('/remote')) {
             const tab = new URLSearchParams(location.hash.slice(1)).get('tab') || 'controls';
@@ -145,7 +145,7 @@
             main.removeAttribute('aria-busy');
             for (const element of main.querySelectorAll(':scope > .workspace-module')) element.hidden = element !== section;
             document.body.classList.toggle('workspace-fitted', route === 'terminal' || route === 'desktop');
-            document.body.classList.toggle('workspace-agent-visible', key === 'codex' || key === 'hermes');
+            document.body.classList.toggle('workspace-agent-visible', key === 'codex' || key === 'hermes' || key === 'claude');
             if (key === 'remote') {
                 const tab = remoteTabs[route];
                 const activate = () => {
@@ -195,7 +195,7 @@
             event.preventDefault(); window.RemoteToolWorkspace.remote(params.get('tab') || 'controls', params.get('path') || params.get('composePath'));
         } else {
             const path = url.pathname.toLowerCase();
-            const route = path === '/phone-tools' ? 'phone-tools' : path === '/storage' ? 'storage' : path === '/cloudflare' ? 'cloudflare' : path === '/settings/auth' ? 'identity' : path === '/hangfire' ? 'jobs' : path.startsWith('/agents/') ? (path.includes('hermes') ? 'hermes' : 'codex') : null;
+            const route = path === '/phone-tools' ? 'phone-tools' : path === '/storage' ? 'storage' : path === '/cloudflare' ? 'cloudflare' : path === '/settings/auth' ? 'identity' : path === '/hangfire' ? 'jobs' : path.startsWith('/agents/') ? (path.includes('claude') ? 'claude' : path.includes('hermes') ? 'hermes' : 'codex') : null;
             if (route) { event.preventDefault(); location.hash = `/${route}`; }
         }
     });

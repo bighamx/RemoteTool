@@ -53,7 +53,7 @@ private class FullEdition(
     override fun reloadSettings() = updates.reloadCloudSettings()
     override fun openUpdates() = updates.open()
     override fun normalizeRoute(route: String) = if (route == "文件") "Codex" else route
-    override fun ownsToolbar(route: String) = route in listOf("Codex", "Hermes", "文件", "Cloudflare", "空间管理")
+    override fun ownsToolbar(route: String) = route in listOf("Codex", "Hermes", "Claude Code", "文件", "Cloudflare", "空间管理")
     private fun draft(deviceId: String?) = shares.ready?.takeIf { it.deviceId == deviceId }
     override fun shareId(deviceId: String?) = draft(deviceId)?.id
     override fun shareRoute(deviceId: String?) = draft(deviceId)?.let { if (it.agent == "codex") "Codex" else "Hermes" }
@@ -98,6 +98,7 @@ private class FullEdition(
         }
     }
     @Composable override fun MoreItems(onDetail: (String) -> Unit) {
+        ToolRow("Claude Code", "官方 Claude 本机会话", Icons.Outlined.Code) { onDetail("Claude Code") }
         ToolRow("空间管理", "本机缓存 · 会话附件 · 服务端回收站", Icons.Outlined.Storage) { onDetail("空间管理") }
         ToolRow("Cloudflare", "DNS · R2 · D1 · Tunnel", icon = {
             androidx.compose.foundation.Image(painterResource(R.drawable.ic_cloudflare), null, Modifier.size(24.dp))
@@ -133,6 +134,7 @@ private class FullEdition(
         onDetail: (String) -> Unit, onClose: () -> Unit): Boolean {
         val sharedDraft = draft(deviceId)
         when (route) {
+            "Claude Code" -> ClaudeScreen(api, deviceId, onClose)
             "空间管理" -> StorageScreen(api,deviceId,onClose)
             "Cloudflare" -> CloudflareScreen(api, error, onClose)
             "系统" -> SystemScreen(api, onProcesses = { onDetail("进程") }, onTerminal = { onDetail("终端") }, onError = error)

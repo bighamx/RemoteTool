@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
             { title: '自动化与智能体', items: [
                 { key: 'hangfire', href: '/#/jobs', icon: '/icons/schedule.svg', label: '定时任务' },
                 { key: 'codex', href: '/#/codex', icon: '/icons/codex.png', label: 'Codex' },
+                { key:'claude',href:'/#/claude',icon:'/icons/claude.svg',label:'Claude Code' },
                 { key: 'hermes', href: '/#/hermes', icon: '/icons/hermes.svg', label: 'Hermes' }
             ] },
             { title: '设置', items: [
@@ -33,7 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
             methods: {
                 sync() {
                     const route = location.hash.match(/^#\/([^?]*)/)?.[1] || 'home';
-                    this.currentTitle = ({ 'phone-tools':'手机工具', storage:'空间管理', home:'总览', cloudflare:'Cloudflare', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes', identity:'身份验证' })[route] || 'RemoteTool';
+                    this.currentTitle = ({ 'phone-tools':'手机工具', claude:'Claude Code', storage:'空间管理', home:'总览', cloudflare:'Cloudflare', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes', identity:'身份验证' })[route] || 'RemoteTool';
                 }
             },
             mounted() { this.sync(); window.addEventListener('hashchange', this.sync); window.addEventListener('workspace-route-change', this.sync); },

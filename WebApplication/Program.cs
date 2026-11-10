@@ -162,6 +162,7 @@ builder.Services.AddSingleton<HermesCompaction>();
             builder.Services.AddSingleton<Services.RemoteControl.FileBookmarkStore>();
             builder.Services.AddSingleton<HermesNativeAttachments>();
             builder.Services.AddSingleton<CodexBridge>();
+            builder.Services.AddSingleton<ClaudeBridge>();
             builder.Services.AddSingleton<ITitleModelGateway>(services => services.GetRequiredService<CodexBridge>());
             builder.Services.AddKeyedSingleton("codex", new HermesAttachments("codex"));
             builder.Services.AddHttpClient("codex", client => client.Timeout = Timeout.InfiniteTimeSpan)

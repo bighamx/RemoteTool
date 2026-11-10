@@ -1,0 +1,36 @@
+(() => {
+    const host=document.getElementById('claude-app'); if(!host)return;
+    const api=window.RemoteToolApi, base='/api/claude';
+    const terminal=new Set(['completed','failed','cancelled','acceptance_unknown']);
+    const pendingKey=id=>'remotetool:claude:pending:'+id;
+    const draftKey=id=>'remotetool:claude:draft:'+id;
+    const text=blocks=>typeof blocks==='string'?blocks:(blocks||[]).map(b=>b.type==='text'?b.text:b.type==='tool_use'?`工具 · ${b.name}\n${JSON.stringify(b.input,null,2)}`:b.type==='tool_result'?`工具结果\n${typeof b.content==='string'?b.content:text(b.content)}`:b.type==='thinking'?'':`[${b.type || '消息'}]`).filter(Boolean).join('\n');
+    const app=Vue.createApp({
+        data:()=>({sessions:[],selected:null,messages:[],events:[],cursor:0,run:null,setup:{},error:'',refreshing:false,sending:false,acting:false,polling:false,synced:false,loadingSession:false,epoch:0,draft:'',pending:null,answers:{},creating:false,newTitle:'',newCwd:'',newPermission:'default',createError:'',timer:null}),
+        computed:{
+            running(){return !!this.run&&!terminal.has(this.run.status);},
+            request(){return this.run?.request;},
+            statusText(){return this.loadingSession?'加载会话…':this.pending?'发送待核对':({started:'执行中',waiting:'等待确认',completed:'已完成',failed:'未完成',cancelled:'已停止',acceptance_unknown:'结果待核对'})[this.run?.status]||'';},
+            liveMessages(){return this.events.filter(e=>['user','assistant','tool_result'].includes(e.type)).map(e=>({id:e.seq,role:e.type==='user'?'你':e.type==='assistant'?'Claude':'工具',text:e.data.text||text(e.data.blocks)}));},
+            streamText(){let chunks='';for(const row of this.events){if(row.type==='assistant')chunks='';if(row.type==='stream'&&row.data.type==='content_block_delta'&&row.data.delta?.type==='text_delta')chunks+=row.data.delta.text;}return chunks;},
+        },
+        watch:{selected(value){host.classList.toggle('claude-chat-open',!!value);},draft(value){if(this.selected?.managed)localStorage.setItem(draftKey(this.selected.id),value);}},
+        methods:{
+            messageText(m){return m.content||text(m.blocks);},
+            chooseAnswer(q,value){if(!q.multiSelect){this.answers[q.question]=value;return;}const set=new Set((this.answers[q.question]||'').split(', ').filter(Boolean));if(set.has(value))set.delete(value);else set.add(value);this.answers[q.question]=[...set].join(', ');},
+            async refresh(){if(this.refreshing)return;this.refreshing=true;this.error='';try{const [setup,list]=await Promise.all([api.get(base+'/setup'),api.get(base+'/sessions')]);this.setup=setup;this.sessions=list.data||[];}catch(e){this.error=e.message;}finally{this.refreshing=false;}},
+            async create(){if(this.sending)return;this.sending=true;this.createError='';try{const row=await api.post(base+'/sessions',{title:this.newTitle,cwd:this.newCwd,permission_mode:this.newPermission});this.sessions.unshift(row);this.creating=false;await this.select(row);}catch(e){this.createError=e.message;}finally{this.sending=false;}},
+            async select(row){const epoch=++this.epoch;this.loadingSession=true;this.selected=row;this.messages=[];this.events=[];this.run=null;this.cursor=0;this.synced=false;this.answers={};this.error='';this.draft=localStorage.getItem(draftKey(row.id))||'';try{this.pending=JSON.parse(localStorage.getItem(pendingKey(row.id))||'null');}catch{this.pending=null;}try{const [history,run]=await Promise.all([api.get(`${base}/sessions/${api.id(row.id)}/messages`),api.get(`${base}/sessions/${api.id(row.id)}/active-run`)]);if(epoch!==this.epoch)return;this.messages=history.data||[];this.run=run.id?run:null;if(this.pending)await this.checkReceipt();await this.poll();}catch(e){if(epoch===this.epoch)this.error=e.message;}finally{if(epoch===this.epoch)this.loadingSession=false;}},
+            async send(){if(this.loadingSession||this.sending||this.running||this.run?.status==='acceptance_unknown'||this.pending||!this.selected?.managed||!this.draft.trim())return;const id=this.selected.id,epoch=this.epoch,input=this.draft,key=crypto.randomUUID?.()||('msg'+Date.now().toString(16)+Math.random().toString(16).slice(2));this.pending={key,input};localStorage.setItem(pendingKey(id),JSON.stringify(this.pending));this.sending=true;this.error='';try{const run=await api.post(base+'/runs',{session_id:id,input},{'Idempotency-Key':key});if(epoch!==this.epoch)return;this.accept(run);}catch(e){if(epoch!==this.epoch)return;if(e.delivery==='rejected'){this.pending=null;localStorage.removeItem(pendingKey(id));}this.error=e.delivery==='rejected'?e.message:'发送结果待核对，请检查回执，避免重复发送。';}finally{this.sending=false;}},
+            accept(run){this.run=run;this.pending=null;this.draft='';this.events=[];this.cursor=0;this.synced=false;this.answers={};localStorage.removeItem(pendingKey(run.session_id));localStorage.removeItem(draftKey(run.session_id));},
+            async checkReceipt(){if(!this.pending||!this.selected)return;const epoch=this.epoch,key=this.pending.key;try{const run=await api.get(`${base}/receipts/${api.id(key)}`);if(epoch!==this.epoch||this.pending?.key!==key)return;if(run.id)this.accept(run);else this.error='尚未找到接收回执，请稍后核对；未自动重发。';}catch(e){if(epoch===this.epoch)this.error=e.message;}},
+            async poll(){if(this.polling||this.synced||!this.selected||!this.run?.id||document.visibilityState==='hidden'||host.closest('[hidden]'))return;this.polling=true;const epoch=this.epoch,id=this.run.id;try{const [run,events]=await Promise.all([api.get(`${base}/runs/${api.id(id)}`),api.get(`${base}/runs/${api.id(id)}/events?after=${this.cursor}`)]);if(epoch!==this.epoch||this.run?.id!==id)return;if(run.request?.id!==this.run.request?.id)this.answers={};this.run=run;this.events.push(...events.data);this.cursor=events.cursor;
+                if(terminal.has(run.status)&&events.cursor===run.sequence){const history=await api.get(`${base}/sessions/${api.id(run.session_id)}/messages`);if(epoch!==this.epoch||this.run?.id!==id)return;const last=this.events.filter(e=>e.type==='assistant').at(-1)?.data.id;if(last&&history.data.some(m=>m.id===last)){this.messages=history.data;this.events=[];this.synced=true;}else if(!this.events.length){this.messages=history.data;this.synced=true;}else if(!last)this.synced=true;}
+            }catch(e){if(epoch===this.epoch)this.error=e.message;}finally{this.polling=false;}},
+            async reply(allow){if(this.acting||!this.request)return;this.acting=true;const epoch=this.epoch,id=this.run.id,requestId=this.request.id;try{await api.post(`${base}/runs/${api.id(id)}/reply`,{request_id:requestId,allow,answers:{...this.answers}});if(epoch===this.epoch&&this.run?.id===id&&this.request?.id===requestId){this.run.request=null;this.answers={};}}catch(e){if(epoch===this.epoch)this.error=e.message;}finally{this.acting=false;}},
+            async stop(){if(this.acting)return;this.acting=true;try{await api.post(`${base}/runs/${api.id(this.run.id)}/stop`);}catch(e){this.error=e.message;}finally{this.acting=false;}},
+        },
+        mounted(){void this.refresh();this.timer=setInterval(()=>this.poll(),1000);},
+        beforeUnmount(){clearInterval(this.timer);this.epoch++;},
+    });app.mount(host);
+})();
