@@ -117,7 +117,7 @@ const dotnet = process.env.REMOTETOOL_TEST_DOTNET || 'dotnet';
             else if(p.endsWith('/model-options'))result={provider:'third',model:'private-model',providers:[{slug:'openai',aliases:['openai','company_login'],name:'OpenAI / ChatGPT',official_provider:true,models:[{model:'official-model'}]},{slug:'third',name:'Fixture Provider',models:[{model:'private-model'}],models_warning:'Fixture discovery warning'}]};
             else if(p.endsWith('/providers'))result=officialQuota?{provider:'company_login',official_provider:true,endpoints:[]}:{provider:'third',official_provider:false,endpoints:[{id:'third',name:'Fixture Provider',current:true,model:'private-model',auth_kind:'api_key'}]};
             else if(p.endsWith('/workspaces')||p.endsWith('/accounts'))result={current:'saved-official',data:[{id:'saved-official',workspace_name:'Saved official',email:'fixture@example.test'}]};
-            else if(p.endsWith('/usage'))result=officialQuota?{rateLimits:{primary:{windowDurationMins:300,usedPercent:46},secondary:{windowDurationMins:10080,usedPercent:49}}}:{available:false,error:'fixture quota unavailable'};
+            else if(p.endsWith('/usage')){const usage={rateLimits:{primary:{windowDurationMins:300,usedPercent:officialQuota?46:77},secondary:{windowDurationMins:10080,usedPercent:officialQuota?49:92}}};result=p.includes('/workspaces/')?{workspace_id:'saved-official',available:true,usage}:usage;}
             else if(p.endsWith('/schedules'))result={items:[]};
             else if(p.endsWith('/projects'))result={data:[]};
             else if(p.endsWith('/session')||p.endsWith('/linked-hidden'))result=detail;
@@ -135,6 +135,9 @@ const dotnet = process.env.REMOTETOOL_TEST_DOTNET || 'dotnet';
         await inspector.getByLabel('模型',{exact:true}).fill('custom-model');
         assert.equal(await inspector.getByLabel('模型',{exact:true}).inputValue(),'custom-model');
         await inspector.locator('.agent-inspector-close').click();
+        await page.locator('.agent-quota-summary').getByText('5 小时 · 剩余 23%',{exact:true}).waitFor();
+        await page.locator('.agent-quota-summary').getByText('周额度 · 剩余 8%',{exact:true}).waitFor();
+        await page.locator('.agent-quota-summary').getByText('官方额度 · Saved official',{exact:true}).waitFor();
         await page.locator('.agent-quota-summary').click();
         await page.getByText('当前使用三方 Provider：Fixture Provider',{exact:true}).waitFor();
         assert.equal(await visibleModal().getByText('当前工作空间',{exact:true}).count(),0);
