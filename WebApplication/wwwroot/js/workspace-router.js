@@ -12,7 +12,7 @@
         docker: 'docker', 'docker/images': 'images', 'docker/compose': 'compose', files: 'files'
     };
     const sources = { claude:'/agents/claude', 'phone-tools':'/phone-tools', storage:'/storage', cloudflare: '/cloudflare', home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
-    const assets = { claude:{styles:['claude.css'],scripts:['web-api.js','claude.js']},
+    const assets = { claude:{styles:['claude.css'],scripts:['web-api.js','vendor/markdown-it/markdown-it.min.js','claude-content.js','claude.js']},
         'phone-tools':{styles:['workspace-pages.css','phone-tools.css'],scripts:['web-api.js','phone-tools.js']},
         storage: {styles:['workspace-pages.css','storage.css'],scripts:['web-api.js','storage.js']},
         cloudflare: { styles: ['workspace-pages.css', 'cloudflare.css'], scripts: ['web-api.js', 'cloudflare.js'] },

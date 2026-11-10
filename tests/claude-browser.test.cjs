@@ -17,7 +17,15 @@ await page.route('**/api/claude/**',async route=>{const request=route.request(),
 if(p.endsWith('/setup'))result={ready:true,message:'官方 Claude Code 已登录'};
 else if(p.endsWith('/sessions')&&request.method()==='POST'){const body=request.postDataJSON();assert.equal(body.permission_mode,'default');sessions=[managed,...sessions];result=managed;}
 else if(p.endsWith('/sessions'))result={data:sessions};
-else if(p.endsWith('/messages'))result={data:p.includes('/native/')?[{id:'old',role:'user',content:'<img src=x onerror=alert(1)>'}]:[]};
+else if(p.endsWith('/messages'))result={data:p.includes('/native/')?[
+...Array.from({length:80},(_,i)=>({id:'earlier-'+i,role:'assistant',blocks:[{type:'text',text:'Earlier message '+i}]})),
+{id:'call-read',role:'assistant',blocks:[{type:'thinking',thinking:'not a chat message'},{type:'tool_use',id:'read-source',name:'Read',input:{file_path:'/project/source.js'}}]},
+{id:'read-result',role:'user',blocks:[{type:'tool_result',tool_use_id:'read-source',content:'RAW_TOOL_SOURCE\n'+'source code\n'.repeat(8000)}]},
+{id:'call-write',role:'assistant',blocks:[{type:'tool_use',id:'write-source',name:'Write',input:{file_path:'/project/fixed.js',content:'RAW_WRITE_SOURCE\n'.repeat(3000)}}]},
+{id:'write-result',role:'user',blocks:[{type:'tool_result',tool_use_id:'write-source',content:'File saved'}]},
+{id:'final',role:'assistant',blocks:[{type:'text',text:'**完成修复**\n\n- 保留对话\n- 折叠工具\n\n```js\n'+('const line = 1;\n'.repeat(25))+'```\n\n[unsafe](javascript:alert(1))'}]},
+{id:'old',role:'user',content:'<img src=x onerror=alert(1)>'}
+]:[]};
 else if(p.endsWith('/active-run'))result=p.includes('/managed/')?(run||{}):{};
 else if(p.endsWith('/runs')&&request.method()==='POST'){posts++;postedKeys.push(request.headers()['idempotency-key']);if(failSend){receipt=null;await route.abort();return;}run={id:'run',session_id:'managed',status:'waiting',sequence:2,request:{id:'permission',tool:'Bash',input:{command:'echo fixture'}}};receipt=run;result=run;}
 else if(p.includes('/receipts/'))result=receipt||{pending:true};
@@ -27,6 +35,15 @@ else if(p.endsWith('/events')){const after=Number(url.searchParams.get('after'))
 else result=run||{};
 await route.fulfill({json:result});});
 await page.goto(base+'/agents/claude');await page.getByRole('button',{name:/Terminal history/}).click();await page.getByText('<img src=x onerror=alert(1)>',{exact:true}).waitFor();assert.equal(await page.locator('.claude-history img').count(),0);assert.equal(await page.getByRole('button',{name:'发送',exact:true}).count(),0);
+assert.equal(await page.locator('.claude-history > .claude-message').count(),40,'long history initially shows recent content');
+assert.equal(await page.locator('.claude-tool-group[open]').count(),0);assert.equal(await page.locator('.claude-tool pre').count(),0);
+assert.equal(await page.locator('.claude-markdown strong').filter({hasText:'完成修复'}).count(),1);assert.equal(await page.locator('.claude-code-fold[open]').count(),0);assert.equal(await page.locator('.claude-code-fold').count(),1);assert.equal(await page.locator('.claude-markdown a[href^="javascript:"]').count(),0);
+assert.ok(!(await page.locator('.claude-history').textContent()).includes('RAW_TOOL_SOURCE'));
+await page.locator('.claude-tool-group > summary').click();assert.equal(await page.locator('.claude-tool pre').count(),0);await page.locator('.claude-tool').filter({hasText:'读取文件'}).locator('summary').click();await page.locator('.claude-tool[open] > pre').filter({hasText:'RAW_TOOL_SOURCE'}).waitFor();
+assert.ok((await page.locator('.claude-tool[open] > pre').boundingBox()).height<=321,'expanded source has a bounded viewport');
+await page.locator('.claude-tool-group > summary').click();await page.getByRole('button',{name:/显示更早的内容/}).click();assert.equal(await page.locator('.claude-history > .claude-message').count(),80);
+await page.locator('.claude-history').evaluate(el=>el.scrollTop=el.scrollHeight);await page.screenshot({path:path.join(temp,'claude-readable-desktop.png')});await page.setViewportSize({width:384,height:820});await page.screenshot({path:path.join(temp,'claude-readable-mobile.png')});await page.setViewportSize({width:1440,height:1000});
+
 await page.locator('.claude-sessions').getByRole('button',{name:'新建',exact:true}).click();const dialog=page.getByRole('dialog',{name:'新建 Claude 会话'});await dialog.getByLabel('本机项目绝对路径').fill('/project');await dialog.getByRole('button',{name:'创建',exact:true}).click();
 await page.getByRole('textbox',{name:'发送给 Claude'}).fill('Hello');await page.getByRole('button',{name:'发送',exact:true}).click();await page.getByRole('button',{name:'允许本次',exact:true}).waitFor();assert.equal(posts,1);assert.ok(postedKeys[0]?.length>=16);await page.getByRole('button',{name:'允许本次',exact:true}).click();assert.deepEqual(replied[0],{request_id:'permission',allow:true,answers:{}});
 await page.getByText('Streaming answer',{exact:true}).waitFor();

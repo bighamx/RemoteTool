@@ -4,6 +4,8 @@
 }
 @section Scripts {
     <script src="~/js/web-api.js" asp-append-version="true"></script>
+    <script src="~/vendor/markdown-it/markdown-it.min.js" asp-append-version="true"></script>
+    <script src="~/js/claude-content.js" asp-append-version="true"></script>
     <script src="~/js/claude.js" asp-append-version="true"></script>
 }
 <div id="claude-app" v-cloak class="claude-workspace">
@@ -19,8 +21,31 @@
         <p v-if="selected && !selected.managed" class="claude-hint">电脑已有会话目前只读；在 RemoteTool 新建会话即可远程执行。</p>
         <p v-if="error" role="alert" class="claude-error">{{error}}</p>
         <div class="claude-history" aria-live="polite">
-            <article v-for="m in messages" :key="m.id"><small>{{m.role==='user'?'你':m.role==='assistant'?'Claude':'系统'}}</small><pre>{{messageText(m)}}</pre></article>
-            <section v-if="events.length" class="claude-live"><h3>当前任务</h3><article v-for="m in liveMessages" :key="m.id"><small>{{m.role}}</small><pre>{{m.text}}</pre></article><pre v-if="streamText">{{streamText}}</pre></section>
+            <button v-if="earlierCount" type="button" class="claude-earlier" @@click="loadEarlier">显示更早的内容（还有 {{earlierCount}} 条）</button>
+            <article v-for="m in historyRows" :key="m.id" class="claude-message" :class="{'claude-tool-row':m.toolOnly,'claude-user-message':m.role==='user'}">
+                <small v-if="!m.toolOnly">{{m.role==='user'?'你':m.role==='assistant'?'Claude':'系统'}}</small>
+                <details v-if="m.toolOnly && m.parts.length>1" class="claude-tool-group" :open="!!expanded['group:'+m.id]" @@toggle="togglePart('group:'+m.id,$event)"><summary>{{toolGroup(m)}}</summary><div v-if="expanded['group:'+m.id]">
+                    <details v-for="tool in m.parts" :key="tool.key" class="claude-tool" :open="!!expanded[tool.key]" @@toggle="togglePart(tool.key,$event)"><summary><span>{{tool.name}}</span><span class="claude-tool-target">{{toolSummary(tool)}}</span><span class="claude-tool-state" :class="{error:tool.error}">{{tool.error?'错误':tool.complete?'完成':'等待结果'}}</span></summary><pre v-if="expanded[tool.key]">{{toolDetails(tool)}}</pre></details>
+                </div></details>
+                <template v-else v-for="part in m.parts" :key="part.key">
+                    <details v-if="part.kind==='tool'" class="claude-tool" :open="!!expanded[part.key]" @@toggle="togglePart(part.key,$event)"><summary><span>{{part.name}}</span><span class="claude-tool-target">{{toolSummary(part)}}</span><span class="claude-tool-state" :class="{error:part.error}">{{part.error?'错误':part.complete?'完成':'等待结果'}}</span></summary><pre v-if="expanded[part.key]">{{toolDetails(part)}}</pre></details>
+                    <details v-else-if="part.kind==='text' && part.long" class="claude-long-message" :open="!!expanded[part.key]" @@toggle="togglePart(part.key,$event)"><summary>{{part.text.slice(0,100)}}… · 展开完整内容</summary><div v-if="expanded[part.key]" class="claude-markdown" v-html="markdown(part.text)"></div></details>
+                    <div v-else-if="part.kind==='text'" class="claude-markdown" v-html="markdown(part.text)"></div>
+                    <p v-else class="claude-hint">{{part.text}}</p>
+                </template>
+            </article>
+            <section v-if="events.length" class="claude-live"><h3>当前任务</h3><article v-for="m in liveMessages" :key="m.id" class="claude-message" :class="{'claude-tool-row':m.toolOnly,'claude-user-message':m.role==='user'}">
+                <small v-if="!m.toolOnly">{{m.role==='user'?'你':m.role==='assistant'?'Claude':'系统'}}</small>
+                <details v-if="m.toolOnly && m.parts.length>1" class="claude-tool-group" :open="!!expanded['group:'+m.id]" @@toggle="togglePart('group:'+m.id,$event)"><summary>{{toolGroup(m)}}</summary><div v-if="expanded['group:'+m.id]">
+                    <details v-for="tool in m.parts" :key="tool.key" class="claude-tool" :open="!!expanded[tool.key]" @@toggle="togglePart(tool.key,$event)"><summary><span>{{tool.name}}</span><span class="claude-tool-target">{{toolSummary(tool)}}</span><span class="claude-tool-state" :class="{error:tool.error}">{{tool.error?'错误':tool.complete?'完成':'等待结果'}}</span></summary><pre v-if="expanded[tool.key]">{{toolDetails(tool)}}</pre></details>
+                </div></details>
+                <template v-else v-for="part in m.parts" :key="part.key">
+                    <details v-if="part.kind==='tool'" class="claude-tool" :open="!!expanded[part.key]" @@toggle="togglePart(part.key,$event)"><summary><span>{{part.name}}</span><span class="claude-tool-target">{{toolSummary(part)}}</span><span class="claude-tool-state" :class="{error:part.error}">{{part.error?'错误':part.complete?'完成':'等待结果'}}</span></summary><pre v-if="expanded[part.key]">{{toolDetails(part)}}</pre></details>
+                    <details v-else-if="part.kind==='text' && part.long" class="claude-long-message" :open="!!expanded[part.key]" @@toggle="togglePart(part.key,$event)"><summary>{{part.text.slice(0,100)}}… · 展开完整内容</summary><div v-if="expanded[part.key]" class="claude-markdown" v-html="markdown(part.text)"></div></details>
+                    <div v-else-if="part.kind==='text'" class="claude-markdown" v-html="markdown(part.text)"></div>
+                    <p v-else class="claude-hint">{{part.text}}</p>
+                </template>
+            </article><div v-if="streamText" class="claude-markdown" v-html="markdown(streamText)"></div></section>
             <p v-if="run?.error" role="status" class="claude-error">{{run.error}}</p>
             <p v-if="run?.usage">本轮输入 {{run.usage.tokens?.input_tokens ?? '—'}} · 输出 {{run.usage.tokens?.output_tokens ?? '—'}} Token · 参考费用 ${{run.usage.cost_usd ?? '—'}}</p>
         </div>
