@@ -24,7 +24,8 @@ document.addEventListener('DOMContentLoaded', () => {
             ] }
         ] }) });
         shell.use(ViewUIPlus);
-        shell.mount(shellNav);
+        const navigation = shell.mount(shellNav);
+        window.RemoteToolNavigation = navigation.groups.flatMap(group => group.items).map(item => ({...item}));
     }
     const titleNode = document.getElementById('workspace-topbar-title');
     if (titleNode && window.Vue) {
@@ -99,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const closeTools=()=>{if(tools?.open)tools.close();};
     document.querySelector('[data-mobile-nav="more"]')?.addEventListener('click',()=>tools?.showModal());
     tools?.querySelector('[data-close-tools]')?.addEventListener('click',closeTools);
-    tools?.querySelectorAll('a').forEach(link=>link.addEventListener('click',closeTools));
+    tools?.addEventListener('click',event=>{if(event.target.closest('a'))closeTools();});
     tools?.querySelector('[data-mobile-action="theme"]')?.addEventListener('click',()=>themeToggle?.click());
     tools?.querySelector('[data-mobile-action="logout"]')?.addEventListener('click',()=>logoutBtn?.click());
     const viewport=window.visualViewport;
@@ -195,10 +196,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const tab = new URLSearchParams(location.hash.slice(1)).get('tab') || 'controls';
             current = ['docker', 'images', 'compose'].includes(tab) ? 'docker' : tab;
         }
-        const mobileRoute=['codex','hermes','desktop'].includes(route)?route:!route||route==='system'||route==='home'?'system':'more';
-        document.querySelectorAll('[data-mobile-nav]').forEach(item=>{
-            if(item.dataset.mobileNav===mobileRoute)item.setAttribute('aria-current','page');else item.removeAttribute('aria-current');
-        });
         if(!['codex','hermes'].includes(route))document.body.classList.remove('mobile-chat-active');
         closeTools();
         document.querySelectorAll('.side-nav a').forEach(link => {
