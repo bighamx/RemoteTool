@@ -130,9 +130,9 @@ namespace RemoteTool.WebApi
                 options.Providers.Add<BrotliCompressionProvider>();
                 options.Providers.Add<GzipCompressionProvider>();
                 // SSE must stay unbuffered; binary media and range responses use their original encoding.
-                options.MimeTypes = new[] { "application/json", "application/problem+json", "text/plain", "text/css", "application/javascript", "text/html" };
+                options.MimeTypes = new[] { "application/json", "application/problem+json", "text/plain", "text/css", "application/javascript", "text/javascript", "text/html", "image/svg+xml", "application/manifest+json" };
             });
-            builder.Services.Configure<BrotliCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
+            builder.Services.Configure<BrotliCompressionProviderOptions>(options => options.Level = CompressionLevel.Optimal);
             builder.Services.Configure<GzipCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
 
             // 注册编码提供程序以支持 GBK (需 NuGet 安装 System.Text.Encoding.CodePages)
@@ -268,7 +268,13 @@ builder.Services.AddSingleton<HermesCompaction>();
             {
                 app.UseExceptionHandler("/Home/Error");
             }
-            app.UseStaticFiles();
+            ServerBuild.AssetVersion = ServerBuild.ComputeAssetVersion(app.Environment.WebRootPath);
+            app.UseStaticFiles(new StaticFileOptions {
+                OnPrepareResponse = context => {
+                    context.Context.Response.Headers.CacheControl = context.Context.Request.Query.ContainsKey("v")
+                        ? "public, max-age=31536000, immutable" : "no-cache";
+                }
+            });
             app.MapGet("/mobile", () => Results.Redirect("/"));
 
             app.UseRouting();

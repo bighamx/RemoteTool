@@ -85,7 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     window.addEventListener('appinstalled', () => { if (installButton) installButton.hidden = true; });
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname)))
-        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+        navigator.serviceWorker.register('/sw.js?v='+encodeURIComponent(document.body?.dataset.build||''), { scope: '/', updateViaCache:'none' }).catch(() => {});
 
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) {

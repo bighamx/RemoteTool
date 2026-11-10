@@ -2,13 +2,83 @@
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <meta name="theme-color" content="#10151d">
-    <title>RemoteTool</title>
-    <script>location.replace('/');</script>
+    <meta name="remotetool-launch" content="1">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="theme-color" content="#e5efe9">
+    <title>正在打开 RemoteTool</title>
+    <style>
+        :root{color-scheme:light;background:#e5efe9;color:#183d35;font:14px/1.6 system-ui,-apple-system,sans-serif}
+        *{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;padding:32px 28px;background:radial-gradient(ellipse at 50% 28%,#f6faf6 0,transparent 62%)}
+        main{width:min(300px,100%);text-align:center;transform:translateY(-16px)}
+        .mark{display:grid;place-items:center;width:100px;height:100px;margin:0 auto 20px;border:1px solid #fff9;border-radius:30px;background:#ffffff52;box-shadow:0 18px 50px #365b4810,inset 0 1px 0 #fff9}
+        .mark svg{width:82px;height:82px}.mark svg>rect{fill:transparent}
+        h1{font-size:30px;line-height:1.2;font-weight:650;letter-spacing:-1px;margin:0 0 10px} .subtitle{margin:0;color:#6b8176;font-size:14px;letter-spacing:1px}
+        .loading{margin-top:44px;text-align:left}.loading-label{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;min-height:22px}
+        #status{font-size:12px;color:#526d61;margin:0;line-height:1.6}#percentage{font-size:11px;letter-spacing:.5px;color:#6d8378;font-variant-numeric:tabular-nums}
+        progress{appearance:none;-webkit-appearance:none;display:block;width:100%;height:4px;border:0;border-radius:4px;overflow:hidden;background:#cadbd2;accent-color:#367668}
+        progress::-webkit-progress-bar{background:#cadbd2;border-radius:4px}progress::-webkit-progress-value{background:#367668;border-radius:4px}progress::-moz-progress-bar{background:#367668;border-radius:4px}
+        nav{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;min-height:44px;margin-top:22px}button,a{font:inherit;font-size:12px;color:#36695b;border:1px solid #b4cabe;border-radius:12px;background:transparent;padding:10px 16px;text-decoration:none;cursor:pointer}button{background:#235e53;color:#f1f7f3;border-color:#235e53}
+        .footnote{position:fixed;bottom:calc(26px + env(safe-area-inset-bottom));left:0;right:0;text-align:center;color:#8da295;font-size:10px;letter-spacing:2px;pointer-events:none}
+        [hidden]{display:none!important}@media(prefers-reduced-motion:no-preference){progress:not([value]){background:linear-gradient(90deg,#cadbd2 0%,#367668 45%,#cadbd2 90%);background-size:200% 100%;animation:loading 1.6s ease-in-out infinite}@keyframes loading{to{background-position:-200% 0}}}@media(max-height:450px){body{padding:16px}main{transform:none}.mark{width:64px;height:64px;border-radius:20px;margin-bottom:10px}.mark svg{width:58px;height:58px}h1{font-size:24px}.loading{margin-top:20px}.footnote{display:none}}
+    </style>
 </head>
-<body style="font:16px system-ui;background:#10151d;color:#edf4f3;padding:2rem">
-    <p>正在连接 RemoteTool…</p>
-    <noscript><a href="/" style="color:#61dbc4">打开工作台</a></noscript>
+<body>
+<main>
+    <div class="mark" aria-hidden="true"><svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#e5efe9"/>
+  <g fill="none" stroke="#235e53" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="126" y="142" width="260" height="186" rx="28"/>
+    <path d="m184 202 36 29-36 29m68 0h58m-54 68v42m-48 0h96"/>
+  </g>
+</svg></div>
+    <h1>RemoteTool</h1>
+    <p class="subtitle">连接你的工作台</p>
+    <section class="loading" aria-label="启动状态"><div class="loading-label"><p id="status" role="status" aria-live="polite">正在连接电脑…</p><span id="percentage" aria-hidden="true"></span></div><progress id="progress" aria-label="界面准备进度"></progress></section>
+    <nav><button id="retry" type="button" hidden>重试</button><a id="direct" href="/?rt-start=1" hidden>直接打开 →</a></nav>
+    <noscript><p>请启用 JavaScript，或使用上方入口打开工作台。</p></noscript>
+</main>
+<div class="footnote" aria-hidden="true">REMOTE WORKSPACE</div>
+<script>
+(() => {
+    const status = document.getElementById('status'), progress = document.getElementById('progress');
+    const retry = document.getElementById('retry'), direct = document.getElementById('direct'), percentage = document.getElementById('percentage');
+    const target = new URL(location.href); if (target.pathname === '/app-start.html') target.searchParams.delete('v'); target.pathname = '/'; target.searchParams.set('rt-start', '1');
+    direct.href = target.pathname + target.search + target.hash;
+    let active = false;
+    async function start() {
+        if (active) return;
+        active = true; retry.hidden = true; direct.hidden = true; percentage.textContent = ''; status.textContent = '正在连接电脑…'; progress.removeAttribute('value');
+        const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 25000);
+        const slow = setTimeout(() => {direct.hidden = false;}, 3000);
+        try {
+            const response = await fetch('/api/app-start', {cache:'no-store', credentials:'same-origin', signal:abort.signal});
+            if (!response.ok) throw new Error('连接失败');
+            const data = await response.json();
+            if (!Array.isArray(data.assets) || !data.assets.length || data.assets.length > 40) throw new Error('入口无效');
+            const assets = data.assets.map(path => {
+                const url = new URL(path, location.origin);
+                if (url.origin !== location.origin || !/^\/(css|js|helper\/lib)\//.test(url.pathname)) throw new Error('资源无效');
+                return url.pathname + url.search;
+            });
+            progress.max = assets.length; progress.value = 0; percentage.textContent = '0%'; status.textContent = '正在准备界面…';
+            await Promise.all(assets.map(async url => {
+                const resource = await fetch(url, {cache:'force-cache', credentials:'same-origin', signal:abort.signal});
+                if (!resource.ok) throw new Error('资源加载失败');
+                const type = resource.headers.get('Content-Type') || '';
+                if (!/^(text|application)\/(javascript|ecmascript)|^text\/css/i.test(type)) throw new Error('资源类型无效');
+                await resource.arrayBuffer(); progress.value++; percentage.textContent = Math.round(progress.value / progress.max * 100) + '%';
+            }));
+            status.textContent = '界面已准备，正在进入…';
+            // Let the public launch screen paint before replacing the document.
+            requestAnimationFrame(() => requestAnimationFrame(() => location.replace(direct.href)));
+        } catch {
+            abort.abort(); status.textContent = navigator.onLine ? '连接较慢或暂时不可用，请重试，也可以直接打开。' : '网络已断开，恢复连接后重试。';
+            retry.hidden = false; direct.hidden = false; percentage.textContent = '';
+        } finally {clearTimeout(timer); clearTimeout(slow); active = false;}
+    }
+    retry.addEventListener('click', start);
+    requestAnimationFrame(start);
+})();
+</script>
 </body>
 </html>
