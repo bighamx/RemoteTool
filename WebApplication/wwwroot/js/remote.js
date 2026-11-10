@@ -89,6 +89,11 @@ class RemoteControl {
         this.moveAckTimer = null;
         // 全屏状态
         this.isFullscreen = false;
+        this.fullscreenEntering = false;
+        this.fullscreenNativeActive = false;
+        this.fullscreenHistoryClosing = false;
+        this.fullscreenHistoryId = `remote-desktop-${Date.now()}`;
+        this.fullscreenAnchor = null;
         // 可编辑的文本文件扩展名列表
         this.editableExtensions = [
             // 代码文件
@@ -575,11 +580,7 @@ class RemoteControl {
             });
         });
 
-        // 全屏按钮事件
-        const fullscreenBtn = document.getElementById('fullscreen-btn');
-        if (fullscreenBtn) {
-            fullscreenBtn.addEventListener('click', () => this.toggleFullscreen());
-        }
+        this.initFullscreen();
 
         // 画质预设下拉框事件
         const qualityPreset = document.getElementById('quality-preset');
@@ -1354,47 +1355,108 @@ class RemoteControl {
 
     // 切换全屏
     toggleFullscreen() {
-        if (this.isFullscreen) {
-            this.exitFullscreen();
-        } else {
-            this.enterFullscreen();
-        }
+        return this.isFullscreen ? this.exitFullscreen() : this.enterFullscreen();
     }
 
-    // 进入全屏
-    enterFullscreen() {
-        const container = document.getElementById('screenshot-container');
-        const hint = document.getElementById('fullscreen-exit-hint');
-        const btn = document.getElementById('fullscreen-btn');
-
-        if (container) {
-            container.classList.add('fullscreen');
-            this.isFullscreen = true;
-            this.setStreamZoom(this.streamZoom);
-            if (btn) btn.textContent = '⛶ 退出全屏';
-
-            // 显示退出提示
-            if (hint) {
-                hint.classList.add('show');
-                setTimeout(() => hint.classList.remove('show'), 3000);
+    initFullscreen() {
+        document.getElementById('fullscreen-btn')?.addEventListener('click', () => this.toggleFullscreen());
+        const exit = document.getElementById('fullscreen-exit-btn');
+        exit?.addEventListener('click', () => this.exitFullscreen());
+        exit?.addEventListener('touchstart', event => event.stopPropagation());
+        document.getElementById('desktop-options-toggle')?.addEventListener('click', event => {
+            const controls = event.currentTarget.closest('.screenshot-controls');
+            const expanded = controls.classList.toggle('mobile-controls-expanded');
+            event.currentTarget.setAttribute('aria-expanded', String(expanded));
+        });
+        document.addEventListener('fullscreenchange', () => {
+            if (document.fullscreenElement === document.getElementById('screenshot-container')) {
+                this.fullscreenNativeActive = true;
+            } else if (this.fullscreenNativeActive) {
+                this.fullscreenNativeActive = false;
+                if (this.isFullscreen) void this.exitFullscreen();
             }
+        });
+        window.addEventListener('popstate', () => {
+            if (history.state?.remoteToolDesktopFullscreen === this.fullscreenHistoryId) return;
+            this.fullscreenHistoryClosing = false;
+            if (this.isFullscreen) void this.exitFullscreen(true);
+        });
+        window.addEventListener('workspace-route-change', () => {
+            if (this.isFullscreen && window.RemoteToolWorkspace && !/^#\/desktop(?:\?|$)/.test(location.hash))
+                void this.exitFullscreen(true);
+        });
+    }
 
-            console.log('Entered fullscreen mode');
+    async enterFullscreen() {
+        if (this.isFullscreen || this.fullscreenEntering || this.fullscreenHistoryClosing) return;
+        const container = document.getElementById('screenshot-container');
+        if (!container) return;
+        this.fullscreenEntering = true;
+        this.isFullscreen = true;
+        const mobile = this.isPhoneFileLayout();
+        let hintText = mobile ? '返回或点击右上角退出全屏' : '按 Esc 或点击右上角退出全屏';
+        let hintDuration = 3000;
+        this.fullscreenAnchor = document.createComment('remote-desktop');
+        container.before(this.fullscreenAnchor);
+        document.body.appendChild(container);
+        container.classList.add('fullscreen');
+        document.body.classList.add('remote-desktop-fullscreen');
+        if (mobile) history.pushState({...history.state, remoteToolDesktopFullscreen:this.fullscreenHistoryId}, '', location.href);
+        const btn = document.getElementById('fullscreen-btn');
+        btn?.setAttribute('aria-label', '退出全屏');
+        try {
+            try {
+                if (!container.requestFullscreen) throw new Error('Fullscreen unavailable');
+                await container.requestFullscreen({navigationUI:'hide'});
+            } catch (error) {
+                console.warn('Remote desktop fullscreen request failed', error?.name, error?.message);
+                hintText = '浏览器未允许原生全屏，当前为网页展开模式；' + hintText;
+                hintDuration = 6000;
+            }
+            if (!this.isFullscreen) {
+                if (document.fullscreenElement === container) await document.exitFullscreen();
+                return;
+            }
+            if (mobile && document.fullscreenElement === container) {
+                try {
+                    await screen.orientation.lock('landscape');
+                    if (!this.isFullscreen) screen.orientation.unlock();
+                } catch {
+                    hintText = '请旋转手机横屏；' + hintText;
+                    hintDuration = 6000;
+                }
+            }
+            if (!this.isFullscreen) return;
+            this.setStreamZoom(this.streamZoom);
+            const hint = document.getElementById('fullscreen-exit-hint');
+            if (hint) {
+                hint.textContent = hintText;
+                hint.classList.add('show');
+                setTimeout(() => hint.classList.remove('show'), hintDuration);
+            }
+        } finally {
+            this.fullscreenEntering = false;
         }
     }
 
-    // 退出全屏
-    exitFullscreen() {
+    async exitFullscreen(fromHistory = false) {
+        if (!this.isFullscreen) return;
+        this.isFullscreen = false;
         const container = document.getElementById('screenshot-container');
-        const btn = document.getElementById('fullscreen-btn');
-
-        if (container) {
-            container.classList.remove('fullscreen');
-            this.isFullscreen = false;
-            this.setStreamZoom(this.streamZoom);
-            if (btn) btn.textContent = '⛶ 全屏';
-
-            console.log('Exited fullscreen mode');
+        if (document.fullscreenElement === container) {
+            try { await document.exitFullscreen(); } catch {}
+        }
+        try { screen.orientation?.unlock(); } catch {}
+        container?.classList.remove('fullscreen');
+        document.body.classList.remove('remote-desktop-fullscreen');
+        this.fullscreenAnchor?.replaceWith(container);
+        this.fullscreenAnchor = null;
+        this.fullscreenNativeActive = false;
+        this.setStreamZoom(this.streamZoom);
+        document.getElementById('fullscreen-btn')?.setAttribute('aria-label', '进入全屏');
+        if (!fromHistory && history.state?.remoteToolDesktopFullscreen === this.fullscreenHistoryId) {
+            this.fullscreenHistoryClosing = true;
+            history.back();
         }
     }
 
@@ -2448,7 +2510,7 @@ class RemoteControl {
         const container = document.getElementById('screenshot-container');
         if (!container) return false;
         const el = document.activeElement;
-        return el === container || container.contains(el);
+        return !el?.closest?.('.remote-fullscreen-exit') && (el === container || container.contains(el));
     }
 
     handleRemoteKeydown(e) {

@@ -104,27 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const viewport=window.visualViewport;
     const virtualKeyboard=navigator.virtualKeyboard;
     let viewportWidth=innerWidth,viewportBaseline=innerHeight,viewportFrame=null,keyboardPoll=null,composerFocusedAt=0,composerMeasuredKeyboard=false;
-    const keyboardSamples=[];
-    const sampleKeyboard=reason=>{
-        const composer=document.querySelector('.workspace-module:not([hidden]) .agent-compose-input-row');
-        const bounds=composer?.getBoundingClientRect();
-        const rect=virtualKeyboard?.boundingRect;
-        const sample={reason,at:Date.now(),fallback:document.body.classList.contains('mobile-keyboard-unreported'),inner:[innerWidth,innerHeight],client:[document.documentElement.clientWidth,document.documentElement.clientHeight],visual:viewport?{height:viewport.height,top:viewport.offsetTop,scale:viewport.scale}:null,keyboard:rect?{y:rect.y,height:rect.height,overlays:virtualKeyboard.overlaysContent}:null,shellHeight:document.querySelector('.app-shell')?.getBoundingClientRect().height,composer:bounds?{top:bounds.top,bottom:bounds.bottom}:null,editing:!!document.activeElement?.matches('input,textarea,[contenteditable="true"]')};
-        const signature=JSON.stringify({...sample,reason:null,at:null});
-        if(reason!=='poll'||keyboardSamples.at(-1)?.signature!==signature){keyboardSamples.push({signature,sample});if(keyboardSamples.length>40)keyboardSamples.shift();}
-    };
-    const diagnostics=document.getElementById('keyboard-diagnostics');
     tools?.querySelector('[data-mobile-action="reload"]')?.addEventListener('click',()=>location.reload());
-    tools?.querySelector('[data-mobile-action="keyboard"]')?.addEventListener('click',()=>{
-        sampleKeyboard('report');
-        document.getElementById('keyboard-diagnostics-text').value=JSON.stringify({version:'keyboard-unreported-4',browser:navigator.userAgent,standalone:matchMedia('(display-mode:standalone)').matches,samples:keyboardSamples.map(row=>row.sample)},null,2);
-        closeTools();diagnostics?.showModal();
-    });
-    diagnostics?.querySelector('[data-close-keyboard]')?.addEventListener('click',()=>diagnostics.close());
-    diagnostics?.querySelector('[data-copy-keyboard]')?.addEventListener('click',async event=>{
-        const field=document.getElementById('keyboard-diagnostics-text');
-        try{await navigator.clipboard.writeText(field.value);event.target.textContent='已复制';}catch{field.focus();field.select();}
-    });
     const syncViewport=()=>{
         viewportFrame=null;
         try{if(virtualKeyboard&&virtualKeyboard.overlaysContent)virtualKeyboard.overlaysContent=false;}catch{}
@@ -155,13 +135,13 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('resize',queueViewport);
     document.addEventListener('focusin',()=>{
         composerFocusedAt=document.activeElement?.matches('.agent-compose-input-row textarea')?Date.now():0;composerMeasuredKeyboard=false;
-        queueViewport();sampleKeyboard('focus');
-        if(keyboardPoll===null&&mobileMedia.matches)keyboardPoll=setInterval(()=>{queueViewport();requestAnimationFrame(()=>sampleKeyboard('poll'));},150);
+        queueViewport();
+        if(keyboardPoll===null&&mobileMedia.matches)keyboardPoll=setInterval(queueViewport,150);
     });
     document.addEventListener('focusout',()=>{
         composerFocusedAt=0;
-        queueViewport();sampleKeyboard('blur');
-        setTimeout(()=>{if(!document.activeElement?.matches('input,textarea,[contenteditable="true"]')){clearInterval(keyboardPoll);keyboardPoll=null;queueViewport();sampleKeyboard('settled');}},500);
+        queueViewport();
+        setTimeout(()=>{if(!document.activeElement?.matches('input,textarea,[contenteditable="true"]')){clearInterval(keyboardPoll);keyboardPoll=null;queueViewport();}},500);
     });
     mobileMedia.addEventListener('change',queueViewport);syncViewport();
 

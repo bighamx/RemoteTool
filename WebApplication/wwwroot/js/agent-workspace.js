@@ -15,6 +15,8 @@
         ? location.hash?.match(/^#\/(codex|hermes)(?=\?|$)/)?.[1]===agent?new URLSearchParams(location.hash.split('?')[1]||'').get('session'):null
         : new URLSearchParams(location.search).get('session');
     let mobileQuery=null;
+    const menuHistoryId=`${storageAgent}:context-menu`;
+    let menuHistoryClosing=null, menuHistoryResolve=null, menuFocusTarget=null;
     const receiptKey = id => `remotetool:web:pending:${storageAgent}:${id}`;
     const echoKey = id => `remotetool:web:delivered:${storageAgent}:${id}`;
     const draftKey = id => `remotetool:web:draft:${storageAgent}:${id}`;
@@ -1141,11 +1143,55 @@
             async togglePin(target=null) {const session=(target&&target.id)?target:this.selected;this.closeSessionMenu();if(!session?.id)return;try{await api.post(`${base}/sessions/${api.id(session.id)}/pin`,{pinned:!session.pinned});session.pinned=!session.pinned;await this.refreshSessions();}catch(e){this.error=e.message;}},
             async deleteSession(target=null) {const session=(target&&target.id)?target:this.selected;this.closeSessionMenu();if(!session?.id)return;if(!confirm(`删除“${session.title||'此会话'}”？`))return;try{const id=session.id;await api.post(`${base}/sessions/${api.id(id)}/delete`);void historyCache?.remove(id);localStorage.removeItem(receiptKey(id));if(this.selectedId===id){this.selected=null;this.selectedId='';}this.sessions=this.sessions.filter(row=>row.id!==id);if(localStorage.getItem(selectedSessionKey)===id)localStorage.removeItem(selectedSessionKey);this.forgetSessionRoute(id);await this.refreshSessions(false);}catch(e){this.error=e.message;}},
             async forkMessage(message) {if(!this.selectedId||!message.id)return;try{const result=await api.post(`${base}/sessions/${api.id(this.selectedId)}/fork`,{message_id:message.id,fork_id:`web_fork_${newKey().replaceAll('-','')}`});const session=result.session||result;await this.refreshSessions();if(session.id)await this.select(this.sessions.find(s=>s.id===session.id)||session);}catch(e){this.error='分叉结果尚未确认，请先刷新会话列表核对。'+e.message;}},
-            openMessageMenu(event,message) {if(!message?.id)return;this.messageMenu={x:Math.max(8,Math.min(event.clientX,innerWidth-190)),y:Math.max(8,Math.min(event.clientY,innerHeight-145)),message};},
-            closeMessageMenu() {this.messageMenu=null;},
-            openSessionMenu(event,item) {if(!item?.id)return;this.sessionMenu={x:Math.max(8,Math.min(event.clientX,innerWidth-190)),y:Math.max(8,Math.min(event.clientY,innerHeight-(agent==='codex'?370:300))),session:item};},
-            closeSessionMenu() {this.sessionMenu=null;},
-            escapeMessageMenu(event) {if(event.key==='Escape'){this.closeMessageMenu();this.closeSessionMenu();this.closeSessionMenus();if(this.inspectorOpen)this.inspectorOpen=false;else if(this.mobileComposerOpen)this.mobileComposerOpen=false;}},
+            openMessageMenu(event,message) {if(!message?.id||menuHistoryClosing)return;this.sessionMenu=null;this.messageMenu={x:event.clientX,y:event.clientY,message};this.prepareContextMenu(event);},
+            closeMessageMenu() {if(this.messageMenu)return this.closeContextMenu();},
+            openSessionMenu(event,item) {if(!item?.id||menuHistoryClosing)return;this.messageMenu=null;this.sessionMenu={x:event.clientX,y:event.clientY,session:item};this.prepareContextMenu(event);},
+            closeSessionMenu() {if(this.sessionMenu)return this.closeContextMenu();},
+            prepareContextMenu(event) {
+                menuFocusTarget=event.currentTarget;
+                if(isMobile()&&history.state?.remoteToolAgentMenu!==menuHistoryId)
+                    history.pushState({...history.state,remoteToolAgentMenu:menuHistoryId},'',location.href);
+                this.$nextTick(()=>{
+                    const menu=this.$refs.contextMenu, state=this.sessionMenu||this.messageMenu;
+                    if(!menu||!state)return;
+                    if(!isMobile()){
+                        state.x=Math.max(8,Math.min(state.x,innerWidth-menu.offsetWidth-8));
+                        state.y=Math.max(8,Math.min(state.y,innerHeight-menu.offsetHeight-8));
+                    }
+                    this.$refs.contextMenuClose?.focus();
+                });
+            },
+            closeContextMenu() {
+                this.messageMenu=null;this.sessionMenu=null;
+                menuFocusTarget?.focus?.();menuFocusTarget=null;
+                if(menuHistoryClosing)return menuHistoryClosing;
+                if(history.state?.remoteToolAgentMenu!==menuHistoryId)return Promise.resolve();
+                menuHistoryClosing=new Promise(resolve=>{menuHistoryResolve=resolve;});
+                history.back();
+                return menuHistoryClosing;
+            },
+            onContextMenuPopState() {
+                if(history.state?.remoteToolAgentMenu===menuHistoryId)return;
+                this.messageMenu=null;this.sessionMenu=null;
+                menuFocusTarget?.focus?.();menuFocusTarget=null;
+                menuHistoryResolve?.();menuHistoryResolve=null;menuHistoryClosing=null;
+            },
+            async runContextMenuAction(action,target) {
+                await this.closeContextMenu();
+                await this[action](target);
+            },
+            escapeMessageMenu(event) {
+                if(this.messageMenu||this.sessionMenu){
+                    if(event.key==='Escape'){void this.closeContextMenu();return;}
+                    if(event.key==='Tab'){
+                        const buttons=[...this.$refs.contextMenu.querySelectorAll('button:not(:disabled)')];
+                        const target=event.shiftKey?buttons.at(-1):buttons[0];
+                        if(document.activeElement===(event.shiftKey?buttons[0]:buttons.at(-1))){event.preventDefault();target?.focus();}
+                    }
+                    return;
+                }
+                if(event.key==='Escape'){this.closeSessionMenus();if(this.inspectorOpen)this.inspectorOpen=false;else if(this.mobileComposerOpen)this.mobileComposerOpen=false;}
+            },
             editBlockedReason() {if(this.externalRunning)return '其他客户端正在执行，请在原客户端结束任务后编辑';if(this.activeRun)return '当前任务正在执行，请先停止任务再编辑';if(this.pending)return '请先核对待确认的消息';return '';},
             canEditMessage(message) {return message?.role==='user'&&!!message.id&&message.editable!==false&&!(this.historyCacheState&&!this.selectedStatusKnown)&&!this.activeRun&&!this.externalRunning&&!this.pending&&!this.sending;},
             async copyMessage(message) {try{if(!await this.copyPlainText(this.messageText(message)))throw new Error('复制失败，请选择消息文字后手动复制');this.$Message.success('已复制消息');}catch(e){this.error=e.message;}finally{this.closeMessageMenu();}},
@@ -1326,8 +1372,8 @@
         created() { this.loadProfiles(); },
         unmounted() { this.resetReasoning();clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
         watch: {adminOpen() {this.syncAdminClass();}, sessionsOpen() {this.syncMobileShell();}, inspectorOpen(value) {if(value)this.loadModels();}, selectedId() { this.schedules=[]; }, draft(value) {if(this.selectedId)localStorage.setItem(draftKey(this.selectedId),value);this.$nextTick(()=>this.resizeComposer());}, attachments: {deep:true,handler(value){if(agent==='hermes'&&this.selectedId)localStorage.setItem(draftFilesKey(this.selectedId),JSON.stringify(value));}}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
-        mounted() {this.syncAdminClass();this.loadAgentSetup();mobileQuery=window.matchMedia?.(mobileMedia);mobileQuery?.addEventListener('change',this.onMobileLayoutChange);this.syncMobileShell();void this.refreshSessions().finally(()=>{this.loadCapabilities();this.loadCurrentUsage();});this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible'&&this.workspaceVisible())this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible'||!this.workspaceVisible())return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadSchedules();this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
-        beforeUnmount() {mobileQuery?.removeEventListener('change',this.onMobileLayoutChange);this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}
+        mounted() {this.syncAdminClass();this.loadAgentSetup();mobileQuery=window.matchMedia?.(mobileMedia);mobileQuery?.addEventListener('change',this.onMobileLayoutChange);this.syncMobileShell();void this.refreshSessions().finally(()=>{this.loadCapabilities();this.loadCurrentUsage();});this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible'&&this.workspaceVisible())this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('popstate',this.onContextMenuPopState);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible'||!this.workspaceVisible())return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadSchedules();this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
+        beforeUnmount() {mobileQuery?.removeEventListener('change',this.onMobileLayoutChange);this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('popstate',this.onContextMenuPopState);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}
     });
     app.use(ViewUIPlus);
     app.mount(root);

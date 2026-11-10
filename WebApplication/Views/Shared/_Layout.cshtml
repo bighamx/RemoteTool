@@ -70,14 +70,9 @@
             <a href="/#/processes"><img src="/icons/memory.svg" alt=""><span><strong>进程管理</strong><small>资源占用与进程操作</small></span><span aria-hidden="true">›</span></a>
             <a href="/#/identity"><img src="/icons/shield.svg" alt=""><span><strong>身份验证</strong><small>OIDC 与 Cloudflare Access</small></span><span aria-hidden="true">›</span></a>
             <button type="button" data-mobile-action="reload"><span aria-hidden="true">↻</span><span><strong>重新加载界面</strong><small>加载最新版本</small></span></button>
-            <button type="button" data-mobile-action="keyboard"><span aria-hidden="true">⌨</span><span><strong>键盘诊断</strong><small>keyboard-unreported-4 · 仅记录窗口尺寸</small></span></button>
             <button type="button" data-mobile-action="theme"><span aria-hidden="true">◐</span><span><strong>切换深浅主题</strong></span></button>
             <button type="button" data-mobile-action="logout"><span aria-hidden="true">↪</span><span><strong>退出登录</strong></span></button>
         </div>
-    </dialog>
-    <dialog id="keyboard-diagnostics" class="mobile-tools" aria-labelledby="keyboard-diagnostics-title">
-        <header><h2 id="keyboard-diagnostics-title">键盘诊断</h2><button type="button" data-close-keyboard aria-label="关闭键盘诊断">×</button></header>
-        <div class="keyboard-diagnostics-body"><p>先在聊天框呼出键盘，再打开此页。记录不包含消息、账号或凭据。</p><textarea id="keyboard-diagnostics-text" readonly aria-label="键盘诊断记录"></textarea><button type="button" data-copy-keyboard>复制诊断</button></div>
     </dialog>
     <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
     @RenderSection("Scripts", required: false)

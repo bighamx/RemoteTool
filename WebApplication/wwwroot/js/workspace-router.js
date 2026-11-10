@@ -136,7 +136,7 @@
         pendingStatus.setAttribute('role', 'status'); retry.hidden = true;
         for (const element of main.querySelectorAll(':scope > .workspace-module')) element.hidden = element !== pending;
         main.setAttribute('aria-busy', 'true');
-        document.body.classList.remove('workspace-fitted', 'workspace-agent-visible', 'mobile-chat-active');
+        document.body.classList.remove('workspace-fitted', 'workspace-files-visible', 'workspace-agent-visible', 'mobile-chat-active');
         if (key !== 'remote' && window.remoteControl) {
             window.remoteControl.stopSysInfoAutoRefresh();
             if (window.remoteControl.streamActive) window.remoteControl.stopStream();
@@ -148,6 +148,7 @@
             main.removeAttribute('aria-busy');
             for (const element of main.querySelectorAll(':scope > .workspace-module')) element.hidden = element !== section;
             document.body.classList.toggle('workspace-fitted', route === 'terminal' || route === 'desktop');
+            document.body.classList.toggle('workspace-files-visible', route === 'files');
             document.body.classList.toggle('workspace-agent-visible', key === 'codex' || key === 'hermes');
             if (key === 'remote') {
                 const tab = remoteTabs[route];

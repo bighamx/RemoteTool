@@ -168,7 +168,9 @@
 }
 <div class="screenshot-controls" style="@(RemoteTool.WebApi.Services.RemoteControl.RemoteDesktopPlatform.Supported ? null : "display:none")">
                 <button id="stream-toggle-btn" class="btn btn-primary btn-sm">▶ 开始</button>
-                <button id="fullscreen-btn" class="btn btn-secondary btn-sm" title="全屏 (F11/Esc退出)">⛶</button>
+                <button id="fullscreen-btn" class="btn btn-secondary btn-sm" type="button" aria-label="进入全屏" title="全屏">⛶</button>
+                <button id="desktop-options-toggle" class="btn btn-secondary btn-sm mobile-only" type="button" aria-expanded="false" aria-controls="desktop-options">画质与按键</button>
+                <div id="desktop-options" class="desktop-options">
                 <span id="mac-zoom-controls" style="display:none">
                     <button id="mac-zoom-out" class="btn btn-secondary btn-sm" type="button" aria-label="缩小桌面画面">－</button>
                     <button id="mac-zoom-reset" class="btn btn-secondary btn-sm" type="button" aria-label="适应窗口">适应</button>
@@ -227,6 +229,7 @@
                 <span id="mac-stream-quality" style="display:none">Mac · H.264 · 最高 1920 宽 · 20 FPS · 双指移动/缩放</span>
                 <span id="stream-mode-indicator" class="mode-indicator">未连接</span>
                 <span id="stream-stats" class="stream-stats" title="实时视频速率、缓冲延迟" aria-hidden="true"></span>
+                </div>
             </div>
             <div class="screenshot-container" id="screenshot-container" tabindex="0" title="点击此处后按键将发送到远程" style="@(RemoteTool.WebApi.Services.RemoteControl.RemoteDesktopPlatform.Supported ? null : "display:none")">
                 <canvas id="stream-canvas"
@@ -235,6 +238,7 @@
                        muted playsinline></video>
                 <img id="stream-img" alt="Remote Screen (MJPEG Legacy)" style="cursor: crosshair; display: none;">
                 <div id="stream-placeholder" class="placeholder-text">点击"开始控制"以连接远程桌面</div>
+                <button id="fullscreen-exit-btn" class="remote-fullscreen-exit" type="button" aria-label="退出全屏">退出全屏</button>
                 <div id="fullscreen-exit-hint" class="fullscreen-exit-hint">按 Esc 或 F11 退出全屏</div>
             </div>
         </div>

@@ -189,7 +189,7 @@ const dotnet = process.env.REMOTETOOL_TEST_DOTNET || 'dotnet';
         const moreIcon=await page.locator('.mobile-more-icon').boundingBox();assert.ok(moreIcon.width<=24&&moreIcon.height<=25,'more icon has bounded dimensions');
         await page.getByRole('button',{name:'消息操作',exact:true}).first().click();
         await page.getByRole('menuitem',{name:'复制消息',exact:true}).waitFor();
-        await page.locator('.agent-conversation-head h2').click();
+        await page.getByRole('button',{name:'关闭操作菜单',exact:true}).click();
         assert.equal(await page.evaluate(()=>navigator.virtualKeyboard.overlaysContent),false,'browser keeps native keyboard avoidance');
         await composer.focus();
         await page.evaluate(()=>{Object.defineProperty(visualViewport,'height',{configurable:true,value:430});visualViewport.dispatchEvent(new Event('resize'));});
@@ -240,11 +240,6 @@ const dotnet = process.env.REMOTETOOL_TEST_DOTNET || 'dotnet';
         await page.waitForFunction(()=>!document.body.classList.contains('mobile-keyboard-unreported'));
         const restored=await page.locator('.agent-compose-input-row').boundingBox();assert.ok(restored.y>500,'finishing input restores bottom composer');
         await page.screenshot({path:path.join(temp,'mobile-chat.png'),fullPage:true});
-        await page.locator('[data-mobile-nav=more]').click();
-        await page.locator('[data-mobile-action=keyboard]').click();
-        const report=JSON.parse(await page.getByRole('textbox',{name:'键盘诊断记录',exact:true}).inputValue());
-        assert.equal(report.version,'keyboard-unreported-4');assert.ok(report.samples.some(row=>row.fallback));assert.ok(report.samples.some(row=>row.visual?.height===430));assert.ok(!JSON.stringify(report).includes('手机草稿'),'diagnostics exclude message contents');
-        await page.getByRole('button',{name:'关闭键盘诊断',exact:true}).click();
 
         for(const width of [320,360,430]){
             await page.setViewportSize({width,height:844});

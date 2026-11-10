@@ -721,13 +721,21 @@
 .screenshot-container.mac-zoom-enabled { touch-action: none; }
 #mac-zoom-controls { display: inline-flex; gap: 4px; }
 
+.desktop-options{display:contents}
+.screenshot-controls #desktop-options-toggle{display:none}
+.remote-fullscreen-exit{display:none}
+.screenshot-container.fullscreen .placeholder-text{color:#ccc}
+.screenshot-container.fullscreen .fullscreen-exit-hint{top:64px;max-width:calc(100% - 32px);text-align:center}
+body.remote-desktop-fullscreen .mobile-navigation{display:none!important}
+.screenshot-container.fullscreen .remote-fullscreen-exit{display:block;position:absolute;top:max(10px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));z-index:10001;min-height:44px;padding:8px 16px;border:1px solid #fff6;border-radius:22px;background:#000a;color:#fff;cursor:pointer}
 /* 全屏模式样式 */
 .screenshot-container.fullscreen {
     position: fixed;
     top: 0;
     left: 0;
     width: 100vw;
-    height: 100vh;
+    height: 100dvh;
+    max-height: none;
     z-index: 9999;
     padding: 0;
     border-radius: 0;
@@ -2079,6 +2087,8 @@ button.file-toolbar-disabled {
     border-radius: 8px;
     max-height: calc(100vh - 290px);
 }
+
+.file-row-main small{display:none}
 
 .files-table {
     width: 100%;
