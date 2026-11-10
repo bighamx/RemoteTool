@@ -1,5 +1,6 @@
+@inject RemoteTool.WebApi.Services.WebAssetVersion WebAssets
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" class="ui-m3" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
@@ -16,10 +17,11 @@
     <link rel="stylesheet" href="~/css/shell.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/mobile.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/server-update.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/m3.css" asp-append-version="true" />
     <script src="~/helper/lib/vue.global.prod.js" asp-append-version="true"></script>
     <script src="~/helper/lib/viewuiplus.min.js" asp-append-version="true"></script>
 </head>
-<body data-build="@DateTime.UtcNow.Ticks">
+<body data-build="@WebAssets.Value">
     <div class="app-shell">
         <aside class="app-sidebar" id="app-sidebar" aria-label="主导航">
             <a class="app-brand" href="/"><span class="app-brand-mark">R</span><span><strong>RemoteTool</strong><small>工作台</small></span></a>
