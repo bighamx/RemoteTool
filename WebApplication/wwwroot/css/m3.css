@@ -340,6 +340,45 @@ html.ui-m3 .agent-inspector { background: var(--md-surface-1); border-color: tra
     html.ui-m3 body .agent-workspace .agent-compose-input-row { border: 0; border-radius: 999px; background: var(--md-surface-2); padding: 4px; }
     html.ui-m3 body .agent-workspace .mobile-compose-send { background: var(--md-primary); color: var(--md-on-primary); width: 48px; height: 48px; }
     html.ui-m3 body .agent-workspace .mobile-compose-send:disabled { background: var(--md-surface-3); color: var(--md-on-surface-variant); opacity: 1; }
+    /* Compact session header like Android: label and its track stacked tightly, no fixed row heights. */
+    html.ui-m3 body .agent-workspace .mobile-session-info { gap: 6px; padding: 0 16px 6px; }
+    html.ui-m3 .mobile-session-info .mobile-quota { min-height: 0; gap: 16px; }
+    html.ui-m3 .mobile-quota > span { gap: 3px; }
+    html.ui-m3 .mobile-session-info button { font-size: 12px; line-height: 1.35; }
+    html.ui-m3 .mobile-context-info { display: flex; flex-direction: column; gap: 3px; min-height: 0; }
+    html.ui-m3 body .agent-workspace .agent-conversation-head { min-height: calc(52px + env(safe-area-inset-top)); }
+
+    /* Bubble meta sits at the end of the last line (Android style) instead of taking its own row.
+       A spacer after the last text line reserves room; layouts the spacer cannot cover keep the row. */
+    html.ui-m3 body .agent-workspace .agent-message:not(.from-system) > .agent-message-surface { position: relative; padding: 10px 14px; }
+    html.ui-m3 body .agent-workspace .agent-message:not(.from-system) .agent-message-meta {
+        position: absolute; right: 10px; bottom: 6px; min-height: 0; margin: 0; gap: 2px; line-height: 20px;
+    }
+    html.ui-m3 body .agent-workspace .agent-message:not(.from-system) .agent-message-text:not(.agent-markdown)::after,
+    html.ui-m3 body .agent-workspace .agent-message:not(.from-system) .agent-markdown > p:last-child::after,
+    html.ui-m3 body .agent-workspace .agent-message:not(.from-system) .agent-markdown > :is(ul,ol):last-child > li:last-child:not(:has(> :is(p,ul,ol,pre)))::after,
+    html.ui-m3 body .agent-workspace .agent-message:not(.from-system) .agent-markdown > :is(ul,ol):last-child > li:last-child > p:last-child::after {
+        content: ''; display: inline-block; width: 74px; height: 1px;
+    }
+    html.ui-m3 body .agent-workspace .agent-message-surface:is(:has(.agent-markdown > :is(pre,table,blockquote,h1,h2,h3,h4,hr,div):last-child),
+        :has(.agent-media-cards, .agent-attachments, .agent-image-attachments, .agent-tool, .agent-interaction, .delivery-state)) {
+        padding-bottom: 4px;
+    }
+    html.ui-m3 body .agent-workspace .agent-message-surface:is(:has(.agent-markdown > :is(pre,table,blockquote,h1,h2,h3,h4,hr,div):last-child),
+        :has(.agent-media-cards, .agent-attachments, .agent-image-attachments, .agent-tool, .agent-interaction, .delivery-state)) .agent-message-meta {
+        position: static; justify-content: flex-end; margin-top: 2px;
+    }
+    html.ui-m3 body .agent-workspace .agent-message-meta > span:not(.delivery-state) { margin-left: auto; font-size: 11px; }
+    /* "操作" stays a real button (iOS has no long-press menu) but shrinks to a small overflow glyph. */
+    html.ui-m3 body .agent-workspace .mobile-message-menu { min-width: 24px; min-height: 20px; height: 20px; margin: 0; padding: 0 2px; font-size: 0; border-radius: 6px; }
+    html.ui-m3 body .agent-workspace .mobile-message-menu::before { content: '⋯'; font-size: 15px; line-height: 20px; letter-spacing: 0; color: var(--md-outline); }
+    html.ui-m3 body .agent-workspace .agent-message.from-system { margin: 2px 0 10px; }
+    html.ui-m3 body .agent-workspace .from-system > .agent-message-surface { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: center; column-gap: 8px; }
+    html.ui-m3 body .agent-workspace .from-system .agent-message-meta { min-height: 0; margin: 0; }
+    html.ui-m3 body .agent-workspace .from-system .agent-message-meta > span:empty { display: none; }
+    html.ui-m3 body .agent-workspace .agent-timeline-inner { padding-top: 4px; }
+    html.ui-m3 body .agent-workspace .agent-message { margin-bottom: 10px; }
+
     html.ui-m3 body .mobile-usage-track { height: 4px; border-radius: 2px; }
     html.ui-m3 body .mobile-usage-track i { border-radius: 2px; }
 
