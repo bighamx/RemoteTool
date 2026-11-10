@@ -22,6 +22,19 @@ public static class ServerBuild
 
     public static long ReleaseSequence => ReadReleaseSequence();
 
+    /// <summary>Cache key for lazily loaded scripts/styles: stable until the deployed web assets change.</summary>
+    public static string AssetVersion { get; set; } = Version;
+
+    internal static string ComputeAssetVersion(string? webRoot) {
+        if (string.IsNullOrEmpty(webRoot) || !Directory.Exists(webRoot)) return Version;
+        var hash = new System.Text.StringBuilder(Version);
+        foreach (var file in Directory.EnumerateFiles(webRoot, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal)) {
+            var info = new FileInfo(file);
+            hash.Append('|').Append(Path.GetRelativePath(webRoot, file)).Append(':').Append(info.Length).Append(':').Append(info.LastWriteTimeUtc.Ticks);
+        }
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(hash.ToString())))[..16].ToLowerInvariant();
+    }
+
     private static long ReadReleaseSequence() => long.TryParse(typeof(ServerBuild).Assembly
         .GetCustomAttributes<AssemblyMetadataAttribute>().FirstOrDefault(a => a.Key == "ReleaseSequence")?.Value, out var value) ? value : 0;
 

@@ -1,0 +1,350 @@
+/*
+ * Material 3 skin for the web workbench, matched to the Android app (green-grey tonal palette,
+ * pill buttons, filled cards, no shadows). Pure presentation: no element is added or removed from
+ * the flow except decorative icons/descriptions. Every rule is scoped by html.ui-m3 so it wins over
+ * lazily appended page styles, and removing that class restores the previous look.
+ */
+
+/* ---------- Tokens ---------- */
+html.ui-m3 {
+    --md-primary: #2b6a58;
+    --md-on-primary: #ffffff;
+    --md-primary-container: #b1f0d9;
+    --md-secondary-container: #d6e8df;
+    --md-on-secondary-container: #10201a;
+    --md-background: #f5f8f6;
+    --md-surface: #f5f8f6;
+    --md-surface-1: #eef3f0;
+    --md-surface-2: #e7eeea;
+    --md-surface-3: #dfe7e3;
+    --md-on-surface: #171d1b;
+    --md-on-surface-variant: #404945;
+    --md-outline: #707975;
+    --md-outline-variant: #c0c9c4;
+    --md-error: #ba1a1a;
+    --md-error-container: #ffdad6;
+    --md-tertiary: #3e6283;
+    --md-scrim: rgb(0 0 0 / .32);
+    --md-radius-s: 12px;
+    --md-radius-m: 16px;
+    --md-radius-l: 24px;
+    --md-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    --md-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Cascadia Code", monospace;
+    color-scheme: light;
+}
+html.ui-m3[data-theme="dark"] {
+    --md-primary: #95d4bd;
+    --md-on-primary: #00382b;
+    --md-primary-container: #0a5141;
+    --md-secondary-container: #344b42;
+    --md-on-secondary-container: #d0e8dc;
+    --md-background: #0f1513;
+    --md-surface: #0f1513;
+    --md-surface-1: #171d1b;
+    --md-surface-2: #1b211f;
+    --md-surface-3: #252b29;
+    --md-on-surface: #dee4e0;
+    --md-on-surface-variant: #bfc9c3;
+    --md-outline: #89938e;
+    --md-outline-variant: #404945;
+    --md-error: #ffb4ab;
+    --md-error-container: #93000a;
+    --md-tertiary: #a6cbf0;
+    --md-scrim: rgb(0 0 0 / .55);
+    color-scheme: dark;
+}
+/* Map the legacy variables every page already uses onto the M3 roles. */
+html.ui-m3, html.ui-m3[data-theme] {
+    --bg-primary: var(--md-background);
+    --bg-secondary: var(--md-surface-1);
+    --bg-tertiary: var(--md-surface-2);
+    --bg-card: var(--md-surface-1);
+    --text-primary: var(--md-on-surface);
+    --text-secondary: var(--md-on-surface-variant);
+    --text-muted: var(--md-outline);
+    --accent-primary: var(--md-primary);
+    --accent-success: var(--md-primary);
+    --accent-danger: var(--md-error);
+    --danger-color: var(--md-error);
+    --border-color: var(--md-outline-variant);
+    --border-radius: var(--md-radius-m);
+    --shadow: 0 2px 6px 2px rgb(0 0 0 / .08), 0 1px 2px rgb(0 0 0 / .12);
+}
+html.ui-m3 body { font-family: var(--md-font); background: var(--md-background); color: var(--md-on-surface); -webkit-font-smoothing: antialiased; }
+html.ui-m3 ::selection { background: color-mix(in srgb, var(--md-primary) 28%, transparent); }
+html.ui-m3 :focus-visible { outline: 2px solid var(--md-primary); outline-offset: 2px; }
+html.ui-m3 * { scrollbar-width: thin; scrollbar-color: var(--md-outline-variant) transparent; }
+
+/* ---------- Buttons ---------- */
+html.ui-m3 .btn,
+html.ui-m3 .ivu-btn {
+    min-height: 36px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--md-outline-variant);
+    background: transparent; color: var(--md-primary); font-family: inherit; font-size: 14px; font-weight: 500;
+    box-shadow: none; transition: background-color .15s, border-color .15s, color .15s;
+}
+html.ui-m3 .btn:hover, html.ui-m3 .ivu-btn:hover { background: color-mix(in srgb, var(--md-primary) 8%, transparent); border-color: var(--md-outline-variant); color: var(--md-primary); transform: none; }
+html.ui-m3 .btn:focus, html.ui-m3 .btn:active:focus { box-shadow: none; }
+html.ui-m3 .btn-sm, html.ui-m3 .ivu-btn-small { min-height: 32px; padding: 0 12px; font-size: 13px; }
+html.ui-m3 .btn-primary, html.ui-m3 .ivu-btn-primary,
+html.ui-m3 .btn-primary:hover, html.ui-m3 .ivu-btn-primary:hover { border-color: transparent; background: var(--md-primary); color: var(--md-on-primary); }
+html.ui-m3 .btn-primary:hover, html.ui-m3 .ivu-btn-primary:hover { box-shadow: 0 1px 3px rgb(0 0 0 / .2); filter: brightness(1.06); }
+html.ui-m3 .btn-secondary, html.ui-m3 .ivu-btn-default, html.ui-m3 .workspace-page .ivu-btn-default {
+    border-color: transparent; background: var(--md-secondary-container); color: var(--md-on-secondary-container);
+}
+html.ui-m3 .btn-secondary:hover, html.ui-m3 .ivu-btn-default:hover { background: color-mix(in srgb, var(--md-on-secondary-container) 8%, var(--md-secondary-container)); color: var(--md-on-secondary-container); border-color: transparent; }
+html.ui-m3 .btn-danger, html.ui-m3 .ivu-btn-error { border-color: transparent; background: var(--md-error); color: #fff; }
+html.ui-m3[data-theme="dark"] .btn-danger, html.ui-m3[data-theme="dark"] .ivu-btn-error { color: #690005; }
+html.ui-m3 .ivu-btn-text { border-color: transparent; background: transparent; }
+html.ui-m3 .ivu-btn-icon-only { padding: 0; width: 36px; min-width: 36px; }
+html.ui-m3 .ivu-btn-icon-only.ivu-btn-small { width: 32px; min-width: 32px; }
+html.ui-m3 .btn:disabled, html.ui-m3 .ivu-btn[disabled] { opacity: .38; filter: none; box-shadow: none; }
+html.ui-m3 .btn-small { border-radius: 999px; }
+
+/* ---------- Inputs ---------- */
+html.ui-m3 input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]),
+html.ui-m3 select, html.ui-m3 textarea,
+html.ui-m3 .ivu-input, html.ui-m3 .ivu-select-selection, html.ui-m3 .workspace-page .ivu-input {
+    border: 1px solid var(--md-outline-variant); border-radius: var(--md-radius-s); background: var(--md-background);
+    color: var(--md-on-surface); font-family: inherit; box-shadow: none;
+}
+html.ui-m3 input:not([type=checkbox]):not([type=radio]):focus, html.ui-m3 select:focus, html.ui-m3 textarea:focus,
+html.ui-m3 .ivu-input:focus, html.ui-m3 .ivu-select-visible .ivu-select-selection { border-color: var(--md-primary); box-shadow: 0 0 0 1px var(--md-primary); outline: 0; }
+html.ui-m3 input[type=checkbox], html.ui-m3 input[type=radio] { accent-color: var(--md-primary); }
+html.ui-m3 .ivu-checkbox-checked .ivu-checkbox-inner, html.ui-m3 .ivu-switch-checked { background: var(--md-primary); border-color: var(--md-primary); }
+
+/* ---------- Surfaces ---------- */
+html.ui-m3 .workspace-panel, html.ui-m3 .metric-card,
+html.ui-m3 .control-card, html.ui-m3 .perf-card, html.ui-m3 .overview-shortcut {
+    border: 0; border-radius: var(--md-radius-l); background: var(--md-surface-1); box-shadow: none;
+}
+html.ui-m3 .metric-card:hover, html.ui-m3 .overview-shortcut:hover { background: var(--md-surface-2); border-color: transparent; transform: none; box-shadow: none; }
+html.ui-m3 .workspace-alert { border: 0; border-radius: var(--md-radius-m); background: var(--md-error-container); color: var(--md-error); }
+html.ui-m3[data-theme="dark"] .workspace-alert { color: #ffdad6; }
+html.ui-m3 .workspace-alert-success { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+html.ui-m3 .ivu-modal-content, html.ui-m3 .workspace-modal { border: 0; border-radius: 28px; background: var(--md-surface-2); color: var(--md-on-surface); box-shadow: var(--shadow); }
+html.ui-m3 .ivu-modal-header, html.ui-m3 .ivu-modal-footer, html.ui-m3 .workspace-modal-head { border-color: transparent; }
+html.ui-m3 .ivu-modal-header-inner, html.ui-m3 .workspace-modal-head h2 { font-size: 20px; font-weight: 500; color: var(--md-on-surface); }
+html.ui-m3 .ivu-modal-mask, html.ui-m3 .workspace-modal-backdrop { background: var(--md-scrim); }
+html.ui-m3 .ivu-message-notice-content, html.ui-m3 .ivu-notice-notice { border-radius: 8px; background: #2c322f; color: #edf2ee; box-shadow: var(--shadow); }
+html.ui-m3 .ivu-message-notice-content .ivu-message-custom-content span { color: inherit; }
+html.ui-m3 .ivu-dropdown-menu, html.ui-m3 .ivu-select-dropdown { border-radius: 4px; background: var(--md-surface-2); box-shadow: var(--shadow); }
+
+/* ---------- Desktop shell: navigation drawer + top app bar ---------- */
+html.ui-m3 .app-sidebar { background: var(--md-surface-1); border-right: 0; }
+html.ui-m3 .app-brand { height: 72px; padding: 0 24px; border-bottom: 0; }
+html.ui-m3 .app-brand-mark { width: 36px; height: 36px; border-radius: 12px; background: var(--md-primary-container); color: var(--md-primary); font-size: 18px; }
+html.ui-m3[data-theme="dark"] .app-brand-mark { color: var(--md-on-secondary-container); }
+html.ui-m3 .app-brand strong { font-size: 16px; font-weight: 600; }
+html.ui-m3 .side-nav { padding: 0 12px 16px; }
+html.ui-m3 .side-nav-label { padding: 18px 16px 8px; color: var(--md-on-surface-variant); font-size: 12px; font-weight: 500; letter-spacing: .02em; }
+html.ui-m3 .side-nav a { min-height: 48px; margin: 0; padding: 0 16px; border-radius: 999px; color: var(--md-on-surface-variant); font-size: 14px; font-weight: 500; gap: 12px; }
+html.ui-m3 .side-nav a:hover { background: color-mix(in srgb, var(--md-on-surface) 8%, transparent); color: var(--md-on-surface); }
+html.ui-m3 .side-nav a.active { background: var(--md-secondary-container); color: var(--md-on-secondary-container); font-weight: 600; box-shadow: none; }
+html.ui-m3 .side-nav a .nav-icon-mark { width: 22px; height: 22px; background: var(--md-on-surface-variant); }
+html.ui-m3 .side-nav a.active .nav-icon-mark { background: var(--md-on-secondary-container); }
+html.ui-m3 .sidebar-footer { padding: 14px 24px; border-top: 0; background: transparent; color: var(--md-on-surface-variant); }
+html.ui-m3 .sidebar-online-dot { background: #2e9e6f; box-shadow: 0 0 0 3px color-mix(in srgb, #2e9e6f 22%, transparent); }
+
+html.ui-m3 .app-topbar { height: 64px; padding: 0 16px 0 24px; background: var(--md-background); border-bottom: 0; }
+html.ui-m3 .topbar-title small { display: none; }
+html.ui-m3 .topbar-title strong { margin: 0; font-size: 22px; font-weight: 500; letter-spacing: 0; }
+html.ui-m3 .app-topbar .header-right { gap: 8px; }
+html.ui-m3 .app-topbar #user-info { font-size: 13px; color: var(--md-on-surface-variant); }
+html.ui-m3 .app-topbar .btn { min-height: 40px; }
+html.ui-m3 #theme-toggle { width: 40px; padding: 0; border-color: transparent; background: transparent; font-size: 18px; }
+html.ui-m3 #theme-toggle:hover { background: color-mix(in srgb, var(--md-on-surface) 8%, transparent); }
+html.ui-m3 #logout-btn { border: 1px solid var(--md-outline-variant); background: transparent; color: var(--md-primary); }
+html.ui-m3 .app-workspace .tabs, html.ui-m3 .remote-section-heading { background: var(--md-background); border-bottom: 1px solid var(--md-outline-variant); }
+html.ui-m3 .tab { color: var(--md-on-surface-variant); font-weight: 500; }
+html.ui-m3 .tab.active { color: var(--md-primary); }
+html.ui-m3 .tab.active::after { height: 3px; border-radius: 3px 3px 0 0; background: var(--md-primary); }
+html.ui-m3 .workspace-route-state h1 { font-weight: 500; }
+
+/* Page headings follow Android: plain large title, no eyebrow. */
+html.ui-m3 .workspace-heading .eyebrow { display: none; }
+html.ui-m3 .workspace-heading h1 { font-size: 28px; font-weight: 500; letter-spacing: 0; }
+html.ui-m3 .workspace-heading p { color: var(--md-on-surface-variant); font-size: 14px; }
+html.ui-m3 .metric-card span { font-size: 13px; color: var(--md-on-surface-variant); }
+html.ui-m3 .metric-card strong { font-size: 32px; font-weight: 400; color: var(--md-primary); }
+html.ui-m3 .overview-shortcut .shortcut-icon { border-radius: 14px; background: var(--md-secondary-container); }
+html.ui-m3 .overview-shortcut .shortcut-glyph { background: var(--md-on-secondary-container); }
+html.ui-m3 .overview-shortcut strong { font-size: 16px; font-weight: 500; }
+html.ui-m3 .pill-tabs .ivu-btn, html.ui-m3 .pill-tabs button { border-radius: 8px; }
+html.ui-m3 .data-row { border-color: var(--md-outline-variant); }
+html.ui-m3 .data-row:hover { background: color-mix(in srgb, var(--md-on-surface) 4%, transparent); }
+
+/* ---------- System page: Android-style action chips instead of big emoji cards ---------- */
+html.ui-m3 #controls-tab .controls-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
+html.ui-m3 #controls-tab .control-card {
+    position: relative; display: inline-flex; align-items: center; justify-content: center; min-width: 88px; min-height: 48px;
+    padding: 0 24px; border: 1px solid var(--md-outline); border-radius: 999px; background: transparent;
+    color: var(--md-primary); cursor: pointer; transform: none; box-shadow: none; overflow: visible;
+}
+html.ui-m3 #controls-tab .control-card::before, html.ui-m3 #controls-tab .control-card::after { display: none; }
+html.ui-m3 #controls-tab .control-card:hover { background: color-mix(in srgb, var(--md-primary) 8%, transparent); transform: none; box-shadow: none; }
+html.ui-m3 #controls-tab .control-card .control-icon, html.ui-m3 #controls-tab .control-card p { display: none; }
+html.ui-m3 #controls-tab .control-card h3 { margin: 0; font-size: 15px; font-weight: 500; color: inherit; }
+html.ui-m3 #controls-tab .control-card.danger { color: var(--md-error); }
+html.ui-m3 #controls-tab .control-card.danger:hover { background: color-mix(in srgb, var(--md-error) 8%, transparent); }
+html.ui-m3 #controls-tab .control-card.loading, html.ui-m3 #controls-tab .control-card[aria-busy=true] { opacity: .5; }
+html.ui-m3 .system-monitor-heading h2, html.ui-m3 .perf-heading h2 { font-size: 22px; font-weight: 500; }
+html.ui-m3 .perf-range { border-radius: 8px; }
+
+/* ---------- Remote page sections (files, docker, processes, compose) ---------- */
+html.ui-m3 .files-toolbar, html.ui-m3 .docker-section, html.ui-m3 .compose-editor-section, html.ui-m3 .compose-history-section,
+html.ui-m3 .compose-status-section, html.ui-m3 .sysinfo-section, html.ui-m3 .screenshot-controls, html.ui-m3 .upload-panel-container {
+    border: 0; border-radius: var(--md-radius-l); background: var(--md-surface-1); box-shadow: none;
+}
+html.ui-m3 .docker-info-grid .info-item, html.ui-m3 .info-item, html.ui-m3 .compose-status-item, html.ui-m3 .history-item {
+    border: 0; border-radius: var(--md-radius-m); background: var(--md-surface-2); box-shadow: none;
+}
+html.ui-m3 .files-breadcrumb { border: 0; border-radius: var(--md-radius-s); background: var(--md-surface-2); }
+html.ui-m3 .files-controls .btn-icon, html.ui-m3 .btn-icon {
+    width: 40px; height: 40px; min-height: 40px; padding: 0; display: inline-grid; place-items: center;
+    border: 0; border-radius: 50%; background: transparent; color: var(--md-on-surface-variant);
+}
+html.ui-m3 .btn-icon:hover { background: color-mix(in srgb, var(--md-on-surface) 8%, transparent); }
+html.ui-m3 .context-menu, html.ui-m3 .bookmark-dropdown, html.ui-m3 .create-dropdown {
+    border: 0; border-radius: var(--md-radius-s); background: var(--md-surface-2); box-shadow: var(--shadow);
+}
+html.ui-m3 .dialog-container { border: 0; border-radius: 28px; background: var(--md-surface-2); box-shadow: var(--shadow); }
+html.ui-m3 .processes-header h2, html.ui-m3 .docker-section h2, html.ui-m3 .docker-section h3, html.ui-m3 .files-header h2 { font-weight: 500; }
+
+/* ---------- Tables (files, processes, docker) ---------- */
+html.ui-m3 .files-table-container, html.ui-m3 .processes-table-container, html.ui-m3 .docker-table-container,
+html.ui-m3 .images-table-container, html.ui-m3 .containers-table-container {
+    border: 0; border-radius: var(--md-radius-l); background: var(--md-surface-1); box-shadow: none;
+}
+html.ui-m3 .files-table th, html.ui-m3 .processes-table th, html.ui-m3 #remote-page table th {
+    background: var(--md-surface-1); color: var(--md-on-surface-variant); font-size: 13px; font-weight: 500; border-color: var(--md-outline-variant);
+}
+html.ui-m3 #remote-page table td { border-color: color-mix(in srgb, var(--md-outline-variant) 60%, transparent); }
+html.ui-m3 #remote-page table tbody tr:hover { background: color-mix(in srgb, var(--md-on-surface) 5%, transparent); }
+html.ui-m3 .files-header, html.ui-m3 .files-toolbar-card, html.ui-m3 #files-tab > :first-child { border: 0; box-shadow: none; }
+
+/* ---------- Agent workspace (Codex / Hermes) ---------- */
+html.ui-m3 .agent-workspace { background: var(--md-background); }
+html.ui-m3 .agent-sessions { background: var(--md-background); border-right: 1px solid var(--md-outline-variant); }
+html.ui-m3 .agent-pane-identity h2 { font-size: 22px; font-weight: 500; }
+html.ui-m3 .agent-pane-identity small { color: var(--md-on-surface-variant); }
+html.ui-m3 .agent-pane-head .ivu-btn:not(.ivu-btn-primary) { border-color: transparent; background: transparent; color: var(--md-on-surface-variant); }
+html.ui-m3 .agent-pane-head .ivu-btn:not(.ivu-btn-primary):hover { background: color-mix(in srgb, var(--md-on-surface) 8%, transparent); }
+html.ui-m3 .agent-search .ivu-input { height: 48px; border-radius: 999px; padding-left: 20px; background: var(--md-surface-2); border-color: transparent; }
+html.ui-m3 .agent-session-item {
+    border: 0; border-radius: var(--md-radius-m); background: var(--md-surface-1); box-shadow: none;
+}
+html.ui-m3 .agent-session-item:hover { background: var(--md-surface-2); }
+html.ui-m3 .agent-session-item.active { background: var(--md-secondary-container); border: 0; box-shadow: none; }
+html.ui-m3 .agent-session-item.active .agent-session-title { color: var(--md-on-secondary-container); }
+html.ui-m3 .agent-session-title { font-size: 15px; font-weight: 500; }
+html.ui-m3 .agent-session-preview { color: var(--md-on-surface-variant); }
+html.ui-m3 .agent-session-foot { color: var(--md-outline); }
+html.ui-m3 .agent-session-group { border-radius: 999px; color: var(--md-on-surface-variant); }
+
+html.ui-m3 .agent-conversation-head { background: var(--md-background); border-bottom: 1px solid var(--md-outline-variant); }
+html.ui-m3 .agent-conversation-title h2 { font-size: 18px; font-weight: 500; }
+html.ui-m3 .agent-status-pill { border: 0; border-radius: 8px; background: var(--md-surface-2); color: var(--md-on-surface-variant); }
+html.ui-m3 .agent-session-actions > summary { border-radius: 50%; }
+html.ui-m3 .agent-session-actions > div, html.ui-m3 .agent-context-menu {
+    border: 0; border-radius: var(--md-radius-s); background: var(--md-surface-2); box-shadow: var(--shadow); padding: 8px 0;
+}
+html.ui-m3 .agent-session-actions > div button, html.ui-m3 .agent-context-menu button { border-radius: 0; min-height: 44px; padding: 0 16px; }
+html.ui-m3 .agent-session-actions > div button:hover, html.ui-m3 .agent-context-menu button:hover { background: color-mix(in srgb, var(--md-on-surface) 8%, transparent); }
+html.ui-m3 .agent-session-actions .danger, html.ui-m3 .agent-context-menu .danger { color: var(--md-error); }
+
+html.ui-m3 .agent-message.from-agent > .agent-message-surface {
+    border: 0; border-radius: 20px; background: var(--md-surface-2); box-shadow: none;
+}
+html.ui-m3 .agent-message.from-user > .agent-message-surface {
+    border: 0; border-radius: 20px 20px 6px 20px; background: var(--md-secondary-container); color: var(--md-on-secondary-container); box-shadow: none;
+}
+html.ui-m3 .agent-message.from-system .agent-message-surface { border: 0; background: transparent; box-shadow: none; color: var(--md-on-surface-variant); }
+html.ui-m3 .agent-message-text { line-height: 1.6; }
+html.ui-m3 .agent-message-meta { color: var(--md-outline); }
+html.ui-m3 .agent-markdown code { border-radius: 6px; background: color-mix(in srgb, var(--md-on-surface) 7%, transparent); font-family: var(--md-mono); }
+html.ui-m3 .agent-markdown pre { border: 0; border-radius: var(--md-radius-s); background: var(--md-background); font-family: var(--md-mono); }
+html.ui-m3 .agent-markdown pre code { background: transparent; }
+html.ui-m3 .agent-markdown a { color: var(--md-primary); }
+html.ui-m3 .agent-banner { border: 0; border-radius: var(--md-radius-m); background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+html.ui-m3 .agent-banner.error { background: var(--md-error-container); color: var(--md-error); }
+html.ui-m3 .agent-live-tools, html.ui-m3 .agent-running { border: 0; border-radius: var(--md-radius-m); background: var(--md-surface-1); }
+html.ui-m3 .agent-welcome-mark { border-radius: 24px; background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+
+/* Composer: one rounded surface like the Android message field. */
+html.ui-m3 .agent-compose-wrap { border: 0; border-radius: 28px; background: var(--md-surface-2); box-shadow: none; }
+html.ui-m3 .agent-compose-top { border-bottom: 0; }
+html.ui-m3 .agent-compose-wrap textarea, html.ui-m3 .agent-compose-wrap .ivu-input { border: 0; background: transparent; box-shadow: none; font-size: 15px; }
+html.ui-m3 .agent-compose-wrap textarea:focus { box-shadow: none; }
+html.ui-m3 .agent-model-chip { border: 1px solid var(--md-outline-variant); border-radius: 8px; background: transparent; color: var(--md-on-surface-variant); font-weight: 500; }
+html.ui-m3 .agent-compose-actions .ivu-btn:not(.ivu-btn-primary), html.ui-m3 .agent-compose-top .ivu-btn:not(.ivu-btn-primary) { border-color: transparent; background: transparent; color: var(--md-primary); }
+html.ui-m3 .agent-compose-actions .ivu-btn:not(.ivu-btn-primary):hover, html.ui-m3 .agent-compose-top .ivu-btn:not(.ivu-btn-primary):hover { background: color-mix(in srgb, var(--md-primary) 8%, transparent); }
+html.ui-m3 .agent-upload-label { border-radius: 999px; color: var(--md-primary); }
+html.ui-m3 .agent-inspector { background: var(--md-surface-1); border-color: transparent; }
+
+/* ---------- Mobile (same breakpoint as mobile.css) ---------- */
+@media (max-width:760px), (max-width:1000px) and (max-height:500px) and (pointer:coarse) {
+    html.ui-m3 body .app-topbar { height: calc(64px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 8px 0 20px; border-bottom: 0; background: var(--md-background); }
+    html.ui-m3 body .topbar-icon-button { display: none; }
+    html.ui-m3 body .topbar-title strong { font-size: 24px; font-weight: 500; }
+    html.ui-m3 body .app-topbar .btn { min-width: 48px; min-height: 48px; border: 0; background: transparent; color: var(--md-on-surface-variant); }
+    html.ui-m3 body #install-app-btn { width: auto; border-radius: 999px; color: var(--md-primary); }
+
+    /* Navigation bar: Android indicator pill behind the icon. */
+    html.ui-m3 body .mobile-navigation { height: calc(80px + env(safe-area-inset-bottom)); padding: 0 4px env(safe-area-inset-bottom); border-top: 0; background: var(--md-surface-2); }
+    html.ui-m3 body .app-workspace { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
+    html.ui-m3 body.mobile-keyboard-open .app-workspace { padding-bottom: 0; }
+    html.ui-m3 .mobile-navigation > a, html.ui-m3 .mobile-navigation > button { gap: 4px; min-height: 80px; padding: 12px 0 16px; border-radius: 0; color: var(--md-on-surface-variant); font-size: 12px; font-weight: 500; }
+    html.ui-m3 .mobile-navigation > a, html.ui-m3 .mobile-navigation > button { position: relative; isolation: isolate; }
+    html.ui-m3 .mobile-navigation > a > img, html.ui-m3 .mobile-navigation > button > svg { width: 24px; height: 24px; margin: 4px 0; }
+    html.ui-m3 .mobile-navigation > a::before, html.ui-m3 .mobile-navigation > button::before { content: ''; position: absolute; z-index: -1; top: 12px; left: 50%; width: 64px; height: 32px; border-radius: 999px; background: transparent; transform: translateX(-50%) scaleX(.5); opacity: 0; transition: transform .2s, opacity .2s; }
+    html.ui-m3 .mobile-navigation [aria-current=page] { background: transparent; color: var(--md-on-surface); font-weight: 700; }
+    html.ui-m3 .mobile-navigation [aria-current=page]::before { background: var(--md-secondary-container); transform: translateX(-50%); opacity: 1; }
+
+    /* "更多": full-screen list of filled cards with chevrons. */
+    html.ui-m3 body .mobile-tools[open] { background: var(--md-background); }
+    html.ui-m3 .mobile-tools header { border-bottom: 0; padding: calc(20px + env(safe-area-inset-top)) 16px 12px 24px; }
+    html.ui-m3 .mobile-tools header h2 { font-size: 28px; font-weight: 500; }
+    html.ui-m3 .mobile-tools header small { color: var(--md-on-surface-variant); font-size: 14px; }
+    html.ui-m3 .mobile-tools header button { width: 48px; height: 48px; background: transparent; color: var(--md-on-surface-variant); }
+    html.ui-m3 .mobile-tools-list { display: flex; flex-direction: column; gap: 12px; padding: 8px 16px calc(24px + env(safe-area-inset-bottom)); }
+    html.ui-m3 .mobile-tools-list > a, html.ui-m3 .mobile-tools-list > button { min-height: 80px; padding: 16px 20px 16px 24px; gap: 20px; border-radius: var(--md-radius-l); background: var(--md-surface-2); }
+    html.ui-m3 .mobile-tools-list > a:hover, html.ui-m3 .mobile-tools-list > button:hover { background: var(--md-surface-3); }
+    html.ui-m3 .mobile-tools-list img { filter: none; }
+    html.ui-m3 .mobile-tools-list strong { font-size: 18px; font-weight: 500; }
+    html.ui-m3 .mobile-tools-list small { font-size: 14px; color: var(--md-on-surface-variant); }
+    html.ui-m3 .mobile-tools-list > a > span:last-child { font-size: 26px; color: var(--md-on-surface); }
+
+    /* System page: chips wrap like the Android action rows. */
+    html.ui-m3 body #controls-tab .controls-grid { display: flex; gap: 12px; }
+    html.ui-m3 body #controls-tab .control-card { min-width: 0; flex: 0 0 auto; padding: 0 24px; min-height: 48px; }
+    html.ui-m3 body #controls-tab .control-card h3 { font-size: 16px; }
+
+    /* Session list as filled cards. */
+    html.ui-m3 body .agent-workspace .agent-pane-head { min-height: calc(64px + env(safe-area-inset-top)); background: var(--md-background); }
+    html.ui-m3 body .agent-workspace .agent-pane-identity h2 { font-size: 24px; font-weight: 500; }
+    html.ui-m3 body .agent-workspace .agent-pane-head .ivu-btn { min-width: 48px; min-height: 48px; border-radius: 50%; }
+    html.ui-m3 body .agent-workspace .agent-pane-head .ivu-btn-primary { border-radius: 16px; }
+    html.ui-m3 body .agent-workspace .agent-search .ivu-input { height: 56px; border-radius: 999px; background: var(--md-surface-2); }
+    html.ui-m3 body .agent-workspace .agent-session-list { padding: 0 16px 16px; }
+    html.ui-m3 body .agent-workspace .agent-session-row { margin: 0 0 12px; border-radius: var(--md-radius-l); background: var(--md-surface-2); }
+    html.ui-m3 body .agent-workspace .agent-session-row:has(.active) { background: var(--md-secondary-container); }
+    html.ui-m3 body .agent-workspace .agent-session-item { padding: 16px 4px 14px 20px; background: transparent; }
+    html.ui-m3 body .agent-workspace .agent-session-title { font-size: 17px; font-weight: 500; }
+
+    /* Conversation */
+    html.ui-m3 body .agent-workspace .agent-conversation-head { border-bottom: 0; }
+    html.ui-m3 body .agent-workspace .agent-conversation-title h2 { font-size: 20px; font-weight: 400; }
+    html.ui-m3 body .agent-workspace .agent-message.from-agent > .agent-message-surface { border-radius: 20px; background: var(--md-surface-2); }
+    html.ui-m3 body .agent-workspace .agent-message.from-user > .agent-message-surface { border-radius: 20px; background: var(--md-secondary-container); }
+    html.ui-m3 body .agent-workspace .agent-compose-wrap { border-top: 0; border-radius: 0; background: var(--md-background); }
+    html.ui-m3 body .agent-workspace .agent-compose-input-row { border: 0; border-radius: 999px; background: var(--md-surface-2); padding: 4px; }
+    html.ui-m3 body .agent-workspace .mobile-compose-send { background: var(--md-primary); color: var(--md-on-primary); width: 48px; height: 48px; }
+    html.ui-m3 body .agent-workspace .mobile-compose-send:disabled { background: var(--md-surface-3); color: var(--md-on-surface-variant); opacity: 1; }
+    html.ui-m3 body .mobile-usage-track { height: 4px; border-radius: 2px; }
+    html.ui-m3 body .mobile-usage-track i { border-radius: 2px; }
+
+    html.ui-m3 body .ivu-modal-content { border-radius: 28px 28px 0 0; background: var(--md-surface-1); }
+    html.ui-m3 body #remote-page #files-list > tr, html.ui-m3 body #remote-page #processes-list > tr { border: 0; border-radius: var(--md-radius-l); background: var(--md-surface-2); }
+    html.ui-m3 body #remote-page .files-table th.sortable { border-radius: 8px; background: var(--md-surface-2); }
+    html.ui-m3 body .files-table-container, html.ui-m3 body .processes-table-container { background: transparent; }
+}

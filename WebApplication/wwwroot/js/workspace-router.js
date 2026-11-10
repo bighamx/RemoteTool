@@ -82,12 +82,17 @@
     const page = async key => {
         if (modules.has(key)) return modules.get(key);
         const loading = (async () => {
-            const response = await fetch(sources[key], { credentials: 'same-origin', cache: 'no-store' });
-            if (response.redirected && new URL(response.url).pathname.toLowerCase().startsWith('/account/login')) {
-                location.assign(response.url); throw new Error('登录已过期');
+            const warmed = warmPages.get(key); warmPages.delete(key);
+            let text = warmed ? await warmed.catch(() => null) : null;
+            if (text == null) {
+                const response = await fetch(sources[key], { credentials: 'same-origin', cache: 'no-store' });
+                if (response.redirected && new URL(response.url).pathname.toLowerCase().startsWith('/account/login')) {
+                    location.assign(response.url); throw new Error('登录已过期');
+                }
+                if (!response.ok) throw new Error(`页面加载失败 (${response.status})`);
+                text = await response.text();
             }
-            if (!response.ok) throw new Error(`页面加载失败 (${response.status})`);
-            const html = new DOMParser().parseFromString(await response.text(), 'text/html');
+            const html = new DOMParser().parseFromString(text, 'text/html');
             const body = html.getElementById('main-content');
             if (!body) throw new Error('页面内容不可用');
             const section = document.createElement('section'); section.className = 'workspace-module';
@@ -209,6 +214,28 @@
             : session ? `?session=${encodeURIComponent(session)}` : '';
         location.replace(`/#/${route}${query}`); return;
     }
+    // Over a high-latency tunnel the first visit to a tab used to wait for its HTML, styles and scripts
+    // in sequence. Once the current page is up, fetch the main tabs' markup and warm the HTTP cache for
+    // their (immutable, versioned) assets in the background; nothing is mounted or executed early.
+    const warmPages = new Map();
+    const warmAsset = (name, as) => {
+        const path = name.startsWith('vendor/') ? `/${name}` : `/${as === 'style' ? 'css' : 'js'}/${name}`;
+        if ((as === 'style' ? loadedStyles : loadedScripts).has(path)) return;
+        const link = document.createElement('link'); link.rel = 'prefetch'; link.as = as;
+        link.href = `${path}?v=${encodeURIComponent(document.body?.dataset.build || '')}`;
+        document.head.append(link);
+    };
+    const warm = () => {
+        if (navigator.connection?.saveData) return;
+        for (const key of ['codex', 'remote', 'hermes']) {
+            if (modules.has(key) || warmPages.has(key)) continue;
+            warmPages.set(key, fetch(sources[key], { credentials: 'same-origin', cache: 'no-store' })
+                .then(response => response.ok && !response.redirected ? response.text() : null));
+            for (const style of assets[key]?.styles || []) warmAsset(style, 'style');
+            for (const script of assets[key]?.scripts || []) warmAsset(script, 'script');
+        }
+    };
+    const scheduleWarm = () => setTimeout(() => (window.requestIdleCallback || (callback => callback()))(warm, { timeout: 4000 }), 1200);
     window.addEventListener('hashchange', show);
-    show();
+    show().finally(() => document.readyState === 'complete' ? scheduleWarm() : window.addEventListener('load', scheduleWarm, { once: true }));
 })();
