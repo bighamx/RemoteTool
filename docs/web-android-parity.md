@@ -58,3 +58,13 @@
 - 将旧的思考过程用例与当前 Android/Web 的“工具期间合并、真实旁白后新分段、终态淡出删除”语义对齐，不修改思考产品逻辑；浏览器用例使用上游当前的新建按钮及文件操作入口。
 
 验证：68 项 Node 前端检查、Web/Razor 构建、AgentContracts 和 PhoneTools 契约；隔离浏览器验证桌面/手机界面、连接创建和撤销、令牌不持久化、新建两类会话的参数、离线/旧服务提示及文件排序。仅使用模拟手机，不执行真实手机操作或模型推理。Android 源码未修改，未构建 APK。
+
+## 2026-11-10：Material 3 界面与远程访问加载
+
+- 新增 `wwwroot/css/m3.css`，按 Android 主 App 的 Material 3 配色和组件样式覆盖 Web：药丸按钮、填充卡片、导航栏指示器、侧栏与顶栏、系统页操作按钮、会话卡片、聊天气泡与输入栏、底部面板，深浅主题均覆盖。规则全部限定在 `<html class="ui-m3">` 下，移除该 class 即恢复原样式；不改动脚本逻辑与 DOM 结构。
+- 手机聊天页：额度与上下文行去掉固定行高；气泡时间内联到最后一行末尾（以代码块、表格、附件等结尾时保留独立行）；“操作”按钮保留并缩为“⋯”，可访问名称与文字不变；工具摘要与时间同行。手机消息正文仍为 14px。
+- 压缩：.NET 8 以 `text/javascript` 提供 `.js`，原 MIME 列表未包含，脚本此前未压缩；补充 `text/javascript`、`image/svg+xml`、`application/manifest+json`，Brotli 级别改为 Optimal（质量 4）。
+- 缓存：带 `?v=` 的静态资源返回 `public, max-age=31536000, immutable`，`/icons/`、`/mobile/` 为一天，其余 `no-cache`（以 ETag 重新验证）。`data-build` 由每次渲染的 `DateTime.UtcNow.Ticks` 改为启动时按 wwwroot 文件路径、大小、修改时间计算的 `ServerBuild.AssetVersion`，按需加载的脚本与样式不再在每次刷新时重新下载。
+- 路由：首屏显示后在空闲时预取 Codex、远程、Hermes 的页面 HTML，并以 `<link rel=prefetch>` 预热其样式与脚本；不提前挂载或执行。预取结果仅使用一次，登录失效或失败时回到原有加载路径；`Save-Data` 时不预取。
+
+验证：22 项 Node 前端检查、`web-parity-browser` 与 `phone-tools-browser` 两组 Playwright 隔离浏览器回归、Release 构建。浏览器模拟 150ms 延迟、约 2Mbps 下，冷启动 9.3s/2083KB → 约 4.8s/721KB，刷新 1.76s/308KB → 约 0.3s/55KB，首次切换 Codex 1.8s → 0.5s。在一台 macOS 服务端经 Cloudflare Tunnel 部署并用 Android 手机浏览器访问；未在 iOS、Windows 服务端上验证。
