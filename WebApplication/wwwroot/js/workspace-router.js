@@ -1,4 +1,10 @@
 (() => {
+    // The launch marker only bypasses the SW for the document request, not later SPA links.
+    const entry = new URL(location.href);
+    if (entry.searchParams.has('rt-start')) {
+        entry.searchParams.delete('rt-start');
+        history.replaceState(history.state, '', entry.pathname + entry.search + entry.hash);
+    }
     // The server still serves the older URLs for bookmarks and API clients. The workbench
     // keeps every mounted view in one document so navigating away preserves its state.
     const remoteTabs = {
