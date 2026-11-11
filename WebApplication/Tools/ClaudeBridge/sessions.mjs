@@ -297,15 +297,6 @@ export class SessionService {
         return {providers: [{id: 'anthropic', slug: 'anthropic', name: 'Claude', models}], provider: 'anthropic',
             model: meta?.model || '', reasoning_effort: meta?.effort || '', session_model_supported: true, catalog_cached: !!this.store.data.models};
     }
-    usage() {
-        const limits = this.store.data.rate_limits || {}, windows = {};
-        const window = (info, minutes) => info ? {windowDurationMins: minutes, usedPercent: info.utilization == null ? null : Number(info.utilization) <= 1 ? Number(info.utilization) * 100 : Number(info.utilization),
-            resetsAt: info.resetsAt ?? null, status: info.status, observedAt: info.observed_at} : undefined;
-        if (limits.five_hour) windows.primary = window(limits.five_hour, 300);
-        if (limits.seven_day) windows.secondary = window(limits.seven_day, 10080);
-        return {available: !!(windows.primary || windows.secondary), rateLimitsByLimitId: windows.primary || windows.secondary ? {claude: {limitName: 'Claude', ...windows}} : {},
-            source: '最近一次任务返回的额度信息；没有任务时不会主动刷新'};
-    }
     /** Preflight for a new turn. Never sends a prompt. */
     async prepare(id, kind) {
         const {info, meta} = await this.require(id);

@@ -8,9 +8,10 @@ import {pathToFileURL} from 'node:url';
 import {StateStore, BridgeError, TERMINAL, validId} from './state.mjs';
 import {RunManager} from './runs.mjs';
 import {SessionService} from './sessions.mjs';
+import {ClaudeUsage} from './usage.mjs';
 
 export const PROTOCOL = 2;      // API contract with the C# host; a change requires an idle restart.
-export const BRIDGE_VERSION = 5; // Implementation revision; RemoteToolPaths.ClaudeBridgeVersion must match.
+export const BRIDGE_VERSION = 6; // Implementation revision; RemoteToolPaths.ClaudeBridgeVersion must match.
 
 function args(argv) {
     const result = {};
@@ -55,7 +56,8 @@ export function createApp({root, executable, attachments, sdk, allowCustom = fal
         onModels: list => { if (Array.isArray(list) && list.length) { store.data.models = {list, at: Date.now()}; try { store.save(); } catch {} } }});
     sessions.runs = runs;
     const sweeper = setInterval(() => runs.sweep(), 60000); sweeper.unref?.();
-    return {store, sessions, runs, auth};
+    const usage = new ClaudeUsage({sdk, executable, cwd: root, auth, officialOnly: !allowCustom});
+    return {store, sessions, runs, auth, usage};
 }
 
 function send(res, code, data) {
@@ -133,7 +135,7 @@ export function createServer(app, token) {
                 case 'GET /sessions/:id/activity': data = await app.sessions.activity(id); break;
                 case 'GET /sessions/:id/active-run': data = app.sessions.activeRun(id); break;
                 case 'GET /model-options': data = app.sessions.modelOptions(q('session')); break;
-                case 'GET /usage': data = app.sessions.usage(); break;
+                case 'GET /usage': data = await app.usage.read(); break;
                 case 'POST /runs': data = await app.runs.start(body, key); break;
                 case 'GET /runs/:id': data = id === 'lookup' ? app.runs.lookup(q('key')) : app.runs.doc(app.store.run(id)); break;
                 case 'GET /runs/:id/events': return stream(app, req, res, id);

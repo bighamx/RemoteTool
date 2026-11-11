@@ -463,6 +463,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             }
         }
         if (agent != "hermes") CodexUsage(model, compact = true) { if (agent == "codex") { accountsPanel = true; model.fetchAccounts() } else model.fetchUsage() }
+        if (agent == "claude") model.usage?.cleanSetting("message")?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         if (agent == "claude" && !displayList && model.claudeUnresolvedRun != null) {
             Text("上次任务结果待核对。请先检查历史，确认前不会重新发送。", Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.bodySmall)
             TextButton(enabled = !model.submitting, onClick = { acknowledgeClaude = true }) { Text("已核对任务结果…") }

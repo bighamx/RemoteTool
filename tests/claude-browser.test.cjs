@@ -19,7 +19,7 @@ const disabled=await (await context.request.get(base+'/api/agent-setup/claude'))
 
 const held={id:'held-session',title:'Terminal session',cwd:'/project',status:null,last_active:Date.now()};
 const own={id:'own-session',title:'Remote session',cwd:'/project',status:null,last_active:Date.now()-1000,permission_mode:'default'};
-let sessions=[held,own],detail={...own},run=null,events=[],posts=[],tookOver=false;
+let sessions=[held,own],detail={...own},run=null,events=[],posts=[],tookOver=false,usageFails=false;
 const history=[{id:'u1',role:'user',content:'Earlier question',timestamp:Date.now()-60000,editable:false},
   {id:'a1',role:'assistant',content:'**Earlier answer**',timestamp:Date.now()-50000},
   {id:'tools-u1',role:'system',type:'toolSummary',tool_summary_id:'tools-u1',content:'工具 1 次 · 文件修改 0 次',timestamp:Date.now()-40000}];
@@ -47,7 +47,7 @@ await page.route('**/api/claude/**',async route=>{
   else if(p==='/runs/run-1/approval'){run={...run,approval:null,status:'running'};json={accepted:true};}
   else if(p==='/runs/run-1'){const pending=[...events].reverse().find(e=>e.type==='approval.request'||e.type==='approval.resolved');json={...run,approval:pending?.type==='approval.request'&&!posts.some(row=>row.body?.request_id===pending.request_id)?pending:null};}
   else if(p==='/model-options')json={providers:[{id:'anthropic',slug:'anthropic',name:'Claude',models:[{model:'opus',displayName:'Opus',supportedReasoningEfforts:[{reasoningEffort:'high'}]}]}],provider:'anthropic'};
-  else if(p==='/usage')json={available:false};
+  else if(p==='/usage'){if(usageFails){await route.fulfill({status:503,json:{message:'temporary failure'}});return;}json={available:true,source:'官方 Claude Code 订阅额度',rateLimitsByLimitId:{claude:{primary:{windowDurationMins:300,usedPercent:0},secondary:{windowDurationMins:10080,usedPercent:64}}}};}
   else if(p.endsWith('/files'))json={data:[]};
   await route.fulfill({json});
 });
@@ -76,6 +76,17 @@ await unresolved.getByRole('button',{name:'我已核对，继续'}).click();awai
 assert.ok(posts.some(row=>row.path==='/runs/old-run/acknowledge'));
 await app.locator('.agent-banner').filter({hasText:'已撤回'}).getByRole('button',{name:'取消撤回'}).click();
 assert.ok(posts.some(row=>row.path==='/sessions/own-session/rewind/cancel'));
+
+// Official usage includes a zero-used short window and an independently populated weekly window.
+await app.locator('.agent-model-chip').click();
+const quota=app.locator('.agent-inspector .inspector-section').filter({hasText:'账户额度'});
+await quota.getByText(/5 小时 · 剩余 100%/).first().waitFor();
+assert.ok((await quota.textContent()).includes('周额度 · 剩余 36%'));
+await app.locator('.agent-inspector-close').click();usageFails=true;
+await app.locator('.agent-model-chip').click();
+await quota.getByText('额度刷新失败，当前显示上次读取结果').waitFor();
+assert.ok((await quota.textContent()).includes('周额度 · 剩余 36%'));
+await app.locator('.agent-inspector-close').click();usageFails=false;
 
 // Native permission modes, never a bypass option.
 await app.locator('.agent-head-trailing details.agent-session-actions summary').click();await app.locator('.agent-head-trailing').getByRole('button',{name:'会话权限'}).click();

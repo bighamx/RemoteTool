@@ -1969,7 +1969,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             }
         } }
         catch (e: CancellationException) { throw e }
-        catch (_: Exception) { if (api === connection) usage = null }
+        catch (_: Exception) { if (api === connection) usage = if (isClaude && usage?.optBoolean("available") == true)
+            JSONObject(usage.toString()).put("stale", true).put("message", "额度刷新失败，当前显示上次读取结果")
+            else if (isClaude) obj("available" to false, "message" to "Claude 额度暂时无法读取，请稍后重试") else null }
     }
     fun importCurrentAccount() = launch { api.json("$root/accounts/import", obj()); fetchAccountsNow() }
     fun removeAccount(id: String) = launch { api.json("$root/accounts/$id/remove", obj()); fetchAccountsNow() }

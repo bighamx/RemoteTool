@@ -30,6 +30,7 @@ class ClaudeWorkspaceTest {
     @Test fun sharedWorkspaceReadsNativeHistoryForksByUuidAndNeverReplaysAnUnknownSend() {
         val requests = CopyOnWriteArrayList<Pair<String, JSONObject>>()
         var receiptFound = false
+        val usageFails = java.util.concurrent.atomic.AtomicBoolean(false)
         val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         val row = obj("id" to "native-session", "title" to "Native", "cwd" to "/project")
         val responder = thread(isDaemon = true) { try { while (!server.isClosed) server.accept().use { socket ->
@@ -45,6 +46,7 @@ class ClaudeWorkspaceTest {
             requests += path to body
             var status = 200
             val response = when {
+                path.endsWith("/usage") -> if (usageFails.get()) { status = 503; obj("message" to "temporary failure") } else obj("available" to true, "rateLimitsByLimitId" to obj("claude" to obj("primary" to obj("windowDurationMins" to 300, "usedPercent" to 0), "secondary" to obj("windowDurationMins" to 10080, "usedPercent" to 64))))
                 path.endsWith("/capabilities") -> obj("protocol" to 2, "features" to obj("fork" to true, "rewind" to true, "external_session_activity" to true))
                 path.endsWith("/model-options") -> obj("provider" to "anthropic", "providers" to org.json.JSONArray())
                 path.endsWith("/sessions") -> obj("data" to org.json.JSONArray().put(row), "has_more" to false)
@@ -73,6 +75,13 @@ class ClaudeWorkspaceTest {
             await { model.sessions.isNotEmpty() }
             model.select(row)
             await { model.messages.size == 2 && !model.historyLoading }
+            model.fetchUsage()
+            await { model.usage?.optBoolean("available") == true }
+            assertEquals(0, model.usage!!.getJSONObject("rateLimitsByLimitId").getJSONObject("claude").getJSONObject("primary").getInt("usedPercent"))
+            usageFails.set(true)
+            model.fetchUsage()
+            await { model.usage?.optBoolean("stale") == true }
+            assertEquals(64, model.usage!!.getJSONObject("rateLimitsByLimitId").getJSONObject("claude").getJSONObject("secondary").getInt("usedPercent"))
             assertEquals("Claude Code", model.agentName)
             assertTrue(model.supportsMessageActions)
             assertEquals("tools-native-user", model.messages.last().nativeId)
