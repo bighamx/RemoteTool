@@ -210,6 +210,8 @@ export class RunManager {
                 systemPrompt: plan.appendSystemPrompt ? {type: 'preset', preset: 'claude_code', append: plan.appendSystemPrompt} : {type: 'preset', preset: 'claude_code'},
                 permissionMode: plan.permissionMode || 'default', includePartialMessages: true, abortController: abort,
                 stderr: () => {},
+                // Pin the official endpoint for the spawned CLI when custom endpoints are not allowed.
+                ...(plan.officialOnly ? {env: {...process.env, ANTHROPIC_BASE_URL: 'https://api.anthropic.com'}} : {}),
                 ...(plan.model ? {model: plan.model} : {}), ...(plan.effort ? {effort: plan.effort} : {}),
                 ...(plan.resume ? {resume: run.session_id, ...(plan.resumeSessionAt ? {resumeSessionAt: plan.resumeSessionAt} : {})} : {sessionId: run.session_id}),
                 canUseTool: (tool, toolInput, context) => this.permission(run, runtime, tool, toolInput, context),

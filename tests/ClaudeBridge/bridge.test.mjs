@@ -121,6 +121,7 @@ test('a turn streams coalesced events, completes, and its receipt is idempotent'
     assert.equal(app.runs.eventsAfter(run.run_id).find(e => e.type === 'message.delta').delta, 'Hello');
     assert.equal(app.runs.eventsAfter(run.run_id).find(e => e.type === 'message.completed').item_id, 'm1:0');
     assert.equal(sdk.calls[0].options.resume, SID);
+    assert.equal(sdk.calls[0].options.env.ANTHROPIC_BASE_URL, 'https://api.anthropic.com', 'official endpoint pinned');
     assert.match(sdk.calls[0].options.systemPrompt.append, /MEDIA:/);
     assert.equal(app.store.meta(SID).context_window, 1000000);
     assert.equal((await app.runs.start({session_id: SID, input: 'hi'}, key)).run_id, run.run_id, 'same key returns the accepted run');
@@ -221,6 +222,10 @@ test('preflight refuses sessions held by another Claude process and custom endpo
     assert.equal(Object.keys(app.store.data.receipts).length, 0, 'rejected sends leave no receipt');
     const own = setup(async function* () {}, {holders: [{sessionId: SID, pid: 43, status: 'busy'}], parent: process.pid});
     assert.equal((await own.app.sessions.activity(SID)).running, false, 'our own lingering SDK child is not an external holder');
+    const unreadable = setup(async function* () {});
+    unreadable.sdk.resolveSettings = async () => { throw new Error('bad settings'); };
+    await assert.rejects(unreadable.app.runs.start({session_id: SID, input: 'x'}, 'u'.repeat(20)), e => e.code === 'settings_unreadable' && e.delivery === 'rejected');
+    assert.equal(unreadable.sdk.calls.length, 0, 'unreadable settings never start the CLI');
     const custom = setup(async function* () {});
     custom.sdk.resolveSettings = async () => ({effective: {env: {ANTHROPIC_BASE_URL: 'https://gateway.example'}}});
     await assert.rejects(custom.app.runs.start({session_id: SID, input: 'x'}, 'r'.repeat(20)), e => e.code === 'custom_endpoint');

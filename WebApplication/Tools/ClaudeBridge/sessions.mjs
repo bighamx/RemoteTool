@@ -286,9 +286,11 @@ export class SessionService {
         const status = await this.auth();
         if (!status.ready) throw new BridgeError(status.message, 409, {delivery: 'rejected', code: 'claude_not_ready'});
         if (!this.allowCustomEndpoint) {
-            let effective = {};
-            try { effective = (await this.sdk.resolveSettings({cwd, settingSources: ['user', 'project', 'local']}))?.effective?.env || {}; } catch {}
-            if (!officialEnvironment(this.env) || !officialEnvironment(effective))
+            // Fail closed: settings that cannot be read could route the session through an unknown endpoint.
+            let effective = null;
+            try { effective = (await this.sdk.resolveSettings({cwd, settingSources: ['user', 'project', 'local']}))?.effective || null; } catch {}
+            if (!effective) throw new BridgeError('无法读取此项目的 Claude Code 设置，未开始执行；请检查项目中的 settings.json', 409, {delivery: 'rejected', code: 'settings_unreadable'});
+            if (!officialEnvironment(this.env) || !officialEnvironment(effective.env || {}))
                 throw new BridgeError('此项目配置了非官方模型端点；如需使用请在服务端设置 Claude:AllowCustomEndpoint=true', 409, {delivery: 'rejected', code: 'custom_endpoint'});
         }
         if (info) {
@@ -298,7 +300,7 @@ export class SessionService {
             if (held) throw new BridgeError('电脑上的 Claude Code 正在使用此会话（PID ' + held.pid + '），请先结束该进程再远程继续', 409, {delivery: 'rejected', code: 'session_held'});
         }
         return {cwd, resume: !!info, resumeSessionAt: info ? meta?.rewind?.at || null : null,
-            permissionMode: meta?.permission_mode || 'default', model: meta?.model || null, effort: meta?.effort || null,
+            permissionMode: meta?.permission_mode || 'default', model: meta?.model || null, effort: meta?.effort || null, officialOnly: !this.allowCustomEndpoint,
             appendSystemPrompt: this.attachmentPrompt(id)};
     }
     attachmentPrompt(id) {
