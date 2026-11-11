@@ -43,6 +43,7 @@ public sealed class ManagedStorageService
         }) {
         this.nativeActive = nativeActive ?? ((_,_,_)=>false);
         labels = (agent, profile) => {
+            if (agent == "claude") return new(); // Claude titles live in its own transcripts; files remain listed by session id.
             try {
                 var home = agent == "codex" ? configuration["Codex:Home"] : profiles.HomeFor(profile);
                 if (agent == "codex" && string.IsNullOrWhiteSpace(home)) {
@@ -61,7 +62,7 @@ public sealed class ManagedStorageService
     public sealed class SessionLabel { public string id {get;set;} = ""; public string? title {get;set;} }
     internal ManagedStorageService(string directory, Func<string, string, string, long?>? active = null) {
         data = Path.GetFullPath(directory); trash = Path.Combine(data, "storage-management", "trash");
-        roots = new() { ["codex"] = Path.Combine(data, "codex-attachments"), ["hermes"] = Path.Combine(data, "hermes-attachments"), ["logs"] = Path.Combine(data, "logs") };
+        roots = new() { ["codex"] = Path.Combine(data, "codex-attachments"), ["hermes"] = Path.Combine(data, "hermes-attachments"), ["claude"] = Path.Combine(data, "claude-attachments"), ["logs"] = Path.Combine(data, "logs") };
         this.activeAge = active ?? ((_, _, _) => null);
     }
     private Snapshot Require(string token, string owner) => snapshots.TryGetValue(token, out var value) && value.Owner == owner && DateTime.UtcNow - value.At < TimeSpan.FromMinutes(10)

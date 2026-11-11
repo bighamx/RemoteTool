@@ -12,7 +12,7 @@
         docker: 'docker', 'docker/images': 'images', 'docker/compose': 'compose', files: 'files'
     };
     const sources = { claude:'/agents/claude', 'phone-tools':'/phone-tools', storage:'/storage', cloudflare: '/cloudflare', home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
-    const assets = { claude:{styles:['claude.css'],scripts:['web-api.js','vendor/markdown-it/markdown-it.min.js','claude-content.js','claude.js']},
+    const assets = { claude: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-history-cache.js', 'agent-workspace.js'] },
         'phone-tools':{styles:['workspace-pages.css','phone-tools.css'],scripts:['web-api.js','phone-tools.js']},
         storage: {styles:['workspace-pages.css','storage.css'],scripts:['web-api.js','storage.js']},
         cloudflare: { styles: ['workspace-pages.css', 'cloudflare.css'], scripts: ['web-api.js', 'cloudflare.js'] },
@@ -103,7 +103,7 @@
                 if (tabs) section.append(document.importNode(tabs, true));
             }
             for (const node of [...body.childNodes]) section.append(document.importNode(node, true));
-            if (key === 'codex' || key === 'hermes') {
+            if (key === 'codex' || key === 'hermes' || key === 'claude') {
                 const agent = section.querySelector('[data-agent]');
                 if (agent) agent.id = `agent-${key}-app`;
             }
@@ -210,7 +210,7 @@
         const params = new URLSearchParams(location.hash.slice(1));
         const filePath = route === 'files' ? params.get('path') : null;
         const composePath = route === 'docker/compose' ? params.get('composePath') : null;
-        const session = route === 'codex' || route === 'hermes' ? new URLSearchParams(location.search).get('session') : null;
+        const session = route === 'codex' || route === 'hermes' || route === 'claude' ? new URLSearchParams(location.search).get('session') : null;
         const query = filePath ? `?path=${encodeURIComponent(filePath)}` : composePath ? `?composePath=${encodeURIComponent(composePath)}`
             : session ? `?session=${encodeURIComponent(session)}` : '';
         location.replace(`/#/${route}${query}`); return;

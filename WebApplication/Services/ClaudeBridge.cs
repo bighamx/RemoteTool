@@ -1,25 +1,46 @@
 using System.Diagnostics;
-using System.Net;
 using System.Net.Http.Headers;
-using System.Security.Cryptography;
 using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json.Nodes;
+using Microsoft.Win32;
+using RemoteTool.WebApi.Services.RemoteControl;
 
 namespace RemoteTool.WebApi.Services;
 
-/// <summary>Lazy loopback bridge. The worker owns runs independently of browser/HTTP lifetime.</summary>
+/// <summary>
+/// Lazily started loopback Node worker that drives the official Claude Agent SDK.
+/// The worker owns runs independently of HTTP/browser lifetime and survives host restarts.
+/// </summary>
 public sealed class ClaudeBridge(IConfiguration configuration, IWebHostEnvironment environment)
 {
+    public const int Protocol = 2;
     private readonly SemaphoreSlim gate = new(1, 1);
-    private static readonly HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false }) { Timeout = TimeSpan.FromSeconds(30) };
-    private string Root => Path.Combine(RemoteToolPaths.ProgramData, "claude-bridge");
+    // Infinite: event streams are long-lived. Ordinary calls use per-request budgets.
+    private static readonly HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false }) { Timeout = Timeout.InfiniteTimeSpan };
+    private static string Root => RemoteToolPaths.ClaudeBridge;
+    private bool Enabled => configuration.GetValue<bool?>("Claude:Enabled") != false;
+
+    public sealed record Health(int Port, string Token, int Protocol, int Version, int ActiveRuns, int Waiting, int Pid);
+
+    /// <summary>Home directory of the account Claude Code must run as (the desktop user on a Windows service).</summary>
+    private static string UserProfile() {
+        if (OperatingSystem.IsWindows() && InteractiveProcessLauncher.IsRunningInSession0) {
+            var sid = InteractiveProcessLauncher.GetInteractiveUserSid();
+            var profile = sid == null ? null : Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}", "ProfileImagePath", null)?.ToString();
+            if (!string.IsNullOrWhiteSpace(profile)) return Environment.ExpandEnvironmentVariables(profile);
+        }
+        return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    }
+
     private string FindExecutable(string setting, string name) {
         var configured = configuration["Claude:" + setting];
         if (!string.IsNullOrWhiteSpace(configured)) return File.Exists(configured) ? Path.GetFullPath(configured) : throw new InvalidOperationException($"Claude:{setting} 指向的程序不存在");
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var directories = new[] { Path.Combine(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin" }
+        var home = UserProfile();
+        var directories = new[] { Path.Combine(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin" }
+            .Concat(OperatingSystem.IsWindows() ? new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs") } : Array.Empty<string>())
             .Concat((Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator));
         foreach (var directory in directories.Where(x => !string.IsNullOrWhiteSpace(x))) {
             var path = Path.Combine(directory, name + (OperatingSystem.IsWindows() ? ".exe" : ""));
@@ -27,76 +48,132 @@ public sealed class ClaudeBridge(IConfiguration configuration, IWebHostEnvironme
         }
         throw new InvalidOperationException($"未找到 {name}，请安装后配置 Claude:{setting} 的绝对路径");
     }
-    private async Task<(int Port, string Token)?> Existing(CancellationToken ct) {
+
+    private static async Task<HttpResponseMessage> Raw(HttpMethod method, int port, string token, string path, string? body, string? key, string? lastEvent, TimeSpan? budget, CancellationToken ct) {
+        using var request = new HttpRequestMessage(method, $"http://127.0.0.1:{port}/{path}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        if (!string.IsNullOrWhiteSpace(key)) request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
+        if (!string.IsNullOrWhiteSpace(lastEvent)) request.Headers.TryAddWithoutValidation("Last-Event-ID", lastEvent);
+        if (body != null) request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        if (budget == null) return await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(budget.Value);
+        var response = await client.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token);
+        return response;
+    }
+
+    /// <summary>Reads the running worker's health without ever starting one.</summary>
+    public async Task<Health?> Probe(CancellationToken ct) {
         try {
             var status = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(Root, "status.json"), ct));
             var connection = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(Root, "connection.json"), ct));
-            var port = status["port"]!.GetValue<int>(); var token = connection["token"]!.GetValue<string>();
+            var port = status?["port"]?.GetValue<int>() ?? 0; var token = connection?["token"]?.GetValue<string>() ?? "";
             if (port is < 1 or > 65535 || token.Length < 40) return null;
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}/health");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct); budget.CancelAfter(TimeSpan.FromMilliseconds(600));
-            using var result = await client.SendAsync(request, budget.Token);
-            if (!result.IsSuccessStatusCode) return null;
-            var health = JsonNode.Parse(await result.Content.ReadAsStringAsync(budget.Token));
-            if (health?["protocol"]?.GetValue<int>() != 1) throw new InvalidOperationException("Claude 桥接版本不同，请等待任务完成后在本机更新");
-            return (port, token);
-        } catch (Exception e) when (e is IOException or System.Text.Json.JsonException or HttpRequestException or OperationCanceledException or NullReferenceException) {ct.ThrowIfCancellationRequested(); return null;}
+            using var response = await Raw(HttpMethod.Get, port, token, "health", null, null, null, TimeSpan.FromSeconds(3), ct);
+            if (!response.IsSuccessStatusCode) return null;
+            var health = JsonNode.Parse(await response.Content.ReadAsStringAsync(ct));
+            return new Health(port, token, health?["protocol"]?.GetValue<int>() ?? 0, health?["version"]?.GetValue<int>() ?? 0,
+                health?["active_runs"]?.GetValue<int>() ?? 0, health?["waiting"]?.GetValue<int>() ?? 0, health?["pid"]?.GetValue<int>() ?? 0);
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or HttpRequestException or OperationCanceledException or InvalidOperationException or FormatException) {
+            ct.ThrowIfCancellationRequested(); return null;
+        }
     }
-    private async Task<(int Port, string Token)> Connect(CancellationToken ct) {
-        if (configuration.GetValue<bool?>("Claude:Enabled") == false) throw new InvalidOperationException("Claude 接入未启用，请设置 Claude:Enabled=true");
+
+    /// <summary>True when the worker file says a process exists but it does not answer: idleness is unproven.</summary>
+    public static bool UnansweredWorker() {
+        try {
+            var status = JsonNode.Parse(File.ReadAllText(Path.Combine(Root, "status.json")));
+            var pid = status?["pid"]?.GetValue<int>() ?? 0;
+            if (pid <= 0) return false;
+            using var process = Process.GetProcessById(pid);
+            return !process.HasExited && process.ProcessName.Contains("node", StringComparison.OrdinalIgnoreCase);
+        } catch (Exception e) when (e is IOException or ArgumentException or InvalidOperationException or System.Text.Json.JsonException or UnauthorizedAccessException) { return false; }
+    }
+
+    private async Task<Health> Connect(CancellationToken ct) {
+        if (!Enabled) throw new InvalidOperationException("Claude 接入未启用，请设置 Claude:Enabled=true");
         await gate.WaitAsync(ct);
         try {
-            if (await Existing(ct) is { } live) return live;
-            var candidates = new[] {Path.Combine(AppContext.BaseDirectory, "claude", "server.mjs"), Path.Combine(environment.ContentRootPath, "Tools", "ClaudeBridge", "server.mjs")}.Where(File.Exists).ToArray();
-            var script = candidates.FirstOrDefault(p => Directory.Exists(Path.Combine(Path.GetDirectoryName(p)!, "node_modules", "@anthropic-ai", "claude-agent-sdk"))) ?? candidates.FirstOrDefault();
-            if (script == null) throw new InvalidOperationException("Claude 桥接文件未发布，请重新安装服务端");
-            if (!Directory.Exists(Path.Combine(Path.GetDirectoryName(script)!, "node_modules", "@anthropic-ai", "claude-agent-sdk"))) throw new InvalidOperationException("请在服务端 claude 目录（源码 Tools/ClaudeBridge）运行 npm ci --omit=dev --omit=optional 安装官方 SDK，然后重试");
-            var node = FindExecutable("NodeExecutable", "node"); var claude = FindExecutable("Executable", "claude");
+            if (await Probe(ct) is { } live) {
+                if (live.Protocol == Protocol && live.Version >= RemoteToolPaths.ClaudeBridgeVersion) return live;
+                // Never interrupt running or waiting tasks to upgrade; an idle old worker exits on request.
+                if (live.ActiveRuns > 0) {
+                    if (live.Protocol == Protocol) return live;
+                    throw new InvalidOperationException("Claude 桥接正在执行旧版本任务；任务结束后会自动更新，请稍后重试");
+                }
+                using (var stop = await Raw(HttpMethod.Post, live.Port, live.Token, "shutdown", "{}", null, null, TimeSpan.FromSeconds(3), ct)) {
+                    // Protocol 1 workers predate /shutdown; they reported zero active runs above, so ending them loses nothing.
+                    if (stop.StatusCode == System.Net.HttpStatusCode.NotFound && live.Protocol < Protocol && live.Pid > 0) {
+                        try { using var old = Process.GetProcessById(live.Pid); if (old.ProcessName.Contains("node", StringComparison.OrdinalIgnoreCase)) old.Kill(); }
+                        catch (ArgumentException) { }
+                    } else if (!stop.IsSuccessStatusCode) throw new InvalidOperationException("Claude 桥接正在执行任务；结束后会自动更新，请稍后重试");
+                }
+                for (var i = 0; i < 40 && await Probe(ct) != null; i++) await Task.Delay(100, ct);
+            }
+            var candidates = new[] { Path.Combine(AppContext.BaseDirectory, "claude", "server.mjs"), Path.Combine(environment.ContentRootPath, "Tools", "ClaudeBridge", "server.mjs") }.Where(File.Exists).ToArray();
+            static bool Installed(string script) => Directory.Exists(Path.Combine(Path.GetDirectoryName(script)!, "node_modules", "@anthropic-ai", "claude-agent-sdk"));
+            var script = candidates.FirstOrDefault(Installed) ?? candidates.FirstOrDefault()
+                ?? throw new InvalidOperationException("Claude 桥接文件未发布，请重新安装服务端");
+            if (!Installed(script)) throw new InvalidOperationException("请在服务端 claude 目录（源码为 WebApplication/Tools/ClaudeBridge）执行 npm ci --omit=dev --omit=optional 安装官方 SDK，然后重试");
+            var node = FindExecutable("NodeExecutable", "node");
+            var claude = FindExecutable("Executable", "claude");
             Directory.CreateDirectory(Root);
             if ((File.GetAttributes(Root) & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("Claude 数据目录不能是链接");
+            var attachments = RemoteToolPaths.Attachments("claude");
+            Directory.CreateDirectory(attachments);
             if (OperatingSystem.IsWindows()) {
                 var acl = new DirectorySecurity(); acl.SetAccessRuleProtection(true, false);
                 var inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
-                foreach (var identity in new[] {WindowsIdentity.GetCurrent().User!, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null)})
+                var owners = new List<SecurityIdentifier> { WindowsIdentity.GetCurrent().User!, new(WellKnownSidType.LocalSystemSid, null) };
+                if (InteractiveProcessLauncher.IsRunningInSession0 && InteractiveProcessLauncher.GetInteractiveUserSid() is { } sid) owners.Add(new SecurityIdentifier(sid));
+                foreach (var identity in owners.Distinct())
                     acl.AddAccessRule(new FileSystemAccessRule(identity, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
                 new DirectoryInfo(Root).SetAccessControl(acl);
-            }
-            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(Root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                new DirectoryInfo(attachments).SetAccessControl(acl);
+            } else File.SetUnixFileMode(Root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var connection = Path.Combine(Root, "connection.json");
             if (!File.Exists(connection)) {
                 var temporary = connection + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try {
-                    await File.WriteAllTextAsync(temporary, new JsonObject {["token"] = Convert.ToHexString(RandomNumberGenerator.GetBytes(32))}.ToJsonString(), ct);
+                    await File.WriteAllTextAsync(temporary, new JsonObject { ["token"] = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)) }.ToJsonString(), ct);
                     if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                    try {File.Move(temporary, connection, false);} catch (IOException) when (File.Exists(connection)) { }
-                } finally {if (File.Exists(temporary)) File.Delete(temporary);}
+                    try { File.Move(temporary, connection, false); } catch (IOException) when (File.Exists(connection)) { }
+                } finally { if (File.Exists(temporary)) File.Delete(temporary); }
             }
-            var start = new ProcessStartInfo(node) {UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(script)!, RedirectStandardOutput = true, RedirectStandardError = true};
-            start.ArgumentList.Add(script);
-            start.Environment.Remove("CLAUDE_CONFIG_DIR");
-            start.Environment.Remove("CLAUDECODE");
-            start.Environment["REMOTETOOL_CLAUDE_STATE"] = Root;
-            start.Environment["REMOTETOOL_CLAUDE_EXECUTABLE"] = claude;
-            var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动 Claude 桥接");
-            // Drain without logging: CLI/plugins may write credentials to stderr.
-            process.OutputDataReceived += (_, _) => { }; process.ErrorDataReceived += (_, _) => { };
-            process.BeginOutputReadLine(); process.BeginErrorReadLine();
-            for (var i = 0; i < 40; i++) {
-                if (await Existing(ct) is { } ready) return ready;
-                if (process.HasExited) break;
+            // A live but slow worker keeps its tasks; never start a competitor next to it.
+            if (UnansweredWorker()) {
+                for (var i = 0; i < 20; i++) { await Task.Delay(250, ct); if (await Probe(ct) is { } late) return late; }
+                throw new InvalidOperationException("Claude 桥接进程无响应；为保护运行中的任务未自动重启，请稍后重试或在服务端检查");
+            }
+            var arguments = new List<string> { script, "--state", Root, "--claude", claude, "--attachments", attachments };
+            if (configuration.GetValue<bool>("Claude:AllowCustomEndpoint")) arguments.Add("--allow-custom-endpoint");
+            if (OperatingSystem.IsWindows() && InteractiveProcessLauncher.IsRunningInSession0) {
+                // Same model as Codex: run as the signed-in desktop user, who owns the Claude login.
+                var command = string.Join(" ", new[] { node }.Concat(arguments).Select(value => "\"" + value.Replace("\"", "\\\"") + "\""));
+                var launch = InteractiveProcessLauncher.LaunchInInteractiveSession(command, Path.GetDirectoryName(script));
+                if (!launch.Success) throw new InvalidOperationException("无法在桌面用户会话中启动 Claude Code，请先登录电脑桌面");
+            } else {
+                // No redirected pipes: the worker must outlive this host, and a closed pipe must not kill it.
+                var start = new ProcessStartInfo(node) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(script)! };
+                foreach (var value in arguments) start.ArgumentList.Add(value);
+                // Session markers inherited from a Claude terminal would make runs child sessions without transcripts.
+                foreach (var name in new[] { "CLAUDE_CONFIG_DIR", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_SESSION_ID",
+                    "CLAUDE_PID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_EXECPATH" }) start.Environment.Remove(name);
+                using var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动 Claude 桥接");
+            }
+            for (var i = 0; i < 60; i++) {
                 await Task.Delay(150, ct);
+                if (await Probe(ct) is { } ready && ready.Protocol == Protocol) return ready;
             }
             throw new InvalidOperationException("Claude 桥接未启动，请检查 Node.js 20+、SDK 安装与本机 Claude Code");
-        } finally {gate.Release();}
+        } finally { gate.Release(); }
     }
-    public async Task<(int Status, string Json)> Send(HttpMethod method, string path, string body, string key, CancellationToken ct) {
-        var connection = await Connect(ct);
-        using var request = new HttpRequestMessage(method, $"http://127.0.0.1:{connection.Port}/" + path);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", connection.Token);
-        if (!string.IsNullOrWhiteSpace(key)) request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
-        if (body != null) request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-        using var response = await client.SendAsync(request, ct);
-        return ((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct));
+
+    /// <summary>Forwards to the worker. Streams (SSE) keep the response open; other calls use a bounded budget.</summary>
+    public async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, string? body, CancellationToken ct, string? key = null, string? lastEvent = null, bool stream = false) {
+        var health = await Connect(ct);
+        // Run starts include a login/ownership preflight; give them longer than reads.
+        var budget = stream ? (TimeSpan?)null : method == HttpMethod.Get ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(90);
+        return await Raw(method, health.Port, health.Token, path, body, key, lastEvent, budget, ct);
     }
 }

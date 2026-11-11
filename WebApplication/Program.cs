@@ -93,6 +93,8 @@ namespace RemoteTool.WebApi
                 services.GetRequiredService<RunRegistry>(),services.GetRequiredService<IConfiguration>(),services.GetRequiredService<HermesProfiles>(),
                 (agent,profile,id)=>{
                     System.Text.Json.Nodes.JsonObject state;
+                    // Claude runs are tracked by the shared registry (cleared when the bridge reports no live run).
+                    if(agent=="claude")return services.GetRequiredService<RunRegistry>().QueryEntry("claude",id) is not null;
                     if(agent=="codex")state=services.GetRequiredService<CodexSessionActivity>().Read(id);
                     else {using var scope=HermesProfileScope.Enter(profile);state=services.GetRequiredService<HermesSessionActivity>().Read(id);}
                     var running=state["running"] is System.Text.Json.Nodes.JsonValue value&&value.TryGetValue<bool>(out var flag)&&flag;
@@ -165,6 +167,7 @@ builder.Services.AddSingleton<HermesCompaction>();
             builder.Services.AddSingleton<ClaudeBridge>();
             builder.Services.AddSingleton<ITitleModelGateway>(services => services.GetRequiredService<CodexBridge>());
             builder.Services.AddKeyedSingleton("codex", new HermesAttachments("codex"));
+            builder.Services.AddKeyedSingleton("claude", new HermesAttachments("claude"));
             builder.Services.AddHttpClient("codex", client => client.Timeout = Timeout.InfiniteTimeSpan)
                 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
             builder.Services.AddHostedService<HermesAttachmentCleanup>();

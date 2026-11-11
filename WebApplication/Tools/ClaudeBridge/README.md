@@ -1,52 +1,57 @@
 # Claude Code 本机接入
 
-RemoteTool 通过官方 `@anthropic-ai/claude-agent-sdk` 驱动本机 Claude Code。模型执行、项目文件和 Claude 配置留在服务端机器；浏览器与 Android 主 App 使用同一组 `/api/claude` 接口。入口为 Web 的 Claude Code，以及主 App「更多 → Claude Code」。独立手机操控 App 不包含此功能。
+RemoteTool 通过官方 `@anthropic-ai/claude-agent-sdk` 驱动服务端机器上的 Claude Code。模型执行、项目文件、登录与 Claude 配置都留在服务端；Web 使用与 Codex / Hermes 相同的会话工作台（`/#/claude`），接口为 `/api/claude`，契约与 `/api/codex` 一致。**Android 主 App 尚未适配**：`ClaudeScreen.kt` 仍调用旧接口（`receipts/`、`runs/{id}/reply`、`events?after=`），与当前服务端不兼容，需在 Web 验证后改为复用共享会话界面；在此之前不要从本分支发布 App。
 
 ## 安装
 
-1. 在运行 RemoteTool 的操作系统用户下安装并配置官方 Claude Code（当前桥接要求支持 `claude auth status --json` 和 `claude agents --json` 的版本；以 2.1.322 验证）。先在本机执行 `claude auth login`，再用 `claude auth status` 确认官方认证可用。Windows 服务若由 SYSTEM 启动，不会继承桌面用户的登录和钥匙串；应让 RemoteTool 使用已配置 Claude 的专用用户运行。
-2. 安装 Node.js 20+。
-3. 源码运行：在 `WebApplication/Tools/ClaudeBridge` 执行 `npm ci --omit=dev --omit=optional`。发布包运行：在发布目录 `claude` 下执行同一命令。桥接始终使用本机已安装的官方 Claude 可执行文件，因此省略 SDK 额外捆绑的可选二进制。发布包包含桥接源码和锁定依赖清单，不打包平台专属的 node_modules，也不会在服务启动时联网安装依赖。
-4. 启动 RemoteTool，打开 Claude Code 页面检查就绪状态。只检查安装/认证，不会发送提示词。
+1. 在运行 RemoteTool 的系统用户下安装官方 Claude Code（需支持 `claude auth status --json` 与 `claude agents --json`；以 2.1.322 验证）和 Node.js 20+。
+2. 在该用户下执行 `claude auth login`，用 `claude auth status` 确认已登录。Windows 服务以 SYSTEM 运行时，桥接会像 Codex 一样在已登录的桌面用户会话中启动（需要桌面用户已登录）。
+3. 源码运行：在 `WebApplication/Tools/ClaudeBridge` 执行 `npm ci --omit=dev --omit=optional`。发布包：在发布目录 `claude` 下执行同一命令。桥接使用本机已安装的 `claude`，不需要 SDK 捆绑的可选二进制。
+4. 打开 Web 的 Claude Code 页面，就绪卡片只检查安装与登录，不发送提示词。
 
-可选服务端配置（环境变量用双下划线，例如 `Claude__Executable`）：
+可选配置（环境变量用双下划线，如 `Claude__Executable`）：
 
 ```json
 {
   "Claude": {
     "Enabled": true,
     "Executable": "/absolute/path/to/claude",
-    "NodeExecutable": "/absolute/path/to/node"
+    "NodeExecutable": "/absolute/path/to/node",
+    "AllowCustomEndpoint": false
   }
 }
 ```
 
-未配置程序路径时，在 PATH、用户 `.local/bin` 和常见 macOS 安装路径查找。Windows 路径需指向真正的 `claude.exe` / `node.exe`，不通过 shell 执行命令。用户配置、CLAUDE.md、skills、插件和 MCP 由官方 Claude 加载，RemoteTool 不复制凭据、不提供远程登录令牌输入框。不支持备用 `CLAUDE_CONFIG_DIR`、第三方模型网关和非官方云提供方。
+- 未配置路径时在 PATH、用户 `.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 查找；Windows 需指向 `claude.exe` / `node.exe`。
+- `AllowCustomEndpoint=false`（默认）时，配置了非官方 `ANTHROPIC_BASE_URL` 或 Bedrock/Vertex/Foundry 的项目会被拒绝执行；设为 `true` 后按本机 Claude Code 配置原样执行。
+- 用户配置、CLAUDE.md、hooks、skills、插件和 MCP 由官方 Claude Code 加载；RemoteTool 不复制凭据，不提供远程登录。
 
-官方 CLI/SDK 的实际认证可用性受 Anthropic 当前产品规则约束。本机 claude.ai Pro 登录已完成 SDK 初始化验证，未发送模型提示词；这不代表第三方产品可以向其他用户提供 claude.ai 登录或订阅额度。发行与使用应遵循 [官方 SDK 认证说明](https://code.claude.com/docs/en/agent-sdk/overview)。官方 API 认证需用户自行在本机配置。
+## 功能
 
-## 支持范围
+- 会话：列出本机全部 Claude Code 会话（含终端创建的），新建（选择工作目录与权限模式）、重命名、置顶、删除、从任一消息分叉、撤回并编辑（下一轮以 `resumeSessionAt` 从所选位置继续，发送前不改动原始记录，可取消）。
+- 执行：流式回复与思考过程、工具进度、执行中插话（同一进程的流式输入）、停止（先 `interrupt()`，10 秒未结束才强制终止）、`/compact` 压缩、附件（图片内联，其他文件给出路径）与 `MEDIA:` 回传文件。
+- 审批：工具授权“仅允许本次 / 拒绝”；只有 Claude 原生给出建议规则（`suggestions`）时才显示“允许并保存 Claude 建议的规则”，保存位置由原生建议决定。`AskUserQuestion` 在页面内选择或自填回答。计划模式的 `ExitPlanMode` 作为审批显示计划内容。
+- 设置：每个会话的模型与推理强度（下一轮生效），权限模式 `default` / `acceptEdits` / `plan`（执行中修改立即作用于当前任务）。不提供绕过权限模式。
+- 状态：上下文用量（原生 `contextWindow`，未知时估算并标注）、累计 Token、最近一次任务返回的账户额度。
 
-- 新建 RemoteTool 管理的 Claude 会话，选择本机项目目录与 `default`、`acceptEdits`、`plan` 权限模式；不默认绕过权限。发送消息会执行项目内的原生配置、hooks、skills 与 MCP。
-- 流式文本、工具调用/结果、按次授权、AskUserQuestion（包括多选/自填）、停止、Token 和 SDK 参考费用（不是订阅账户的实际扣费账单）。
-- 最近 300 个本机会话历史查看（RemoteTool 受管会话另行完整列出）；RemoteTool 创建的会话可在后续轮次恢复。电脑其他入口创建的会话本版仅只读，不接管其进程。每次启动轮次前通过官方进程列表核对会话是否仍由其他进程持有，无法确认时拒绝写入。
-- 暂不支持附件、修改历史、模型切换、订阅余量、执行中追加消息或导入外部会话写入。UI 不提供这些尚未实现的入口。
+## 会话占用与安全
 
-会话拥有者检查是开始执行前的检查，不是对其他桌面程序施加全局写锁；远程任务运行期间请勿在另一个终端恢复同一会话。
+- 开始每一轮前用 `claude agents --json` 检查会话是否被电脑上的其他 Claude 进程持有；持有时只读，并显示 PID 和该进程空闲/执行中。
+- 接管：用户确认后，向占用进程发送 SIGTERM 正常退出（不强杀），等它从占用列表消失后放行；10 秒未退出则报错。发信号前会用确认时看到的 PID 与启动时间实时复核，进程已变化则拒绝。会话记录保留，电脑上可用 `claude --resume` 再打开；执行中的进程会被中断，页面会提前说明。桥接自身的 SDK 子进程在 Unix 上按父进程识别，不会被误判。这是开始前的检查，不是全局写锁：远程任务执行期间请勿在终端恢复同一会话。
+- 发送使用幂等标识；回执在执行前落盘，同一标识不能用于不同内容。超时或断线时客户端只做只读核对，不自动重放。
+- 进程启动前就失败（未登录、路径无效等）记为“未完成”，可直接重发；已开始执行后连接中断，或桥接进程退出，记为“结果待核对”，该会话的新消息被阻止，直到用户在页面上确认“我已核对”。原任务不会被重发。
+- 错误信息使用固定文案，不回显 SDK/插件的原始异常（可能含凭据）。
 
-## 任务与回执
+## 进程与数据
 
-桥接是按需启动、仅监听回环地址且有独立 Bearer 鉴权的本机 Node 进程。它独立持有任务，页面离开/网络断开/RemoteTool Web 服务重启不会主动结束轮次（macOS 进程复用已验证；Windows/IIS 若由宿主作业对象终止子进程，将进入下述“结果待核对”恢复流程，尚需 Windows 真机验证）。RemoteTool API 继续要求登录，回环令牌不发给客户端。`Claude:Enabled=false` 禁止新的接入请求，不会强杀已有 worker。
-
-数据位于 RemoteTool 数据目录的 `claude-bridge/`，包括仅当前操作系统用户可读写的连接文件、会话元信息、发送幂等回执和增量事件日志。官方 transcript 保存在用户原生 Claude 目录；不改写用户历史。回执在执行前落盘，同一标识不可用于不同消息；浏览器和 App 保留未确认标识并提供只读回执核对，未知结果不自动重放。
-
-若桥接进程本身退出，恢复后的未结束任务显示“结果待核对”，不冒充停止/失败，也不重发原任务。此会话的新轮次会被阻止；应先核对本机历史和工具实际结果，必要时新建会话继续。授权仅对应本轮的特定请求 ID，不创建额外的持久 allow 规则。停止可能发生在命令已开始后，请核对工具副作用。
-
-维护或更新 bridge 源码前，等待所有任务与待确认请求结束，再停止旧 worker；不能仅为升级强杀运行中的进程。服务端与 SDK 文件更新不会热替换正在运行的 worker。
+- 桥接是按需启动、仅监听 `127.0.0.1`、使用独立 Bearer 令牌的 Node 进程；令牌不发给客户端。它独立持有任务，页面关闭或 RemoteTool 服务重启不会结束任务；不重定向标准输出，宿主退出不会因管道关闭而终止桥接。
+- 数据位于 RemoteTool 数据目录 `claude-bridge/`：连接文件、`journal/state-v2.json`（会话元信息、任务、回执；只在状态变化时写入，保留最近 300 个已结束任务，回执保留 14 天）。流式事件只在内存中保留（每个任务最多 2000 条，结束后 15 分钟），重连通过 `Last-Event-ID` 续传，缺口会发出 `stream.gap`。
+- 附件位于 `claude-attachments/`，可在“空间管理”中清理；执行中的会话附件不会被清理。
+- 升级：`PROTOCOL`（接口契约）与 `BRIDGE_VERSION`（实现版本，对应 `RemoteToolPaths.ClaudeBridgeVersion`）不一致时，宿主只在桥接空闲时请求其退出并启动新版本；有任务执行或等待确认时继续使用旧进程（协议兼容时）或提示稍后重试，不强杀。服务端更新的空闲检查包含 Claude 任务；桥接无响应时视为未确认空闲。
 
 ## 验证
 
-- `node --test tests/ClaudeBridge/*.test.mjs tests/ClaudeBridge/*.test.cjs`：幂等、并发、授权、问答、停止、恢复与历史保护。
-- `node tests/claude-browser.test.cjs`：隔离的后端与浏览器交互，需要 Playwright 与 Chrome、已构建的 WebApplication.dll。
-- Android：`:mobile:assembleFullDebug :mobile:testFullDebugUnitTest :mobile:lintFullDebug`；没有修改独立 phone flavor。
-- 自动化任务执行使用模拟 SDK/接口（鉴权/进程测试会启动真实桥接但不提交提示词），不调用模型、不改动个人 Claude 配置；真实 CLI/SDK 初始化验证和完整模型推理验收分别记录。
+- `node --test tests/ClaudeBridge/bridge.test.mjs`：历史投影、回执幂等、审批与建议规则、问答、插话、停止、启动前失败与待核对、外部占用、撤回、重启恢复、HTTP 鉴权与 SSE 续传（模拟 SDK，不调用模型）。
+- `node tests/claude-browser.test.cjs`：共享工作台中的 Claude 交互（模拟接口），需要已构建的 WebApplication.dll、Chrome 与 Playwright。
+- `tests/UpdaterReadiness`：Claude 任务执行中、等待确认、桥接无响应时阻止服务端更新。
+- 真实运行（macOS，官方 Claude Code 2.1.322 + claude.ai 登录，Haiku）：流式回复、文件写入审批、AskUserQuestion、停止、插话、重命名、撤回并编辑、分叉、删除均已验证。Windows 交互会话启动与 Linux systemd 尚未真机验证。

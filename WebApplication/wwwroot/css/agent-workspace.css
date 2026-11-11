@@ -2654,3 +2654,13 @@
 .agent-patch-state.is-incompatible{color:#8b949e}
 
 .agent-phone-options{min-width:0;display:flex;flex-direction:column;gap:8px;border:1px solid var(--border-color);border-radius:12px;padding:12px;margin:10px 0}.agent-phone-options legend{font-size:13px;padding:0 6px}.agent-phone-options select{min-height:40px;width:100%;min-width:0;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-primary);color:var(--text-primary);padding:6px 10px;font:inherit}.agent-phone-picker{display:flex;gap:8px;min-width:0}.agent-phone-picker select{flex:1;width:0}.agent-phone-options .agent-phone-advanced{display:flex;align-items:center;gap:8px}.agent-phone-advanced input{width:auto;min-height:0!important}
+
+/* Claude AskUserQuestion: inline options with a free-text fallback. */
+.agent-approval-questions{display:flex;flex-direction:column;gap:10px;width:100%}
+.agent-approval-question{display:flex;flex-direction:column;gap:6px}
+.agent-approval-question small{font-weight:400;opacity:.7;margin-left:4px}
+.agent-approval-options{display:flex;flex-wrap:wrap;gap:6px}
+.agent-approval-options button{border:1px solid var(--border-color,#8886);border-radius:999px;padding:4px 12px;background:transparent;color:inherit;cursor:pointer;font:inherit}
+.agent-approval-options button.picked{border-color:var(--accent-primary,#6dbfb0);background:color-mix(in srgb,var(--accent-primary,#6dbfb0) 18%,transparent)}
+.agent-approval-question input{border:1px solid var(--border-color,#8886);border-radius:8px;padding:6px 8px;background:transparent;color:inherit;font:inherit}
+.agent-approval-actions{display:flex;gap:8px}

@@ -1,61 +1,118 @@
+// Claude Code in the shared agent workspace, against a mocked /api/claude contract.
+// Run: node tests/claude-browser.test.cjs  (needs a built WebApplication.dll, Chrome and Playwright)
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net');
-const {spawn}=require('node:child_process');const {chromium}=require('playwright');
+const {spawn}=require('node:child_process');
+const {chromium}=require(process.env.REMOTETOOL_TEST_PLAYWRIGHT||'playwright');
 (async()=>{
 const root=path.resolve(__dirname,'..'),temp=fs.mkdtempSync(path.join(os.tmpdir(),'claude-web-'));
 const probe=net.createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));const port=probe.address().port;await new Promise(r=>probe.close(r));const base=`http://127.0.0.1:${port}`;
-const dotnet=process.env.REMOTETOOL_TEST_DOTNET||'dotnet';const server=spawn(dotnet,[path.join(root,'WebApplication/bin/Debug/net8.0/WebApplication.dll')],{cwd:path.join(root,'WebApplication'),env:{...process.env,ASPNETCORE_URLS:base,Auth__Username:'fixture',Auth__Password:'fixture-only-password',Auth__JwtSecret:'fixture-only-signing-key-at-least-thirty-two-characters',REMOTETOOL_DATA_DIR:path.join(temp,'data'),Hangfire__Database:path.join(temp,'hangfire.db'),Claude__Enabled:'false'},stdio:'ignore'});
+const server=spawn(process.env.REMOTETOOL_TEST_DOTNET||'dotnet',[path.join(root,'WebApplication/bin/Debug/net8.0/WebApplication.dll')],{cwd:path.join(root,'WebApplication'),env:{...process.env,ASPNETCORE_URLS:base,Auth__Username:'fixture',Auth__Password:'fixture-only-password',Auth__JwtSecret:'fixture-only-signing-key-at-least-thirty-two-characters',REMOTETOOL_DATA_DIR:path.join(temp,'data'),Hangfire__Database:path.join(temp,'hangfire.db'),Claude__Enabled:'false'},stdio:'ignore'});
 let browser;
 try{
 for(let i=0;i<100;i++){try{if((await fetch(base+'/api/device/identity')).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
 browser=await chromium.launch({headless:true,executablePath:process.env.REMOTETOOL_TEST_CHROME||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
-const context=await browser.newContext({viewport:{width:1440,height:1000}});const page=await context.newPage();page.setDefaultTimeout(10000);const errors=[];page.on('pageerror',e=>errors.push(e.message));
-assert.equal((await context.request.get(base+'/api/claude/sessions')).status(),401);
+const context=await browser.newContext({viewport:{width:1440,height:950}});const page=await context.newPage();page.setDefaultTimeout(10000);
+const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+assert.equal((await context.request.get(base+'/api/claude/sessions')).status(),401,'API requires login');
 assert.ok((await context.request.post(base+'/api/auth/login',{data:{username:'fixture',password:'fixture-only-password'}})).ok());
-assert.equal((await context.request.get(base+'/api/claude/setup')).status(),503);
-const external={id:'native',title:'Terminal history',cwd:'/project',managed:false},managed={id:'managed',title:'Managed session',cwd:'/project',permission_mode:'default',managed:true};let sessions=[external],run=null,posts=0,postedKeys=[],replied=[],failSend=false,receipt=null;
-await page.route('**/api/claude/**',async route=>{const request=route.request(),url=new URL(request.url()),p=url.pathname;let result={};
-if(p.endsWith('/setup'))result={ready:true,message:'官方 Claude Code 已登录'};
-else if(p.endsWith('/sessions')&&request.method()==='POST'){const body=request.postDataJSON();assert.equal(body.permission_mode,'default');sessions=[managed,...sessions];result=managed;}
-else if(p.endsWith('/sessions'))result={data:sessions};
-else if(p.endsWith('/messages'))result={data:p.includes('/native/')?[
-...Array.from({length:80},(_,i)=>({id:'earlier-'+i,role:'assistant',blocks:[{type:'text',text:'Earlier message '+i}]})),
-{id:'call-read',role:'assistant',blocks:[{type:'thinking',thinking:'not a chat message'},{type:'tool_use',id:'read-source',name:'Read',input:{file_path:'/project/source.js'}}]},
-{id:'read-result',role:'user',blocks:[{type:'tool_result',tool_use_id:'read-source',content:'RAW_TOOL_SOURCE\n'+'source code\n'.repeat(8000)}]},
-{id:'call-write',role:'assistant',blocks:[{type:'tool_use',id:'write-source',name:'Write',input:{file_path:'/project/fixed.js',content:'RAW_WRITE_SOURCE\n'.repeat(3000)}}]},
-{id:'write-result',role:'user',blocks:[{type:'tool_result',tool_use_id:'write-source',content:'File saved'}]},
-{id:'final',role:'assistant',blocks:[{type:'text',text:'**完成修复**\n\n- 保留对话\n- 折叠工具\n\n```js\n'+('const line = 1;\n'.repeat(25))+'```\n\n[unsafe](javascript:alert(1))'}]},
-{id:'old',role:'user',content:'<img src=x onerror=alert(1)>'}
-]:[]};
-else if(p.endsWith('/active-run'))result=p.includes('/managed/')?(run||{}):{};
-else if(p.endsWith('/runs')&&request.method()==='POST'){posts++;postedKeys.push(request.headers()['idempotency-key']);if(failSend){receipt=null;await route.abort();return;}run={id:'run',session_id:'managed',status:'waiting',sequence:2,request:{id:'permission',tool:'Bash',input:{command:'echo fixture'}}};receipt=run;result=run;}
-else if(p.includes('/receipts/'))result=receipt||{pending:true};
-else if(p.endsWith('/reply')){replied.push(request.postDataJSON());run={...run,status:'started',request:null};result={accepted:true};}
-else if(p.endsWith('/stop')){run={...run,status:'cancelled',request:null};result=run;}
-else if(p.endsWith('/events')){const after=Number(url.searchParams.get('after'));result={data:after?[]:[{seq:1,type:'user',data:{text:'Hello'}},{seq:2,type:'stream',data:{type:'content_block_delta',delta:{type:'text_delta',text:'Streaming answer'}}}],cursor:2,status:run?.status};}
-else result=run||{};
-await route.fulfill({json:result});});
-await page.goto(base+'/agents/claude');await page.getByRole('button',{name:/Terminal history/}).click();await page.getByText('<img src=x onerror=alert(1)>',{exact:true}).waitFor();assert.equal(await page.locator('.claude-history img').count(),0);assert.equal(await page.getByRole('button',{name:'发送',exact:true}).count(),0);
-assert.equal(await page.locator('.claude-history > .claude-message').count(),40,'long history initially shows recent content');
-assert.equal(await page.locator('.claude-tool-group[open]').count(),0);assert.equal(await page.locator('.claude-tool pre').count(),0);
-assert.equal(await page.locator('.claude-markdown strong').filter({hasText:'完成修复'}).count(),1);assert.equal(await page.locator('.claude-code-fold[open]').count(),0);assert.equal(await page.locator('.claude-code-fold').count(),1);assert.equal(await page.locator('.claude-markdown a[href^="javascript:"]').count(),0);
-assert.ok(!(await page.locator('.claude-history').textContent()).includes('RAW_TOOL_SOURCE'));
-await page.locator('.claude-tool-group > summary').click();assert.equal(await page.locator('.claude-tool pre').count(),0);await page.locator('.claude-tool').filter({hasText:'读取文件'}).locator('summary').click();await page.locator('.claude-tool[open] > pre').filter({hasText:'RAW_TOOL_SOURCE'}).waitFor();
-assert.ok((await page.locator('.claude-tool[open] > pre').boundingBox()).height<=321,'expanded source has a bounded viewport');
-await page.locator('.claude-tool-group > summary').click();await page.getByRole('button',{name:/显示更早的内容/}).click();assert.equal(await page.locator('.claude-history > .claude-message').count(),80);
-await page.locator('.claude-history').evaluate(el=>el.scrollTop=el.scrollHeight);await page.screenshot({path:path.join(temp,'claude-readable-desktop.png')});await page.setViewportSize({width:384,height:820});await page.screenshot({path:path.join(temp,'claude-readable-mobile.png')});await page.setViewportSize({width:1440,height:1000});
+const disabled=await (await context.request.get(base+'/api/agent-setup/claude')).json();assert.equal(disabled.state,'disabled');
 
-await page.locator('.claude-sessions').getByRole('button',{name:'新建',exact:true}).click();const dialog=page.getByRole('dialog',{name:'新建 Claude 会话'});await dialog.getByLabel('本机项目绝对路径').fill('/project');await dialog.getByRole('button',{name:'创建',exact:true}).click();
-await page.getByRole('textbox',{name:'发送给 Claude'}).fill('Hello');await page.getByRole('button',{name:'发送',exact:true}).click();await page.getByRole('button',{name:'允许本次',exact:true}).waitFor();assert.equal(posts,1);assert.ok(postedKeys[0]?.length>=16);await page.getByRole('button',{name:'允许本次',exact:true}).click();assert.deepEqual(replied[0],{request_id:'permission',allow:true,answers:{}});
-await page.getByText('Streaming answer',{exact:true}).waitFor();
-run={...run,status:'waiting',request:{id:'question',tool:'AskUserQuestion',input:{questions:[{question:'Which?',multiSelect:true,options:[{label:'A'},{label:'B'}]}]}}};
-await page.getByLabel('Which?',{exact:true}).waitFor();await page.getByRole('button',{name:'A',exact:true}).click();await page.getByRole('button',{name:'B',exact:true}).click();await page.getByRole('button',{name:'提交回答',exact:true}).click();assert.deepEqual(replied[1],{request_id:'question',allow:true,answers:{'Which?':'A, B'}});
-await page.getByRole('button',{name:'停止任务',exact:true}).click();await page.getByText('已停止',{exact:true}).waitFor();
-failSend=true;await page.getByRole('textbox',{name:'发送给 Claude'}).fill('Uncertain');await page.getByRole('button',{name:'发送',exact:true}).click();await page.getByRole('button',{name:'核对发送回执',exact:true}).waitFor();assert.equal(posts,2);assert.ok(await page.getByRole('button',{name:'发送',exact:true}).isDisabled());
-await page.goto(base+'/#/claude');await page.getByRole('button',{name:/Managed session/}).click();await page.locator('.claude-chat').getByText('尚未找到接收回执，请稍后核对；未自动重发。',{exact:true}).waitFor();assert.equal(posts,2,'reload does not replay uncertain input');
-// Read-only receipt reconciliation restores the existing accepted task, with no POST.
-receipt={...run,status:'completed'};await page.getByRole('button',{name:'核对发送回执',exact:true}).click();await page.getByRole('button',{name:'核对发送回执',exact:true}).waitFor({state:'hidden'});assert.equal(posts,2);
-await page.setViewportSize({width:384,height:820});await page.locator('.claude-back').click();await page.getByRole('button',{name:/Managed session/}).click();await page.getByRole('textbox',{name:'发送给 Claude'}).fill('Mobile draft');await page.getByRole('textbox',{name:'发送给 Claude'}).focus();await page.setViewportSize({width:384,height:460});
-await page.waitForFunction(()=>{const box=document.querySelector('.claude-composer textarea')?.getBoundingClientRect();return box&&box.bottom<=innerHeight;},{},{timeout:5000});
-const box=await page.getByRole('textbox',{name:'发送给 Claude'}).boundingBox();assert.ok(box&&box.y+box.height<=460,'composer stays in resized viewport');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-await page.screenshot({path:path.join(temp,'claude-mobile.png')});assert.deepEqual(errors,[]);console.log('PASS: Claude native read-only history, safe rendering, create, stream, approval, stop, uncertain send/reload/receipt, mobile keyboard layout');console.log('Screenshot: '+path.join(temp,'claude-mobile.png'));
+const held={id:'held-session',title:'Terminal session',cwd:'/project',status:null,last_active:Date.now()};
+const own={id:'own-session',title:'Remote session',cwd:'/project',status:null,last_active:Date.now()-1000,permission_mode:'default'};
+let sessions=[held,own],detail={...own},run=null,events=[],posts=[],tookOver=false;
+const history=[{id:'u1',role:'user',content:'Earlier question',timestamp:Date.now()-60000,editable:false},
+  {id:'a1',role:'assistant',content:'**Earlier answer**',timestamp:Date.now()-50000},
+  {id:'tools-u1',role:'system',type:'toolSummary',tool_summary_id:'tools-u1',content:'工具 1 次 · 文件修改 0 次',timestamp:Date.now()-40000}];
+const sse=list=>list.map(e=>`id: ${e.seq}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+await page.route('**/api/claude/**',async route=>{
+  const request=route.request(),url=new URL(request.url()),p=url.pathname.replace('/api/claude','');const method=request.method();
+  if(method!=='GET')posts.push({path:p,body:request.postDataJSON?.()??null,key:request.headers()['idempotency-key']});
+  let json={};
+  if(p==='/sessions'&&method==='GET')json={data:sessions,has_more:false};
+  else if(p==='/sessions'&&method==='POST'){const body=request.postDataJSON();const created={id:'created-session',title:body.title||'新 Claude Code 会话',cwd:body.cwd,permission_mode:body.permission_mode};sessions=[created,...sessions];json={session:created};}
+  else if(/^\/sessions\/held-session$/.test(p))json={session:{...held,control:{state:'writer_held'}}};
+  else if(/^\/sessions\/[^/]+$/.test(p))json={session:p.includes('own')?detail:sessions.find(s=>p.endsWith(s.id))};
+  else if(p.endsWith('/messages'))json={data:p.includes('/held-')||p.includes('/own-')?history:[],has_more:false,oldest_id:'u1'};
+  else if(p.endsWith('/activity'))json=p.includes('/held-')&&!tookOver?{available:true,running:true,kind:'external',pid:4242,started_at:1700000000,external_status:'idle',progress:[]}:{available:true,running:false,progress:[]};
+  else if(p.endsWith('/takeover')){tookOver=true;json={ready:true,terminated_pid:4242};}
+  else if(p.endsWith('/active-run'))json=run&&p.includes('/own-')?{session_id:'own-session',run_id:run.run_id,status:run.status}:{run_id:null};
+  else if(p.endsWith('/context'))json={context:{available:true,tokens:50000,limit:200000,estimated:false}};
+  else if(p.endsWith('/permissions')&&method==='GET')json={mode:detail.permission_mode,choices:[{id:'default',label:'按本机规则询问',description:'d'},{id:'acceptEdits',label:'自动批准文件编辑',description:'e'},{id:'plan',label:'计划模式',description:'p'}],current:{label:'按本机规则询问'}};
+  else if(p.endsWith('/permissions')){detail={...detail,permission_mode:request.postDataJSON().mode};json={mode:detail.permission_mode,applied_to_running_task:false};}
+  else if(p.includes('/tools/'))json={data:[{id:'t1',tool:'读取文件',status:'completed',description:'/project/a.js\n\nRAW'}],tools:1,file_changes:0,has_more:false};
+  else if(p.endsWith('/acknowledge')){detail={...detail,unresolved_run:null};json={status:'acceptance_unknown',reviewed:true};}
+  else if(p.endsWith('/rewind/cancel')){detail={...detail,rewind_pending:false};json={success:true};}
+  else if(p==='/runs'&&method==='POST'){run={run_id:'run-1',session_id:'own-session',status:'running',created_at:Math.floor(Date.now()/1000)};json={...run,delivery:'accepted'};}
+  else if(p==='/runs/run-1/events'){await route.fulfill({status:200,headers:{'content-type':'text/event-stream'},body:sse(events)});return;}
+  else if(p==='/runs/run-1/approval'){run={...run,approval:null,status:'running'};json={accepted:true};}
+  else if(p==='/runs/run-1'){const pending=[...events].reverse().find(e=>e.type==='approval.request'||e.type==='approval.resolved');json={...run,approval:pending?.type==='approval.request'&&!posts.some(row=>row.body?.request_id===pending.request_id)?pending:null};}
+  else if(p==='/model-options')json={providers:[{id:'anthropic',slug:'anthropic',name:'Claude',models:[{model:'opus',displayName:'Opus',supportedReasoningEfforts:[{reasoningEffort:'high'}]}]}],provider:'anthropic'};
+  else if(p==='/usage')json={available:false};
+  else if(p.endsWith('/files'))json={data:[]};
+  await route.fulfill({json});
+});
+await page.route('**/api/agent-setup/claude',route=>route.fulfill({json:{agent:'claude',state:'ready'}}));
+await page.goto(base+'/#/claude');
+const app=page.locator('#workspace-claude');
+await app.locator('.agent-pane-identity h2').filter({hasText:'Claude Code'}).waitFor();
+assert.equal(await app.locator('.agent-brand-icon img').getAttribute('src'),'/icons/claude-color.svg');
+
+// A session held by a desktop Claude process can be read but not written.
+await app.getByRole('button',{name:/Terminal session/}).click();
+await app.getByText('电脑上的 Claude Code 正在使用此会话（PID 4242，空闲）',{exact:false}).waitFor();
+assert.ok(await app.locator('.agent-send-actions').getByRole('button',{name:'发送'}).isDisabled(),'sending is blocked while the desktop holds the session');
+await app.locator('.agent-markdown strong').filter({hasText:'Earlier answer'}).waitFor();
+await app.getByRole('button',{name:'查看工具记录'}).click();await page.locator('.workspace-modal .agent-tool-detail').filter({hasText:'读取文件'}).waitFor();await page.locator('.workspace-modal').getByRole('button',{name:'关闭'}).click();
+// Takeover ends exactly the confirmed desktop process, then the session becomes writable.
+const heldBanner=app.locator('.agent-banner').filter({hasText:'会话被电脑占用'});await heldBanner.getByRole('button',{name:'结束电脑进程并接管'}).click();await heldBanner.waitFor({state:'hidden'});
+assert.deepEqual(posts.find(row=>row.path==='/sessions/held-session/takeover').body,{expected_pid:4242,expected_started_at:1700000000});
+await app.locator('textarea[aria-label="消息输入"]').fill('after takeover');assert.ok(!(await app.locator('.agent-send-actions').getByRole('button',{name:'发送'}).isDisabled()),'writable after takeover');await app.locator('textarea[aria-label="消息输入"]').fill('');
+
+// An unresolved result blocks sending until explicitly acknowledged; never resent automatically.
+detail={...own,unresolved_run:{run_id:'old-run',error:'桥接进程已结束，上一轮结果待核对；未自动重发。'},rewind_pending:true};
+await app.getByRole('button',{name:/Remote session/}).click();
+const unresolved=app.locator('.agent-banner').filter({hasText:'上一轮结果待核对'});await unresolved.waitFor();
+await unresolved.getByRole('button',{name:'我已核对，继续'}).click();await unresolved.waitFor({state:'hidden'});
+assert.ok(posts.some(row=>row.path==='/runs/old-run/acknowledge'));
+await app.locator('.agent-banner').filter({hasText:'已撤回'}).getByRole('button',{name:'取消撤回'}).click();
+assert.ok(posts.some(row=>row.path==='/sessions/own-session/rewind/cancel'));
+
+// Native permission modes, never a bypass option.
+await app.locator('.agent-head-trailing details.agent-session-actions summary').click();await app.locator('.agent-head-trailing').getByRole('button',{name:'会话权限'}).click();
+const permissions=page.locator('.ivu-modal').filter({hasText:'当前会话权限'});await permissions.getByText('计划模式',{exact:true}).waitFor();
+assert.equal(await permissions.getByText(/完全访问|bypass/i).count(),0);
+await permissions.locator('input[value=plan]').check();await permissions.getByRole('button',{name:'保存'}).click();
+assert.ok(posts.some(row=>row.path==='/sessions/own-session/permissions'&&row.body.mode==='plan'));
+
+// Send, stream, then answer an AskUserQuestion inline and approve a tool with the native suggestion.
+events=[{seq:1,type:'run.running',status:'running'},{seq:2,type:'message.started',item_id:'m:0'},{seq:3,type:'message.delta',item_id:'m:0',delta:'Streaming reply'},
+  {seq:4,type:'approval.request',request_id:'q1',kind:'user_input',questions:[{id:'0',question:'Which color?',multiSelect:true,options:[{label:'Red'},{label:'Blue'}]}],choices:[]}];
+await app.locator('textarea[aria-label="消息输入"]').fill('Hello Claude');await app.locator('.agent-send-actions').getByRole('button',{name:'发送'}).click();
+const send=posts.find(row=>row.path==='/runs');assert.ok(send.key?.length>=16);assert.deepEqual(send.body,{input:'Hello Claude',session_id:'own-session',attachment_ids:[]});
+await app.getByText('Streaming reply',{exact:false}).first().waitFor();
+const ask=app.locator('.agent-approval-questions');await ask.waitFor();
+assert.ok(await ask.getByRole('button',{name:'提交回答'}).isDisabled());
+await ask.getByRole('button',{name:'Red',exact:true}).click();await ask.getByRole('button',{name:'Blue',exact:true}).click();await ask.getByRole('button',{name:'提交回答'}).click();
+await ask.waitFor({state:'hidden'});
+assert.deepEqual(posts.find(row=>row.path==='/runs/run-1/approval').body,{answers:{0:{answers:['Red','Blue']}},request_id:'q1'});
+events=[...events,{seq:5,type:'approval.resolved',request_id:'q1'},{seq:6,type:'approval.request',request_id:'p1',kind:'approval',description:'执行命令 · Bash',command:'npm test',
+  choices:[{id:'once',label:'仅允许本次'},{id:'always',label:'允许并保存 Claude 建议的规则',detail:'允许：Bash(npm test:*) · 本地项目设置'},{id:'deny',label:'拒绝'}]}];
+const approval=app.locator('.agent-banner').filter({hasText:'需要确认'});await approval.getByText('npm test',{exact:true}).waitFor({timeout:20000});
+await approval.getByRole('button',{name:'允许并保存 Claude 建议的规则'}).click();
+await page.waitForFunction(()=>true);await approval.waitFor({state:'hidden'});
+assert.deepEqual(posts.filter(row=>row.path==='/runs/run-1/approval').at(-1).body,{choice:'always',request_id:'p1'});
+
+// New session: working directory and permission mode; no phone-tools section for Claude.
+await app.getByRole('button',{name:'新建会话'}).first().click();
+const create=page.locator('.ivu-modal').filter({hasText:'新建 Claude Code 会话'});await create.waitFor();
+assert.equal(await create.locator('.agent-phone-options').count(),0);
+await create.locator('#agent-create-cwd input, input#agent-create-cwd').first().fill('/work/project');await create.locator('#agent-create-permission').selectOption('acceptEdits');
+await create.getByRole('button',{name:'创建会话'}).click();
+assert.deepEqual(posts.find(row=>row.path==='/sessions').body,{title:null,cwd:'/work/project',permission_mode:'acceptEdits'});
+
+await page.setViewportSize({width:390,height:844});await page.waitForTimeout(300);
+assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no horizontal scroll on phones');
+await page.screenshot({path:path.join(temp,'claude-mobile.png')});
+assert.deepEqual(errors,[]);
+console.log('PASS: Claude in the shared workspace — held session, takeover, tool records, unresolved acknowledge, rewind cancel, permissions, send/stream, inline questions, native suggestion approval, create, mobile');
 }finally{await browser?.close();server.kill();}})().catch(e=>{console.error(e);process.exitCode=1;});
