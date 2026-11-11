@@ -6,6 +6,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.width
@@ -37,27 +38,61 @@ class MobileNavigationLayoutTest {
         compose.onNodeWithText("Claude").assertIsSelected()
     }
     @Test fun editorSavesAcrossRestartsAndCancelLeavesSavedOrderAlone() {
-        val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("navigation-test", 0)
+        val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("navigation-drag-test", 0)
         prefs.edit().clear().commit()
         val settings = MobileNavigationSettings(prefs)
         var editing by mutableStateOf(true)
         compose.setContent { MaterialTheme { if (editing) MobileNavigationEditor(settings) { editing = false } } }
-        compose.onNodeWithContentDescription("上移Claude").performClick()
-        compose.onNodeWithText("保存").performClick()
+        compose.onNodeWithTag("navigation-order").performScrollToNode(hasTestTag("navigation-row-Claude Code"))
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("navigation-row-Claude Code").performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(650)
+        compose.onNodeWithTag("navigation-row-Claude Code").performTouchInput {
+            repeat(6) { moveBy(androidx.compose.ui.geometry.Offset(0f, -18f), delayMillis = 16) }; up()
+        }
+        compose.mainClock.autoAdvance = true
+        compose.onNodeWithText("保存布局").performClick()
         compose.runOnIdle {
             assertEquals("Claude Code", MobileNavigationSettings(prefs).order[2])
             editing = true
         }
-        compose.onNodeWithContentDescription("下移Claude").performClick()
+        compose.onNodeWithTag("navigation-order").performScrollToNode(hasTestTag("navigation-row-Claude Code"))
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("navigation-row-Claude Code").performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(650)
+        compose.onNodeWithTag("navigation-row-Claude Code").performTouchInput {
+            repeat(6) { moveBy(androidx.compose.ui.geometry.Offset(0f, 18f), delayMillis = 16) }; up()
+        }
+        compose.mainClock.autoAdvance = true
         compose.onNodeWithText("取消").performClick()
         compose.runOnIdle { assertEquals("Claude Code", MobileNavigationSettings(prefs).order[2]); prefs.edit().clear().commit() }
+    }
+    @Test fun draggingToTheBottomEdgeScrollsAcrossTheFiveItemBoundary() {
+        val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("navigation-auto-scroll-test", 0)
+        prefs.edit().clear().commit()
+        val settings = MobileNavigationSettings(prefs)
+        var editing by mutableStateOf(true)
+        compose.setContent { MaterialTheme { if (editing) MobileNavigationEditor(settings) { editing = false } } }
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("navigation-row-系统").performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(650)
+        compose.onNodeWithTag("navigation-order").performTouchInput { moveTo(androidx.compose.ui.geometry.Offset(center.x, height - 8f), delayMillis = 32) }
+        compose.mainClock.advanceTimeBy(1800)
+        compose.onNodeWithTag("navigation-order").performTouchInput { up() }
+        compose.mainClock.autoAdvance = true
+        compose.onNodeWithText("保存布局").performClick()
+        compose.runOnIdle {
+            assertTrue("The held row should move from the bottom bar into More", settings.order.indexOf("系统") >= 5)
+            assertEquals(mobileDestinations.size, settings.order.distinct().size)
+            prefs.edit().clear().commit()
+        }
     }
     @Test fun editionKeepsFilesAsARealTabAndExposesTheNavigationEditorInMore() {
         var edition: AppEdition? = null
         var clicked: String? = null
         compose.setContent { MaterialTheme { Column { val current = rememberAppEdition(); SideEffect { edition = current }; current.MoreItems { clicked = it } } } }
         compose.onNodeWithText("自定义底栏").assertIsDisplayed().performClick()
-        compose.onNodeWithText("保存").assertIsDisplayed()
+        compose.onNodeWithText("保存布局").assertIsDisplayed()
         compose.onNodeWithText("取消").performClick()
         compose.onNodeWithText("文件").performClick()
         compose.runOnIdle {

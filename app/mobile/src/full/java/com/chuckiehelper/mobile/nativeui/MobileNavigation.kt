@@ -4,12 +4,20 @@ package com.chuckiehelper.mobile.nativeui
 
 import android.content.SharedPreferences
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.*
+import kotlinx.coroutines.isActive
 import androidx.compose.foundation.background
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -61,30 +69,146 @@ internal class MobileNavigationSettings(private val preferences: SharedPreferenc
 internal fun MobileNavigationEditor(settings: MobileNavigationSettings, close: () -> Unit) {
     var draft by remember { mutableStateOf(settings.order) }
     var error by remember { mutableStateOf<String?>(null) }
-    AlertDialog(onDismissRequest = close, title = { Text("自定义底栏") }, text = {
-        Column {
-            Text("前 5 项显示在底栏，第 6 个按钮固定为更多，其余入口收纳在更多中。", style = MaterialTheme.typography.bodySmall)
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
-                itemsIndexed(draft, key = { _, route -> route }) { index, route ->
-                    val item = mobileDestinations.first { it.route == route }
-                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(item.label, style = MaterialTheme.typography.bodyMedium)
-                            Text(if (index < 5) "底栏 · 第 ${index + 1} 位" else "更多", style = MaterialTheme.typography.labelSmall)
+    val list = rememberLazyListState()
+    val currentOrder by rememberUpdatedState(draft)
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val edge = with(density) { 64.dp.toPx() }
+    val scrollSpeed = with(density) { 600.dp.toPx() }
+    var dragging by remember { mutableStateOf<String?>(null) }
+    var dragMoved by remember { mutableStateOf(false) }
+    var dragTop by remember { mutableFloatStateOf(0f) }
+    var dragHeight by remember { mutableIntStateOf(0) }
+    var pointerY by remember { mutableFloatStateOf(0f) }
+    var beforeDrag by remember { mutableStateOf<List<String>>(emptyList()) }
+    fun reorder() {
+        val key = dragging ?: return
+        val center = dragTop + dragHeight / 2f
+        val visible = list.layoutInfo.visibleItemsInfo.filter { it.key in currentOrder }
+        // Wait for the preceding move to reach layout before interpreting another target.
+        if (visible.any { row ->
+            val index = currentOrder.indexOf(row.key)
+            row.index != index + if (index >= 5) 1 else 0
+        }) return
+        val target = visible.minByOrNull { kotlin.math.abs(center - (it.offset + it.size / 2f)) } ?: return
+        val from = currentOrder.indexOf(key)
+        val to = currentOrder.indexOf(target.key)
+        if (from != to && from >= 0 && to >= 0) {
+            list.requestScrollToItem(list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset)
+            draft = moveMobileDestination(currentOrder, from, to)
+        }
+    }
+    LaunchedEffect(dragging) {
+        if (dragging == null) return@LaunchedEffect
+        var previousFrame = 0L
+        while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+            val frame = withFrameNanos { it }
+            val seconds = if (previousFrame == 0L) .016f else ((frame - previousFrame) / 1_000_000_000f).coerceAtMost(.032f)
+            previousFrame = frame
+            val layout = list.layoutInfo
+            val step = when {
+                !dragMoved -> 0f
+                pointerY < layout.viewportStartOffset + edge -> -((layout.viewportStartOffset + edge - pointerY) / edge).coerceIn(0f, 1f) * scrollSpeed * seconds
+                pointerY > layout.viewportEndOffset - edge -> ((pointerY - (layout.viewportEndOffset - edge)) / edge).coerceIn(0f, 1f) * scrollSpeed * seconds
+                else -> 0f
+            }
+            if (step != 0f) { list.scrollBy(step); reorder() }
+        }
+    }
+    val colors = MaterialTheme.colorScheme
+    ModalBottomSheet(onDismissRequest = close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("你的底栏", style = MaterialTheme.typography.titleLarge)
+                    Text("常用功能，放在顺手的位置", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                }
+                TextButton(enabled = dragging == null, onClick = { draft = normalizeMobileNavigation(null) }) { Text("恢复默认") }
+            }
+            Surface(shape = MaterialTheme.shapes.large, color = colors.secondaryContainer.copy(alpha = .55f)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("底栏预览 · 前 5 项", style = MaterialTheme.typography.labelMedium, color = colors.onSecondaryContainer)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                        draft.take(5).forEach { route ->
+                            val item = mobileDestinations.first { it.route == route }
+                            Column(Modifier.weight(1f), horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                                MobileDestinationIcon(item, Modifier.size(22.dp))
+                                Text(item.label, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                            }
                         }
-                        if (index >= 5) TextButton(onClick = { draft = moveMobileDestination(draft, index, 4) }) { Text("加入底栏") }
-                        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
-                            IconButton(onClick = { draft = moveMobileDestination(draft, index, index - 1) }, enabled = index > 0, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.ArrowUpward, "上移${item.label}") }
-                            IconButton(onClick = { draft = moveMobileDestination(draft, index, index + 1) }, enabled = index < draft.lastIndex, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.ArrowDownward, "下移${item.label}") }
+                        Column(Modifier.weight(1f), horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                            Icon(Icons.Outlined.MoreHoriz, null, Modifier.size(22.dp))
+                            Text("更多", style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
             }
-            TextButton(onClick = { draft = normalizeMobileNavigation(null) }) { Text("恢复默认") }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            Text("长按条目拖动排序 · 前 5 项显示在底栏", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+            LazyColumn(state = list, userScrollEnabled = dragging == null, modifier = Modifier.weight(1f).fillMaxWidth().testTag("navigation-order")
+                .pointerInput(list) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { position ->
+                            val row = list.layoutInfo.visibleItemsInfo.firstOrNull { it.key in currentOrder && position.y >= it.offset && position.y < it.offset + it.size }
+                            if (row != null) {
+                                dragMoved = false; beforeDrag = currentOrder.toList(); dragging = row.key as String
+                                dragTop = row.offset.toFloat(); dragHeight = row.size; pointerY = position.y
+                                haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            }
+                        },
+                        onDrag = { change, amount -> if (dragging != null) { dragMoved = true; change.consume(); dragTop += amount.y; pointerY += amount.y; reorder() } },
+                        onDragEnd = { dragging = null },
+                        onDragCancel = { if (dragging != null) draft = beforeDrag; dragging = null },
+                    )
+                }, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
+                draft.forEachIndexed { index, route ->
+                    if (index == 5) item(key = "navigation-more-divider") {
+                        Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 10.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            HorizontalDivider(Modifier.weight(1f))
+                            Text("更多入口", Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+                            HorizontalDivider(Modifier.weight(1f))
+                        }
+                    }
+                    item(key = route) {
+                        val item = mobileDestinations.first { it.route == route }
+                        val pinned = index < 5
+                        val active = dragging == route
+                        val offset = if (active) dragTop - (list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == route }?.offset ?: dragTop.toInt()) else 0f
+                        Column(Modifier.animateItem(placementSpec = if (active) null else androidx.compose.animation.core.spring())
+                            .zIndex(if (active) 1f else 0f).graphicsLayer { translationY = offset; if (active) { scaleX = 1.025f; scaleY = 1.025f } }
+                            .testTag("navigation-row-$route").semantics {
+                                stateDescription = if (pinned) "底栏第 ${index + 1} 位" else "更多中的第 ${index - 4} 项"
+                                customActions = buildList {
+                                    if (index > 0) add(CustomAccessibilityAction("上移${item.label}") { draft = moveMobileDestination(draft, index, index - 1); true })
+                                    if (index < draft.lastIndex) add(CustomAccessibilityAction("下移${item.label}") { draft = moveMobileDestination(draft, index, index + 1); true })
+                                    if (!pinned) add(CustomAccessibilityAction("加入底栏") { draft = moveMobileDestination(draft, index, 4); true })
+                                }
+                            }) {
+                            Surface(shape = MaterialTheme.shapes.medium, tonalElevation = if (active) 6.dp else 0.dp, shadowElevation = if (active) 8.dp else 0.dp,
+                                color = if (active) colors.primaryContainer else if (pinned) colors.secondaryContainer.copy(alpha = .55f) else colors.surfaceContainerLow) {
+                                Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    if (pinned) Surface(shape = androidx.compose.foundation.shape.CircleShape, color = colors.primary, modifier = Modifier.size(26.dp)) {
+                                        Box(contentAlignment = androidx.compose.ui.Alignment.Center) { Text("${index + 1}", color = colors.onPrimary, style = MaterialTheme.typography.labelMedium) }
+                                    } else Icon(Icons.Outlined.MoreHoriz, null, Modifier.size(26.dp), tint = colors.onSurfaceVariant)
+                                    MobileDestinationIcon(item, Modifier.size(24.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(item.label, style = MaterialTheme.typography.bodyMedium)
+                                        Text(if (pinned) "显示在底栏" else "收纳在更多", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+                                    }
+                                    Icon(Icons.Outlined.DragHandle, "长按拖动${item.label}", Modifier.size(24.dp), tint = if (active) colors.primary else colors.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            error?.let { Text(it, color = colors.error) }
+            Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = close, enabled = dragging == null, modifier = Modifier.weight(1f)) { Text("取消") }
+                Button(enabled = dragging == null, onClick = { runCatching { settings.save(draft) }.onSuccess { close() }.onFailure { error = it.message } }, modifier = Modifier.weight(1f)) { Text("保存布局") }
+            }
         }
-    }, confirmButton = { TextButton(onClick = { runCatching { settings.save(draft) }.onSuccess { close() }.onFailure { error = it.message } }) { Text("保存") } },
-        dismissButton = { TextButton(onClick = close) { Text("取消") } })
+    }
 }
 
 @Composable
