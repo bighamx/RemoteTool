@@ -268,6 +268,9 @@ export class SessionService {
         if (body?.expected_pid != null && (Number(body.expected_pid) !== target.pid ||
             (body.expected_started_at != null && Math.floor(Number(target.startedAt) / 1000) !== Number(body.expected_started_at))))
             throw new BridgeError('占用此会话的电脑进程已变化，请刷新后再确认', 409, {code: 'holder_changed'});
+        // The user confirmed an idle process; if it started working since, do not interrupt that new task.
+        if (body?.expected_status === 'idle' && target.status !== 'idle')
+            throw new BridgeError('电脑上的 Claude Code 刚开始执行任务，未接管；请刷新后重新确认', 409, {code: 'holder_busy'});
         if (!Number.isSafeInteger(target.pid) || target.pid <= 1 || target.pid === process.pid) throw new BridgeError('无法识别占用进程', 409);
         try { kill(target.pid, 'SIGTERM'); }
         catch (error) { if (error?.code !== 'ESRCH') throw new BridgeError('没有权限结束电脑上的 Claude Code 进程', 409); }

@@ -65,7 +65,7 @@ await app.locator('.agent-markdown strong').filter({hasText:'Earlier answer'}).w
 await app.getByRole('button',{name:'查看工具记录'}).click();await page.locator('.workspace-modal .agent-tool-detail').filter({hasText:'读取文件'}).waitFor();await page.locator('.workspace-modal').getByRole('button',{name:'关闭'}).click();
 // Takeover ends exactly the confirmed desktop process, then the session becomes writable.
 const heldBanner=app.locator('.agent-banner').filter({hasText:'会话被电脑占用'});await heldBanner.getByRole('button',{name:'结束电脑进程并接管'}).click();await heldBanner.waitFor({state:'hidden'});
-assert.deepEqual(posts.find(row=>row.path==='/sessions/held-session/takeover').body,{expected_pid:4242,expected_started_at:1700000000});
+assert.deepEqual(posts.find(row=>row.path==='/sessions/held-session/takeover').body,{expected_pid:4242,expected_started_at:1700000000,expected_status:'idle'});
 await app.locator('textarea[aria-label="消息输入"]').fill('after takeover');assert.ok(!(await app.locator('.agent-send-actions').getByRole('button',{name:'发送'}).isDisabled()),'writable after takeover');await app.locator('textarea[aria-label="消息输入"]').fill('');
 
 // An unresolved result blocks sending until explicitly acknowledged; never resent automatically.

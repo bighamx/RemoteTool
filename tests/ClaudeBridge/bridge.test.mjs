@@ -285,7 +285,10 @@ test('takeover signals only the confirmed desktop holder and waits for it to exi
     const opts = {kill: (pid, signal) => killed.push([pid, signal]), wait: async () => {}, timeout: 2000};
     await assert.rejects(app.sessions.takeover(SID, {expected_pid: 999}, opts), e => e.code === 'holder_changed');
     await assert.rejects(app.sessions.takeover(SID, {expected_pid: 4242, expected_started_at: 1}, opts), e => e.code === 'holder_changed');
-    assert.equal(killed.length, 0, 'a changed holder is never signalled');
+    rows = [{...rows[0], status: 'busy'}];
+    await assert.rejects(app.sessions.takeover(SID, {expected_pid: 4242, expected_started_at: 1700000000, expected_status: 'idle'}, opts), e => e.code === 'holder_busy');
+    rows = [{...rows[0], status: 'idle'}];
+    assert.equal(killed.length, 0, 'a changed or newly busy holder is never signalled');
     await assert.rejects(app.sessions.takeover(SID, {expected_pid: 4242, expected_started_at: 1700000000}, opts), e => e.code === 'holder_alive');
     assert.deepEqual(killed, [[4242, 'SIGTERM']], 'graceful signal only, no forced kill');
     const exiting = {...opts, kill: (pid, signal) => { killed.push([pid, signal]); rows = []; }};
