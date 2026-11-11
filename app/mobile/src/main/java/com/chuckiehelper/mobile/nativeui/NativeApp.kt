@@ -312,15 +312,15 @@ fun NativeApp(model: NativeModel) {
                                 when {
                                     page == "端口转发" -> TunnelScreen(api, renderedSession.device.id, renderedSession.device.name)
                                     edition.Page(page, api, renderedSession.device.id, error,
-                                        onDetail = { detail = it }, onClose = { detail = null }) -> Unit
+                                        onDetail = { detail = it }, onClose = { if (detail != null) detail = null else route = "更多" }) -> Unit
                                     else ->
                                         Column(
                                             Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
                                             verticalArrangement = Arrangement.spacedBy(12.dp),
                                         ) {
                                             CloudAccountEntry(cloud)
-                                            edition.MoreItems { detail = it }
-                                            ToolRow("端口转发", "TCP / UDP · 双向局域网访问", Icons.Outlined.SwapHoriz) { detail = "端口转发" }
+                                            edition.MoreItems { if (edition.isNavigationRoute(it)) { detail = null; route = it } else detail = it }
+                                            if (!edition.isNavigationRoute("端口转发")) ToolRow("端口转发", "TCP / UDP · 双向局域网访问", Icons.Outlined.SwapHoriz) { detail = "端口转发" }
                                             ToolRow("手机操控", "MCP · 无障碍 · Shizuku · Root", Icons.Outlined.PhoneAndroid) { phoneTools = true }
                                             ToolRow("设置", if (edition.showUpdates) "更新 · 日志 · 开机自启" else "日志 · 开机自启", Icons.Outlined.Settings) { settings = true }
                                         }
