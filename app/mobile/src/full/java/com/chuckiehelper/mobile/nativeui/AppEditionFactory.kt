@@ -60,14 +60,17 @@ private class FullEdition(
     @Composable override fun Navigation(route: String, deviceName: String, onRoute: (String) -> Unit) {
         FullMobileNavigation(navigation.order, route, onRoute)
     }
-    @Composable override fun MoreItems(onDetail: (String) -> Unit) {
+    @Composable override fun ToolbarActions(route: String) {
+        if (route != "更多") return
         var editing by remember { mutableStateOf(false) }
-        ToolRow("自定义底栏", "调整顺序 · 前五项常用 · 其余收进更多", Icons.Outlined.Tune) { editing = true }
+        IconButton(onClick = { editing = true }) { Icon(Icons.Outlined.Tune, "自定义底栏") }
+        if (editing) MobileNavigationEditor(navigation) { editing = false }
+    }
+    @Composable override fun MoreItems(onDetail: (String) -> Unit) {
         navigation.order.drop(5).forEach { route ->
             val item = mobileDestinations.first { it.route == route }
             ToolRow(item.label, item.description, icon = { MobileDestinationIcon(item, Modifier.size(24.dp)) }) { onDetail(route) }
         }
-        if (editing) MobileNavigationEditor(navigation) { editing = false }
     }
     @Composable override fun Page(route: String, api: NativeApi, deviceId: String, error: (String) -> Unit,
         onDetail: (String) -> Unit, onClose: () -> Unit): Boolean {

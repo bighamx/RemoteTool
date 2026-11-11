@@ -258,6 +258,7 @@ fun NativeApp(model: NativeModel) {
                             }
                     },
                     actions = {
+                        if (!choosingShare && renderedSession != null && !model.loginNeeded && scene.detail == null) edition.ToolbarActions(route)
                         if (renderedSession != null && serverUpdatesSupported) IconButton(onClick = { serverUpdatesOpen = true }) {
                             Icon(Icons.Outlined.SystemUpdateAlt, "服务端更新")
                         }
