@@ -295,3 +295,15 @@ test('takeover signals only the confirmed desktop holder and waits for it to exi
     const own = setup(async function* () {}, {holders: () => rows, parent: process.pid});
     assert.deepEqual(await own.app.sessions.takeover(SID, {}, opts), {ready: true}, 'our own SDK child is not taken over');
 });
+
+test('session list carries context usage like Codex and Hermes, cached per transcript revision', async () => {
+    const {app, sdk} = setup(async function* () {});
+    let reads = 0; const original = sdk.getSessionMessages; sdk.getSessionMessages = async (...args) => { reads++; return original(...args); };
+    const first = (await app.sessions.list()).data[0];
+    assert.equal(first.context_used, 330);
+    assert.equal(first.context_window, 200000);
+    await app.sessions.list();
+    assert.equal(reads, 1, 'unchanged transcript is not re-read');
+    app.store.ensureMeta(SID, {context_window: 1000000});
+    assert.equal((await app.sessions.list()).data[0].context_window, 1000000, 'native window wins when known');
+});

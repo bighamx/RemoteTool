@@ -106,14 +106,15 @@
     body .agent-workspace .agent-pane-head>.ivu-btn{min-height:44px;min-width:40px;padding:8px;border-radius:14px;font-size:14px}
     body .agent-workspace .agent-search{padding:0 16px 14px}
     body .agent-workspace .agent-search .ivu-input{height:46px;font-size:16px;border-radius:16px;padding-left:14px;background:var(--bg-tertiary)}
-    body .agent-workspace .agent-session-list{padding:0 10px 16px;overflow:auto;min-height:0;overscroll-behavior:contain}
+    body .agent-workspace .agent-session-list{padding:2px 12px 16px;overflow:auto;min-height:0;overscroll-behavior:contain}
     body .agent-workspace .agent-session-group{min-height:44px;padding:10px;font-size:13px}
-    body .agent-workspace .agent-session-row{display:flex;align-items:stretch;margin:3px 0;border-radius:18px;overflow:hidden}
-    body .agent-workspace .agent-session-row:has(.active){background:color-mix(in srgb,var(--accent-primary) 10%,var(--bg-primary))}
-    body .agent-workspace .agent-session-item{flex:1;width:0;min-width:0;min-height:92px;padding:14px 10px 12px;margin:0;border:0;border-radius:0;background:transparent;box-shadow:none}
-    body .agent-workspace .agent-session-title{font-size:16px;font-weight:550;line-height:1.45}
-    body .agent-workspace .agent-session-preview{font-size:13px;line-height:1.5;margin-top:5px;color:var(--text-secondary)}
-    body .agent-workspace .agent-session-foot{font-size:11px;gap:6px;margin-top:8px;min-width:0}
+    /* One card per session: a visible surface and gap keep sessions apart on phones. */
+    body .agent-workspace .agent-session-row{display:flex;align-items:stretch;margin:0 0 8px;border:1px solid var(--border-color);border-radius:16px;background:var(--bg-secondary);overflow:hidden}
+    body .agent-workspace .agent-session-row:has(.active){background:color-mix(in srgb,var(--accent-primary) 10%,var(--bg-secondary));border-color:color-mix(in srgb,var(--accent-primary) 55%,var(--border-color))}
+    body .agent-workspace .agent-session-item{flex:1;width:0;min-width:0;min-height:0;gap:3px;padding:11px 2px 13px 14px;margin:0;border:0;border-radius:0;background:transparent;box-shadow:none}
+    body .agent-workspace .agent-session-title{font-size:16px;font-weight:550;line-height:1.35}
+    body .agent-workspace .agent-session-preview{font-size:13px;line-height:1.4;margin-top:0;color:var(--text-secondary)}
+    body .agent-workspace .agent-session-foot{font-size:11px;gap:6px;margin-top:3px;min-width:0}
     body .agent-workspace .agent-session-location{min-width:0;max-width:56%;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
     body .agent-workspace .mobile-session-menu{align-items:center;justify-content:center;width:44px;flex:none;border:0;background:transparent;color:var(--text-muted);font-size:24px}
     body .agent-workspace .agent-conversation{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg-primary)}

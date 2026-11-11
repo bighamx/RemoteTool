@@ -36,7 +36,7 @@ export class SessionService {
      */
     constructor({store, sdk, auth, holders, allowCustomEndpoint = false, env = process.env}) {
         this.store = store; this.sdk = sdk; this.auth = auth; this.holders = holders;
-        this.allowCustomEndpoint = allowCustomEndpoint; this.env = env; this.runs = null; this.cache = new Map();
+        this.allowCustomEndpoint = allowCustomEndpoint; this.env = env; this.runs = null; this.cache = new Map(); this.contexts = new Map();
     }
     async info(id) {
         if (!validId(id)) throw new BridgeError('无效会话标识');
@@ -59,10 +59,36 @@ export class SessionService {
             started_at: info?.createdAt || meta?.created_at || null, pinned: meta?.pinned === true, status: this.status(id),
             native: !!info, permission_mode: meta?.permission_mode || 'default', model: meta?.model || null, reasoning_effort: meta?.effort || null};
     }
+    /** Context usage for list rows, same fields as Codex/Hermes; cached per transcript revision. */
+    async listContext(info) {
+        const key = `${info.lastModified}|${info.fileSize}`;
+        let entry = this.contexts.get(info.sessionId);
+        if (entry?.key !== key) {
+            let tokens = null, model = null;
+            try {
+                const messages = await this.sdk.getSessionMessages(info.sessionId);
+                for (let i = messages.length - 1; i >= 0; i--) {
+                    const message = messages[i];
+                    if (message?.type !== 'assistant' || message.parent_tool_use_id || message.parent_agent_id || !message.message?.usage) continue;
+                    const usage = message.message.usage;
+                    tokens = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.output_tokens || 0);
+                    model = message.message.model || null; break;
+                }
+            } catch {}
+            entry = {key, tokens, model};
+            if (this.contexts.size > 1000) this.contexts.delete(this.contexts.keys().next().value);
+            this.contexts.set(info.sessionId, entry);
+        }
+        if (!entry.tokens) return {};
+        const meta = this.store.meta(info.sessionId);
+        return {context_used: entry.tokens, context_window: contextLimit(meta?.model || entry.model, meta?.context_window, entry.tokens).limit};
+    }
     async list(cursor) {
         const offset = Math.max(0, Number(cursor) || 0), limit = 60;
         const native = await this.sdk.listSessions({limit, offset});
-        const rows = native.map(info => this.row(info, this.store.meta(info.sessionId)));
+        const contexts = new Map();
+        for (let i = 0; i < native.length; i += 6) await Promise.all(native.slice(i, i + 6).map(async info => contexts.set(info.sessionId, await this.listContext(info))));
+        const rows = native.map(info => ({...this.row(info, this.store.meta(info.sessionId)), ...contexts.get(info.sessionId)}));
         if (offset === 0) {
             const known = new Set(rows.map(row => row.id));
             for (const meta of Object.values(this.store.data.sessions)) {
