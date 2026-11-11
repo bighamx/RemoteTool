@@ -15,7 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
             { title: '自动化与智能体', items: [
                 { key: 'hangfire', href: '/#/jobs', icon: '/icons/schedule.svg', label: '定时任务' },
                 { key: 'codex', href: '/#/codex', icon: '/icons/codex.png', label: 'Codex' },
-                { key:'claude',href:'/#/claude',icon:'/icons/claude.svg',label:'Claude Code' },
+                { key:'claude',href:'/#/claude',icon:'/icons/claude-code.svg',label:'Claude Code' },
                 { key: 'hermes', href: '/#/hermes', icon: '/icons/hermes.svg', label: 'Hermes' }
             ] },
             { title: '设置', items: [
