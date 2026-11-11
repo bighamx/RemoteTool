@@ -408,8 +408,9 @@ fun CodexLoginDialog(model: HermesModel) {
 }
 
 @Composable
-fun CodexQuestions(request: JSONObject, submit: (JSONObject) -> Unit) {
+fun CodexQuestions(request: JSONObject, busy: Boolean = false, submit: (JSONObject) -> Unit) {
     var answers by remember(request.optString("request_id")) { mutableStateOf(mapOf<String, String>()) }
+    var multiple by remember(request.optString("request_id")) { mutableStateOf(mapOf<String, List<String>>()) }
     val questions = request.array("questions").objects()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         questions.forEachIndexed { index, question ->
@@ -423,13 +424,15 @@ fun CodexQuestions(request: JSONObject, submit: (JSONObject) -> Unit) {
                 Text(question.optString("question"), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
             }
             question.array("options").objects().forEach { option ->
-                val selected = answers[id] == option.optString("label")
+                val label = option.optString("label")
+                val multi = question.optBoolean("multiSelect")
+                val selected = if (multi) label in multiple[id].orEmpty() else answers[id] == label
                 Surface(shape = MaterialTheme.shapes.medium,
                     color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
                     border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) {
                     Row(Modifier.fillMaxWidth().selectable(selected = selected, role = Role.RadioButton,
-                        onClick = { answers = answers + (id to option.optString("label")) }).padding(vertical = 6.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected, onClick = null, modifier = Modifier.padding(10.dp))
+                        onClick = { if (multi) multiple = multiple + (id to (if (selected) multiple[id].orEmpty() - label else multiple[id].orEmpty() + label)) else answers = answers + (id to label) }).padding(vertical = 6.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (multi) Checkbox(selected, onCheckedChange = null, modifier = Modifier.padding(10.dp)) else RadioButton(selected, onClick = null, modifier = Modifier.padding(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(option.optString("label"), style = MaterialTheme.typography.bodyMedium)
                             if (option.optString("description").isNotBlank()) Text(option.optString("description"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -442,8 +445,8 @@ fun CodexQuestions(request: JSONObject, submit: (JSONObject) -> Unit) {
         }
         Button(onClick = {
             val body = JSONObject()
-            answers.forEach { (id, value) -> body.put(id, obj("answers" to org.json.JSONArray(listOf(value)))) }
+            questions.forEach { question -> val id = question.getString("id"); body.put(id, obj("answers" to org.json.JSONArray(agentQuestionAnswers(question, answers[id].orEmpty(), multiple[id].orEmpty())))) }
             submit(body)
-        }, modifier = Modifier.fillMaxWidth(), enabled = questions.all { !answers[it.getString("id")].isNullOrBlank() }) { Text("发送回答") }
+        }, modifier = Modifier.fillMaxWidth(), enabled = !busy && questions.all { agentQuestionAnswers(it, answers[it.getString("id")].orEmpty(), multiple[it.getString("id")].orEmpty()).isNotEmpty() }) { Text("发送回答") }
     }
 }

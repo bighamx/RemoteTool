@@ -23,7 +23,7 @@ internal fun agentApprovalChoices(approval: JSONObject): List<AgentApprovalChoic
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun AgentApprovalButtons(approval: JSONObject, busy: Boolean, onApprove: (String) -> Unit) {
+internal fun AgentApprovalButtons(approval: JSONObject, busy: Boolean, agentName: String = "Codex", onApprove: (String) -> Unit) {
     var confirm by remember(approval.optString("request_id")) { mutableStateOf<AgentApprovalChoice?>(null) }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         agentApprovalChoices(approval).forEach { choice ->
@@ -35,14 +35,15 @@ internal fun AgentApprovalButtons(approval: JSONObject, busy: Boolean, onApprove
     }
     confirm?.let { choice ->
         AlertDialog(onDismissRequest = { confirm = null }, title = { Text(choice.label) },
-            text = { Text(choice.detail + "\n\nCodex 将保存这条规则，用于之后匹配的请求。") },
+            text = { Text(choice.detail + "\n\n$agentName 将保存这条规则，用于之后匹配的请求。") },
             confirmButton = { TextButton(enabled = !busy, onClick = { confirm = null; onApprove(choice.id) }) { Text("保存规则并允许") } },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("取消") } })
     }
 }
 
 @Composable
-internal fun CodexSessionPermissionsDialog(api: NativeApi, session: String, onDismiss: () -> Unit, onSaved: (String) -> Unit) {
+internal fun CodexSessionPermissionsDialog(api: NativeApi, session: String, onDismiss: () -> Unit, onSaved: (String) -> Unit, agent: String = "codex") {
+    var choices by remember(session) { mutableStateOf<List<JSONObject>>(emptyList()) }
     var mode by remember(session) { mutableStateOf("default") }
     var loading by remember(session) { mutableStateOf(true) }
     var saving by remember(session) { mutableStateOf(false) }
@@ -53,8 +54,9 @@ internal fun CodexSessionPermissionsDialog(api: NativeApi, session: String, onDi
     val scope = rememberCoroutineScope()
     LaunchedEffect(api, session) {
         try {
-            val result = api.json("/api/codex/sessions/${android.net.Uri.encode(session)}/permissions")
+            val result = api.json("/api/$agent/sessions/${android.net.Uri.encode(session)}/permissions")
             overrideMode = result.optString("mode", "default")
+            choices = result.array("choices").objects()
             val actual = result.optJSONObject("current")
             val defaults = result.optJSONObject("configuration")
             currentInfo = when {
@@ -62,7 +64,7 @@ internal fun CodexSessionPermissionsDialog(api: NativeApi, session: String, onDi
                 defaults != null -> "会话尚无可读取的实际权限记录。\n服务端配置默认：${defaults.optString("label")}"
                 else -> "尚未获取到原生会话的实际权限，请更新服务端后重试。"
             }
-            mode = overrideMode.takeUnless { it == "default" } ?: actual?.optString("mode")
+            mode = if (agent == "claude") overrideMode else overrideMode.takeUnless { it == "default" } ?: actual?.optString("mode")
                 ?.takeIf { it in setOf("workspace", "full") } ?: "default"
             loaded = true
         } catch (e: CancellationException) { throw e }
@@ -74,28 +76,28 @@ internal fun CodexSessionPermissionsDialog(api: NativeApi, session: String, onDi
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (loaded) {
                 Text(currentInfo, style = MaterialTheme.typography.bodySmall)
-                Text("下一轮 RemoteTool 权限设置：" + when(overrideMode) {
+                if (agent != "claude") Text("下一轮 RemoteTool 权限设置：" + when(overrideMode) {
                     "full" -> "完全访问 · 不再审批"
                     "workspace" -> "工作区访问 · 按需审批"
                     else -> "未覆盖，沿用 Codex 原有策略"
                 }, style = MaterialTheme.typography.bodySmall)
             }
-            listOf("workspace" to "工作区访问 · 按需审批", "full" to "完全访问 · 不再审批").forEach { (value, label) ->
+            (if (agent == "claude") choices.map { it.cleanSetting("id") to it.cleanSetting("label") } else listOf("workspace" to "工作区访问 · 按需审批", "full" to "完全访问 · 不再审批")).forEach { (value, label) ->
                 Row {
                     RadioButton(selected = mode == value, enabled = loaded && !saving, onClick = { mode = value })
                     TextButton(enabled = loaded && !saving, onClick = { mode = value }) { Text(label) }
                 }
             }
-            Text("完全访问允许联网、执行命令及读写工作区外文件，并跳过审批。", style = MaterialTheme.typography.bodySmall)
-            Text("仅设置当前会话，从下一轮通过 RemoteTool 发送的消息开始生效；不会解除当前轮正在等待的审批。", style = MaterialTheme.typography.bodySmall)
+            if (agent != "claude") Text("完全访问允许联网、执行命令及读写工作区外文件，并跳过审批。", style = MaterialTheme.typography.bodySmall)
+            Text(if (agent == "claude") "仅修改当前 Claude 会话；运行中任务可立即生效，下一轮继续沿用。本机项目规则仍然有效。" else "仅设置当前会话，从下一轮通过 RemoteTool 发送的消息开始生效；不会解除当前轮正在等待的审批。", style = MaterialTheme.typography.bodySmall)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         }
     }, confirmButton = {
-        TextButton(enabled = loaded && !saving && mode != "default", onClick = {
+        TextButton(enabled = loaded && !saving && (if (agent == "claude") choices.any { it.cleanSetting("id") == mode } else mode != "default"), onClick = {
             saving = true; error = null
             scope.launch {
                 try {
-                    val result = api.json("/api/codex/sessions/${android.net.Uri.encode(session)}/permissions", obj("mode" to mode))
+                    val result = api.json("/api/$agent/sessions/${android.net.Uri.encode(session)}/permissions", obj("mode" to mode))
                     onSaved(result.getString("mode")); onDismiss()
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { error = connectionFailureMessage(e) }
@@ -104,3 +106,6 @@ internal fun CodexSessionPermissionsDialog(api: NativeApi, session: String, onDi
         }) { Text(if (saving) "保存中" else "保存") }
     }, dismissButton = { TextButton(enabled = !saving, onClick = onDismiss) { Text("取消") } })
 }
+
+internal fun agentQuestionAnswers(question: JSONObject, text: String, selected: List<String>): List<String> =
+    ((if (question.optBoolean("multiSelect")) selected else emptyList()) + listOf(text.trim()).filter { it.isNotBlank() }).distinct()

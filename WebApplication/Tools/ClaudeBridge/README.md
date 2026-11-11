@@ -1,13 +1,13 @@
 # Claude Code 本机接入
 
-RemoteTool 通过官方 `@anthropic-ai/claude-agent-sdk` 驱动服务端机器上的 Claude Code。模型执行、项目文件、登录与 Claude 配置都留在服务端；Web 使用与 Codex / Hermes 相同的会话工作台（`/#/claude`），接口为 `/api/claude`，契约与 `/api/codex` 一致。**Android 主 App 尚未适配**：`ClaudeScreen.kt` 仍调用旧接口（`receipts/`、`runs/{id}/reply`、`events?after=`），与当前服务端不兼容，需在 Web 验证后改为复用共享会话界面；在此之前不要从本分支发布 App。
+RemoteTool 通过官方 `@anthropic-ai/claude-agent-sdk` 驱动服务端机器上的 Claude Code。模型执行、项目文件、登录与 Claude 配置都留在服务端；Web 使用与 Codex / Hermes 相同的会话工作台（`/#/claude`），接口为 `/api/claude`，契约与 `/api/codex` 一致。Android 主 App 同样复用共享原生会话工作台；需要支持本版协议 v2 的服务端。
 
 ## 安装
 
 1. 在运行 RemoteTool 的系统用户下安装官方 Claude Code（需支持 `claude auth status --json` 与 `claude agents --json`；以 2.1.322 验证）和 Node.js 20+。
 2. 在该用户下执行 `claude auth login`，用 `claude auth status` 确认已登录。Windows 服务以 SYSTEM 运行时，桥接会像 Codex 一样在已登录的桌面用户会话中启动（需要桌面用户已登录）。
 3. 源码运行：在 `WebApplication/Tools/ClaudeBridge` 执行 `npm ci --omit=dev --omit=optional`。发布包：在发布目录 `claude` 下执行同一命令。桥接使用本机已安装的 `claude`，不需要 SDK 捆绑的可选二进制。
-4. 打开 Web 的 Claude Code 页面，就绪卡片只检查安装与登录，不发送提示词。
+4. 打开 Web 或 Android 主 App 的 Claude Code 页面，就绪卡片只检查安装与登录，不发送提示词。
 
 可选配置（环境变量用双下划线，如 `Claude__Executable`）：
 
@@ -49,7 +49,15 @@ RemoteTool 通过官方 `@anthropic-ai/claude-agent-sdk` 驱动服务端机器�
 - 附件位于 `claude-attachments/`，可在“空间管理”中清理；执行中的会话附件不会被清理。
 - 升级：`PROTOCOL`（接口契约）与 `BRIDGE_VERSION`（实现版本，对应 `RemoteToolPaths.ClaudeBridgeVersion`）不一致时，宿主只在桥接空闲时请求其退出并启动新版本；有任务执行或等待确认时继续使用旧进程（协议兼容时）或提示稍后重试，不强杀。服务端更新的空闲检查包含 Claude 任务；桥接无响应时视为未确认空闲。
 
+## Android 主 App
+
+Claude 与 Codex/Hermes 共用原生会话工作台、Markdown 消息、附件、工具详情、模型选择、审批与问答组件；不再维护独立聊天页面。使用协议 v2 的 `/api/claude`，保留原始字符串消息 ID；分页、回执核对和 SSE 恢复沿用共享状态管理。工作目录通过通用远程目录选择器选择。
+
+会话权限只显示本机规则询问、自动批准文件编辑、计划模式；持续规则只来自原生审批建议。桌面接管提交用户确认的 PID、启动时间和空闲/执行状态；结果未知时先核对并明确确认，不自动重发。不显示 Claude 服务端未支持的 Provider 管理、账户切换和定时发送入口。
+
 ## 验证
+
+- Android：`:mobile:testFullDebugUnitTest` 中的 `ClaudeProtocolTest` / `ClaudeWorkspaceTest` 覆盖共享历史/缓存、原始 ID 分叉、分页、审批多选、待落盘输出、发送超时与回执恢复（本机模拟服务，不调用模型）。
 
 - `node --test tests/ClaudeBridge/bridge.test.mjs`：历史投影、回执幂等、审批与建议规则、问答、插话、停止、启动前失败与待核对、外部占用、撤回、重启恢复、HTTP 鉴权与 SSE 续传（模拟 SDK，不调用模型）。
 - `node tests/claude-browser.test.cjs`：共享工作台中的 Claude 交互（模拟接口），需要已构建的 WebApplication.dll、Chrome 与 Playwright。

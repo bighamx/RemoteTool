@@ -1,6 +1,10 @@
 package com.chuckiehelper.mobile.nativeui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -13,6 +17,7 @@ import org.json.JSONObject
 
 @Composable
 internal fun ToolDetailsDialog(api: NativeApi, agent: String, session: String, summary: String, onDismiss: () -> Unit) {
+    var selected by remember(session, summary) { mutableStateOf<JSONObject?>(null) }
     var rows by remember(session, summary) { mutableStateOf<List<JSONObject>>(emptyList()) }
     var limit by remember(session, summary) { mutableIntStateOf(50) }
     var total by remember { mutableIntStateOf(0) }
@@ -54,12 +59,15 @@ internal fun ToolDetailsDialog(api: NativeApi, agent: String, session: String, s
                 failure?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton(onClick = { retry++ }) { Text("重试") } }
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     items(rows, key = { it.optString("id") }) { tool ->
-                        ToolProgressRow(if (tool.optString("category") == "file_change") "文件修改" else tool.optString("tool", "工具"),
-                            tool.optString("description"), tool.optString("status"), maxLines = 4)
+                        Column(Modifier.fillMaxWidth().clickable { selected = tool }) { ToolProgressRow(if (tool.optString("category") == "file_change") "文件修改" else tool.optString("tool", "工具"),
+                            tool.optString("description"), tool.optString("status"), maxLines = 4) }
                     }
                     if (rows.size < total) item { TextButton(onClick = { limit += 50 }) { Text("加载更多（${rows.size}/$total）") } }
                     if (!loading && failure == null && rows.isEmpty()) item { Text("暂无工具调用") }
                 }
             }
         }, confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } })
+    selected?.let { tool -> AlertDialog(onDismissRequest = { selected = null }, title = { Text(tool.optString("tool", "工具详情")) },
+        text = { SelectionContainer { Text(tool.optString("description"), modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall) } },
+        confirmButton = { TextButton(onClick = { selected = null }) { Text("返回工具列表") } }) }
 }

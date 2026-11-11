@@ -134,7 +134,9 @@ private class FullEdition(
         onDetail: (String) -> Unit, onClose: () -> Unit): Boolean {
         val sharedDraft = draft(deviceId)
         when (route) {
-            "Claude Code" -> ClaudeScreen(api, deviceId, onClose)
+            "Claude Code" -> screens.SaveableStateProvider("claude-$deviceId") {
+                HermesScreen(api, deviceId, agent = "claude", incoming = sharedDraft?.takeIf { it.agent == "claude" }, onSharedHandled = { shares.finishDelivery(it) })
+            }
             "空间管理" -> StorageScreen(api,deviceId,onClose)
             "Cloudflare" -> CloudflareScreen(api, error, onClose)
             "系统" -> SystemScreen(api, onProcesses = { onDetail("进程") }, onTerminal = { onDetail("终端") }, onError = error)
