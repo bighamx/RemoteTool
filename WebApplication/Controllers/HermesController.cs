@@ -304,7 +304,12 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         }
     }
     [HttpPost("sessions")] public async Task CreateSession([FromBody] JsonElement body, [FromServices] Services.PhoneControl.PhoneSessionIntegration phone, CancellationToken ct) {
-        var nativeBody = JsonNode.Parse(body.GetRawText())!.AsObject(); nativeBody.Remove("auto_title");
+        var nativeBody = JsonNode.Parse(body.GetRawText())!.AsObject();
+        var automaticTitle = (body.TryGetProperty("auto_title", out var automatic) && automatic.ValueKind == JsonValueKind.True)
+            || string.IsNullOrWhiteSpace(nativeBody["title"]?.ToString());
+        nativeBody.Remove("auto_title");
+        // Hermes requires unique explicit titles. Automatic naming starts after the first input.
+        if (automaticTitle) nativeBody.Remove("title");
         JsonObject? phoneBinding;
         try { phoneBinding = await phone.Prepare(nativeBody, "hermes", Request, ct); }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException) {
@@ -316,7 +321,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             var value = JsonNode.Parse(payload); var session = value?["session"] ?? value;
             if (session?["id"] != null) {
                 phone.Complete(phoneBinding, session["id"]!.ToString(), "hermes");
-                titles.Register(session["id"]!.ToString(), session["title"]?.ToString() ?? "", body.TryGetProperty("auto_title", out var automatic) && automatic.ValueKind == JsonValueKind.True);
+                titles.Register(session["id"]!.ToString(), session["title"]?.ToString() ?? "", automaticTitle);
             }
         }
         else phone.Abort(phoneBinding);

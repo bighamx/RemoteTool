@@ -2,6 +2,10 @@ package com.chuckiehelper.mobile.nativeui
 
 /** IDs can include synthetic tool-summary hashes. Only the captured set is an append boundary. */
 internal fun currentSubmissionHistoryMatch(agent: String, pending: PendingAgentSubmission, existing: Set<Long>, history: List<HermesMessage>, files: List<org.json.JSONObject> = emptyList()): HermesMessage? {
+    if (agent == "claude") return history.filter { row -> row.role == "user" && row.serverId > 0 && row.serverId !in existing &&
+        row.timestamp?.let { it in (pending.timestamp - 10_000L)..(pending.timestamp + 600_000L) } == true &&
+        row.text.replace("\r\n", "\n").trim() == pending.input.replace("\r\n", "\n").trim() &&
+        (pending.attachmentIds.isEmpty() || containsAgentAttachments(row.attachments, files)) }.singleOrNull()
     if (agent == "codex") return history.singleOrNull { it.role == "user" && it.serverId > 0 && it.requestKey == pending.key }
     // Hermes native rows use SQLite sequence IDs. Tool summaries use large hashes
     // and cannot establish a send boundary.

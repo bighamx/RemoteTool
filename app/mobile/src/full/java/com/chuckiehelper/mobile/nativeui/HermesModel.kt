@@ -31,6 +31,8 @@ data class HermesMessage(
     val interactions: List<JSONObject> = emptyList(),
     val messageType: String? = null,
     val messageUid: String? = null,
+    /** Original string ID for providers such as Claude; serverId is only a local display identity. */
+    val nativeId: String? = null,
 )
 
 data class HermesEvent(val type: String, val text: String, val detail: String = "", val itemId: String? = null)
@@ -58,7 +60,9 @@ internal fun currentCodexIdentity(accounts: JSONObject, workspaces: JSONObject):
 
 /** Durable run ids, never a persisted provider secret or automatically replayed prompt. */
 class HermesModel(application: Application, deviceId: String, val agent: String = "hermes", val profile: String = "default") : AndroidViewModel(application) {
-    val agentName = if (agent == "codex") "Codex" else "Hermes"
+    val agentName = when (agent) { "codex" -> "Codex"; "claude" -> "Claude Code"; else -> "Hermes" }
+    val isClaude get() = agent == "claude"
+    fun supportsFeature(name: String) = capabilities.optJSONObject(if (isClaude) "features" else "chuckie_features")?.optBoolean(name) == true
     private val identity = "$agent-$deviceId" + if (agent == "hermes" && profile != "default") "-profile-$profile" else ""
     private val root = if (agent == "hermes" && profile != "default") "/api/hermes/profiles/${android.net.Uri.encode(profile)}" else "/api/$agent"
     private val prefs = application.getSharedPreferences(identity, 0)
@@ -82,6 +86,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var sessionSearchEpoch = 0L
     private var sessionSearchJob: Job? = null
     fun searchSessions(query: String) {
+        if (isClaude) { sessionSearchQuery = query.trim(); sessionSearchResults = orderedSessions.filter { (it.cleanSetting("title") + " " + it.cleanSetting("cwd") + " " + it.cleanSetting("preview")).contains(sessionSearchQuery, ignoreCase = true) }; sessionSearchHasMore = false; return }
         sessionSearchQuery = query.trim()
         sessionSearchEpoch++; sessionSearchJob?.cancel()
         sessionSearchResults = emptyList(); sessionSearchError = null; sessionSearchHasMore = false
@@ -122,9 +127,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var nextSessionOffset = 0
     private var messageActionSessions by mutableStateOf<Set<String>>(emptySet())
     val messageActionBusy get() = selectedId in messageActionSessions
-    val supportsMessageActions get() = if (agent == "codex") capabilities.optBoolean("message_actions")
+    val supportsMessageActions get() = if (isClaude) supportsFeature("fork") && supportsFeature("rewind") else if (agent == "codex") capabilities.optBoolean("message_actions")
         else capabilities.optJSONObject("chuckie_features")?.optBoolean("message_actions") == true
-    val canEditMessages get() = supportsMessageActions && !hasExecution && runId == null && !submitting && !hasPendingSubmission && !messageActionBusy
+    val canEditMessages get() = supportsMessageActions && (!isClaude || claudeUnresolvedRun == null) && !hasExecution && runId == null && !submitting && !hasPendingSubmission && !messageActionBusy
     fun forkMessage(message: HermesMessage, onDone: () -> Unit) {
         val session = selectedId ?: return
         if (!supportsMessageActions || message.serverId <= 0 || session in messageActionSessions) return
@@ -133,7 +138,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val connection = api
         launch {
             try {
-                val request = obj("message_id" to message.serverId, "fork_id" to "mobile_fork_${UUID.randomUUID().toString().replace("-", "")}")
+                val request = obj("message_id" to (message.nativeId ?: message.serverId), "fork_id" to "mobile_fork_${UUID.randomUUID().toString().replace("-", "")}")
                 val result = connection.json("$root/sessions/${q(session)}/fork", request)
                 val fork = result.getJSONObject("session")
                 if (api !== connection) return@launch
@@ -156,8 +161,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             var rewound = false
             try {
                 historyReadMutex.withLock {
-                    val result = connection.json("$root/sessions/${q(session)}/rewind", obj("message_id" to message.serverId,
-                        "expected_last_turn_id" to boundary.lastTurnId, "expected_latest_user_id" to boundary.latestUserId))
+                    val result = connection.json("$root/sessions/${q(session)}/rewind", obj("message_id" to (message.nativeId ?: message.serverId),
+                        "expected_last_turn_id" to boundary.lastTurnId, "expected_latest_user_id" to (if (isClaude) boundary.nativeLatestUserId else boundary.latestUserId)))
                     if (!result.optBoolean("rewound")) throw java.io.IOException("服务端未确认撤回，编辑内容已保留")
                     rewound = true
                     cachedHistory.remove(session); localSubmissions.remove(session)
@@ -389,6 +394,28 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     var eventCount by mutableStateOf(0)
         private set
     private var externalActivity by mutableStateOf<JSONObject?>(null)
+    var claudeSession by mutableStateOf<JSONObject?>(null); private set
+    val claudeUnresolvedRun get() = claudeSession?.optJSONObject("unresolved_run")?.cleanSetting("run_id")?.takeIf { it.isNotBlank() }
+    val claudeTakeoverSnapshot get() = externalActivity?.let { JSONObject(it.toString()) }
+    val claudeTakeoverDescription get() = "将结束电脑上占用此会话的 Claude Code 进程（PID ${externalActivity?.optLong("pid")}）。" +
+        (if (externalActivity?.cleanSetting("external_status") == "busy") "当前任务会被中断。" else "") + "已完成内容保留，之后电脑上可用 claude --resume 重新打开。"
+    fun acknowledgeClaudeRun() = launch {
+        val session = selectedId ?: return@launch
+        val run = claudeUnresolvedRun ?: return@launch
+        if (!isClaude || submitting) return@launch
+        val connection = api
+        setSubmitting(session, true)
+        try { connection.json("$root/runs/${q(run)}/acknowledge", obj()); if (selectedId == session && api === connection) { loadSelection(session); loadHistory(session) } }
+        finally { setSubmitting(session, false) }
+    }
+    fun cancelClaudeRewind() = launch {
+        val session = selectedId ?: return@launch
+        if (!isClaude || submitting) return@launch
+        val connection = api
+        setSubmitting(session, true)
+        try { connection.json("$root/sessions/${q(session)}/rewind/cancel", obj()); if (selectedId == session && api === connection) { loadSelection(session); loadHistory(session) } }
+        finally { setSubmitting(session, false) }
+    }
     private var externalVerifiedAt by mutableLongStateOf(0L)
     private var externalHistoryRevision: String? = null
     private var openingSession: String? = null
@@ -406,7 +433,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private var runVerifiedAt by mutableLongStateOf(0L)
     private var runTurnId: String? = null
     val runStateVerified get() = runId != null && activityNow - runVerifiedAt < 30_000L
-    val canTakeover get() = agent == "codex" && selectedId != null && capabilities.optBoolean("session_takeover") &&
+    val canTakeover get() = if (isClaude) selectedId != null && supportsFeature("external_session_activity") && externalRunning && !submitting && !hasPendingSubmission else agent == "codex" && selectedId != null && capabilities.optBoolean("session_takeover") &&
         runId == null && !submitting && !hasPendingSubmission && (showWriteInterruption(externalRunning, sessionControl?.optString("state"), sessionControlVerifiedAt, activityNow) ||
             error.orEmpty().let { "写入权限" in it || "所有者" in it || "接管" in it })
     val writeAccessMessage get() = sessionControl?.takeIf { showWriteInterruption(externalRunning, it.optString("state"), sessionControlVerifiedAt, activityNow) && it.optString("state") == "busy" }?.optString("message")
@@ -454,7 +481,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (saved != null && (!streamConnected || events.isEmpty() || streamGap)) externalActivityEvents(saved).ifEmpty { events } else events
     } else externalActivityEvents(externalActivity)
     val executionEventCount get() = if (runId != null) maxOf(eventCount, currentRunActivity?.optInt("event_count") ?: 0) else externalActivity?.optInt("event_count") ?: 0
-    val executionState get() = if (requestingCompaction) "正在提交压缩请求" else if (streamCompacting || externalActivityCompacting(currentRunActivity)) "正在压缩上下文" else if (runId != null) state else externalActivityLabel(externalActivity)
+    val executionState get() = if (requestingCompaction) "正在提交压缩请求" else if (streamCompacting || externalActivityCompacting(currentRunActivity)) "正在压缩上下文" else if (runId != null) state else if (isClaude) { if (externalActivity?.cleanSetting("external_status") == "busy") "电脑上正在执行" else "电脑占用中" } else externalActivityLabel(externalActivity)
     val executionCompacting get() = requestingCompaction || executionState == "正在压缩上下文"
 
     private var externalActivityJob: Job? = null
@@ -490,7 +517,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             // Gateway may have recovered after startup; capabilities are safe to retry.
             ensureCapabilities()
             if (api !== connection || selectedId != id) return@launch
-            if (capabilities.optJSONObject("chuckie_features")?.optBoolean("external_session_activity") != true) return@launch
+            if (!supportsFeature("external_session_activity")) return@launch
             // An IIS/bridge restart can drop the local run subscription while its
             // desktop transport still executes a turn originally submitted here.
             if (activeRunCheckSession != id || requestedAt - activeRunCheckedAt >= 8_000L) attachServerActiveRun(id)
@@ -504,7 +531,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     private suspend fun applyExternalActivity(id: String, connection: NativeApi, result: JSONObject, observedAt: Long) {
         if (selectedId != id || api !== connection || runId != null || !result.optBoolean("available")) return
-        externalActivity = result; externalVerifiedAt = observedAt; activityNow = observedAt
+        externalActivity = if (isClaude) JSONObject(result.toString()).put("session_id", id) else result; externalVerifiedAt = observedAt; activityNow = observedAt
         val compactedAt = parseMessageTimestamp(result.opt("compacted_at"))
         val compactedId = result.optString("compaction_id").takeIf { it.isNotBlank() && it != "null" }
         if (compactedAt != null && compactedId != null) recordExternalCompaction(id, compactedId, compactedAt)
@@ -818,7 +845,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         prefs.edit().putString("compactionNotices", org.json.JSONArray(compactionNotices.map { it.json() }).toString()).apply()
     }
     private fun recordExternalCompaction(session: String, compactedId: String, time: Long) {
-        if (agent == "codex") return // History refresh returns the native ordered item.
+        if (agent != "hermes") return // History refresh returns the native ordered item.
         val key = "external-$compactedId"
         if (compactionNotices.any { it.session == session && (it.run == key || it.compactionId == compactedId) }) return
         val history = if (selectedId == session) messages else cachedHistory[session].orEmpty()
@@ -1008,7 +1035,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     val finalSyncPending get() = finalSyncStates.any { it.session == selectedId }
     private fun needsFinalSyncPolling(session: String) = finalSyncStates.any { it.session == session } ||
-        outgoingFiles.any { it.session == session }
+        outgoingFiles.any { it.session == session } || isClaude && narrations.any { it.session == session }
     private var finalSyncJob: Job? = null
     internal val chatTextStream: ChatTextStream?
         get() = runId?.takeIf { runSession == selectedId && pendingText.isNotBlank() }?.let {
@@ -1039,7 +1066,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }.getOrDefault(emptyList())
     private val checkingSteering = mutableSetOf<String>()
     private fun reconcileSteeringReceipts(session: String, connection: NativeApi, immediate: Boolean = false) {
-        if (agent != "codex") return
+        if (agent == "hermes") return
         steering.filter { it.session == session && (it.accountId == null || it.accountId == currentCodexAccountId()) && it.delivery == "发送状态待核对" &&
             (immediate || it.timestamp?.let { at -> System.currentTimeMillis() - at > 120_000L } == true) }
             .forEach { record ->
@@ -1051,11 +1078,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                             steering.none { it.session == session && it.key == record.key && it.delivery == "发送状态待核对" }) return@launch
                         val sameSession = result.optBoolean("found") && result.optString("session_id") == session
                         when {
-                            sameSession && result.optString("kind") == "steering" && result.optString("delivery") == "accepted" -> {
+                            sameSession && result.optString("kind") in setOf("steering", "steer") && result.optString("delivery") == "accepted" -> {
                                 updateSteering(record.key, "已送达")
                                 loadHistory(session)
                             }
-                            sameSession && result.optString("kind") == "steering" && result.optString("delivery") == "rejected" -> {
+                            sameSession && result.optString("kind") in setOf("steering", "steer") && result.optString("delivery") == "rejected" -> {
                                 steering = steering.filterNot { it.session == session && it.key == record.key }
                                 saveSteering()
                                 messages = messages.filterNot { it.localKey == record.key }
@@ -1171,7 +1198,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
     /** Only the currently tracked task supplies temporary narration. */
     private fun liveNarrations(id: String) = narrations.filter {
-        it.session == id && it.run != null && it.run == (runId.takeIf { runSession == id } ?: backgroundRuns[id])
+        it.session == id && it.run != null && (isClaude || it.run == (runId.takeIf { runSession == id } ?: backgroundRuns[id]))
     }.map { if (agent == "hermes") it.copy(text = hermesAssistantText(it.text)) else it }.filter { it.text.isNotBlank() }
     private fun saveSteering() {
         prefs.edit().putString("steeringMessages", org.json.JSONArray(steering.map { row ->
@@ -1200,7 +1227,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         narrations = narrations.filterNot { it.run == run }; saveNarrations()
         messages = messages.filterNot { it.serverId == 0L && it.localKey in keys }
     }
-    fun takeover() = launch {
+    fun takeover(confirmedClaudeActivity: JSONObject? = null) = launch {
         val session = selectedId ?: return@launch
         val connection = api
         if (submitting || hasPendingSubmission) return@launch
@@ -1208,7 +1235,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             else externalActivity?.optString("activity_id")?.takeIf { it.isNotBlank() } ?: sessionControl?.optString("activity_id").orEmpty()
         setSubmitting(session, true); setError(session, null); controlMessage = null
         try {
-            val result = connection.json("$root/sessions/${q(session)}/takeover", obj("expected_activity_id" to expected))
+            val result = connection.json("$root/sessions/${q(session)}/takeover", if (isClaude) claudeTakeoverRequest(confirmedClaudeActivity) else obj("expected_activity_id" to expected))
             if (api !== connection || selectedId != session) return@launch
             if (!result.optBoolean("ready")) throw java.io.IOException("尚未确认会话可写入，请刷新后重试")
             runId?.let { clearRunTracking(session, it) }
@@ -1356,6 +1383,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     suspend fun loadSchedules() {
+        if (isClaude) { schedules = emptyList(); return }
         val session = selectedId ?: run { schedules = emptyList(); return }
         try {
             val items = api.json("$root/schedules?sessionId=" + q(session)).optJSONArray("items") ?: org.json.JSONArray()
@@ -1399,7 +1427,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     private suspend fun ensureCapabilities(force: Boolean = false) {
-        if (!this::api.isInitialized || !force && capabilities.optJSONObject("chuckie_features")?.optBoolean("external_session_activity") == true) return
+        if (!this::api.isInitialized || !force && supportsFeature("external_session_activity")) return
         val connection = api
         val result = connection.json("$root/capabilities")
         if (api === connection) capabilities = result
@@ -1424,7 +1452,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         ensureCapabilities(force = true)
         if (agent == "codex") fetchAccountsNow()
         refreshSessions()
-        selectedId?.let { loadHistory(it) }
+        selectedId?.let { if (isClaude) loadSelection(it); loadHistory(it) }
     }
 
     private suspend fun refreshSessions(offset: Int = 0) = sessionRefreshMutex.withLock {
@@ -1433,7 +1461,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         loading = true
         var pageRows: List<JSONObject> = emptyList()
         try {
-            val result = connection.json(if (agent == "codex") "$root/sessions" +
+            val result = connection.json(if (agent != "hermes") "$root/sessions" +
                 (if (offset > 0 && nextCursor != null) "?cursor=${q(nextCursor!!)}" else "")
                 else "$root/sessions?offset=$offset")
             if (api !== connection) return@withLock
@@ -1455,7 +1483,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
         // 上下文占用懒加载：列表先渲染，缺数据的行再分块异步补（服务端按缓存/预算返回），
         // 不阻塞列表本身；codex 的列表响应已内联该字段，无需请求。
-        if (agent != "codex") launch { loadSessionContext(pageRows) }
+        if (agent == "hermes") launch { loadSessionContext(pageRows) }
     }
 
     /** 列表响应经常不带 context（服务端对运行中会话 30s 过期后不下发，其余走懒加载）；
@@ -1521,7 +1549,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
-    fun moreSessions() = launch { refreshSessions(if (agent == "codex") sessions.size else nextSessionOffset) }
+    fun moreSessions() = launch { refreshSessions(if (agent != "hermes") sessions.size else nextSessionOffset) }
     fun sessionActivity(session: JSONObject): String? {
         val id = session.optString("id")
         return sessionActivityLabel(sessionActivities[id], activityNow, hasPendingFor(id))
@@ -1575,13 +1603,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (pendingSubmissions[session]?.key != pending.key || !result.optBoolean("found")) return
         noteRunActivity(session, result, activityClock())
         if (agent == "hermes") {
-            if (result.optString("status") !in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval", "completed", "failed", "cancelled", "interrupted")) {
+            if (result.optString("status") !in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval", "waiting", "completed", "failed", "cancelled", "interrupted")) {
                 setError(session, "Hermes 尚未确认上次任务状态，请稍后核对；不会重复发送。")
                 return
             }
             markSubmissionAccepted(session, pending.key); removePending(session); questionAccepted(session)
             setError(session, null)
-            if (result.optString("status") in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval")) {
+            if (result.optString("status") in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval", "waiting")) {
                 val id = result.getString("run_id")
                 startRunTiming(id, result, pending.timestamp)
                 if (selectedId == session) {
@@ -1596,7 +1624,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             return
         }
         when (result.optString("status")) {
-            "started", "submitting" -> {
+            "started", "submitting", "running", "waiting", "stopping" -> {
                 if (result.optString("delivery") == "unknown") {
                     setError(session, "任务已登记，消息是否写入仍待核对；不会自动重发")
                     return
@@ -1633,6 +1661,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                 }
             }
             "acceptance_unknown" -> {
+                if (isClaude && selectedId == session) loadSelection(session)
                 setError(session, "上次发送结果尚未确认，请核对会话历史；不要重复发送相同消息")
                 if (selectedId == session) loadHistory(session)
             }
@@ -1669,14 +1698,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     noteRunActivity(session, result, runRequestedAt)
                     if (result.optString("status") in setOf("completed", "failed", "cancelled", "interrupted", "acceptance_unknown") && backgroundRuns[session] == id) {
                         recordCompactionCompletion(id, session, result)
-                        discardRunNarrations(id)
+                        if (!isClaude) discardRunNarrations(id)
                         runNarrationUsers.remove(id)
                         backgroundRuns.remove(session); saveRuns()
                     }
                 } catch (e: CancellationException) { throw e }
                 catch (e: ApiRequestFailure) {
                     if (e.status == 404 && backgroundRuns[session] == id && api === connection) {
-                        discardRunNarrations(id)
+                        if (!isClaude) discardRunNarrations(id)
                         runNarrationUsers.remove(id)
                         noteRunActivity(session, obj("status" to "missing"), activityClock())
                         backgroundRuns.remove(session); saveRuns()
@@ -1940,7 +1969,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             }
         } }
         catch (e: CancellationException) { throw e }
-        catch (_: Exception) { if (api === connection) usage = null }
+        catch (_: Exception) { if (api === connection) usage = if (isClaude && usage?.optBoolean("available") == true)
+            JSONObject(usage.toString()).put("stale", true).put("message", "额度刷新失败，当前显示上次读取结果")
+            else if (isClaude) obj("available" to false, "message" to "Claude 额度暂时无法读取，请稍后重试") else null }
     }
     fun importCurrentAccount() = launch { api.json("$root/accounts/import", obj()); fetchAccountsNow() }
     fun removeAccount(id: String) = launch { api.json("$root/accounts/$id/remove", obj()); fetchAccountsNow() }
@@ -1975,6 +2006,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             watching?.cancel(); streamJob?.cancel()
         }
         if (selectedId != id) {
+            claudeSession = null
             externalActivity = null; externalHistoryRevision = null; sessionControl = null; controlMessage = null; runVerifiedAt = 0
             runSession = null
             seq = -1; events = emptyList(); eventCount = 0
@@ -2017,6 +2049,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             val overviewHistoryVersion = historyVersions[id] ?: 0L
             // Start the network read before disk-cache replay; neither should block the other.
             val overviewRequest = async {
+                if (isClaude) return@async null
                 try { withTimeout(25_000) { connection.json("$root/sessions/${q(id)}/overview?limit=100") } }
                 catch (_: TimeoutCancellationException) { null }
                 catch (error: CancellationException) { throw error }
@@ -2075,7 +2108,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (selectedId != id || api !== connection || generation != openingGeneration || runId != null) return
             activeRunCheckSession = id; activeRunCheckedAt = activityClock()
             val serverRun = result.optString("run_id").takeIf { it.isNotBlank() && it != "null" } ?: return
-            if (result.optString("status") !in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval")) return
+            if (result.optString("status") !in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval", "waiting")) return
             startRunTiming(serverRun, result)
             runId = serverRun; runSession = id
             seq = -1; events = emptyList(); eventCount = 0; approval = null; pendingText = ""; pendingMessageUid = null
@@ -2095,6 +2128,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val result = response.optJSONObject("session") ?: response.takeIf { it.has("id") } ?: return
         if (selectedId != id || api !== connection || generation != openingGeneration) return
         result.optString("title").takeIf { it.isNotBlank() }?.let { title = it }
+        if (isClaude) claudeSession = result
         val selection = readAgentSelection(result)
         sessionProvider = selection.provider; sessionModel = selection.model
         sessionEffort = selection.effort; sessionTier = selection.tier
@@ -2128,7 +2162,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val generation = openingGeneration
         val response = try {
             (prefetched?.takeIf { !earlier && it.optJSONArray("data") != null } ?: connection.json("$root/sessions/$id/messages?limit=100" +
-                (historyOldestId?.let { "&${if (earlier) "older_before" else "from_id"}=" + android.net.Uri.encode(it) } ?: ""))).also { it.getJSONArray("data") }
+                (historyOldestId?.takeIf { earlier || !isClaude }?.let { "&${if (earlier) "older_before" else "from_id"}=" + android.net.Uri.encode(it) } ?: ""))).also { it.getJSONArray("data") }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             if (selectedId != id || api !== connection || generation != openingGeneration) return
@@ -2139,9 +2173,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (id != selectedId || api !== connection || generation != openingGeneration) return
         // Native order and content are authoritative. Local snapshots never contribute rows.
         var history = withConfirmedKeys(id, response.array("data").objects().mapNotNull { row -> agentHistoryMessage(agent, row) })
+        if (isClaude) history = mergeClaudeHistory(cachedHistory[id].orEmpty(), history, earlier)
         history = mergeAgentCompactionNotices(agent, history, compactionNotices.filter { it.session == id })
-        historyHasMore = response.optBoolean("has_more", false)
-        historyOldestId = response.optString("oldest_id").takeIf { it.isNotBlank() && it != "null" }
+        historyHasMore = if (isClaude && !earlier && history.firstOrNull()?.nativeId != response.array("data").optJSONObject(0)?.cleanSetting("id")) historyHasMore else response.optBoolean("has_more", false)
+        historyOldestId = if (isClaude) history.firstOrNull()?.nativeId else response.optString("oldest_id").takeIf { it.isNotBlank() && it != "null" }
         val bindings = mutableListOf<Pair<Long, List<String>>>()
         val confirmedLocalKeys = mutableSetOf<String>()
         // Hermes has no request-key lookup. After an App restart the in-memory
@@ -2168,7 +2203,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             rememberMessageKey(id, confirmed.serverId, sent.key)
             history = withConfirmedKeys(id, history)
             narrations = acknowledgeNarrationUser(narrations, id, sent.key, canonical)
-            if (sent.attachments.isNotEmpty()) {
+            if (sent.attachments.isNotEmpty() && !isClaude) {
                 bindings += confirmed.serverId to sent.attachments.map { it.getString("id") }
                 history = attachConfirmedSubmission(history, confirmed.serverId, sent.attachments)
             }
@@ -2191,7 +2226,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     markSubmissionAccepted(id, local.pending.key); removePending(id); questionAccepted(id)
                     if (error.orEmpty().contains("尚未确认")) setError(id, null)
                 }
-                if (local.files.isNotEmpty()) {
+                if (local.files.isNotEmpty() && !isClaude) {
                     bindings += acknowledged.serverId to local.files.map { it.getString("id") }
                     history = attachConfirmedSubmission(history, acknowledged.serverId, local.files)
                 }
@@ -2204,7 +2239,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
         // Replace the canonical window, including a successful empty response.
         val activeRun = runId.takeIf { runSession == id } ?: backgroundRuns[id]
-        narrations = narrations.filter { it.session != id || it.run == activeRun && activeRun != null }
+        narrations = if (isClaude) narrations.filter { it.session != id } + pendingClaudeNarrations(history, liveNarrations(id)) else narrations.filter { it.session != id || it.run == activeRun && activeRun != null }
         saveNarrations()
         compactionNotices = compactionNotices.filterNot { it.session == id }; saveCompactionNotices()
         // Commit the canonical snapshot before publishing it. Switching sessions or
@@ -2242,15 +2277,15 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
         acknowledgeFinalSync(id, history)
         messages = projectFinalSyncRows(
-            reconcilePendingAssistant(withActiveNarrations(visibleHistory, liveNarrations(id), activeRun, legacyHermes = agent == "hermes"),
+            reconcilePendingAssistant(if (isClaude) claudeNarrationOverlay(visibleHistory, liveNarrations(id)) else withActiveNarrations(visibleHistory, liveNarrations(id), activeRun, legacyHermes = agent == "hermes"),
                 pendingItemId.takeIf { activeRun != null }, pendingText.takeIf { activeRun != null }.orEmpty()),
             finalSyncStates, id)
         historyLoading = false
         if (selectedId != id || api !== connection) return
         reconcileSteeringReceipts(id, connection)
-        launch { bindOutgoingIfReady(id, connection) }
+        if (!isClaude) launch { bindOutgoingIfReady(id, connection) }
         launch {
-            for ((messageId, attachmentIds) in bindings) {
+            for ((messageId, attachmentIds) in bindings.filter { !isClaude }) {
                 connection.json("$root/sessions/$id/messages/$messageId/attachments", obj("ids" to org.json.JSONArray(attachmentIds)))
                 if (api !== connection) return@launch
             }
@@ -2352,9 +2387,9 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val originatingSession = selectedId
         setSubmitting(originatingSession, true)
         try {
-            val body = obj("title" to name.ifBlank { newHermesChatName() })
+            val body = obj("title" to (if (isClaude) name.trim().takeIf { it.isNotBlank() } else name.ifBlank { newHermesChatName() }))
             body.put("auto_title", name.isBlank() || Regex("手机对话\\d{8}_\\d{6}").matches(name))
-            if (agent == "codex") project?.keys()?.forEach { key -> body.put(key, project.get(key)) }
+            if (agent != "hermes") project?.keys()?.forEach { key -> body.put(key, project.get(key)) }
             else project?.optJSONObject("phone_tools")?.let { body.put("phone_tools", it) }
             val result =
                 api.json(
@@ -2397,7 +2432,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun renameSession(id: String, name: String, onDone: () -> Unit) = launch {
         val body = obj("title" to name.trim()).toString().toRequestBody("application/json".toMediaType())
         val result = api.json(api.request("$root/sessions/$id").newBuilder().patch(body).build())
-        val renamed = result.getJSONObject("session").optString("title")
+        val renamed = result.optJSONObject("session")?.optString("title") ?: if (isClaude && result.optBoolean("success")) name.trim() else throw IOException("服务端未确认重命名")
         sessions = sessions.map { if (it.optString("id") == id) JSONObject(it.toString()).put("title", renamed) else it }
         saveOfflineSessions()
         if (selectedId == id) title = renamed
@@ -2448,7 +2483,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             { row, result -> dispatchQueuedMessage(row, result) })
     }
     fun enqueueDraft(): Boolean {
-        if (submitting || uploading || selectedId == null) return false
+        if (isClaude || submitting || uploading || selectedId == null) return false
         if (draft.trim().startsWith("/")) { error = "斜杠命令请直接执行，消息队列用于对话内容"; return false }
         val files = pendingFiles.toList()
         if (!messageQueue.enqueue(draft.trim(), files)) {
@@ -2491,10 +2526,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     private fun sendInput(input: String, questionId: String? = null, hermesExternalVerified: Boolean = false): Boolean {
         val session = selectedId ?: return false
+        if (isClaude && claudeUnresolvedRun != null) { error = "请先核对上次任务结果并确认后再继续"; return false }
         if (messageActionBusy) { error = "请等待消息操作完成"; return false }
         if (hasPendingSubmission) { error = "请先核对上一次提交结果，避免重复创建任务"; return false }
         if (input.isBlank() || submitting) return false
-        if (externalRunning && agent == "codex") {
+        if (externalRunning && agent != "hermes") {
             val connection = api
             val originalDraft = draft
             val originalFiles = pendingFiles.map { it.optString("id") }
@@ -2557,7 +2593,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (id.startsWith("hcompact_") || state == "正在压缩上下文") { error = "请等待压缩完成后发送"; return false }
             val attached = if (isQuestion) emptyList() else pendingFiles.toList()
             if (attached.isNotEmpty() && !(if (agent == "codex") capabilities.optBoolean("attachment_steering")
-                    else capabilities.optJSONObject("chuckie_features")?.optBoolean("attachment_steering") == true)) {
+                    else if (isClaude) supportsFeature("attachments") && supportsFeature("steer") else supportsFeature("attachment_steering"))) {
                 error = "当前服务端尚未更新附件插话接口，附件和文字已保留"
                 return false
             }
@@ -2826,10 +2862,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     runVerifiedAt = requestedAt
                     runTurnId = result.optString("turn_id").takeIf { it.isNotBlank() && it != "null" }
                     startRunTiming(id, result)
-                    state = if (stoppingRunId == id && result.optString("status") in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval")) "正在停止"
+                    state = if (stoppingRunId == id && result.optString("status") in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval", "waiting")) "正在停止"
                         else if (result.optString("kind") == "compact" && result.optString("status") == "started") "正在压缩上下文" else statusLabel(result.optString("status"))
                     approval = result.optJSONObject("approval")
-                    if (result.optString("status") in setOf("started", "running", "stopping", "waiting_for_approval")) {
+                    if (result.optString("status") in setOf("started", "running", "stopping", "waiting_for_approval", "waiting")) {
                         refreshRunActivity(id, watchedSession, connection)
                         if (runId != id || api !== connection) return@launch
                     }
@@ -2877,7 +2913,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         val finalSync = FinalSyncState(watchedSession, id, terminalItem, runTurnId, terminalText,
                             pendingTextTimestamp ?: System.currentTimeMillis(), runTimings[id]?.startedAt, canConfirm,
                             flushedStreamPrefix, pendingMessageUid.takeIf { agent == "hermes" && !streamGap && terminalText.trim() == hermesAssistantText(pendingText).trim() })
-                        if (!compact && finishedSession != null && completedMessageKey.isNotBlank()) {
+                        if (!isClaude && !compact && finishedSession != null && completedMessageKey.isNotBlank()) {
                             outgoingFiles.removeAll { it.run == id }
                             outgoingFiles.add(OutgoingFiles(finishedSession, id, finalSync.item, finalSync.turn,
                                 finalSync.text, finalSync.startedAt, returned.map { it.getString("id") },
@@ -2885,12 +2921,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                             saveOutgoingFiles()
                         }
                         finishedSession?.let { loadHistory(it) }
-                        val historyReady = compact || finishedSession == null ||
+                        val historyReady = compact || finishedSession == null || isClaude && terminalText.isBlank() ||
                             finalSyncAcknowledged(finalSync, cachedHistory[finishedSession].orEmpty())
                         if (finishedSession != null && !historyReady) keepFinalSync(finalSync)
                         runId = null
                         runVerifiedAt = 0
-                        discardRunNarrations(id)
+                        if (!isClaude) discardRunNarrations(id)
                         runNarrationUsers.remove(id)
                         backgroundRuns.values.remove(id); saveRuns()
                         approval = null
@@ -2898,7 +2934,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                         streamRecovering = false
                         prefs.edit().remove("run").remove("runSession").apply()
                         if (finishedSession != null && selectedId == finishedSession) {
-                            messages = projectFinalSyncRows(cachedHistory[finishedSession].orEmpty(), finalSyncStates, finishedSession)
+                            messages = projectFinalSyncRows(if (isClaude) claudeNarrationOverlay(cachedHistory[finishedSession].orEmpty(), liveNarrations(finishedSession)) else cachedHistory[finishedSession].orEmpty(), finalSyncStates, finishedSession)
                             pendingText = ""; pendingMessageUid = null; pendingItemId = null; pendingPhase = ""; streamGap = false
                             if (!historyReady) {
                                 state = "已结束，正在同步消息"
@@ -2906,6 +2942,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                             ensureFinalSyncPolling(finishedSession, connection)
                         }
                         currentCoroutineContext().ensureActive()
+                        if (isClaude && finishedSession != null && selectedId == finishedSession) { loadSelection(finishedSession); fetchUsage() }
                         refreshSessions()
                         break
                     }
@@ -2919,7 +2956,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     if (e is ApiRequestFailure && e.status == 404) {
                         noteRunActivity(watchedSession, obj("status" to "missing"), activityClock())
                         runId = null; approval = null
-                        discardRunNarrations(id)
+                        if (!isClaude) discardRunNarrations(id)
                         runNarrationUsers.remove(id)
                         streamJob?.cancel()
                         streamRecovering = false; statusRecovering = false
@@ -2967,7 +3004,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     while (currentCoroutineContext().isActive) {
                         val line = reader.readLine() ?: break
                         parser.line(line)?.let { json ->
-                            val event = JSONObject(json)
+                            val event = JSONObject(json).also { if (isClaude && !it.has("timestamp") && it.has("created_at")) it.put("timestamp", it.opt("created_at")) }
                             withContext(Dispatchers.Main) {
                                 if (runId != id || api !== connection || !observation.active || epoch != observationEpoch) return@withContext
                                 val n = event.optLong("seq", -1)
@@ -3146,7 +3183,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     private fun modelOptionsPath(session: String? = selectedId): String = "$root/model-options" +
-        if (agent == "codex" && !session.isNullOrBlank()) "?session=${android.net.Uri.encode(session)}" else ""
+        if (agent != "hermes" && !session.isNullOrBlank()) "?session=${android.net.Uri.encode(session)}" else ""
 
     fun fetchModels(forceRefresh: Boolean = false) = launch {
         val connection = api; val session = selectedId
@@ -3308,7 +3345,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (agent == "codex") {
             val metadata = modelOptions.array("providers").objects().firstOrNull { providerMatches(it, provider) }
             if (supportsServiceTier(metadata)) body.put("service_tier", tier)
-        } else if (!global) body.put("model_options", obj("reasoning" to hermesReasoning(effort)))
+        } else if (agent == "hermes" && !global) body.put("model_options", obj("reasoning" to hermesReasoning(effort)))
         if (global) {
             body.put("scope", "main")
             body.put("confirm_expensive_model", confirm)
@@ -3381,7 +3418,7 @@ fun statusLabel(value: String) =
         "completed" -> "已完成"
         "running",
         "started" -> "执行中"
-        "waiting_for_approval" -> "等待审批"
+        "waiting_for_approval", "waiting" -> "等待审批"
         "stopping" -> "正在停止"
         "cancelled" -> "已停止"
         "failed" -> "执行失败"

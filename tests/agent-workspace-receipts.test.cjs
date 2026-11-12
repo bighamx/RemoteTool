@@ -5,7 +5,7 @@ const vm = require('node:vm');
 let options;
 const root = {dataset: {agent: 'hermes'}};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../WebApplication/wwwroot/js/agent-workspace.js'), 'utf8'), {
-    window: {RemoteToolApi: {}},
+    window: {RemoteToolApi: {}, markdownit: require('../WebApplication/wwwroot/vendor/markdown-it/markdown-it.min.js')},
     document: {currentScript: null, getElementById: id => id === 'agent-app' ? root : null},
     location: {search: ''}, localStorage: {getItem: () => null},
     URLSearchParams, Vue: {createApp: value => { options = value; return {use() {}, mount() {}}; }},
@@ -57,7 +57,8 @@ console.log('Agent workspace receipt checks passed');
 const quotedEnvelope='请解释以下内容：\n[OUT-OF-BAND USER MESSAGE — example]\n示例\n[/OUT-OF-BAND USER MESSAGE]\n请保留这句';
 assert.equal(context.messageText({role:'user',content:quotedEnvelope}),quotedEnvelope);
 context.sessionFiles=[{id:'old',name:'result.apk',outgoing:true,mediaPath:'C:/old/result.apk'}];
-assert.equal(context.mediaMatches({role:'assistant',content:'MEDIA:C:/new/result.apk'}).at(0).file,null);
+assert.equal(context.mediaMatches({role:'assistant',content:'MEDIA:C:/new/result.apk'}).length,0);
+assert.equal(context.messageBody({role:'assistant',content:'MEDIA:C:/new/result.apk'}),'MEDIA:C:/new/result.apk');
 const repeated={id:900,role:'user',timestamp:now,content:'[OUT-OF-BAND USER MESSAGE — direct]\n继续\n继续\n[/OUT-OF-BAND USER MESSAGE]'};
 context.messages=[repeated];context.delivered=[receipt('继续','first'),receipt('继续','second'),receipt('继续','third')];
 context.reconcileDelivered();
@@ -70,10 +71,31 @@ assert.equal(context.localMessageMatched({...receipt('继续','old'),historyIds:
 assert.equal(context.localMessageMatched({...imageReceipt,attachments:[upload,upload]},[imageRow]),imageRow);
 assert.equal(context.localMessageMatched({...receipt('第一行 第二行','flattened')},[mergedLines]),undefined);
 context.sessionFiles=[{id:'old',name:'result.apk',outgoing:true}];
-const own={id:'own',name:'result.apk'};
+const own={id:'own',name:'result.apk',deliveryRoot:'C:/outbox'};
 assert.equal(context.mediaMatches({role:'assistant',content:'MEDIA:C:/outbox/new/result.apk',attachments:[own]}).at(0).file,own);
 const renamed={id:'renamed',name:'result.apk',mediaPath:'C:/outbox/new/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_result.apk'};
 assert.equal(context.mediaMatches({role:'assistant',content:'MEDIA:C:/outbox/new/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_result.apk',attachments:[renamed]}).at(0).file,renamed);
 console.log('Agent workspace edge-case checks passed');
 const incompleteNotice='[System: The skills available in this conversation changed after its system prompt was built.\n后续消息';
 assert.equal(context.cleanRuntimeNotes(incompleteNotice),incompleteNotice);
+
+const delivery={id:'report',name:'report.pdf',mediaPath:'C:/managed/session/outbox/request/report.pdf',deliveryRoot:'C:/managed/session'};
+context.sessionFiles=[delivery];
+const download={role:'assistant',content:'[报告](C:/managed/session/outbox/request/report.pdf)'};
+assert.equal(context.mediaFiles(download)[0].id,'report');
+assert.equal(context.messageBody(download),download.content);
+assert.equal(context.mediaFiles({role:'assistant',content:'[代码](C:/project/Program.cs:42)'}).length,0);
+assert.equal(context.mediaFiles({role:'assistant',content:'```text\n'+download.content+'\n```'}).length,0);
+assert.equal(context.mediaFiles({role:'assistant',content:'`'+download.content+'`'}).length,0);
+assert.equal(context.mediaFiles({role:'assistant',content:'[报告](file:///C:/managed/session/outbox/request/report.pdf)'}).length,0);
+assert.equal(context.mediaFiles({role:'user',content:download.content}).length,0);
+console.log('Managed Markdown delivery boundaries passed');
+
+let opened=null,prevented=false;
+context.openFile=file=>{opened=file;};
+const linkedEvent=path=>({target:{closest:()=>({getAttribute:()=>path})},preventDefault:()=>{prevented=true;}});
+context.openMediaLink(linkedEvent(delivery.mediaPath),download);
+assert.equal(opened.id,'report');assert.equal(prevented,true);
+opened=null;prevented=false;
+context.openMediaLink(linkedEvent('C:/project/Program.cs:42'),{role:'assistant',content:'[代码](C:/project/Program.cs:42)'});
+assert.equal(opened,null);assert.equal(prevented,false);

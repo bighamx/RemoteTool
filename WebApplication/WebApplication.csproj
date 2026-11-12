@@ -76,6 +76,12 @@
     <Content Include="..\tools\PhoneTools\hermes_plugin\*.yaml" Link="phone-tools\hermes_plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\PhoneTools\**\*.md" Link="phone-tools\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="Tools\ClaudeBridge\node_modules\**" />
+    <Content Remove="Tools\ClaudeBridge\**" />
+    <None Remove="Tools\ClaudeBridge\node_modules\**" />
+    <Content Include="Tools\ClaudeBridge\*.mjs;Tools\ClaudeBridge\package*.json;Tools\ClaudeBridge\README.md" Link="claude\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
   <Target Name="StampSourceVersion" BeforeTargets="GetAssemblyVersion" DependsOnTargets="InitializeSourceControlInformation">
     <PropertyGroup><SourceCheckoutRoot>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/..'))</SourceCheckoutRoot></PropertyGroup>
     <!-- Service builds inherit SYSTEM/root; trust only this user-authorized checkout. -->

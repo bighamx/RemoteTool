@@ -54,7 +54,7 @@ internal fun encodeHistorySnapshot(messages: List<HermesMessage>) = JSONArray(me
     obj("role" to message.role, "text" to agentMessageContentText(message.text, message.attachments.isNotEmpty()), "id" to message.serverId,
         "attachments" to JSONArray(message.attachments), "timestamp" to message.timestamp,
         "narration" to message.narration, "turnId" to message.nativeTurnId, "editable" to message.editable,
-        "requestKey" to message.requestKey, "messageType" to message.messageType, "interactions" to JSONArray(message.interactions), "messageUid" to message.messageUid)
+        "requestKey" to message.requestKey, "messageType" to message.messageType, "interactions" to JSONArray(message.interactions), "messageUid" to message.messageUid, "nativeId" to message.nativeId)
 })
 
 internal fun decodeHistorySnapshot(rows: JSONArray): List<HermesMessage> = rows.objects().map { row ->
@@ -71,7 +71,7 @@ internal fun decodeHistorySnapshot(rows: JSONArray): List<HermesMessage> = rows.
         requestKey = row.optString("requestKey").takeIf { it.isNotBlank() && it != "null" },
         interactions = row.array("interactions").objects(),
         messageType = row.cleanSetting("messageType").takeIf { it.isNotBlank() } ?: legacyType,
-        messageUid = row.cleanSetting("messageUid").takeIf { it.isNotBlank() })
+        messageUid = row.cleanSetting("messageUid").takeIf { it.isNotBlank() }, nativeId = row.cleanSetting("nativeId").takeIf { it.isNotBlank() })
 }
 
 /** Pending submissions are temporary trailing rows, never position hints for native history. */

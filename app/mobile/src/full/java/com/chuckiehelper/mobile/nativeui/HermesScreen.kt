@@ -112,7 +112,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     LaunchedEffect(model.selectedId) { model.loadSchedules() }
     LaunchedEffect(api.base, agent, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            if (agent == "codex") while (true) { awaitUiRead(model.fetchUsage()); kotlinx.coroutines.delay(agentUsagePollDelay(model.hasKnownActivity)) }
+            if (agent != "hermes") while (true) { awaitUiRead(model.fetchUsage()); kotlinx.coroutines.delay(agentUsagePollDelay(model.hasKnownActivity)) }
         }
     }
     LaunchedEffect(model, lifecycle, model.hasKnownActivity) {
@@ -159,9 +159,13 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     var globalModels by remember { mutableStateOf(false) }
     var accountsPanel by remember { mutableStateOf(false) }
     var createCodex by remember { mutableStateOf(false) }
+    var createClaude by remember { mutableStateOf(false) }
     var createHermesWithPhone by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var stop by remember { mutableStateOf(false) }
+    var confirmedTakeoverMessage by remember { mutableStateOf("") }
+    var confirmedClaudeActivity by remember { mutableStateOf<JSONObject?>(null) }
+    var acknowledgeClaude by remember { mutableStateOf(false) }
     var takeover by remember { mutableStateOf(false) }
     var filter by rememberSaveable { mutableStateOf("") }
     var pendingInfo by remember { mutableStateOf(false) }
@@ -291,6 +295,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     }
     fun createChat() {
         if (agent == "codex") { createCodex = true; model.fetchProjects() }
+        else if (agent == "claude") createClaude = true
         else createHermesWithPhone = true
     }
     fun command(value: String) {
@@ -306,8 +311,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             "/compact", "/compress" -> model.compact()
             "/status" -> model.reconnect()
             "/providers" -> {
-                providers = true
-                model.fetchProviders()
+                if (agent != "claude") { providers = true; model.fetchProviders() }
             }
             "/account", "/workspace" -> {
                 if (agent == "codex") { accountsPanel = true; model.fetchAccounts() }
@@ -436,12 +440,12 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                             handoverSession = obj("id" to model.selectedId, "title" to model.title)
                         },
                     )
-                    if (agent == "codex" && !displayList && model.selectedId != null) DropdownMenuItem(
+                    if (agent != "hermes" && !displayList && model.selectedId != null) DropdownMenuItem(
                         text = { Text("会话权限") }, onClick = { menu = false; permissionsDialog = true })
                     if (agent == "codex") DropdownMenuItem(text = { Text("账户与工作空间") }, onClick = { menu = false; accountsPanel = true; model.fetchAccounts() })
-                    DropdownMenuItem(text = { Text("标题生成模型") }, onClick = { menu = false; titleModelDialog = true; model.fetchTitleModel() })
-                    (listOf("模型选择" to "/model") +
-                        (if (displayList) listOf("Provider 管理" to "/providers") else emptyList()) +
+                    if (agent == "codex") DropdownMenuItem(text = { Text("标题生成模型") }, onClick = { menu = false; titleModelDialog = true; model.fetchTitleModel() })
+                    ((if (agent != "claude" || model.selectedId != null && !displayList) listOf("模型选择" to "/model") else emptyList()) +
+                        (if (displayList && agent != "claude") listOf("Provider 管理" to "/providers") else emptyList()) +
                         listOf("刷新与重连" to "/status"))
                         .forEach { (name, value) ->
                             DropdownMenuItem(
@@ -458,9 +462,17 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             }
             }
         }
-        if (agent == "codex") CodexUsage(model, compact = true) { accountsPanel = true; model.fetchAccounts() }
+        if (agent != "hermes") CodexUsage(model, compact = true) { if (agent == "codex") { accountsPanel = true; model.fetchAccounts() } else model.fetchUsage() }
+        if (agent == "claude") model.usage?.cleanSetting("message")?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (agent == "claude" && !displayList && model.claudeUnresolvedRun != null) {
+            Text("上次任务结果待核对。请先检查历史，确认前不会重新发送。", Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.bodySmall)
+            TextButton(enabled = !model.submitting, onClick = { acknowledgeClaude = true }) { Text("已核对任务结果…") }
+        }
+        if (agent == "claude" && !displayList && model.claudeSession?.optBoolean("rewind_pending") == true)
+            TextButton(enabled = !model.submitting, onClick = { model.cancelClaudeRewind() }) { Text("撤回将在下次发送时生效 · 取消撤回") }
         var setupVisible by remember(agent,model.profile){mutableStateOf(false) }
         AgentSetupCard(api,agent,model.profile,model.capabilities.optInt("state_version")){ setupVisible=it }
+        if (agent == "claude" && !displayList && model.selectedId != null) TextButton(onClick = { permissionsDialog = true }) { Text("权限：" + when (model.claudeSession?.cleanSetting("permission_mode")) { "acceptEdits" -> "自动批准文件编辑"; "plan" -> "计划模式"; else -> "按本机规则询问" }, style = MaterialTheme.typography.labelSmall) }
         if (agent == "codex" && !displayList && accessMode == "full") TextButton(onClick = { permissionsDialog = true }) {
             Text("权限设置：完全访问", style = MaterialTheme.typography.labelSmall)
         }
@@ -470,7 +482,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
         if (!displayList && model.error == null && model.canTakeover) model.writeAccessMessage?.let { message ->
             FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.Center) {
                 Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth())
-                TextButton(onClick = { takeover = true }) { Text("中断并接管") }
+                TextButton(onClick = { confirmedClaudeActivity = model.claudeTakeoverSnapshot; confirmedTakeoverMessage = model.claudeTakeoverDescription; takeover = true }) { Text("中断并接管") }
             }
         }
         model.error?.let { rawError ->
@@ -485,7 +497,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                         TextButton(onClick = { model.reconnect() }) { Text("重新连接") }
                         if (model.hasPendingSubmission)
                             TextButton(onClick = { pendingInfo = true; model.reconcilePending() }) { Text("核对发送结果") }
-                        if (model.canTakeover) TextButton(onClick = { takeover = true }) { Text("中断并接管") }
+                        if (model.canTakeover) TextButton(onClick = { confirmedClaudeActivity = model.claudeTakeoverSnapshot; confirmedTakeoverMessage = model.claudeTakeoverDescription; takeover = true }) { Text("中断并接管") }
                         TextButton(onClick = { model.error = null }) { Text("收起") }
                     }
                 }
@@ -770,7 +782,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                     if (message.role == "system" && message.messageType == "interaction") {
                         InteractionCard(message, agentName)
                     } else if (message.role == "system") {
-                        Row(Modifier.fillMaxWidth().then(if (message.messageType == "toolSummary") Modifier.clickable { toolDetails = message.serverId.toString() } else Modifier)
+                        Row(Modifier.fillMaxWidth().then(if (message.messageType == "toolSummary") Modifier.clickable { toolDetails = message.nativeId ?: message.serverId.toString() } else Modifier)
                             .padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically) {
                             Icon(if (message.messageType == "toolSummary") Icons.Outlined.Build else Icons.Outlined.CheckCircle,
@@ -857,7 +869,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                                         if (!model.requestingCompaction && (model.runId != null || agent == "hermes" && model.externalRunning))
                                             TextButton(onClick = { stop = true }, enabled = !model.stopping,
                                                 modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text(if (model.stopping) "正在停止" else "停止", maxLines = 1) }
-                                        else if (!model.requestingCompaction && model.canTakeover) TextButton(onClick = { takeover = true },
+                                        else if (!model.requestingCompaction && model.canTakeover) TextButton(onClick = { confirmedClaudeActivity = model.claudeTakeoverSnapshot; confirmedTakeoverMessage = model.claudeTakeoverDescription; takeover = true },
                                             modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text("中断并接管", maxLines = 1) }
                                     }
                                 }
@@ -897,9 +909,10 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                                             style = MaterialTheme.typography.bodySmall,
                                         )
                                     }
-                                if (agent == "codex" && approval.optString("kind") == "user_input") {
-                                    CodexQuestions(approval) { model.answerQuestions(it) }
-                                } else AgentApprovalButtons(approval, model.submitting) { model.approve(it) }
+                                if (agent != "hermes" && approval.optString("kind") == "user_input") {
+                                    CodexQuestions(approval, busy = model.submitting) { model.answerQuestions(it) }
+                                    if (agent == "claude") TextButton(enabled = !model.submitting, onClick = { model.approve("deny") }) { Text("不回答并拒绝本次请求") }
+                                } else AgentApprovalButtons(approval, model.submitting, agentName) { model.approve(it) }
                             }
                         }
                 }
@@ -983,7 +996,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                             )
                         }
                         ComposerMenu(commands, { commands = false }, onBounds = { commandPanelBounds = it }) {
-                            DropdownMenuItem(
+                            if (agent == "hermes") DropdownMenuItem(
                                 text = { Text("思考过程") },
                                 trailingIcon = {
                                     Icon(
@@ -1111,7 +1124,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                                     filePicker.launch(arrayOf("*/*"))
                                 },
                             )
-                            DropdownMenuItem(
+                            if (agent != "claude") DropdownMenuItem(
                                 text = { Text("定时发送…") },
                                 enabled = model.selectedId != null,
                                 onClick = {
@@ -1125,7 +1138,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                     val canSend =
                         (model.selectedId != null || model.draft.trim().startsWith("/")) &&
                             !model.submitting &&
-                            !model.uploading &&
+                            !model.uploading && !(agent == "claude" && model.claudeUnresolvedRun != null) &&
                             (model.draft.isNotBlank() || model.pendingFiles.isNotEmpty())
                     Surface(
                         shape = androidx.compose.foundation.shape.CircleShape,
@@ -1138,8 +1151,8 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                             modifier = Modifier.size(40.dp).focusProperties { canFocus = false }
                                 .combinedClickable(
                                     enabled = canSend || model.runId != null,
-                                    onLongClickLabel = "加入消息队列",
-                                    onLongClick = { if (canSend && model.enqueueDraft()) queueDialog = true else if (!canSend) queueDialog = true },
+                                    onLongClickLabel = if (agent == "claude") null else "加入消息队列",
+                                    onLongClick = if (agent == "claude") null else { { if (canSend && model.enqueueDraft()) queueDialog = true else if (!canSend) queueDialog = true } },
                                     onClick = {
                                         if (model.runId != null && !canSend) stop = true
                                         else if (model.draft.trim().startsWith("/")) {
@@ -1256,17 +1269,18 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             handoverSession = null
         }
     }
+    if (acknowledgeClaude) ConfirmDialog("确认已核对任务结果", "确认你已检查会话历史。此操作只解除结果待核对状态，不会重发原消息。", { acknowledgeClaude = false }) { acknowledgeClaude = false; model.acknowledgeClaudeRun() }
     if (stop)
         ConfirmDialog("停止 $agentName 任务", "请求在安全中断点停止，不会撤销已经执行的操作。", { stop = false }) {
             model.stop()
             stop = false
         }
-    if (takeover) ConfirmDialog("中断并接管当前会话", "请求中断此会话在其他端的任务，已执行的操作不会撤销。确认原任务结束且会话可写入后，再由你发送保留的草稿。其他端已启动新任务时会取消接管。", { takeover = false }) {
-        takeover = false; model.takeover()
+    if (takeover) ConfirmDialog("中断并接管当前会话", if (agent == "claude") confirmedTakeoverMessage else "请求中断此会话在其他端的任务，已执行的操作不会撤销。确认原任务结束且会话可写入后，再由你发送保留的草稿。其他端已启动新任务时会取消接管。", { takeover = false }) {
+        takeover = false; model.takeover(confirmedClaudeActivity)
     }
-    if (models) HermesModelPicker(model, if (agent == "hermes") globalModels else null) { models = false }
-    if (permissionsDialog && agent == "codex") model.selectedId?.let { session ->
-        CodexSessionPermissionsDialog(api, session, { permissionsDialog = false }, { accessMode = it })
+    if (models) HermesModelPicker(model, if (agent == "claude") false else if (agent == "hermes") globalModels else null) { models = false }
+    if (permissionsDialog && agent != "hermes") model.selectedId?.let { session ->
+        CodexSessionPermissionsDialog(api, session, { permissionsDialog = false }, { accessMode = it; if (agent == "claude") model.refresh() }, agent = agent)
     }
     if (providers) HermesProviderDialog(model) { providers = false }
     if (titleModelDialog) CodexTitleModelDialog(model) { titleModelDialog = false }
@@ -1286,6 +1300,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
         text = { Text("手机未收到某次提交的确认结果。请先核对会话历史；清除本机记录会恢复草稿，不会终止电脑任务。若原消息实际已送达，再次发送会重复执行。") },
         confirmButton = { TextButton(onClick = { model.reconcilePending(); pendingInfo = false }) { Text("重新核对") } },
         dismissButton = { Row { TextButton(onClick = { model.clearPendingRecord(); pendingInfo = false }) { Text("清除记录") }; TextButton(onClick = { pendingInfo = false }) { Text("关闭") } } })
+    if (createClaude) ClaudeNewSessionDialog(api, model, { createClaude = false }) { list = false }
     if (createHermesWithPhone) PhoneNewSessionDialog(api, model, { createHermesWithPhone = false }) { list = false }
     if (createCodex) CodexNewSessionDialog(api, model, { createCodex = false }) { options ->
         model.newSession(newHermesChatName(), { createCodex = false; list = false }, options)

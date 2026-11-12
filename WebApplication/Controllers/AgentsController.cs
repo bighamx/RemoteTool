@@ -10,6 +10,9 @@ public sealed class AgentsController : Controller
     [HttpGet("codex")]
     public IActionResult Codex() { ViewBag.Agent = "codex"; ViewBag.Title = "Codex"; return View("Index"); }
 
+    [HttpGet("claude")]
+    public IActionResult Claude() { ViewBag.Agent = "claude"; ViewBag.Title = "Claude Code"; return View("Index"); }
+
     [HttpGet("hermes")]
     public IActionResult Hermes() { ViewBag.Agent = "hermes"; ViewBag.Title = "Hermes"; return View("Index"); }
 }

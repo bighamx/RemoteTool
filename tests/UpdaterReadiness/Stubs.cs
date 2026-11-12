@@ -12,6 +12,12 @@ namespace RemoteTool.WebApi.Services {
     public sealed class HermesBridge(Func<HttpResponseMessage> response) {
         public Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body, object? extra, CancellationToken ct) => Task.FromResult(response());
     }
+    public sealed class ClaudeBridge(ClaudeBridge.Health? health = null, bool unanswered = false) {
+        public sealed record Health(int Port, string Token, int Protocol, int Version, int ActiveRuns, int Waiting, int Pid);
+        public static bool Unanswered;
+        public Task<Health?> Probe(CancellationToken ct) { Unanswered = unanswered; return Task.FromResult(health); }
+        public static bool UnansweredWorker() => Unanswered;
+    }
     public sealed class CodexBridge(Func<HttpResponseMessage> response) {
         public int Probes;
         public Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct) { Probes++; return Task.FromResult(response()); }

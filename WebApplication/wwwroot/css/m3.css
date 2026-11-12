@@ -316,7 +316,9 @@ html.ui-m3 .agent-inspector { background: var(--md-surface-1); border-color: tra
     html.ui-m3 .mobile-tools-list > a, html.ui-m3 .mobile-tools-list > button { min-height: 80px; padding: 16px 20px 16px 24px; gap: 20px; border-radius: var(--md-radius-l); background: var(--md-surface-2); }
     html.ui-m3 .mobile-tools-list > a:hover, html.ui-m3 .mobile-tools-list > button:hover { background: var(--md-surface-3); }
     html.ui-m3[data-theme="light"] .mobile-tools-list img { filter: none; }
-    html.ui-m3 .mobile-tools-list strong { font-size: 18px; font-weight: 500; }
+    html.ui-m3 .mobile-tools-list strong { font-size: 18px; font-weight: 500; color: var(--md-on-surface); }
+    html.ui-m3 .mobile-tools header .mobile-tools-header-actions { flex: none; }
+    html.ui-m3 .mobile-tools header .mobile-nav-edit { width: auto; white-space: nowrap; }
     html.ui-m3 .mobile-tools-list small { font-size: 14px; color: var(--md-on-surface-variant); }
     html.ui-m3 .mobile-tools-list > a > span:last-child { font-size: 26px; color: var(--md-on-surface); }
 

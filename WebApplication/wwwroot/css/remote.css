@@ -3941,6 +3941,8 @@ body #remote-page .file-row-more{display:none}
   body #remote-page #files-tab #files-list>tr.file-row .file-actions-column{display:flex!important;flex:0 0 46px!important;width:46px!important;justify-content:center!important;padding:0!important}
   body #remote-page #files-tab .file-row-more{display:grid!important;place-items:center!important;width:45px!important;height:52px!important;padding:0!important;border:0!important;border-radius:10px!important;background:transparent!important;color:var(--text-secondary);font-size:26px!important;line-height:1!important}
   body #remote-page #files-tab .file-row-more:active{background:var(--bg-tertiary)!important}
+  /* Transformed entry animations make the fixed file dock overlap navigation. */
+  body.workspace-files-visible #remote-page.page.active,body.workspace-files-visible #files-tab{animation:none}
   body #remote-page #files-tab .file-mobile-dock{display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr));position:fixed;left:0;right:0;bottom:calc(var(--mobile-bottom-offset,0px) + var(--mobile-navigation-height,68px) + env(safe-area-inset-bottom,0px));z-index:32;background:var(--bg-secondary);border-top:1px solid var(--border-color);padding:1px 2px}
   body #remote-page #files-tab .file-dock-btn{height:60px;border:0;background:transparent;color:#4e8178;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;border-radius:10px;font:inherit}
   body #remote-page #files-tab .file-dock-btn:active{background:var(--bg-tertiary)}

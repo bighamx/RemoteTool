@@ -12,6 +12,8 @@ AssemblyLoadContext.Default.Resolving += (_, name) => {
     return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null;
 };
 var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(dll);
+await HermesSessionCreateChecks.Run(assembly);
+if (args.Contains("--hermes-create-only")) return;
 var agent = assembly.GetType("RemoteTool.WebApi.Services.Codex.CodexAgent", true)!;
 var ctor = agent.GetConstructor(BindingFlags.NonPublic | BindingFlags.Instance, null, [typeof(string)], null)!;
 var file = Path.GetTempFileName();

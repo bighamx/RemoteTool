@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
             { title: '自动化与智能体', items: [
                 { key: 'hangfire', href: '/#/jobs', icon: '/icons/schedule.svg', label: '定时任务' },
                 { key: 'codex', href: '/#/codex', icon: '/icons/codex.png', label: 'Codex' },
+                { key:'claude',href:'/#/claude',icon:'/icons/claude-code.svg',label:'Claude Code' },
                 { key: 'hermes', href: '/#/hermes', icon: '/icons/hermes.svg', label: 'Hermes' }
             ] },
             { title: '设置', items: [
@@ -23,7 +24,8 @@ document.addEventListener('DOMContentLoaded', () => {
             ] }
         ] }) });
         shell.use(ViewUIPlus);
-        shell.mount(shellNav);
+        const navigation = shell.mount(shellNav);
+        window.RemoteToolNavigation = navigation.groups.flatMap(group => group.items).map(item => ({...item}));
     }
     const titleNode = document.getElementById('workspace-topbar-title');
     if (titleNode && window.Vue) {
@@ -32,7 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
             methods: {
                 sync() {
                     const route = location.hash.match(/^#\/([^?]*)/)?.[1] || 'home';
-                    this.currentTitle = ({ storage:'空间管理', home:'总览', cloudflare:'Cloudflare', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes', identity:'身份验证' })[route] || 'RemoteTool';
+                    this.currentTitle = ({ claude:'Claude Code', storage:'空间管理', home:'总览', cloudflare:'Cloudflare', system:'系统与监控', processes:'进程管理', desktop:'远程桌面', terminal:'命令终端', docker:'Docker', 'docker/images':'Docker 镜像', 'docker/compose':'Docker Compose', files:'文件管理', jobs:'定时任务', codex:'Codex', hermes:'Hermes', identity:'身份验证' })[route] || 'RemoteTool';
                 }
             },
             mounted() { this.sync(); window.addEventListener('hashchange', this.sync); window.addEventListener('workspace-route-change', this.sync); },
@@ -82,7 +84,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     window.addEventListener('appinstalled', () => { if (installButton) installButton.hidden = true; });
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname)))
-        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+        navigator.serviceWorker.register('/sw.js?v='+encodeURIComponent(document.body?.dataset.build||''), { scope: '/', updateViaCache:'none' }).catch(() => {});
 
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) {
@@ -98,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const closeTools=()=>{if(tools?.open)tools.close();};
     document.querySelector('[data-mobile-nav="more"]')?.addEventListener('click',()=>tools?.showModal());
     tools?.querySelector('[data-close-tools]')?.addEventListener('click',closeTools);
-    tools?.querySelectorAll('a').forEach(link=>link.addEventListener('click',closeTools));
+    tools?.addEventListener('click',event=>{if(event.target.closest('a'))closeTools();});
     tools?.querySelector('[data-mobile-action="theme"]')?.addEventListener('click',()=>themeToggle?.click());
     tools?.querySelector('[data-mobile-action="logout"]')?.addEventListener('click',()=>logoutBtn?.click());
     const viewport=window.visualViewport;
@@ -167,18 +169,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const path = location.pathname.toLowerCase();
         let current = 'home';
         const route = location.hash.match(/^#\/([^?]*)/)?.[1];
-        if (route) current = ({home:'home',storage:'storage',cloudflare:'cloudflare',identity:'identity',system:'controls',processes:'processes',desktop:'screenshot',terminal:'terminal',docker:'docker','docker/images':'docker','docker/compose':'docker',files:'files',jobs:'hangfire',codex:'codex',hermes:'hermes'})[route] || 'home';
-        else if (path.startsWith('/agents/')) current = path.includes('hermes') ? 'hermes' : 'codex';
+        if (route) current = ({home:'home',storage:'storage',cloudflare:'cloudflare',identity:'identity',system:'controls',processes:'processes',desktop:'screenshot',terminal:'terminal',docker:'docker','docker/images':'docker','docker/compose':'docker',files:'files',jobs:'hangfire',codex:'codex',hermes:'hermes',claude:'claude'})[route] || 'home';
+        else if (path.startsWith('/agents/')) current = path.includes('claude') ? 'claude' : path.includes('hermes') ? 'hermes' : 'codex';
         else if (path.startsWith('/hangfire')) current = 'hangfire';
         else if (path.startsWith('/remote')) {
             const tab = new URLSearchParams(location.hash.slice(1)).get('tab') || 'controls';
             current = ['docker', 'images', 'compose'].includes(tab) ? 'docker' : tab;
         }
-        const mobileRoute=['codex','hermes','desktop'].includes(route)?route:!route||route==='system'||route==='home'?'system':'more';
-        document.querySelectorAll('[data-mobile-nav]').forEach(item=>{
-            if(item.dataset.mobileNav===mobileRoute)item.setAttribute('aria-current','page');else item.removeAttribute('aria-current');
-        });
-        if(!['codex','hermes'].includes(route))document.body.classList.remove('mobile-chat-active');
+        if(!['codex','hermes','claude'].includes(route))document.body.classList.remove('mobile-chat-active');
         closeTools();
         document.querySelectorAll('.side-nav a').forEach(link => {
             const active = link.dataset.nav === current;

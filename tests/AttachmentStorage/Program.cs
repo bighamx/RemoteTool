@@ -207,13 +207,24 @@ try {
         Check(Media("user", "MEDIA:" + source)["attachments"] == null, agent + " user examples never import files");
         Check(Media("assistant", "```text\nMEDIA:" + source + "\n```")["attachments"] == null, agent + " fenced examples never import files");
         Check(!Directory.Exists(store.Folder("media-test")), agent + " examples create no folders");
-        var imported = Media("assistant", "已生成\nMEDIA:" + source)["attachments"][0];
-        Check(imported["name"].ToString() == "音效 one.mp3" && imported["mediaPath"].ToString() == source.Replace('\\', '/'), agent + " project MEDIA becomes an exact-path attachment");
-        Check(File.ReadAllText(store.Resolve("media-test", imported["id"].ToString())) == "audio snapshot", agent + " imported content resolves without exposing the original");
-        Check(Media("assistant", "MEDIA:" + source)["attachments"][0]["id"].ToString() == imported["id"].ToString(), agent + " repeated refresh keeps stable attachment identity");
-        Check(store.List("media-test").Length == 1, agent + " repeated refresh does not duplicate copied files");
-        File.WriteAllText(source, "updated audio snapshot");
-        Check(Media("assistant", "MEDIA:" + source)["attachments"][0]["id"].ToString() != imported["id"].ToString(), agent + " source changes produce a new immutable snapshot");
+        Check(Media("assistant", "已生成\nMEDIA:" + source)["attachments"] == null, agent + " project paths remain references outside managed delivery storage");
+        Check(Media("assistant", "[项目文件](<" + source + ">)")["attachments"] == null, agent + " Markdown project paths never become managed attachments");
+        Check(!Directory.Exists(store.Folder("media-test")), agent + " unrelated paths create no attachment snapshots");
+        var managed = Path.Combine(store.Folder("media-test"), "outbox", "request", "音效 one.mp3");
+        Directory.CreateDirectory(Path.GetDirectoryName(managed)); File.WriteAllText(managed, "generated audio");
+        var imported = Media("assistant", "[音效](<" + managed + ">)")["attachments"][0];
+        Check(imported["name"].ToString() == "音效 one.mp3" && imported["mediaPath"].ToString() == managed.Replace('\\', '/'), agent + " managed Markdown delivery keeps its exact path");
+        Check(imported["deliveryRoot"].ToString() == store.Folder("media-test").Replace('\\', '/'), agent + " metadata identifies the verified session root");
+        Check(store.Resolve("media-test", imported["id"].ToString()) == managed, agent + " managed output is served directly");
+        Check(Media("assistant", "MEDIA:" + managed)["attachments"][0]["id"].ToString() == imported["id"].ToString(), agent + " legacy markers share the managed file identity");
+        Check(store.List("media-test").Length == 1, agent + " repeated refresh creates no duplicate snapshots");
+        File.WriteAllText(managed, "updated generated audio");
+        Check(Media("assistant", "MEDIA:" + managed)["attachments"][0]["id"].ToString() == imported["id"].ToString(), agent + " managed identity stays stable when generated content changes");
+        Check(File.ReadAllText(store.Resolve("media-test", imported["id"].ToString())) == "updated generated audio", agent + " reads current managed bytes");
+        var other = Path.Combine(store.Folder("other-media-session"), "result.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(other)); File.WriteAllText(other, "another session");
+        Check(Media("assistant", "[文件](<" + other + ">)")["attachments"] == null, agent + " a different session's files cannot become deliveries");
+
     }
 } finally { if (Directory.Exists(fixture)) Directory.Delete(fixture, true); }
 Console.WriteLine($"Attachment storage checks: {count} passed");

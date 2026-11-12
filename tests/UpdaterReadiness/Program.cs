@@ -12,6 +12,22 @@ Directory.CreateDirectory(root);
 var checks = 0;
 void Assert(bool value, string message) { if (!value) throw new Exception(message); checks++; }
 try {
+    // Claude: an active or unanswered worker blocks; an idle one clears stale registry hints.
+    foreach (var scenario in new[] { "claude-active", "claude-waiting", "claude-unanswered", "claude-idle", "claude-absent" }) {
+        RemoteToolPaths.ProgramData=Path.Combine(root,scenario);
+        var updates=Path.Combine(RemoteToolPaths.ProgramData,"updates");Directory.CreateDirectory(updates);
+        var job=new UpdateJob(Guid.NewGuid().ToString("N"),"waiting","",0,"test",SourceBuild:true);UpdateContract.WriteJob(updates,job);
+        var registry=new RunRegistry();registry.Register("claude","session","claude-run");
+        var health=scenario switch { "claude-active"=>new ClaudeBridge.Health(1,"t",2,2,1,0,1), "claude-waiting"=>new ClaudeBridge.Health(1,"t",2,2,1,1,1), "claude-idle"=>new ClaudeBridge.Health(1,"t",2,2,0,0,1), _=>null };
+        HttpResponseMessage Reply()=>new(HttpStatusCode.OK){Content=new StringContent("{}")};
+        using var service=new ServerUpdateService(new Clients(),new ConfigurationBuilder().Build(),new TestEnvironment(root),new HermesManagement(),new HermesProfiles(),new HermesBridge(Reply),new CodexBridge(Reply),new ClaudeBridge(health,scenario=="claude-unanswered"),registry,new UpdaterBootstrap());
+        var result=JsonSerializer.SerializeToNode(await service.Readiness(job.Id,default))!;
+        var idle=scenario is "claude-idle" or "claude-absent";
+        Assert(result["ready"]!.GetValue<bool>()==idle,"Claude readiness: "+scenario+" "+result);
+        Assert((registry.Query("claude","session")==null)==idle,"Claude registry hint cleanup: "+scenario);
+        if(scenario=="claude-waiting")Assert(result["blockers"]!.AsArray().Any(b=>b!.GetValue<string>().Contains("等待确认")),"Claude waiting blocker text");
+        checks++;
+    }
     foreach (var scenario in new[] { "old-running", "old-unknown-enqueued", "old-unknown-created", "unknown-no-date", "http-404", "http-500", "completed", "cancelled", "inflight", "force", "reviewed-history", "review-wrong-turn", "reviewed-running" }) {
         RemoteToolPaths.ProgramData = Path.Combine(root, scenario);
         var updates = Path.Combine(RemoteToolPaths.ProgramData, "updates"); Directory.CreateDirectory(updates);
@@ -34,7 +50,7 @@ try {
         };
         var bridge = new CodexBridge(Reply);
         using var service = new ServerUpdateService(new Clients(), new ConfigurationBuilder().Build(), new TestEnvironment(root),
-            new HermesManagement(), new HermesProfiles(), new HermesBridge(Reply), bridge, registry, new UpdaterBootstrap());
+            new HermesManagement(), new HermesProfiles(), new HermesBridge(Reply), bridge, new ClaudeBridge(), registry, new UpdaterBootstrap());
         if (scenario == "inflight") Assert(service.Enter(DateTime.UtcNow.Ticks), "Initial admission failed");
         var result = JsonSerializer.SerializeToNode(await service.Readiness(job.Id, default))!;
         var terminal = scenario is "completed" or "cancelled";
@@ -66,7 +82,7 @@ try {
         var profiles=new HermesProfiles();Directory.CreateDirectory(profiles.Root);
         var management=new HermesManagement(()=>JsonSerializer.SerializeToElement(new {running=true,fresh=scenario!="stale",active=scenario=="active"?1:0}));
         HttpResponseMessage Reply()=>new(scenario=="server-error"?HttpStatusCode.InternalServerError:HttpStatusCode.NotFound){Content=new StringContent(scenario=="generic-404"?"{}":"{\"error\":{\"code\":\"run_not_found\"}}")};
-        using var service=new ServerUpdateService(new Clients(),new ConfigurationBuilder().Build(),new TestEnvironment(root),management,profiles,new HermesBridge(Reply),new CodexBridge(Reply),registry,new UpdaterBootstrap());
+        using var service=new ServerUpdateService(new Clients(),new ConfigurationBuilder().Build(),new TestEnvironment(root),management,profiles,new HermesBridge(Reply),new CodexBridge(Reply),new ClaudeBridge(),registry,new UpdaterBootstrap());
         var result=JsonSerializer.SerializeToNode(await service.Readiness(job.Id,default))!;
         Assert(result["ready"]!.GetValue<bool>()==(scenario=="idle"),"Hermes readiness: "+scenario);
         Assert((registry.Query("hermes","session")==null)==(scenario=="idle"),"Hermes hint cleanup needs fresh idle plus native not-found: "+scenario);

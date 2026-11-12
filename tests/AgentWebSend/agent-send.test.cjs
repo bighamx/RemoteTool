@@ -14,7 +14,7 @@ function createHarness(responses, agent = 'codex', historyCache = null) {
     let nextKey = 0;
     const api = {
         id: encodeURIComponent,
-        async post(route, body) { posts.push(route); bodies.push(JSON.parse(JSON.stringify(body))); return responses.shift(); },
+        async post(route, body = {}) { posts.push(route); bodies.push(JSON.parse(JSON.stringify(body))); return responses.shift(); },
         async get(route) { if (route.includes('/messages?')) return { data: history }; throw new Error(`Unexpected GET: ${route}`); }
     };
     const context = {
@@ -39,7 +39,8 @@ function createHarness(responses, agent = 'codex', historyCache = null) {
     state.loadStatus = async () => {};
     state.ensureEventStream = () => {};
     state.hasRenderableContent = () => true;
-    Object.defineProperty(state, 'displayMessages', { get: () => options.computed.displayMessages.call(state) });
+    for (const name of ['displayMessages', 'reasons', 'sendBlocked'])
+        Object.defineProperty(state, name, { get: () => options.computed[name].call(state) });
     state.loadQueue = async () => {};
     state.$Message = { success() {} };
     return { state, posts, bodies, storage, api, options, context, setHistory: rows => { history = rows; } };
@@ -122,6 +123,20 @@ async function testConfirmedSettingsOverrideUncommittedDialogAndSurviveUnknownSe
     assert.equal(saved.modelSettings.provider,'openai');
 }
 
+async function testHermesSessionTitles() {
+    const h = createHarness([{session:{id:'new-1'}},{session:{id:'new-2'}}], 'hermes');
+    h.state.createValid = true;
+    h.state.refreshSessions = async () => {};
+    h.state.select = async () => {};
+    h.state.createTitle = '   ';
+    await h.state.newSession();
+    assert.deepEqual(h.bodies[0], {title:null, auto_title:true});
+    h.state.createTitle = '  我的会话  ';
+    await h.state.newSession();
+    assert.deepEqual(h.bodies[1], {title:'我的会话', auto_title:false});
+    assert.deepEqual(h.posts, ['/api/hermes/sessions','/api/hermes/sessions']);
+}
+
 module.exports = { createHarness };
 if (require.main === module) (async () => {
     await testAcceptedAndDeduped();
@@ -129,5 +144,6 @@ if (require.main === module) (async () => {
     await testRestoredEcho();
     await testSessionSwitchDuringSend();
     await testConfirmedSettingsOverrideUncommittedDialogAndSurviveUnknownSend();
-    console.log('Agent web send: 5 checks passed');
+    await testHermesSessionTitles();
+    console.log('Agent web send: 6 checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

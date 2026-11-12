@@ -10,10 +10,12 @@ class HermesMediaTextTest {
         val shown = presentHermesMessage("MEDIA:C:/outbox/key/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_result.apk", listOf(file), emptyList())
         assertTrue(shown.unavailable.isEmpty())
         assertFalse(shown.text.contains("MEDIA:"))
-        val legacy = org.json.JSONObject().put("id", "native_2_file").put("name", "result.apk")
+        val legacy = org.json.JSONObject().put("id", "native_2_file").put("name", "result.apk").put("deliveryRoot", "C:/outbox")
         val old = org.json.JSONObject().put("id", "native_3_file").put("name", "result.apk")
         assertTrue(presentHermesMessage("MEDIA:C:/outbox/new/result.apk", listOf(legacy), listOf(old)).unavailable.isEmpty())
-        assertEquals(listOf("result.apk"), presentHermesMessage("MEDIA:C:/new/result.apk", emptyList(), listOf(file)).unavailable)
+        val outside = presentHermesMessage("MEDIA:C:/new/result.apk", emptyList(), listOf(file))
+        assertTrue(outside.unavailable.isEmpty())
+        assertEquals("MEDIA:C:/new/result.apk", outside.text)
     }
     @Test fun parsesWindowsReturnedMediaWithoutDisplayingPaths() {
         val value = extractHermesMedia("文件已生成\r\n\r\nMEDIA:C:\\ProgramData\\outbox\\run-id\\test image.png\r\nMEDIA:\"C:\\ProgramData\\outbox\\run-id\\test_video.mp4\"\r\n\r\n说明保留")
@@ -55,16 +57,19 @@ class HermesMediaTextTest {
         val text = "MEDIA:/tmp/not-yet-indexed.apk"
         val shown = presentHermesMessage(text, emptyList(), emptyList())
         assertEquals(text, shown.text)
-        assertEquals(listOf("not-yet-indexed.apk"), shown.unavailable)
+        assertTrue(shown.unavailable.isEmpty())
+        val managed = org.json.JSONObject().put("id", "other").put("name", "other.apk").put("deliveryRoot", "/tmp")
+        assertEquals(listOf("not-yet-indexed.apk"), presentHermesMessage(text, emptyList(), listOf(managed)).unavailable)
         assertEquals("MEDIA:PATH", presentHermesMessage("MEDIA:PATH", emptyList(), emptyList()).text)
     }
 
     @Test fun singleNameCandidateResolvesEvenWhenOutboxIdDiffers() {
         // 服务端把文件登记成 native_<messageId>_ 记录，mediaPath 可能为空；
-        // 只要文件名唯一就必须解析成附件，而不是显示“暂不可用”和原始标记。
+        // 已确认属于该会话交付目录时，唯一文件名可以关联原生记录。
         val file = org.json.JSONObject()
             .put("id", "native_76781_abc")
             .put("name", "RemoteTool-0.3.104-build107.apk")
+            .put("deliveryRoot", "C:/ProgramData/RemoteTool/hermes-attachments/s")
             .put("mime", "application/vnd.android.package-archive")
         val text = "已打好：\n\nMEDIA:C:\\ProgramData\\RemoteTool\\hermes-attachments\\s\\outbox\\facf6e7b-d9c0\\RemoteTool-0.3.104-build107.apk"
         val shown = presentHermesMessage(text, listOf(file), emptyList())

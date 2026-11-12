@@ -36,7 +36,7 @@ fun steeringAppearsInHistory(message: SteeringMessage, history: List<HermesMessa
 private fun steeringHistoryBlock(message: SteeringMessage, row: HermesMessage, consumedLines: Set<Pair<Long, Int>>): IntRange? {
     val boundary = message.existingIds.filter { it > 0 && it < 1_000_000_000_000L }.maxOrNull() ?: 0L
     val eligible = !rejectedSteering(message) &&
-        row.role == "user" && row.serverId > boundary && row.serverId !in message.existingIds &&
+        row.role == "user" && (row.nativeId != null || row.serverId > boundary) && row.serverId !in message.existingIds &&
             (row.requestKey == message.key || message.delivery == "已送达" && row.requestKey == null && message.timestamp != null &&
                 // 只保留下界：插话在网关队列里可能排队很久才被合并入库（实测 11 分钟），
                 // 上界会把这种合法延迟挡掉。新行保护由 existingIds 边界承担。

@@ -9,7 +9,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="RemoteTool">
     <link rel="manifest" href="~/manifest.webmanifest" asp-append-version="true" />
-    <link rel="apple-touch-icon" href="~/mobile/icon-192.png" />
+    <link rel="apple-touch-icon" href="~/mobile/app-icon-192.png" />
     <title>@ViewBag.Title · RemoteTool</title>
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/helper/lib/viewuiplus.css" asp-append-version="true" />
@@ -55,14 +55,15 @@
         <a href="/#/desktop" data-mobile-nav="desktop"><img src="/icons/desktop_windows.svg" alt=""><span>远程</span></a>
         <a href="/#/codex" data-mobile-nav="codex"><img src="/icons/codex.png" alt=""><span>Codex</span></a>
         <a href="/#/hermes" data-mobile-nav="hermes"><img src="/icons/hermes.svg" alt=""><span>Hermes</span></a>
+        <a href="/#/files" data-mobile-nav="files"><img src="/icons/folder.svg" alt=""><span>文件</span></a>
         <button type="button" data-mobile-nav="more" aria-haspopup="dialog" aria-controls="mobile-tools"><svg class="mobile-more-icon" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><circle cx="6" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="18" cy="12" r="1.5" fill="currentColor"/></svg><span>更多</span></button>
     </nav>
     <dialog id="mobile-tools" class="mobile-tools" aria-labelledby="mobile-tools-title">
-        <header><div><small>当前设备 · @Environment.MachineName</small><h2 id="mobile-tools-title">更多功能</h2></div><button type="button" data-close-tools aria-label="关闭更多功能">×</button></header>
+        <header><div><small>当前设备 · @Environment.MachineName</small><h2 id="mobile-tools-title">更多功能</h2></div><div class="mobile-tools-header-actions"><button type="button" data-mobile-action="customize" class="mobile-nav-edit">编辑导航</button><button type="button" data-close-tools aria-label="关闭更多功能">×</button></div></header>
         <div class="mobile-tools-list">
             <a href="/#/"><img src="/icons/home.svg" alt=""><span><strong>设备概览</strong><small>常用功能与任务概况</small></span><span aria-hidden="true">›</span></a>
+            <a href="/#/claude"><img src="/icons/claude-code.svg" alt=""><span><strong>Claude Code</strong><small>官方 Claude 本机会话</small></span><span aria-hidden="true">›</span></a>
             <a href="/#/storage"><img src="/icons/folder.svg" alt=""><span><strong>空间管理</strong><small>存储占用与清理</small></span><span aria-hidden="true">›</span></a>
-            <a href="/#/files"><img src="/icons/folder.svg" alt=""><span><strong>文件管理</strong><small>浏览、上传与下载</small></span><span aria-hidden="true">›</span></a>
             <a href="/#/terminal"><img src="/icons/terminal.svg" alt=""><span><strong>命令终端</strong><small>交互式 Shell</small></span><span aria-hidden="true">›</span></a>
             <a href="/#/docker"><img src="/icons/layers.svg" alt=""><span><strong>Docker</strong><small>容器、镜像与 Compose</small></span><span aria-hidden="true">›</span></a>
             <a href="/#/cloudflare"><img src="/icons/layers.svg" alt=""><span><strong>Cloudflare</strong><small>DNS、R2、D1 与隧道</small></span><span aria-hidden="true">›</span></a>
@@ -74,9 +75,21 @@
             <button type="button" data-mobile-action="logout"><span aria-hidden="true">↪</span><span><strong>退出登录</strong></span></button>
         </div>
     </dialog>
+    <dialog id="mobile-nav-editor" class="mobile-tools mobile-nav-editor" aria-labelledby="mobile-nav-editor-title">
+        <header><div><small>前 5 个入口显示在底栏，其余收进更多</small><h2 id="mobile-nav-editor-title">自定义底部导航</h2></div><button type="button" data-nav-cancel aria-label="取消编辑导航">×</button></header>
+        <p class="mobile-nav-editor-hint">拖动手柄调整顺序，也可以使用上下移动按钮。设置保存在当前浏览器。</p>
+        <ol id="mobile-nav-editor-list" aria-label="导航顺序"></ol>
+        <p id="mobile-nav-editor-status" role="status" aria-live="polite"></p>
+        <footer><button type="button" data-nav-reset>恢复默认</button><button type="button" data-nav-cancel>取消</button><button type="button" data-nav-save class="mobile-nav-save">保存</button></footer>
+    </dialog>
+    <dialog id="keyboard-diagnostics" class="mobile-tools" aria-labelledby="keyboard-diagnostics-title">
+        <header><h2 id="keyboard-diagnostics-title">键盘诊断</h2><button type="button" data-close-keyboard aria-label="关闭键盘诊断">×</button></header>
+        <div class="keyboard-diagnostics-body"><p>先在聊天框呼出键盘，再打开此页。记录不包含消息、账号或凭据。</p><textarea id="keyboard-diagnostics-text" readonly aria-label="键盘诊断记录"></textarea><button type="button" data-copy-keyboard>复制诊断</button></div>
+    </dialog>
     <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
     @RenderSection("Scripts", required: false)
     <script src="~/js/site.js" asp-append-version="true"></script>
+    <script src="~/js/mobile-navigation.js" asp-append-version="true"></script>
     <script src="~/js/server-update.js" asp-append-version="true"></script>
     <script src="~/js/workspace-router.js" asp-append-version="true"></script>
 </body>

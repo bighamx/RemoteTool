@@ -330,6 +330,10 @@
     background: color-mix(in srgb, var(--accent-danger) 9%, var(--bg-secondary))
 }
 
+.agent-banner.error strong {
+    color: inherit
+}
+
 .agent-banner-warn {
     color: var(--accent-warning);
     font-weight: 600
@@ -431,6 +435,7 @@
 }
 
 .agent-message {
+    max-width: 100%;
     margin: 0 0 18px
 }
 
@@ -1539,10 +1544,10 @@
 }
 
 .agent-session-item {
-    min-height: 104px;
-    gap: 8px;
+    min-height: 0;
+    gap: 4px;
     margin: 7px 0;
-    padding: 14px 15px;
+    padding: 12px 15px 13px;
     border: 1px solid var(--border-color);
     border-radius: 16px;
     background: var(--bg-secondary);
@@ -2684,3 +2689,14 @@
 .agent-patch-log{margin-top:12px;max-height:220px;overflow:auto;background:rgba(0,0,0,.25);padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap}
 .agent-patch-detail{opacity:.58;font-size:11px}
 .agent-patch-state.is-incompatible{color:#8b949e}
+
+
+/* Claude AskUserQuestion: inline options with a free-text fallback. */
+.agent-approval-questions{display:flex;flex-direction:column;gap:10px;width:100%}
+.agent-approval-question{display:flex;flex-direction:column;gap:6px}
+.agent-approval-question small{font-weight:400;opacity:.7;margin-left:4px}
+.agent-approval-options{display:flex;flex-wrap:wrap;gap:6px}
+.agent-approval-options button{border:1px solid var(--border-color,#8886);border-radius:999px;padding:4px 12px;background:transparent;color:inherit;cursor:pointer;font:inherit}
+.agent-approval-options button.picked{border-color:var(--accent-primary,#6dbfb0);background:color-mix(in srgb,var(--accent-primary,#6dbfb0) 18%,transparent)}
+.agent-approval-question input{border:1px solid var(--border-color,#8886);border-radius:8px;padding:6px 8px;background:transparent;color:inherit;font:inherit}
+.agent-approval-actions{display:flex;gap:8px}

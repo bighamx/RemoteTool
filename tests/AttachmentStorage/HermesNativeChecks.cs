@@ -87,18 +87,18 @@ internal static class HermesNativeChecks {
             var legacy=View(20,legacyText);
             Check(legacy["attachments"].AsArray().Count==1,"uploaded copy and Hermes cache copy of one image collapse to a single card");
             Check(legacy["attachments"][0]["uploadId"]?.ToString()==upload["id"].ToString(),"the surviving card is the uploaded original");
-            // Real /v1/runs input -> Hermes text-only persistence -> a fresh
+            // Multimodal input -> Hermes canonical image reference -> a fresh
             // RemoteTool process. No private attachment binding is available.
             var request=JsonSerializer.SerializeToElement(new {session_id="s",input="reload picture",attachment_ids=new[]{upload["id"].ToString()}});
             var sent=JsonNode.Parse(store.PrepareRun(request,"native-image-roundtrip").GetRawText());
-            var flattened=sent["input"][0]["content"][0]["text"].ToString()+"\n[screenshot]";
+            var flattened=sent["input"][0]["content"][0]["text"].ToString()+"\n[Image attached at: "+cachedPath+"]\n[screenshot]";
             using(var db=new SQLiteConnection(Path.Combine(home,"state.db")))
                 db.Execute("INSERT INTO messages VALUES(10,'s','user',?)",flattened);
             var reloaded=new HermesNativeAttachments(profiles,new HermesAttachments("hermes",root));
             var recovered=reloaded.Present("s",new JsonObject { ["data"]=new JsonArray(new JsonObject {
                 ["id"]=10,["role"]="user",["content"]=flattened }) }.ToJsonString())["data"][0];
             Check(recovered["content"].ToString()=="reload picture" && recovered["attachments"].AsArray().Count==1,
-                "text-only native persistence retains exactly one caption and picture after reload");
+                "canonical native persistence retains exactly one caption and picture after reload");
             Check(File.ReadAllBytes(reloaded.Resolve("s",recovered["attachments"][0]["id"].ToString()).Path).SequenceEqual(bytes),
                 "reloaded picture card downloads the original bytes without local App state");
             var blob=Path.Combine(home,"cache","documents","native-inputs",new string('a',64));
