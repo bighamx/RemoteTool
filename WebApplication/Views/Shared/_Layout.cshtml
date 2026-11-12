@@ -1,5 +1,6 @@
+@inject RemoteTool.WebApi.Services.WebAssetVersion WebAssets
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" class="ui-m3" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
@@ -16,10 +17,11 @@
     <link rel="stylesheet" href="~/css/shell.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/mobile.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/server-update.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/m3.css" asp-append-version="true" />
     <script src="~/helper/lib/vue.global.prod.js" asp-append-version="true"></script>
     <script src="~/helper/lib/viewuiplus.min.js" asp-append-version="true"></script>
 </head>
-<body data-build="@RemoteTool.WebApi.Services.ServerBuild.AssetVersion">
+<body data-build="@WebAssets.Value">
     <div class="app-shell">
         <aside class="app-sidebar" id="app-sidebar" aria-label="主导航">
             <a class="app-brand" href="/"><span class="app-brand-mark">R</span><span><strong>RemoteTool</strong><small>工作台</small></span></a>
@@ -61,7 +63,6 @@
         <div class="mobile-tools-list">
             <a href="/#/"><img src="/icons/home.svg" alt=""><span><strong>设备概览</strong><small>常用功能与任务概况</small></span><span aria-hidden="true">›</span></a>
             <a href="/#/claude"><img src="/icons/claude-code.svg" alt=""><span><strong>Claude Code</strong><small>官方 Claude 本机会话</small></span><span aria-hidden="true">›</span></a>
-            <a href="/#/phone-tools"><img src="/icons/smartphone.svg" alt=""><span><strong>手机工具</strong><small>在线手机、工具与 MCP 连接</small></span><span aria-hidden="true">›</span></a>
             <a href="/#/storage"><img src="/icons/folder.svg" alt=""><span><strong>空间管理</strong><small>存储占用与清理</small></span><span aria-hidden="true">›</span></a>
             <a href="/#/terminal"><img src="/icons/terminal.svg" alt=""><span><strong>命令终端</strong><small>交互式 Shell</small></span><span aria-hidden="true">›</span></a>
             <a href="/#/docker"><img src="/icons/layers.svg" alt=""><span><strong>Docker</strong><small>容器、镜像与 Compose</small></span><span aria-hidden="true">›</span></a>
@@ -70,7 +71,6 @@
             <a href="/#/processes"><img src="/icons/memory.svg" alt=""><span><strong>进程管理</strong><small>资源占用与进程操作</small></span><span aria-hidden="true">›</span></a>
             <a href="/#/identity"><img src="/icons/shield.svg" alt=""><span><strong>身份验证</strong><small>OIDC 与 Cloudflare Access</small></span><span aria-hidden="true">›</span></a>
             <button type="button" data-mobile-action="reload"><span aria-hidden="true">↻</span><span><strong>重新加载界面</strong><small>加载最新版本</small></span></button>
-            <button type="button" data-mobile-action="keyboard"><span aria-hidden="true">⌨</span><span><strong>键盘诊断</strong><small>keyboard-unreported-4 · 仅记录窗口尺寸</small></span></button>
             <button type="button" data-mobile-action="theme"><span aria-hidden="true">◐</span><span><strong>切换深浅主题</strong></span></button>
             <button type="button" data-mobile-action="logout"><span aria-hidden="true">↪</span><span><strong>退出登录</strong></span></button>
         </div>

@@ -168,7 +168,9 @@
 }
 <div class="screenshot-controls" style="@(RemoteTool.WebApi.Services.RemoteControl.RemoteDesktopPlatform.Supported ? null : "display:none")">
                 <button id="stream-toggle-btn" class="btn btn-primary btn-sm">▶ 开始</button>
-                <button id="fullscreen-btn" class="btn btn-secondary btn-sm" title="全屏 (F11/Esc退出)">⛶</button>
+                <button id="fullscreen-btn" class="btn btn-secondary btn-sm" type="button" aria-label="进入全屏" title="全屏">⛶</button>
+                <button id="desktop-options-toggle" class="btn btn-secondary btn-sm mobile-only" type="button" aria-expanded="false" aria-controls="desktop-options">画质与按键</button>
+                <div id="desktop-options" class="desktop-options">
                 <span id="mac-zoom-controls" style="display:none">
                     <button id="mac-zoom-out" class="btn btn-secondary btn-sm" type="button" aria-label="缩小桌面画面">－</button>
                     <button id="mac-zoom-reset" class="btn btn-secondary btn-sm" type="button" aria-label="适应窗口">适应</button>
@@ -227,6 +229,7 @@
                 <span id="mac-stream-quality" style="display:none">Mac · H.264 · 最高 1920 宽 · 20 FPS · 双指移动/缩放</span>
                 <span id="stream-mode-indicator" class="mode-indicator">未连接</span>
                 <span id="stream-stats" class="stream-stats" title="实时视频速率、缓冲延迟" aria-hidden="true"></span>
+                </div>
             </div>
             <div class="screenshot-container" id="screenshot-container" tabindex="0" title="点击此处后按键将发送到远程" style="@(RemoteTool.WebApi.Services.RemoteControl.RemoteDesktopPlatform.Supported ? null : "display:none")">
                 <canvas id="stream-canvas"
@@ -235,6 +238,7 @@
                        muted playsinline></video>
                 <img id="stream-img" alt="Remote Screen (MJPEG Legacy)" style="cursor: crosshair; display: none;">
                 <div id="stream-placeholder" class="placeholder-text">点击"开始控制"以连接远程桌面</div>
+                <button id="fullscreen-exit-btn" class="remote-fullscreen-exit" type="button" aria-label="退出全屏">退出全屏</button>
                 <div id="fullscreen-exit-hint" class="fullscreen-exit-hint">按 Esc 或 F11 退出全屏</div>
             </div>
         </div>
@@ -557,12 +561,13 @@
 </div>
 
 <!-- 通用文件选择对话框 -->
-<div id="file-picker-dialog" class="compose-picker-dialog" style="display: none;">
+<div id="file-picker-dialog" class="compose-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="picker-dialog-title" style="display: none;">
     <div class="compose-picker-container">
         <div class="compose-picker-header">
             <h3 id="picker-dialog-title">选择文件</h3>
-            <button type="button" id="picker-close-btn" class="btn btn-secondary">✕</button>
+            <button type="button" id="picker-close-btn" class="btn btn-secondary" aria-label="关闭文件选择">✕</button>
         </div>
+        <p id="picker-description" class="picker-description" hidden></p>
         <div id="picker-breadcrumb" class="picker-breadcrumb"></div>
         <div class="picker-toolbar">
             <button type="button" id="picker-home-btn" class="btn btn-secondary btn-sm">🏠 根</button>
@@ -588,6 +593,7 @@
             <div id="picker-empty" class="picker-empty" style="display: none;">暂无文件</div>
         </div>
         <div class="compose-picker-footer">
+            <p id="picker-message" class="picker-message" role="status" hidden></p>
             <!-- 用于文件夹选择模式的确认按钮 -->
             <button type="button" id="picker-confirm-btn" class="btn btn-primary">确定选择</button>
             <button type="button" id="picker-cancel-btn" class="btn btn-secondary" style="margin-left:10px;">取消</button>

@@ -11,9 +11,8 @@
         system: 'controls', processes: 'processes', desktop: 'screenshot', terminal: 'terminal',
         docker: 'docker', 'docker/images': 'images', 'docker/compose': 'compose', files: 'files'
     };
-    const sources = { claude:'/agents/claude', 'phone-tools':'/phone-tools', storage:'/storage', cloudflare: '/cloudflare', home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
+    const sources = { claude:'/agents/claude', storage:'/storage', cloudflare: '/cloudflare', home: '/', remote: '/remote/index', jobs: '/hangfire', codex: '/agents/codex', hermes: '/agents/hermes', identity: '/settings/auth' };
     const assets = { claude: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-history-cache.js', 'agent-workspace.js'] },
-        'phone-tools':{styles:['workspace-pages.css','phone-tools.css'],scripts:['web-api.js','phone-tools.js']},
         storage: {styles:['workspace-pages.css','storage.css'],scripts:['web-api.js','storage.js']},
         cloudflare: { styles: ['workspace-pages.css', 'cloudflare.css'], scripts: ['web-api.js', 'cloudflare.js'] },
         remote: { styles: ['remote.css', 'performance.css', 'vendor/xterm/xterm.css'], scripts: ['remote-nav.js', 'mp4box.all.min.js', 'performance.js', 'media-preview.js', 'vendor/xterm/xterm.js', 'vendor/xterm/addon-fit.js', 'remote.js'] },
@@ -22,7 +21,7 @@
         hermes: { styles: ['workspace-pages.css', 'agent-workspace.css'], scripts: ['web-api.js', 'web-sse.js', 'vendor/markdown-it/markdown-it.min.js', 'agent-history-cache.js', 'agent-workspace.js'] },
         identity: { styles: ['workspace-pages.css', 'identity-settings.css'], scripts: ['web-api.js', 'oidc-settings.js'] }
     };
-    const titles = { claude:'Claude Code', 'phone-tools':'手机工具', storage:'空间管理', cloudflare: 'Cloudflare', home: '总览', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes', identity: '身份验证' };
+    const titles = { claude:'Claude Code', storage:'空间管理', cloudflare: 'Cloudflare', home: '总览', system: '系统与监控', processes: '进程', desktop: '远程桌面', terminal: '终端', docker: 'Docker', 'docker/images': '镜像', 'docker/compose': 'Compose', files: '文件', jobs: '定时任务', codex: 'Codex', hermes: 'Hermes', identity: '身份验证' };
     const loadedScripts = new Set([...document.scripts].map(script => new URL(script.src, location.href).pathname));
     const loadedStyles = new Set([...document.querySelectorAll('link[rel="stylesheet"]')].map(link => new URL(link.href, location.href).pathname));
     const pendingScripts = new Map();
@@ -35,7 +34,6 @@
 
     const legacy = () => {
         const path = location.pathname.toLowerCase();
-        if (path === '/phone-tools') return 'phone-tools';
         if (path === '/storage') return 'storage';
         if (path === '/cloudflare') return 'cloudflare';
         if (path === '/settings/auth') return 'identity';
@@ -88,12 +86,17 @@
     const page = async key => {
         if (modules.has(key)) return modules.get(key);
         const loading = (async () => {
-            const response = await fetch(sources[key], { credentials: 'same-origin', cache: 'no-store' });
-            if (response.redirected && new URL(response.url).pathname.toLowerCase().startsWith('/account/login')) {
-                location.assign(response.url); throw new Error('登录已过期');
+            const warmed = warmPages.get(key); warmPages.delete(key);
+            let text = warmed ? await warmed.catch(() => null) : null;
+            if (text == null) {
+                const response = await fetch(sources[key], { credentials: 'same-origin', cache: 'no-store' });
+                if (response.redirected && new URL(response.url).pathname.toLowerCase().startsWith('/account/login')) {
+                    location.assign(response.url); throw new Error('登录已过期');
+                }
+                if (!response.ok) throw new Error(`页面加载失败 (${response.status})`);
+                text = await response.text();
             }
-            if (!response.ok) throw new Error(`页面加载失败 (${response.status})`);
-            const html = new DOMParser().parseFromString(await response.text(), 'text/html');
+            const html = new DOMParser().parseFromString(text, 'text/html');
             const body = html.getElementById('main-content');
             if (!body) throw new Error('页面内容不可用');
             const section = document.createElement('section'); section.className = 'workspace-module';
@@ -139,7 +142,7 @@
         pendingStatus.setAttribute('role', 'status'); retry.hidden = true;
         for (const element of main.querySelectorAll(':scope > .workspace-module')) element.hidden = element !== pending;
         main.setAttribute('aria-busy', 'true');
-        document.body.classList.remove('workspace-fitted', 'workspace-agent-visible', 'mobile-chat-active');
+        document.body.classList.remove('workspace-fitted', 'workspace-files-visible', 'workspace-agent-visible', 'mobile-chat-active');
         if (key !== 'remote' && window.remoteControl) {
             window.remoteControl.stopSysInfoAutoRefresh();
             if (window.remoteControl.streamActive) window.remoteControl.stopStream();
@@ -151,6 +154,7 @@
             main.removeAttribute('aria-busy');
             for (const element of main.querySelectorAll(':scope > .workspace-module')) element.hidden = element !== section;
             document.body.classList.toggle('workspace-fitted', route === 'terminal' || route === 'desktop');
+            document.body.classList.toggle('workspace-files-visible', route === 'files');
             document.body.classList.toggle('workspace-agent-visible', key === 'codex' || key === 'hermes' || key === 'claude');
             if (key === 'remote') {
                 const tab = remoteTabs[route];
@@ -201,7 +205,7 @@
             event.preventDefault(); window.RemoteToolWorkspace.remote(params.get('tab') || 'controls', params.get('path') || params.get('composePath'));
         } else {
             const path = url.pathname.toLowerCase();
-            const route = path === '/phone-tools' ? 'phone-tools' : path === '/storage' ? 'storage' : path === '/cloudflare' ? 'cloudflare' : path === '/settings/auth' ? 'identity' : path === '/hangfire' ? 'jobs' : path.startsWith('/agents/') ? (path.includes('claude') ? 'claude' : path.includes('hermes') ? 'hermes' : 'codex') : null;
+            const route = path === '/storage' ? 'storage' : path === '/cloudflare' ? 'cloudflare' : path === '/settings/auth' ? 'identity' : path === '/hangfire' ? 'jobs' : path.startsWith('/agents/') ? (path.includes('claude') ? 'claude' : path.includes('hermes') ? 'hermes' : 'codex') : null;
             if (route) { event.preventDefault(); location.hash = `/${route}`; }
         }
     });
@@ -215,6 +219,28 @@
             : session ? `?session=${encodeURIComponent(session)}` : '';
         location.replace(`/#/${route}${query}`); return;
     }
+    // Over a high-latency tunnel the first visit to a tab used to wait for its HTML, styles and scripts
+    // in sequence. Once the current page is up, fetch the main tabs' markup and warm the HTTP cache for
+    // their (immutable, versioned) assets in the background; nothing is mounted or executed early.
+    const warmPages = new Map();
+    const warmAsset = (name, as) => {
+        const path = name.startsWith('vendor/') ? `/${name}` : `/${as === 'style' ? 'css' : 'js'}/${name}`;
+        if ((as === 'style' ? loadedStyles : loadedScripts).has(path)) return;
+        const link = document.createElement('link'); link.rel = 'prefetch'; link.as = as;
+        link.href = `${path}?v=${encodeURIComponent(document.body?.dataset.build || '')}`;
+        document.head.append(link);
+    };
+    const warm = () => {
+        if (navigator.connection?.saveData) return;
+        for (const key of ['codex', 'remote', 'hermes']) {
+            if (modules.has(key) || warmPages.has(key)) continue;
+            warmPages.set(key, fetch(sources[key], { credentials: 'same-origin', cache: 'no-store' })
+                .then(response => response.ok && !response.redirected ? response.text() : null).catch(() => null));
+            for (const style of assets[key]?.styles || []) warmAsset(style, 'style');
+            for (const script of assets[key]?.scripts || []) warmAsset(script, 'script');
+        }
+    };
+    const scheduleWarm = () => setTimeout(() => (window.requestIdleCallback || (callback => callback()))(warm, { timeout: 4000 }), 1200);
     window.addEventListener('hashchange', show);
-    show();
+    show().finally(() => document.readyState === 'complete' ? scheduleWarm() : window.addEventListener('load', scheduleWarm, { once: true }));
 })();

@@ -41,6 +41,11 @@ class RemoteControl {
         this.previewVideoIndex = -1;
         /** Compose 文件选择器当前路径 */
         this.pickerCurrentPath = null;
+        this.pickerLoadEpoch = 0;
+        this.pickerReady = false;
+        this.pickerSubmitting = false;
+        this.filePanelHistoryId = `file-panel-${Date.now()}-${Math.random()}`;
+        this.filePanelClosing = null;
         // previewObjectUrl 不再需要，视频和图片均通过 URL 直接加载
         this.streamActive = false;
         this.streamZoom = 1;
@@ -84,6 +89,11 @@ class RemoteControl {
         this.moveAckTimer = null;
         // 全屏状态
         this.isFullscreen = false;
+        this.fullscreenEntering = false;
+        this.fullscreenNativeActive = false;
+        this.fullscreenHistoryClosing = false;
+        this.fullscreenHistoryId = `remote-desktop-${Date.now()}`;
+        this.fullscreenAnchor = null;
         // 可编辑的文本文件扩展名列表
         this.editableExtensions = [
             // 代码文件
@@ -333,167 +343,56 @@ class RemoteControl {
     }
     /** 批量复制 */
     handleMultiCopy() {
-        if (this.selectedFiles.size === 0) return;
-        this.clipboardAction = {
-            type: 'copy',
-            paths: Array.from(this.selectedFiles),
-            isDirectoryList: Array.from(this.selectedFiles).map(p => {
-                const file = this.files.find(f => f.path === p);
-                return file ? file.isDirectory : false;
-            })
-        };
-        this.showPasteButton();
-        this.showToast('批量复制已记录，导航到目标目录后粘贴', 'info');
+        this.selectFileDestination('copy');
     }
+
     /** 批量移动 */
     handleMultiMove() {
-        if (this.selectedFiles.size === 0) return;
-        this.clipboardAction = {
-            type: 'move',
-            paths: Array.from(this.selectedFiles),
-            isDirectoryList: Array.from(this.selectedFiles).map(p => {
-                const file = this.files.find(f => f.path === p);
-                return file ? file.isDirectory : false;
-            })
-        };
-        this.showPasteButton();
-        this.showToast('批量移动已记录，导航到目标目录后粘贴', 'info');
-    }
-    /**
-     * 记录复制/移动操作，显示粘贴按钮
-     */
-    setClipboardAction(type, path, isDirectory) {
-        this.clipboardAction = {
-            type,
-            path,
-            isDirectory
-        };
-        this.showPasteButton();
-        this.showToast(`已${type === 'copy' ? '复制' : '剪切'}到剪贴板，导航到目标目录后粘贴`, 'info');
+        this.selectFileDestination('move');
     }
 
-    /**
-     * 显示粘贴按钮
-     */
-    showPasteButton() {
-        let pasteBtn = document.getElementById('paste-btn');
-        if (!pasteBtn) {
-            pasteBtn = document.createElement('button');
-            pasteBtn.id = 'paste-btn';
-            pasteBtn.className = 'btn-icon';
-            pasteBtn.title = '粘贴到当前目录';
-            pasteBtn.innerHTML = '<span class="menu-icon">📥</span>粘贴';
-            pasteBtn.style.marginLeft = '8px';
-            pasteBtn.addEventListener('click', () => this.handlePasteAction());
-            // 插入到文件工具栏
-            const toolbar = document.querySelector('.files-controls');
-            if (toolbar) toolbar.appendChild(pasteBtn);
-        } else {
-            pasteBtn.style.display = 'inline-block';
-        }
-    }
-
-    /**
-     * 隐藏粘贴按钮
-     */
-    hidePasteButton() {
-        const pasteBtn = document.getElementById('paste-btn');
-        if (pasteBtn) pasteBtn.style.display = 'none';
-    }
-
-    /**
-     * 执行粘贴操作
-     */
-    async handlePasteAction() {
-        if (!this.clipboardAction || !this.currentPath) return;
-        const { type, path, isDirectory, paths, isDirectoryList } = this.clipboardAction;
-        let successCount = 0;
-        if (paths && Array.isArray(paths)) {
-            // 批量操作，调用批量接口
-            const items = paths.map((src, i) => ({ Path: src, IsDirectory: isDirectoryList[i] }));
-            const destPath = this.currentPath.replace(/[/\\]$/, '');
-            let url = '', body = {};
-            if (type === 'copy') {
-                url = '/api/files/copy-batch';
-                body = { Items: items, DestPath: destPath, Overwrite: true };
-            } else if (type === 'move') {
-                url = '/api/files/move-batch';
-                body = { Items: items, DestPath: destPath };
+    selectFileDestination(type, path = null, isDirectory = false) {
+        const items = path ? [{ Path: path, IsDirectory: isDirectory }]
+            : Array.from(this.selectedFiles).map(source => ({
+                Path: source,
+                IsDirectory: this.files.find(file => file.path === source)?.isDirectory === true
+            }));
+        if (!items.length || this.pickerSubmitting) return;
+        const label = type === 'copy' ? '复制' : '移动';
+        this.openFilePicker({
+            title: `${label}到目标文件夹`,
+            description: items.length === 1 ? items[0].Path : `已选择 ${items.length} 项`,
+            initialPath: this.currentPath,
+            selectMode: 'folder',
+            confirmText: `${label}到此处`,
+            waitForSelect: true,
+            onSelect: async destination => {
+                this.setPickerMessage(`正在${label}…`);
+                let response, result;
+                try {
+                    const body = { Items: items, DestPath: destination };
+                    if (type === 'copy') body.Overwrite = true;
+                    response = await fetch(`/api/files/${type}-batch`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                    result = await response.json();
+                } catch (error) {
+                    // The server may already have applied a lost response. Require verification before another operation.
+                    this.pickerOptions.onSelect = null;
+                    this.setPickerMessage(`${label}结果未确认，请关闭窗口并刷新核对源目录和目标目录后再操作。`, true);
+                    return false;
+                }
+                if (!response.ok || !result.success || (result.data?.fail > 0 && result.data?.success === 0)) {
+                    this.setPickerMessage(result.message || `${label}失败，请检查目标路径和权限。`, true);
+                    return false;
+                }
+                this.showToast(result.message || `${label}完成`, result.data?.fail > 0 ? 'warning' : 'success');
+                await this.loadFiles(this.currentPath);
+                return true;
             }
-            try {
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${this.token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(body)
-                });
-                const data = await res.json();
-                this.showToast(data.message, data.success ? 'success' : 'error');
-            } catch (e) {
-                this.showToast('批量操作失败', 'error');
-            }
-        } else {
-            // 单项操作
-            let destPath = this.currentPath;
-            const name = path.split(/[\\\/]/).pop();
-            destPath = destPath.replace(/[/\\]$/, '');
-            destPath = destPath ? destPath + '/' + name : name;
-            let result = false;
-            if (type === 'copy') {
-                result = await this.copyFileOrDirectory(path, destPath, isDirectory);
-            } else if (type === 'move') {
-                result = await this.moveFileOrDirectory(path, destPath, isDirectory);
-            }
-            if (result) successCount++;
-            this.showToast(`成功${type === 'copy' ? '复制' : '移动'} ${successCount} 项`, successCount > 0 ? 'success' : 'error');
-        }
-        this.clipboardAction = null;
-        this.hidePasteButton();
-        await this.loadFiles(this.currentPath);
-    }
-
-    /**
-     * 调用后端复制接口
-     */
-    // 单文件复制/移动统一用批量接口实现
-    async copyFileOrDirectory(sourcePath, destPath, isDirectory) {
-        try {
-            const items = [{ Path: sourcePath, IsDirectory: isDirectory }];
-            const body = { Items: items, DestPath: destPath.replace(/[/\\]$/, ''), Overwrite: true };
-            const res = await fetch('/api/files/copy-batch', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(body)
-            });
-            const data = await res.json();
-            return data.success;
-        } catch (e) {
-            return false;
-        }
-    }
-
-    async moveFileOrDirectory(sourcePath, destPath, isDirectory) {
-        try {
-            const items = [{ Path: sourcePath, IsDirectory: isDirectory }];
-            const body = { Items: items, DestPath: destPath.replace(/[/\\]$/, '') };
-            const res = await fetch('/api/files/move-batch', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(body)
-            });
-            const data = await res.json();
-            return data.success;
-        } catch (e) {
-            return false;
-        }
+        });
     }
 
     /**
@@ -681,11 +580,7 @@ class RemoteControl {
             });
         });
 
-        // 全屏按钮事件
-        const fullscreenBtn = document.getElementById('fullscreen-btn');
-        if (fullscreenBtn) {
-            fullscreenBtn.addEventListener('click', () => this.toggleFullscreen());
-        }
+        this.initFullscreen();
 
         // 画质预设下拉框事件
         const qualityPreset = document.getElementById('quality-preset');
@@ -942,12 +837,6 @@ class RemoteControl {
         if (composePickerClose) composePickerClose.addEventListener('click', () => this.closeComposeFilePicker());
         const composePickerCancel = document.getElementById('compose-picker-cancel-btn');
         if (composePickerCancel) composePickerCancel.addEventListener('click', () => this.closeComposeFilePicker());
-        const pickerHomeBtn = document.getElementById('picker-home-btn');
-        if (pickerHomeBtn) pickerHomeBtn.addEventListener('click', () => this.pickerNavigateHome());
-        const pickerBackBtn = document.getElementById('picker-back-btn');
-        if (pickerBackBtn) pickerBackBtn.addEventListener('click', () => this.pickerNavigateBack());
-        const pickerRefreshBtn = document.getElementById('picker-refresh-btn');
-        if (pickerRefreshBtn) pickerRefreshBtn.addEventListener('click', () => this.loadPickerFiles(this.pickerCurrentPath));
         // File Management
         const refreshFilesBtn = document.getElementById('refresh-files-btn');
         if (refreshFilesBtn) {
@@ -1466,47 +1355,108 @@ class RemoteControl {
 
     // 切换全屏
     toggleFullscreen() {
-        if (this.isFullscreen) {
-            this.exitFullscreen();
-        } else {
-            this.enterFullscreen();
-        }
+        return this.isFullscreen ? this.exitFullscreen() : this.enterFullscreen();
     }
 
-    // 进入全屏
-    enterFullscreen() {
-        const container = document.getElementById('screenshot-container');
-        const hint = document.getElementById('fullscreen-exit-hint');
-        const btn = document.getElementById('fullscreen-btn');
-
-        if (container) {
-            container.classList.add('fullscreen');
-            this.isFullscreen = true;
-            this.setStreamZoom(this.streamZoom);
-            if (btn) btn.textContent = '⛶ 退出全屏';
-
-            // 显示退出提示
-            if (hint) {
-                hint.classList.add('show');
-                setTimeout(() => hint.classList.remove('show'), 3000);
+    initFullscreen() {
+        document.getElementById('fullscreen-btn')?.addEventListener('click', () => this.toggleFullscreen());
+        const exit = document.getElementById('fullscreen-exit-btn');
+        exit?.addEventListener('click', () => this.exitFullscreen());
+        exit?.addEventListener('touchstart', event => event.stopPropagation());
+        document.getElementById('desktop-options-toggle')?.addEventListener('click', event => {
+            const controls = event.currentTarget.closest('.screenshot-controls');
+            const expanded = controls.classList.toggle('mobile-controls-expanded');
+            event.currentTarget.setAttribute('aria-expanded', String(expanded));
+        });
+        document.addEventListener('fullscreenchange', () => {
+            if (document.fullscreenElement === document.getElementById('screenshot-container')) {
+                this.fullscreenNativeActive = true;
+            } else if (this.fullscreenNativeActive) {
+                this.fullscreenNativeActive = false;
+                if (this.isFullscreen) void this.exitFullscreen();
             }
+        });
+        window.addEventListener('popstate', () => {
+            if (history.state?.remoteToolDesktopFullscreen === this.fullscreenHistoryId) return;
+            this.fullscreenHistoryClosing = false;
+            if (this.isFullscreen) void this.exitFullscreen(true);
+        });
+        window.addEventListener('workspace-route-change', () => {
+            if (this.isFullscreen && window.RemoteToolWorkspace && !/^#\/desktop(?:\?|$)/.test(location.hash))
+                void this.exitFullscreen(true);
+        });
+    }
 
-            console.log('Entered fullscreen mode');
+    async enterFullscreen() {
+        if (this.isFullscreen || this.fullscreenEntering || this.fullscreenHistoryClosing) return;
+        const container = document.getElementById('screenshot-container');
+        if (!container) return;
+        this.fullscreenEntering = true;
+        this.isFullscreen = true;
+        const mobile = this.isPhoneFileLayout();
+        let hintText = mobile ? '返回或点击右上角退出全屏' : '按 Esc 或点击右上角退出全屏';
+        let hintDuration = 3000;
+        this.fullscreenAnchor = document.createComment('remote-desktop');
+        container.before(this.fullscreenAnchor);
+        document.body.appendChild(container);
+        container.classList.add('fullscreen');
+        document.body.classList.add('remote-desktop-fullscreen');
+        if (mobile) history.pushState({...history.state, remoteToolDesktopFullscreen:this.fullscreenHistoryId}, '', location.href);
+        const btn = document.getElementById('fullscreen-btn');
+        btn?.setAttribute('aria-label', '退出全屏');
+        try {
+            try {
+                if (!container.requestFullscreen) throw new Error('Fullscreen unavailable');
+                await container.requestFullscreen({navigationUI:'hide'});
+            } catch (error) {
+                console.warn('Remote desktop fullscreen request failed', error?.name, error?.message);
+                hintText = '浏览器未允许原生全屏，当前为网页展开模式；' + hintText;
+                hintDuration = 6000;
+            }
+            if (!this.isFullscreen) {
+                if (document.fullscreenElement === container) await document.exitFullscreen();
+                return;
+            }
+            if (mobile && document.fullscreenElement === container) {
+                try {
+                    await screen.orientation.lock('landscape');
+                    if (!this.isFullscreen) screen.orientation.unlock();
+                } catch {
+                    hintText = '请旋转手机横屏；' + hintText;
+                    hintDuration = 6000;
+                }
+            }
+            if (!this.isFullscreen) return;
+            this.setStreamZoom(this.streamZoom);
+            const hint = document.getElementById('fullscreen-exit-hint');
+            if (hint) {
+                hint.textContent = hintText;
+                hint.classList.add('show');
+                setTimeout(() => hint.classList.remove('show'), hintDuration);
+            }
+        } finally {
+            this.fullscreenEntering = false;
         }
     }
 
-    // 退出全屏
-    exitFullscreen() {
+    async exitFullscreen(fromHistory = false) {
+        if (!this.isFullscreen) return;
+        this.isFullscreen = false;
         const container = document.getElementById('screenshot-container');
-        const btn = document.getElementById('fullscreen-btn');
-
-        if (container) {
-            container.classList.remove('fullscreen');
-            this.isFullscreen = false;
-            this.setStreamZoom(this.streamZoom);
-            if (btn) btn.textContent = '⛶ 全屏';
-
-            console.log('Exited fullscreen mode');
+        if (document.fullscreenElement === container) {
+            try { await document.exitFullscreen(); } catch {}
+        }
+        try { screen.orientation?.unlock(); } catch {}
+        container?.classList.remove('fullscreen');
+        document.body.classList.remove('remote-desktop-fullscreen');
+        this.fullscreenAnchor?.replaceWith(container);
+        this.fullscreenAnchor = null;
+        this.fullscreenNativeActive = false;
+        this.setStreamZoom(this.streamZoom);
+        document.getElementById('fullscreen-btn')?.setAttribute('aria-label', '进入全屏');
+        if (!fromHistory && history.state?.remoteToolDesktopFullscreen === this.fullscreenHistoryId) {
+            this.fullscreenHistoryClosing = true;
+            history.back();
         }
     }
 
@@ -2560,7 +2510,7 @@ class RemoteControl {
         const container = document.getElementById('screenshot-container');
         if (!container) return false;
         const el = document.activeElement;
-        return el === container || container.contains(el);
+        return !el?.closest?.('.remote-fullscreen-exit') && (el === container || container.contains(el));
     }
 
     handleRemoteKeydown(e) {
@@ -4016,6 +3966,14 @@ volumes:
     // ============ 通用文件选择对话框（树形/列表） ============
 
     initFilePicker() {
+        window.addEventListener('popstate', () => {
+            if (history.state?.remoteToolFilePanel === this.filePanelHistoryId) return;
+            if (this.pickerSubmitting) { this.startFilePanelHistory(); return; }
+            this.hideContextMenu(true);
+            this.closeFilePicker(true);
+            this.closePreview(true);
+            this.filePanelCloseResolve?.();
+        });
         // 绑定关闭按钮
         const closeBtn = document.getElementById('picker-close-btn');
         if (closeBtn) closeBtn.addEventListener('click', () => this.closeFilePicker());
@@ -4037,12 +3995,71 @@ volumes:
         // 绑定确认按钮 (文件夹模式)
         const confirmBtn = document.getElementById('picker-confirm-btn');
         if (confirmBtn) {
-            confirmBtn.addEventListener('click', () => {
-                if (this.pickerOptions && this.pickerOptions.onSelect && this.pickerOptions.selectMode === 'folder') {
-                    this.pickerOptions.onSelect(this.pickerCurrentPath);
-                    this.closeFilePicker();
-                }
-            });
+            confirmBtn.addEventListener('click', () => this.confirmFilePicker());
+        }
+    }
+
+    startFilePanelHistory() {
+        if (!this.isPhoneFileLayout() || history.state?.remoteToolFilePanel === this.filePanelHistoryId) return;
+        history.pushState({ ...history.state, remoteToolFilePanel: this.filePanelHistoryId }, '', location.href);
+    }
+
+    closeFilePanelHistory() {
+        if (this.filePanelClosing) return this.filePanelClosing;
+        if (history.state?.remoteToolFilePanel !== this.filePanelHistoryId) return Promise.resolve();
+        this.filePanelClosing = new Promise(resolve => {
+            this.filePanelCloseResolve = () => {
+                this.filePanelClosing = null;
+                this.filePanelCloseResolve = null;
+                resolve();
+            };
+            history.back();
+        });
+        return this.filePanelClosing;
+    }
+
+    setPickerMessage(text = '', error = false) {
+        const message = document.getElementById('picker-message');
+        if (!message) return;
+        message.textContent = text;
+        message.classList.toggle('is-error', error);
+        message.hidden = !text;
+    }
+
+    updatePickerControls() {
+        const dialog = document.getElementById('file-picker-dialog');
+        const uncertain = this.pickerOptions?.waitForSelect && !this.pickerOptions.onSelect;
+        dialog?.querySelectorAll('button').forEach(button => {
+            button.disabled = this.pickerSubmitting || (uncertain && !['picker-close-btn', 'picker-cancel-btn'].includes(button.id));
+        });
+        const confirm = document.getElementById('picker-confirm-btn');
+        if (confirm) {
+            confirm.disabled = this.pickerSubmitting || !this.pickerReady || !this.pickerCurrentPath || !this.pickerOptions?.onSelect;
+            confirm.textContent = this.pickerSubmitting ? '处理中…' : this.pickerOptions?.confirmText || '确定选择';
+        }
+    }
+
+    async confirmFilePicker() {
+        const options = this.pickerOptions;
+        if (!options?.onSelect || options.selectMode !== 'folder' || !this.pickerReady || !this.pickerCurrentPath || this.pickerSubmitting) return;
+        const path = this.pickerCurrentPath;
+        if (!options.waitForSelect) {
+            await this.closeFilePicker();
+            await options.onSelect(path);
+            return;
+        }
+        this.pickerSubmitting = true;
+        this.updatePickerControls();
+        try {
+            const completed = await options.onSelect(path);
+            this.pickerSubmitting = false;
+            if (completed !== false) await this.closeFilePicker();
+        } catch (error) {
+            options.onSelect = null;
+            this.setPickerMessage('操作结果未确认，请关闭窗口并刷新核对后再操作。', true);
+        } finally {
+            this.pickerSubmitting = false;
+            this.updatePickerControls();
         }
     }
 
@@ -4050,20 +4067,30 @@ volumes:
      * 打开通用文件选择器
      * @param options { title, initialPath, selectMode: 'file'|'folder', onSelect: (path) => void }
      */
-    openFilePicker(options = {}) {
+    async openFilePicker(options = {}) {
+        if (this.pickerSubmitting) return;
+        await this.filePanelClosing;
         const dialog = document.getElementById('file-picker-dialog');
         if (!dialog) return;
+        if (dialog.parentElement !== document.body) document.body.appendChild(dialog);
 
         this.pickerOptions = {
             title: options.title || '选择文件',
             initialPath: options.initialPath || null,
             selectMode: options.selectMode || 'file', // 'file' or 'folder'
-            onSelect: options.onSelect || null
+            onSelect: options.onSelect || null,
+            confirmText: options.confirmText || '确定选择',
+            waitForSelect: options.waitForSelect === true
         };
 
         // 更新标题
         const titleEl = document.getElementById('picker-dialog-title');
         if (titleEl) titleEl.textContent = this.pickerOptions.title;
+        const description = document.getElementById('picker-description');
+        if (description) {
+            description.textContent = options.description || '';
+            description.hidden = !options.description;
+        }
 
         // 设置初始路径
         if (this.pickerOptions.initialPath) {
@@ -4073,7 +4100,7 @@ volumes:
             // 如果 selectMode=folder，initialPath 视为目录
             if (this.pickerOptions.selectMode === 'file' && !normalized.endsWith('/')) {
                 const lastSlash = normalized.lastIndexOf('/');
-                this.pickerCurrentPath = lastSlash > 0 ? normalized.substring(0, lastSlash) : null;
+                this.pickerCurrentPath = lastSlash >= 0 ? normalized.substring(0, lastSlash + (lastSlash === 0 ? 1 : 0)) : null;
             } else {
                 this.pickerCurrentPath = normalized;
             }
@@ -4082,19 +4109,22 @@ volumes:
         }
 
         // 显示/隐藏 文件夹选择确认区
-        const footerActions = document.getElementById('picker-footer-actions');
-        if (footerActions) {
-            footerActions.style.display = this.pickerOptions.selectMode === 'folder' ? 'flex' : 'none';
-        }
+        document.getElementById('picker-confirm-btn').hidden = this.pickerOptions.selectMode !== 'folder';
 
         dialog.style.display = 'flex';
+        this.startFilePanelHistory();
         this.loadPickerFiles(this.pickerCurrentPath);
     }
 
-    closeFilePicker() {
+    closeFilePicker(preserveHistory = false) {
+        if (this.pickerSubmitting) return;
+        const open = !!this.pickerOptions;
         const dialog = document.getElementById('file-picker-dialog');
         if (dialog) dialog.style.display = 'none';
         this.pickerOptions = null;
+        ++this.pickerLoadEpoch;
+        this.pickerReady = false;
+        return open && !preserveHistory ? this.closeFilePanelHistory() : Promise.resolve();
     }
 
     /** 打开 Compose 文件选择对话框，复用文件列表 API (兼容旧接口) */
@@ -4116,6 +4146,13 @@ volumes:
     }
 
     async loadPickerFiles(path = null) {
+        if (this.pickerSubmitting || !this.pickerOptions) return;
+        const epoch = ++this.pickerLoadEpoch;
+        this.pickerReady = false;
+        this.pickerCurrentPath = path || null;
+        this.updatePickerBreadcrumb(this.pickerCurrentPath);
+        this.setPickerMessage();
+        this.updatePickerControls();
         const listEl = document.getElementById('picker-files-list');
         const loadingEl = document.getElementById('picker-loading');
         const emptyEl = document.getElementById('picker-empty');
@@ -4133,30 +4170,36 @@ volumes:
             const response = await fetch(url, {
                 headers: { 'Authorization': `Bearer ${this.token}` }
             });
-
-            loadingEl.style.display = 'none';
+            if (epoch !== this.pickerLoadEpoch) return;
 
             if (response.ok) {
                 const result = await response.json();
-                this.pickerCurrentPath = path || null;
-                this.updatePickerBreadcrumb(this.pickerCurrentPath);
-                this.renderPickerList(result.data || [], listEl, emptyEl);
+                if (epoch !== this.pickerLoadEpoch) return;
+                if (result.success === false) throw new Error(result.message || '加载失败');
+                const files = this.pickerOptions.selectMode === 'folder' ? (result.data || []).filter(file => file.isDirectory) : result.data || [];
+                this.renderPickerList(files, listEl, emptyEl);
+                this.pickerReady = true;
             } else {
                 emptyEl.textContent = '加载失败';
                 emptyEl.style.display = 'block';
+                this.setPickerMessage(`无法读取此目录（HTTP ${response.status}），请选择其他目录或重试。`, true);
             }
         } catch (err) {
-            loadingEl.style.display = 'none';
+            if (epoch !== this.pickerLoadEpoch) return;
             emptyEl.textContent = '加载失败: ' + (err.message || '');
             emptyEl.style.display = 'block';
         } finally {
-            this.setRefreshState('picker-refresh-btn', false);
+            if (epoch === this.pickerLoadEpoch) {
+                loadingEl.style.display = 'none';
+                this.setRefreshState('picker-refresh-btn', false);
+                this.updatePickerControls();
+            }
         }
     }
 
     renderPickerList(files, listEl, emptyEl) {
         if (!files || files.length === 0) {
-            emptyEl.textContent = '暂无文件';
+            emptyEl.textContent = this.pickerOptions?.selectMode === 'folder' ? '此目录没有子文件夹，可选择当前文件夹' : '暂无文件';
             emptyEl.style.display = 'block';
             return;
         }
@@ -4204,11 +4247,12 @@ volumes:
 
             const selectBtn = row.querySelector('.picker-select-btn');
             if (selectBtn) {
-                selectBtn.addEventListener('click', (e) => {
+                selectBtn.addEventListener('click', async (e) => {
                     e.stopPropagation();
                     if (this.pickerOptions && this.pickerOptions.onSelect) {
-                        this.pickerOptions.onSelect(path);
-                        this.closeFilePicker();
+                        const options = this.pickerOptions;
+                        await this.closeFilePicker();
+                        options.onSelect(path);
                     }
                 });
             }
@@ -4238,14 +4282,21 @@ volumes:
         homeBtn.addEventListener('click', () => this.pickerNavigateHome());
         container.appendChild(homeBtn);
 
-        if (path && path !== '' && path !== '/') {
+        if (path) {
             const normalizedPath = path.replace(/\\/g, '/');
             const parts = normalizedPath.split('/').filter(p => p !== '');
+            const prefix = normalizedPath.startsWith('//') ? '//' : normalizedPath.startsWith('/') ? '/' : '';
+            if (normalizedPath === '/') {
+                const root = document.createElement('button');
+                root.type = 'button'; root.className = 'breadcrumb-item'; root.textContent = '/';
+                root.addEventListener('click', () => this.loadPickerFiles('/'));
+                container.appendChild(root);
+            }
 
             parts.forEach((part, index) => {
                 const sep = document.createElement('span');
                 sep.className = 'breadcrumb-separator';
-                sep.textContent = ' \\ ';
+                sep.textContent = prefix ? ' / ' : ' \\ ';
                 container.appendChild(sep);
 
                 const item = document.createElement('button');
@@ -4256,12 +4307,13 @@ volumes:
                     item.addEventListener('click', () => this.loadPickerFiles(part + '\\'));
                 } else {
                     item.textContent = part;
-                    const fullPath = parts.slice(0, index + 1).join('/');
+                    const fullPath = prefix + parts.slice(0, index + 1).join('/');
                     item.addEventListener('click', () => this.loadPickerFiles(fullPath));
                 }
                 container.appendChild(item);
             });
         }
+        container.scrollLeft = container.scrollWidth;
     }
 
     pickerNavigateHome() {
@@ -4270,14 +4322,14 @@ volumes:
 
     pickerNavigateBack() {
         if (!this.pickerCurrentPath) return;
-        const normalized = this.pickerCurrentPath.replace(/\\/g, '/');
-        if (normalized.match(/^[A-Za-z]:\/$/)) {
+        const normalized = this.pickerCurrentPath.replace(/\\/g, '/').replace(/\/+$/, '') || '/';
+        if (normalized === '/' || /^[A-Za-z]:$/.test(normalized) || /^\/\/[^/]+\/[^/]+$/.test(normalized)) {
             this.loadPickerFiles(null);
             return;
         }
         const lastSlash = normalized.lastIndexOf('/');
-        if (lastSlash > 0) {
-            const parent = normalized.substring(0, lastSlash);
+        if (lastSlash >= 0) {
+            const parent = normalized.substring(0, lastSlash) || '/';
             this.loadPickerFiles(parent.match(/^[A-Za-z]:$/) ? parent + '\\' : parent);
         } else {
             this.loadPickerFiles(null);
@@ -4801,7 +4853,7 @@ volumes:
         }
 
         const phoneLayout = this.isPhoneFileLayout();
-        // 手机单击行打开操作面板；文件夹通过面板的“打开文件夹”进入。
+        // 单击进入文件夹或预览图片/视频；操作菜单使用行末按钮或右键打开。
         // 工具栏多选复选框（直接绑定html）
         const multiBox = document.getElementById('multi-select-toggle-btn');
         if (multiBox) {
@@ -4938,6 +4990,8 @@ volumes:
                 } else if (row.classList.contains('folder-row')) {
                     this.selectedFiles = new Set();
                     this.loadFiles(row.dataset.path);
+                } else if (this.isImageFile(row.dataset.name) || this.isVideoFile(row.dataset.name)) {
+                    this.previewFile(row.dataset.path, row.dataset.name);
                 }
             });
         });
@@ -5072,7 +5126,8 @@ volumes:
         return map[ext] || '';
     }
 
-    previewFile(path, name) {
+    async previewFile(path, name) {
+        await this.filePanelClosing;
         if (!path || !name) {
             return;
         }
@@ -5099,7 +5154,8 @@ volumes:
         }
 
         // 清理旧预览
-        this.closePreview();
+        this.closePreview(true);
+        if (previewModal.parentElement !== document.body) document.body.appendChild(previewModal);
 
         previewFilename.textContent = `预览: ${name}`;
         imagePreview.style.display = 'none';
@@ -5161,6 +5217,7 @@ volumes:
 
         downloadBtn.onclick = () => this.downloadFile(path);
         previewModal.style.display = 'flex';
+        this.startFilePanelHistory();
     }
 
     updatePreviewCounter() {
@@ -5254,8 +5311,9 @@ volumes:
         this.updatePreviewNavButtons();
     }
 
-    closePreview() {
+    closePreview(preserveHistory = false) {
         const previewModal = document.getElementById('file-preview');
+        const open = previewModal?.style.display === 'flex';
         const imagePreview = document.getElementById('image-preview');
         const videoPreview = document.getElementById('video-preview');
         const previewImage = document.getElementById('preview-image');
@@ -5295,6 +5353,7 @@ volumes:
         if (videoNavNext) videoNavNext.style.display = 'none';
         const counterEl = document.getElementById('preview-counter');
         if (counterEl) counterEl.style.display = 'none';
+        return open && !preserveHistory ? this.closeFilePanelHistory() : Promise.resolve();
     }
 
     async editFile(path, options = {}) {
@@ -5987,12 +6046,13 @@ volumes:
         });
     }
 
-    showContextMenu(event, path, isDirectory, name, fileSize = 0, isDrive = false) {
+    async showContextMenu(event, path, isDirectory, name, fileSize = 0, isDrive = false) {
         event.preventDefault();
         event.stopPropagation();
+        await this.filePanelClosing;
 
         // 移除已存在的菜单
-        this.hideContextMenu();
+        this.hideContextMenu(true);
 
         if (this.isPhoneFileLayout()) {
             const menu = document.createElement('div');
@@ -6015,8 +6075,8 @@ volumes:
             menu.innerHTML = `<div class="file-sheet-handle"></div><div class="file-sheet-head"><strong>${label}</strong><button type="button" data-close aria-label="关闭">×</button></div><div class="file-sheet-actions">` +
                 actions.map(([action,icon,text]) => `<button type="button" data-menu-action="${action}" class="${action==='delete'?'danger':''}"><span>${icon}</span><span>${text}</span></button>`).join('') +
                 `</div><button type="button" class="file-sheet-done" data-close>取消</button>`;
-            const run = (action) => {
-                this.hideContextMenu();
+            const run = async (action) => {
+                await this.hideContextMenu();
                 switch(action) {
                     case 'open': this.loadFiles(path); break;
                     case 'compose-manage': this.openComposeManager(path); break;
@@ -6025,8 +6085,8 @@ volumes:
                     case 'rename': this.renameFile(path,isDirectory,name,isDrive); break;
                     case 'compress': this.handleCompress([path]); break;
                     case 'decompress': this.handleDecompress(path); break;
-                    case 'copy': this.setClipboardAction('copy',path,isDirectory); break;
-                    case 'move': this.setClipboardAction('move',path,isDirectory); break;
+                    case 'copy': this.selectFileDestination('copy',path,isDirectory); break;
+                    case 'move': this.selectFileDestination('move',path,isDirectory); break;
                     case 'delete': this.deleteFile(path,isDirectory); break;
                     case 'copy-path': this.copyFilePath(path); break;
                 }
@@ -6034,6 +6094,7 @@ volumes:
             menu.querySelectorAll('[data-menu-action]').forEach(button => button.addEventListener('click', () => run(button.dataset.menuAction)));
             menu.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => this.hideContextMenu()));
             document.body.appendChild(menu);
+            this.startFilePanelHistory();
             requestAnimationFrame(() => menu.classList.add('open'));
             return;
         }
@@ -6164,14 +6225,14 @@ volumes:
                         if (multi) {
                             this.handleMultiCopy();
                         } else {
-                            this.setClipboardAction('copy', menuPath, menuIsDirectory);
+                            this.selectFileDestination('copy', menuPath, menuIsDirectory);
                         }
                         break;
                     case 'move':
                         if (multi) {
                             this.handleMultiMove();
                         } else {
-                            this.setClipboardAction('move', menuPath, menuIsDirectory);
+                            this.selectFileDestination('move', menuPath, menuIsDirectory);
                         }
                         break;
                     case 'delete':
@@ -6232,8 +6293,9 @@ volumes:
         contextMenu.style.top = top + 'px';
     }
 
-    showFileViewSheet() {
-        this.hideContextMenu();
+    async showFileViewSheet() {
+        await this.filePanelClosing;
+        this.hideContextMenu(true);
         const current = this.fileSortColumn;
         const nextView = (sort) => {
             this.fileSortColumn = sort;
@@ -6256,6 +6318,7 @@ volumes:
             <button type="button" class="file-sheet-row" data-folder><span>▤ 文件夹始终置顶</span><span class="file-sheet-check">${this.fileGroupFolders?'✓':''}</span></button>
             <button type="button" class="file-sheet-done" data-close>完成</button>`;
         document.body.appendChild(menu);
+        this.startFilePanelHistory();
         menu.querySelectorAll('[data-sort]').forEach(button => button.addEventListener('click', () => nextView(button.dataset.sort)));
         menu.querySelectorAll('[data-order]').forEach(button => button.addEventListener('click', () => {
             this.fileSortAsc = button.dataset.order === 'asc';
@@ -6287,11 +6350,13 @@ volumes:
         } else fallback();
     }
 
-    hideContextMenu() {
+    hideContextMenu(preserveHistory = false) {
         const contextMenu = document.getElementById('context-menu');
         if (contextMenu) {
             contextMenu.remove();
+            if (!preserveHistory) return this.closeFilePanelHistory();
         }
+        return Promise.resolve();
     }
 
     async renameFile(oldPath, isDirectory, currentName, isDrive = false) {

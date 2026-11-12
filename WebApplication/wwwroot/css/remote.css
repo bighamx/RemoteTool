@@ -721,13 +721,21 @@
 .screenshot-container.mac-zoom-enabled { touch-action: none; }
 #mac-zoom-controls { display: inline-flex; gap: 4px; }
 
+.desktop-options{display:contents}
+.screenshot-controls #desktop-options-toggle{display:none}
+.remote-fullscreen-exit{display:none}
+.screenshot-container.fullscreen .placeholder-text{color:#ccc}
+.screenshot-container.fullscreen .fullscreen-exit-hint{top:64px;max-width:calc(100% - 32px);text-align:center}
+body.remote-desktop-fullscreen .mobile-navigation{display:none!important}
+.screenshot-container.fullscreen .remote-fullscreen-exit{display:block;position:absolute;top:max(10px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));z-index:10001;min-height:44px;padding:8px 16px;border:1px solid #fff6;border-radius:22px;background:#000a;color:#fff;cursor:pointer}
 /* 全屏模式样式 */
 .screenshot-container.fullscreen {
     position: fixed;
     top: 0;
     left: 0;
     width: 100vw;
-    height: 100vh;
+    height: 100dvh;
+    max-height: none;
     z-index: 9999;
     padding: 0;
     border-radius: 0;
@@ -2080,6 +2088,8 @@ button.file-toolbar-disabled {
     max-height: calc(100vh - 290px);
 }
 
+.file-row-main small{display:none}
+
 .files-table {
     width: 100%;
     border-collapse: collapse;
@@ -3070,6 +3080,28 @@ button.file-toolbar-disabled {
     flex-shrink: 0;
 }
 
+.picker-description { margin: 10px 16px 0; max-height: 4.5em; overflow: auto; flex-shrink: 0; color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
+.compose-picker-footer { flex-wrap: wrap; gap: 8px; }
+.picker-message { flex-basis: 100%; margin: 0; color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
+.picker-message.is-error { color: var(--accent-danger); }
+.picker-description[hidden],.picker-message[hidden],#picker-confirm-btn[hidden] { display: none; }
+
+@media(max-width:760px),(max-width:1000px) and (max-height:500px) and (pointer:coarse) {
+    .compose-picker-dialog { padding: 12px; }
+    .compose-picker-container { min-height: 0; max-height: calc(var(--mobile-height,100dvh) - 24px); height: min(620px,calc(var(--mobile-height,100dvh) - 24px)); }
+    .compose-picker-header { padding: 10px 14px; gap: 8px; }
+    .compose-picker-header h3 { min-width: 0; font-size: 17px; }
+    .picker-list-container { min-height: 0; }
+    .picker-files-table .picker-type-col,.picker-files-table .picker-date-col { display: none; }
+    .picker-files-table .picker-name-col { overflow-wrap: anywhere; }
+    .picker-files-table .picker-action-col { width: 80px; }
+    .picker-files-table td { padding: 10px 12px; }
+    .picker-breadcrumb { flex-wrap: nowrap; flex-shrink: 0; }
+    .compose-picker-footer { padding: 12px 14px max(12px,env(safe-area-inset-bottom)); }
+    .compose-picker-footer > button { min-height: 44px; }
+    .picker-empty,.picker-loading { width: calc(100% - 32px); text-align: center; }
+}
+
 .compose-editor-container {
     position: relative;
     height: 600px;
@@ -3857,6 +3889,10 @@ input.multi-select-row {
 }
 .preview-content{min-height:0;overflow:hidden;padding:10px}.preview-container{height:90dvh;max-height:90dvh}.preview-header{padding:10px 16px;gap:12px}.preview-header h3{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.preview-image,.preview-video{width:100%;height:100%;object-fit:contain}.preview-image{touch-action:none;user-select:none;cursor:grab}.preview-image:active{cursor:grabbing}.preview-media-error{font-size:12px;color:var(--accent-danger);flex:1;overflow-wrap:anywhere}.preview-footer{gap:12px;flex-wrap:wrap}@media(max-width:600px){.file-preview .preview-container{width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0}.preview-nav-btn{width:36px;height:36px}.preview-prev-btn{left:5px}.preview-next-btn{right:5px}.preview-header{padding:8px 12px}.preview-footer{padding:10px 12px}}
 /* Mobile file browser: high-specificity final rules independent of CSS load order. */
+@media(max-width:760px),(max-width:1000px) and (max-height:500px) and (pointer:coarse) {
+    .file-preview { top: var(--mobile-top,0px); height: var(--mobile-height,100dvh); max-height: var(--mobile-height,100dvh); }
+    .file-preview .preview-container { height: 100%; max-height: 100%; }
+}
 /* Shared mobile table rules are specificity-overridden below; load order is irrelevant. */
 @media(max-width:768px),(max-width:1000px) and (max-height:500px) and (pointer:coarse){
   body #remote-page #files-tab .files-table thead{display:none!important}
@@ -3905,7 +3941,9 @@ body #remote-page .file-row-more{display:none}
   body #remote-page #files-tab #files-list>tr.file-row .file-actions-column{display:flex!important;flex:0 0 46px!important;width:46px!important;justify-content:center!important;padding:0!important}
   body #remote-page #files-tab .file-row-more{display:grid!important;place-items:center!important;width:45px!important;height:52px!important;padding:0!important;border:0!important;border-radius:10px!important;background:transparent!important;color:var(--text-secondary);font-size:26px!important;line-height:1!important}
   body #remote-page #files-tab .file-row-more:active{background:var(--bg-tertiary)!important}
-  body #remote-page #files-tab .file-mobile-dock{display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr));position:fixed;left:0;right:0;bottom:calc(var(--mobile-bottom-offset,0px) + 68px + env(safe-area-inset-bottom,0px));z-index:32;background:var(--bg-secondary);border-top:1px solid var(--border-color);padding:1px 2px}
+  /* Transformed entry animations make the fixed file dock overlap navigation. */
+  body.workspace-files-visible #remote-page.page.active,body.workspace-files-visible #files-tab{animation:none}
+  body #remote-page #files-tab .file-mobile-dock{display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr));position:fixed;left:0;right:0;bottom:calc(var(--mobile-bottom-offset,0px) + var(--mobile-navigation-height,68px) + env(safe-area-inset-bottom,0px));z-index:32;background:var(--bg-secondary);border-top:1px solid var(--border-color);padding:1px 2px}
   body #remote-page #files-tab .file-dock-btn{height:60px;border:0;background:transparent;color:#4e8178;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;border-radius:10px;font:inherit}
   body #remote-page #files-tab .file-dock-btn:active{background:var(--bg-tertiary)}
   body #remote-page #files-tab .file-dock-btn:disabled{opacity:.35}

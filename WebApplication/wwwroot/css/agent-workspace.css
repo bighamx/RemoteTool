@@ -789,12 +789,22 @@
     white-space: nowrap
 }
 
+.agent-context-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 2100;
+    background: rgb(0 0 0 / .32)
+}
+
 .agent-context-menu {
     position: fixed;
     z-index: 2100;
     display: flex;
     flex-direction: column;
     min-width: 170px;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    overflow: hidden;
     padding: 5px;
     border: 1px solid var(--border-color);
     border-radius: 8px;
@@ -802,7 +812,27 @@
     box-shadow: var(--shadow)
 }
 
+.agent-context-head {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 0 8px;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-color)
+}
+
+.agent-context-items {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain
+}
+
 .agent-context-menu button {
+    flex-shrink: 0;
     padding: 9px 11px;
     border: 0;
     border-radius: 5px;
@@ -1697,7 +1727,9 @@
     right: 0;
     z-index: 25;
     display: grid;
+    width: max-content;
     min-width: 168px;
+    max-width: calc(100vw - 20px);
     padding: 6px;
     border: 1px solid var(--border-color);
     border-radius: 13px;
@@ -2653,7 +2685,6 @@
 .agent-patch-detail{opacity:.58;font-size:11px}
 .agent-patch-state.is-incompatible{color:#8b949e}
 
-.agent-phone-options{min-width:0;display:flex;flex-direction:column;gap:8px;border:1px solid var(--border-color);border-radius:12px;padding:12px;margin:10px 0}.agent-phone-options legend{font-size:13px;padding:0 6px}.agent-phone-options select{min-height:40px;width:100%;min-width:0;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-primary);color:var(--text-primary);padding:6px 10px;font:inherit}.agent-phone-picker{display:flex;gap:8px;min-width:0}.agent-phone-picker select{flex:1;width:0}.agent-phone-options .agent-phone-advanced{display:flex;align-items:center;gap:8px}.agent-phone-advanced input{width:auto;min-height:0!important}
 
 /* Claude AskUserQuestion: inline options with a free-text fallback. */
 .agent-approval-questions{display:flex;flex-direction:column;gap:10px;width:100%}

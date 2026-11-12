@@ -1535,7 +1535,7 @@ private fun MessageBubble(
             color =
                 if (role == "user") MaterialTheme.colorScheme.secondaryContainer
                 else MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.widthIn(max = if (hasImages) 268.dp else 600.dp).bubbleTap(openActions),
+            modifier = Modifier.widthIn(max = if (role == "user" && hasImages) 268.dp else 600.dp).bubbleTap(openActions),
         ) {
             SelectionContainer {
                 Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp, top = if (reasoning) 8.dp else 14.dp)) {
