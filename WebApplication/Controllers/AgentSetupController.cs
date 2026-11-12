@@ -9,7 +9,7 @@ using System.Text.Json.Nodes;
 namespace RemoteTool.WebApi.Controllers;
 
 [Authorize,ApiController,Route("api/agent-setup")]
-public sealed class AgentSetupController(IConfiguration configuration,HermesProfiles profiles,HermesManagement management,HermesGatewayAdmin gateway,HermesBridge bridge,CodexInstaller installer,HermesInstaller hermesInstaller):ControllerBase
+public sealed class AgentSetupController(IConfiguration configuration,HermesProfiles profiles,HermesManagement management,HermesGatewayAdmin gateway,HermesBridge bridge,CodexInstaller installer,HermesInstaller hermesInstaller,ClaudeBridge claude):ControllerBase
 {
     [HttpGet("{agent}")]
     public async Task<IActionResult> Status(string agent,[FromQuery]string profile="default",CancellationToken ct=default) {
@@ -34,6 +34,17 @@ public sealed class AgentSetupController(IConfiguration configuration,HermesProf
                     auth=providerMap.Any(p=>p.Value is JsonObject detail&&!string.IsNullOrWhiteSpace(detail["api_key"]?.ToString()));
             }catch(Exception e)when(e is IOException or JsonException){}
             return Ok(auth?Guide(agent,"ready","Codex 已找到","",false):Guide(agent,"sign_in","需要登录或配置模型","请在服务端登录 Codex 官方账号，或在模型设置中配置第三方 Provider。",false));
+        }
+        if(agent=="claude") {
+            if(configuration.GetValue<bool?>("Claude:Enabled")==false)return Ok(ClaudeGuide("disabled","Claude Code 接入未启用","服务端设置了 Claude:Enabled=false。"));
+            try {
+                using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);timeout.CancelAfter(TimeSpan.FromSeconds(20));
+                using var response=await claude.SendAsync(HttpMethod.Get,"setup",null,timeout.Token);
+                var payload=JsonNode.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+                if(!response.IsSuccessStatusCode)return Ok(ClaudeGuide("not_running","Claude 桥接未就绪",payload?["message"]?.ToString()??"请检查服务端 Claude 桥接。"));
+                return Ok(payload?["ready"]?.GetValue<bool>()==true?ClaudeGuide("ready","Claude Code 已登录",""):ClaudeGuide("sign_in","需要登录 Claude Code",payload?["message"]?.ToString()??""));
+            }catch(InvalidOperationException e){return Ok(ClaudeGuide("not_installed","Claude Code 尚未就绪",e.Message));}
+            catch(Exception e)when(e is HttpRequestException or IOException or OperationCanceledException or JsonException){return Ok(ClaudeGuide("not_running","Claude 桥接未响应","请稍后重新检测。"));}
         }
         if(agent!="hermes")return NotFound();
         if(hermesInstaller.Current.Busy)return Ok(Guide(agent,"installing","正在安装 Hermes",hermesInstaller.Current.Message,false));
@@ -69,6 +80,10 @@ public sealed class AgentSetupController(IConfiguration configuration,HermesProf
                 :"服务端缺少 Hermes API 接入或管理组件。请先安装并完成初始设置。",managed&&profile=="default"));
         return Ok(Guide(agent,"not_running","Hermes API 未连接","配置已找到，但本地 API 未响应。请启动网关，或使用安全重启后重新检测。",managed&&profile=="default"));
     }
+    private static object ClaudeGuide(string state,string title,string message)=>new{
+        agent="claude",state,title,message,canConfigureApi=false,canInstall=false,install=(object)null,
+        installationNote="RemoteTool 使用官方 Claude Agent SDK 驱动本机 Claude Code；不会代为登录、复制凭据或修改你的 Claude 配置。检测只读取安装与登录状态，不发送提示词。",
+        steps=new[]{"在运行 RemoteTool 的系统用户下安装官方 Claude Code（claude 命令）和 Node.js 20+。","在该用户下执行 claude auth login，并用 claude auth status 确认已登录。","在服务端 claude 目录（源码为 WebApplication/Tools/ClaudeBridge）执行 npm ci --omit=dev --omit=optional。","如程序不在默认位置，配置 Claude:Executable / Claude:NodeExecutable 的绝对路径。","返回这里重新检测。"}};
     private object Guide(string agent,string state,string title,string message,bool canConfigure,bool? canInstall=null){
         var installable=canInstall??(agent=="codex"?installer.CanInstall:hermesInstaller.CanInstall);
         return new {

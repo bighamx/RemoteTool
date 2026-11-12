@@ -13,6 +13,7 @@ internal abstract class AppEdition {
     open fun openUpdates() = Unit
     open fun normalizeRoute(route: String): String = route
     open fun ownsToolbar(route: String): Boolean = false
+    open fun isNavigationRoute(route: String): Boolean = false
     open fun pageTitle(route: String): String = route
     open fun shareId(deviceId: String?): String? = null
     open fun shareRoute(deviceId: String?): String? = null
@@ -20,6 +21,7 @@ internal abstract class AppEdition {
     @Composable open fun UpdateHost() = Unit
     @Composable open fun Navigation(route: String, deviceName: String, onRoute: (String) -> Unit) = Unit
     @Composable open fun ShareChooser(api: NativeApi, deviceId: String, deviceName: String, changeDevice: () -> Unit) = Unit
+    @Composable open fun ToolbarActions(route: String) = Unit
     @Composable open fun MoreItems(onDetail: (String) -> Unit) = Unit
     @Composable open fun Page(route: String, api: NativeApi, deviceId: String, error: (String) -> Unit,
         onDetail: (String) -> Unit, onClose: () -> Unit): Boolean = false

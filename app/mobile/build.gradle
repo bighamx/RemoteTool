@@ -25,6 +25,9 @@ def automaticBuildCode = sourceCount.isInteger() ? versioning.versionCodeBase.to
 def appBuildCode = providers.gradleProperty('buildVersionCode').map { it.toInteger() }.orElse(automaticBuildCode).get()
 def appVersionName = { String base -> buildChannel == 'stable' ? base : "${base}-dev.${sourceHash ?: 'unknown'}" }
 
+// Optional side-by-side Claude trial; normal full/phone packages remain unchanged.
+def claudeTrial = providers.gradleProperty('claudeTrial').orElse('false').get().toBoolean()
+
 android {
     namespace 'com.chuckiehelper.mobile'
     compileSdk 34
@@ -39,13 +42,13 @@ android {
     productFlavors {
         full {
             dimension 'edition'
-            applicationId 'com.chuckiehelper.mobile'
+            applicationId claudeTrial ? 'com.chuckiehelper.mobile.claudetrial' : 'com.chuckiehelper.mobile'
             versionCode appBuildCode
             versionName appVersionName(versioning.fullVersionName)
             buildConfigField 'boolean', 'PHONE_COMPANION', 'false'
             buildConfigField 'String', 'SIBLING_PACKAGE', '"com.chuckiehelper.phonecontrol"'
-            manifestPlaceholders = [appLabel: 'RemoteTool', appIcon: '@mipmap/ic_launcher',
-                siblingPackage: 'com.chuckiehelper.phonecontrol', accessibilityLabel: 'RemoteTool 手机操控', notificationLabel: 'RemoteTool 手机通知',
+            manifestPlaceholders = [appLabel: claudeTrial ? 'RemoteTool 测试版' : 'RemoteTool', appIcon: '@mipmap/ic_launcher',
+                siblingPackage: 'com.chuckiehelper.phonecontrol', accessibilityLabel: claudeTrial ? 'RemoteTool 测试版 · 手机操控' : 'RemoteTool 手机操控', notificationLabel: claudeTrial ? 'RemoteTool 测试版 · 手机通知' : 'RemoteTool 手机通知',
                 xiaomiAppId: providers.gradleProperty('mobileXiaomiAppId').orElse('').get(),
                 xiaomiDebug: providers.gradleProperty('mobileXiaomiDebug').orElse('false').get()]
         }
@@ -93,11 +96,11 @@ android {
     // Deliverable naming follows the project name (RemoteTool), not the legacy package.
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
-            def prefix = variant.flavorName == 'phone' ? 'RemoteTool-PhoneControl' : 'RemoteTool'
+            def prefix = variant.flavorName == 'phone' ? 'RemoteTool-PhoneControl' : (claudeTrial ? 'RemoteTool-ClaudeTrial' : 'RemoteTool')
             outputFileName = "${prefix}-${variant.versionName}-${variant.versionCode}.apk"
         }
         if (variant.buildType.name == 'release') {
-            def prefix = variant.flavorName == 'phone' ? 'RemoteTool-PhoneControl' : 'RemoteTool'
+            def prefix = variant.flavorName == 'phone' ? 'RemoteTool-PhoneControl' : (claudeTrial ? 'RemoteTool-ClaudeTrial' : 'RemoteTool')
             def archive = tasks.register("archive${variant.name.capitalize()}CrashMapping", Zip) {
                 inputs.property('apkVersionName', variant.versionName)
                 inputs.property('apkVersionCode', variant.versionCode)

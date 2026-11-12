@@ -1,0 +1,14 @@
+{
+  "name": "remotetool-claude-bridge",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.322"
+  },
+  "scripts": {
+    "test": "node --test ../../../tests/ClaudeBridge/bridge.test.mjs"
+  }
+}

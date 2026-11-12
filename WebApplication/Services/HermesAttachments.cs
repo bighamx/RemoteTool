@@ -16,7 +16,7 @@ public sealed class HermesAttachments
     private readonly string agent;
     public HermesAttachments(string agent = "hermes") : this(agent, RemoteToolPaths.Attachments(agent)) { }
     internal HermesAttachments(string agent, string directory) {
-        if (agent is not ("hermes" or "codex")) throw new ArgumentException("无效 Agent");
+        if (agent is not ("hermes" or "codex" or "claude")) throw new ArgumentException("无效 Agent");
         this.agent = agent;
         storageRoot = Path.GetFullPath(directory);
     }

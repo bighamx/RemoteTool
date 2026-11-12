@@ -5,9 +5,6 @@ package com.chuckiehelper.mobile.nativeui
 import android.content.Intent
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -15,12 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import com.chuckiehelper.mobile.R
 import com.chuckiehelper.mobile.RemoteActivity
 import androidx.compose.ui.unit.dp
 
@@ -36,13 +28,16 @@ internal fun receiveEditionIntent(activity: ComponentActivity, intent: Intent) {
     val shares: ShareInboxModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val updates: AppUpdateModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val screens = rememberSaveableStateHolder()
-    return remember(shares, updates, screens) { FullEdition(shares, updates, screens) }
+    val context = LocalContext.current.applicationContext
+    val navigation = remember(context) { MobileNavigationSettings(context.getSharedPreferences("mobile-navigation", 0)) }
+    return remember(shares, updates, screens, navigation) { FullEdition(shares, updates, screens, navigation) }
 }
 
 private class FullEdition(
     private val shares: ShareInboxModel,
     private val updates: AppUpdateModel,
     private val screens: SaveableStateHolder,
+    private val navigation: MobileNavigationSettings,
 ) : AppEdition() {
     override val initialRoute = "系统"
     override val showUpdates = true
@@ -50,10 +45,10 @@ private class FullEdition(
     @Composable override fun StorageHost(api: NativeApi?, deviceId: String?, onClose: () -> Unit) { StorageScreen(api,deviceId,onClose) }
     override val updateSubtitle get() = updates.subtitle
     private var composeTarget by mutableStateOf<String?>(null)
-    override fun reloadSettings() = updates.reloadCloudSettings()
+    override fun reloadSettings() { updates.reloadCloudSettings(); navigation.reload() }
     override fun openUpdates() = updates.open()
-    override fun normalizeRoute(route: String) = if (route == "文件") "Codex" else route
-    override fun ownsToolbar(route: String) = route in listOf("Codex", "Hermes", "文件", "Cloudflare", "空间管理")
+    override fun isNavigationRoute(route: String) = mobileDestinations.any { it.route == route }
+    override fun ownsToolbar(route: String) = route in listOf("Codex", "Hermes", "Claude Code", "文件", "Cloudflare", "空间管理")
     private fun draft(deviceId: String?) = shares.ready?.takeIf { it.deviceId == deviceId }
     override fun shareId(deviceId: String?) = draft(deviceId)?.id
     override fun shareRoute(deviceId: String?) = draft(deviceId)?.let { if (it.agent == "codex") "Codex" else "Hermes" }
@@ -63,76 +58,27 @@ private class FullEdition(
         ShareTargetScreen(shares, api, deviceId, deviceName, changeDevice)
     }
     @Composable override fun Navigation(route: String, deviceName: String, onRoute: (String) -> Unit) {
-        NavigationBar(modifier = Modifier.selectableGroup()) {
-            listOf(
-                    "系统" to Icons.Outlined.Speed,
-                    "远程" to Icons.Outlined.DesktopWindows,
-                    "Codex" to Icons.Outlined.Code,
-                    "Hermes" to Icons.Outlined.SmartToy,
-                    "更多" to Icons.Outlined.MoreHoriz,
-                )
-                .forEach { (name, icon) ->
-                    val selected = route == name
-                    val color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                    Column(
-                        Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 6.dp)
-                            .height(68.dp).clip(RoundedCornerShape(20.dp))
-                            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                            .selectable(selected, role = Role.Tab, onClick = { onRoute(name) }),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        CompositionLocalProvider(LocalContentColor provides color) { when (name) {
-                            "Hermes" -> HermesOfficialIcon(Modifier.size(40.dp))
-                            "Codex" -> Icon(painterResource(R.drawable.ic_codex_official), name, Modifier.size(40.dp))
-                            else -> Icon(icon, name)
-                        } }
-                        if (name !in listOf("Hermes", "Codex")) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(if (name == "系统" && !selected) deviceName else name,
-                                color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                        }
-                    }
-                }
-        }
+        FullMobileNavigation(navigation.order, route, onRoute)
+    }
+    @Composable override fun ToolbarActions(route: String) {
+        if (route != "更多") return
+        var editing by remember { mutableStateOf(false) }
+        IconButton(onClick = { editing = true }) { Icon(Icons.Outlined.Tune, "自定义底栏") }
+        if (editing) MobileNavigationEditor(navigation) { editing = false }
     }
     @Composable override fun MoreItems(onDetail: (String) -> Unit) {
-        ToolRow("空间管理", "本机缓存 · 会话附件 · 服务端回收站", Icons.Outlined.Storage) { onDetail("空间管理") }
-        ToolRow("Cloudflare", "DNS · R2 · D1 · Tunnel", icon = {
-            androidx.compose.foundation.Image(painterResource(R.drawable.ic_cloudflare), null, Modifier.size(24.dp))
-        }) { onDetail("Cloudflare") }
-        ToolRow("文件管理", "浏览 · 传输 · 图片与视频预览", Icons.Outlined.Folder) { onDetail("文件") }
-        ToolRow(
-            "Docker",
-            "容器 · Compose · 镜像管理",
-            Icons.Outlined.Layers,
-        ) {
-            onDetail("Docker")
+        navigation.order.drop(5).forEach { route ->
+            val item = mobileDestinations.first { it.route == route }
+            ToolRow(item.label, item.description, icon = { MobileDestinationIcon(item, Modifier.size(24.dp)) }) { onDetail(route) }
         }
-        ToolRow(
-            "命令终端",
-            "Shell · PowerShell · CMD",
-            Icons.Outlined.Terminal,
-        ) {
-            onDetail("终端")
-        }
-        ToolRow(
-            "Hangfire",
-            "任务、队列与执行历史",
-            Icons.Outlined.Schedule,
-        ) {
-            onDetail("Hangfire")
-        }
-        ToolRow("进程管理", "查看资源占用与结束进程", Icons.Outlined.Memory) {
-            onDetail("进程")
-        }
-
     }
     @Composable override fun Page(route: String, api: NativeApi, deviceId: String, error: (String) -> Unit,
         onDetail: (String) -> Unit, onClose: () -> Unit): Boolean {
         val sharedDraft = draft(deviceId)
         when (route) {
+            "Claude Code" -> screens.SaveableStateProvider("claude-$deviceId") {
+                HermesScreen(api, deviceId, agent = "claude", incoming = sharedDraft?.takeIf { it.agent == "claude" }, onSharedHandled = { shares.finishDelivery(it) })
+            }
             "空间管理" -> StorageScreen(api,deviceId,onClose)
             "Cloudflare" -> CloudflareScreen(api, error, onClose)
             "系统" -> SystemScreen(api, onProcesses = { onDetail("进程") }, onTerminal = { onDetail("终端") }, onError = error)

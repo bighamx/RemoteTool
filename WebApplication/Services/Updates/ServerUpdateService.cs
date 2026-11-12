@@ -7,7 +7,7 @@ using RemoteTool.Updates;
 namespace RemoteTool.WebApi.Services.Updates;
 
 public sealed class ServerUpdateService(IHttpClientFactory clients, IConfiguration config, IWebHostEnvironment environment,
-    HermesManagement hermes, HermesProfiles profiles, HermesBridge hermesBridge, CodexBridge codexBridge, RunRegistry registry, UpdaterBootstrap bootstrap) : BackgroundService
+    HermesManagement hermes, HermesProfiles profiles, HermesBridge hermesBridge, CodexBridge codexBridge, ClaudeBridge claudeBridge, RunRegistry registry, UpdaterBootstrap bootstrap) : BackgroundService
 {
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly object requests = new();
@@ -169,9 +169,20 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
                 }
             } catch { blockers.Add("无法确认 Hermes 空闲"); }
         }
+        // Claude tasks live in a separate worker; an unanswered worker does not prove idleness.
+        var claudeIdle = false;
+        try {
+            if (await claudeBridge.Probe(ct) is { } claude) {
+                if (claude.ActiveRuns > 0) blockers.Add(claude.Waiting > 0 ? "Claude Code 任务等待确认" : "Claude Code 任务执行中");
+                else claudeIdle = true;
+            } else if (ClaudeBridge.UnansweredWorker()) blockers.Add("无法确认 Claude Code 空闲");
+            else claudeIdle = true;
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { blockers.Add("无法确认 Claude Code 空闲"); }
         var checkedRuns = new HashSet<(string Agent, string Run)>();
         async Task CheckRun(string agent, string session, string run, bool staleTracking = false) {
             if (!checkedRuns.Add((agent, run))) return;
+            if (agent == "claude") { if (claudeIdle) registry.Clear(agent, session, run); return; }
             try {
                 HttpResponseMessage response;
                 if (agent.StartsWith("hermes", StringComparison.Ordinal)) {

@@ -252,6 +252,7 @@
     flex-direction: column
 }
 
+.workspace-module[data-module="claude"],
 .workspace-module[data-module="codex"],
 .workspace-module[data-module="hermes"] {
     width: 100%;

@@ -31,7 +31,7 @@
 | 命令终端 | WebSocket 交互终端，Windows PowerShell / CMD，Linux Shell，macOS PTY |
 | 文件管理 | 浏览、上传、下载、复制、移动、重命名、删除，以及支持格式的文件预览 |
 | Docker / Compose | 容器、镜像、日志及 Compose 文件编辑与部署 |
-| Codex / Hermes | 会话搜索、新建、续聊、流式消息、旁白、工具进度、附件与模型设置，支持按原生协议展示审批和问题回答 |
+| Codex / Hermes / Claude Code | 会话搜索、新建、续聊、流式消息、旁白、工具进度、附件与模型设置，支持按原生协议展示审批和问题回答 |
 | Cloudflare | DNS、R2、D1 和隧道管理 |
 | 定时任务 | Hangfire 任务与执行日志，内置 qBittorrent、DDNS 等任务模板 |
 | 空间管理 | 按会话、附件类型和时间管理 RemoteTool 附件与诊断日志，支持操作确认和回收站 |
@@ -130,7 +130,7 @@ dotnet run --project WebApplication/WebApplication.csproj --launch-profile http
 | 文件管理 | `/#/files` |
 | 远程桌面 | `/#/desktop` |
 | 命令终端 | `/#/terminal` |
-| Codex / Hermes | `/#/codex`、`/#/hermes` |
+| Codex / Hermes / Claude Code | `/#/codex`、`/#/hermes`、`/#/claude` |
 | 定时任务 | `/#/jobs` |
 | 空间管理 | `/#/storage` |
 | 网页身份验证 | `/#/identity` |
@@ -161,6 +161,12 @@ dotnet run --project WebApplication/WebApplication.csproj --launch-profile http
 
 - **Codex** 使用原生 `app-server` 协议，支持会话与项目管理、审批、问题回答及模型设置。CLI 需要支持 `codex app-server --stdio`，服务可通过配置定位可执行文件及 Codex Home。[Codex 接入说明](app/CODEX.md)
 - **Hermes** 使用持久会话接口和 `/v1/runs` 事件流。明确填写本机 API 地址、Hermes Home 和密钥文件。IIS 部署应指向实际桌面用户的安装目录。`HERMES_API_KEY_FILE` 用于 `Hermes:KeyFile` 缺省时的密钥路径回退。[Hermes 接入说明](app/HERMES.md)
+
+### Claude Code
+
+Web 与 Android 主 App 共用会话工作台，通过官方 Claude Agent SDK 读取和继续本机会话，支持流式消息、工具记录、审批与问题回答、附件、模型与权限模式以及官方订阅额度。电脑进程占用的会话需确认后才能接管；结果未知时保留回执，不自动重放。服务端需安装 Node.js 和 SDK，安装及安全边界见 [Claude 接入说明](WebApplication/Tools/ClaudeBridge/README.md)。
+
+手机 Web 与 Android 主 App 支持自定义底部导航：前五个入口加固定“更多”，其他入口收纳到更多中。Web PWA 提供启动加载状态和失败重试。
 
 ### 网页身份验证
 

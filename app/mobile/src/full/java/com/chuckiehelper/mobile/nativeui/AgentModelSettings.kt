@@ -19,8 +19,9 @@ internal fun modelMetadata(provider: JSONObject?, model: String?): JSONObject =
     } ?: JSONObject()
 
 internal fun reasoningChoices(agent: String, provider: JSONObject?, model: String?): List<String> {
-    if (agent == "codex") return modelMetadata(provider, model).array("supportedReasoningEfforts")
+    if (agent == "codex" || agent == "claude") return modelMetadata(provider, model).array("supportedReasoningEfforts")
         .objects().map { it.cleanSetting("reasoningEffort") }.filter { it.isNotBlank() }.distinct()
+        .ifEmpty { if (agent == "claude") listOf("low", "medium", "high", "xhigh", "max") else emptyList() }
     val caps = provider?.optJSONObject("capabilities")?.optJSONObject(model.orEmpty())
     if (caps != null && !caps.optBoolean("reasoning", true)) return emptyList()
     return (if (caps?.optBoolean("can_disable_reasoning", true) != false) listOf("none") else emptyList()) +

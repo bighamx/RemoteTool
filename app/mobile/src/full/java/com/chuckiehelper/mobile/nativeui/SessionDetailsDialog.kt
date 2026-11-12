@@ -69,8 +69,8 @@ internal fun SessionDetailsDialog(api: NativeApi, agent: String, listed: JSONObj
         val response = detailRequest.await()
         detail = response?.optJSONObject("session") ?: response?.takeIf { it.has("id") }
         val contextResponse = contextRequest.await()
-        contextInfo = if (agent == "codex") contextResponse?.optJSONObject("context") else contextResponse
-        usageInfo = if (agent == "codex") contextResponse?.optJSONObject("usage")
+        contextInfo = if (agent != "hermes") contextResponse?.optJSONObject("context") else contextResponse
+        usageInfo = if (agent != "hermes") contextResponse?.optJSONObject("usage")
             ?: detail?.optJSONObject("usage") else null
         activity = activityRequest.await()
         failedParts = buildList {
@@ -114,9 +114,14 @@ internal fun SessionDetailsDialog(api: NativeApi, agent: String, listed: JSONObj
                             DetailField("来源", field("source"))
                         }
                         DetailField("最后活跃", sessionDetailTime(field("last_active")))
-                        if (agent == "codex") {
+                        if (agent != "hermes") {
                             DetailField("工作目录", field("cwd"), protectDrivePrefix = true)
-                            DetailField("项目 ID", field("project_id"))
+                            if (agent == "codex") DetailField("项目 ID", field("project_id"))
+                            if (agent == "claude") {
+                                DetailField("权限模式", field("permission_mode"))
+                                DetailField("Git 分支", field("git_branch"))
+                                DetailField("待生效撤回", sessionDetailFlag(detail ?: listed, "rewind_pending"))
+                            }
                             DetailField("模型", field("model"))
                             DetailField("提供方", field("provider"))
                             DetailField("推理强度", field("reasoning_effort"))

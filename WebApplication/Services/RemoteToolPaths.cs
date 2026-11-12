@@ -36,6 +36,10 @@ public static class RemoteToolPaths
     public const int CodexBridgeVersion = 43;
     public static string CodexState => Path.Combine(CodexBridge, "state-v11");
 
+    public static string ClaudeBridge => Path.Combine(ProgramData, "claude-bridge");
+    /// <summary>Claude SDK bridge implementation revision; must match BRIDGE_VERSION in Tools/ClaudeBridge/server.mjs.</summary>
+    public const int ClaudeBridgeVersion = 7;
+
     public static string CodexAttachments => Path.Combine(ProgramData, "codex-attachments");
     /// <summary>自托管安装的 Codex 运行时（npm 前缀、状态与已验证的可执行文件）。</summary>
     public static string CodexManagedTools => Path.Combine(ProgramData, "codex-tools");
