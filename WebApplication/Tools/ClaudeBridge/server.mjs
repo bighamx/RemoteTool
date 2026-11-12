@@ -11,7 +11,7 @@ import {SessionService} from './sessions.mjs';
 import {ClaudeUsage} from './usage.mjs';
 
 export const PROTOCOL = 2;      // API contract with the C# host; a change requires an idle restart.
-export const BRIDGE_VERSION = 6; // Implementation revision; RemoteToolPaths.ClaudeBridgeVersion must match.
+export const BRIDGE_VERSION = 7; // Implementation revision; RemoteToolPaths.ClaudeBridgeVersion must match.
 
 function args(argv) {
     const result = {};
@@ -46,10 +46,15 @@ export function createApp({root, executable, attachments, sdk, allowCustom = fal
     });
     const sessions = new SessionService({store, sdk, auth: () => auth(), holders: fresh => holders(fresh), allowCustomEndpoint: allowCustom});
     sessions.attachmentRoot = attachments || null;
-    // Exact ownership on Unix: our SDK children have this worker as parent.
-    if (process.platform !== 'win32') sessions.isChild = async pid => {
+    // Only an OS-reported parent PID proves that this worker owns the CLI process.
+    sessions.isChild = async pid => {
         if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-        const {stdout} = await exec('ps', ['-o', 'ppid=', '-p', String(pid)], {timeout: 5000});
+        const windows = process.platform === 'win32';
+        const command = windows ? 'powershell.exe' : 'ps';
+        const args = windows
+            ? ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").ParentProcessId`]
+            : ['-o', 'ppid=', '-p', String(pid)];
+        const {stdout} = await exec(command, args, {timeout: 5000, windowsHide: true});
         return Number(String(stdout).trim()) === process.pid;
     };
     const runs = new RunManager({store, sdk, executable, prepare: (id, kind) => sessions.prepare(id, kind),
@@ -98,12 +103,14 @@ function stream(app, req, res, runId) {
 
 export function createServer(app, token) {
     const expected = Buffer.from('Bearer ' + token);
+    let stopping = false;
     return http.createServer(async (req, res) => {
         const supplied = Buffer.from(req.headers.authorization || '');
         if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return send(res, 401, {message: 'Unauthorized'});
         try {
             const url = new URL(req.url, 'http://localhost'), parts = url.pathname.split('/').filter(Boolean), method = req.method;
             const body = await readBody(req), key = req.headers['idempotency-key'], q = name => url.searchParams.get(name);
+            if (stopping && method !== 'GET') throw new BridgeError('Claude 桥接正在退出，请稍后重试', 503, {delivery: 'rejected'});
             const id = parts[1];
             if (id !== undefined && ['sessions', 'runs'].includes(parts[0]) && !(parts[0] === 'runs' && id === 'lookup') && !validId(id)) throw new BridgeError('无效标识', 400, {delivery: 'rejected'});
             let data;
@@ -112,6 +119,7 @@ export function createServer(app, token) {
                 case 'GET /health': data = {protocol: PROTOCOL, version: BRIDGE_VERSION, implementation: 'claude-agent-sdk', pid: process.pid, active_runs: app.runs.active().runs, waiting: app.runs.active().waiting}; break;
                 case 'POST /shutdown':
                     if (app.runs.active().runs) throw new BridgeError('仍有任务执行中', 409);
+                    stopping = true;
                     send(res, 200, {stopping: true}); setTimeout(() => process.emit('remotetool-shutdown'), 50); return;
                 case 'GET /capabilities': data = {protocol: PROTOCOL, version: BRIDGE_VERSION, features: {steer: true, approvals: true, ask_user_question: true, fork: true, rewind: true, rename: true,
                     pin: true, delete: true, model: true, permissions: true, compact: true, attachments: true, external_session_activity: true, acknowledge_unknown: true, usage: true}}; break;

@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {spawn} from 'node:child_process';
 import {project, windowRows, toolPage, ATTACHMENT_MARKER} from '../../WebApplication/Tools/ClaudeBridge/history.mjs';
-import {StateStore} from '../../WebApplication/Tools/ClaudeBridge/state.mjs';
+import {StateStore, BridgeError} from '../../WebApplication/Tools/ClaudeBridge/state.mjs';
 import {createApp, createServer} from '../../WebApplication/Tools/ClaudeBridge/server.mjs';
 
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'claude-bridge-'));
@@ -95,7 +96,14 @@ const init = {type: 'system', subtype: 'init', session_id: SID};
 
 function setup(script, options) {
     const root = temp(), sdk = fakeSdk(script, options);
-    const exec = async (file, args) => file === 'ps' ? {stdout: String(options?.parent ?? 1)} : args[0] === 'auth' ? {stdout: JSON.stringify({loggedIn: true, apiProvider: 'firstParty'})} : {stdout: JSON.stringify(typeof options?.holders === 'function' ? options.holders() : options?.holders || [])};
+    const exec = async (file, args) => {
+        if (file === 'ps' || file === 'powershell.exe') {
+            if (options?.parentError) throw new Error('Process ownership query failed');
+            return {stdout: String(options?.parent ?? 1)};
+        }
+        if (args[0] === 'auth') return {stdout: JSON.stringify({loggedIn: true, apiProvider: 'firstParty'})};
+        return {stdout: JSON.stringify(typeof options?.holders === 'function' ? options.holders() : options?.holders || [])};
+    };
     const app = createApp({root, executable: '/bin/claude', attachments: path.join(root, 'att'), sdk, exec});
     return {root, sdk, app};
 }
@@ -197,8 +205,8 @@ test('stop interrupts gracefully and marks the run cancelled', async () => {
 test('failure before start is rejected-safe; an unknown result blocks until acknowledged', async () => {
     let mode = 'spawn';
     const {app} = setup(async function* (input) {
-        await input.next();
         if (mode === 'spawn') throw new Error('spawn ENOENT secret-token-123');
+        await input.next();
         yield init; // started, then the stream ends without a result
     });
     const first = await app.runs.start({session_id: SID, input: 'a'}, 'f'.repeat(20));
@@ -309,4 +317,136 @@ test('session list carries context usage like Codex and Hermes, cached per trans
     assert.equal(reads, 1, 'unchanged transcript is not re-read');
     app.store.ensureMeta(SID, {context_window: 1000000});
     assert.equal((await app.sessions.list()).data[0].context_window, 1000000, 'native window wins when known');
+});
+
+
+test('a newly started desktop writer stays external after our previous turn finishes', async () => {
+    const now = Date.now();
+    const {app, sdk} = setup(async function* () {}, {holders: [{sessionId: SID, pid: 4242, startedAt: now, status: 'busy'}]});
+    app.store.data.runs.previous = {id: 'previous', session_id: SID, status: 'completed', created_at: now - 2000, finished_at: now - 1000};
+    assert.equal((await app.sessions.activity(SID)).running, true);
+    await assert.rejects(app.runs.start({session_id: SID, input: 'x'}, 'external-writer-123456789'), error => error.code === 'session_held');
+    assert.equal(sdk.calls.length, 0);
+    app.sessions.isChild = async () => { throw new Error('Access denied'); };
+    assert.equal((await app.sessions.activity(SID)).running, true, 'unknown ownership must stay external');
+    app.sessions.isChild = null;
+    assert.equal((await app.sessions.activity(SID)).running, true, 'timestamps alone never prove parentage');
+});
+
+test('the OS parent-process query identifies a real owned child on this platform', async () => {
+    const root = temp();
+    const app = createApp({root, executable: process.execPath, sdk: {}});
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio: 'ignore'});
+    try {
+        await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+        assert.equal(await app.sessions.isChild(child.pid), true);
+        assert.equal(await app.sessions.isChild(process.pid), false);
+    } finally {
+        child.kill();
+        assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep));
+        fs.rmSync(root, {recursive: true, force: true});
+    }
+});
+
+for (const failure of ['throw', 'end']) test(`consumed input without a first native event stays unknown (${failure})`, async () => {
+    let executions = 0;
+    const {app, sdk} = setup(async function* (input) {
+        await input.next(); executions++;
+        if (failure === 'throw') throw new Error('transport disconnected');
+    });
+    const body = {session_id: SID, input: 'perform operation'}, key = 'consumed-input-key-123456';
+    const receipt = await app.runs.start(body, key);
+    await wait(() => app.store.run(receipt.run_id).status === 'acceptance_unknown');
+    assert.equal((await app.sessions.detail(SID)).unresolved_run.run_id, receipt.run_id);
+    assert.equal((await app.runs.start(body, key)).run_id, receipt.run_id, 'the original receipt remains authoritative');
+    await assert.rejects(app.runs.start(body, 'new-consumed-input-key-123456'), error => error.code === 'unresolved_run');
+    assert.equal(executions, 1);
+    assert.equal(sdk.calls.length, 1);
+});
+
+test('concurrent HTTP retries of one key wait for the same preflight and receipt', async () => {
+    const {app, sdk} = setup(async function* (input) { await input.next(); yield init; yield ok; });
+    const original = app.sessions.prepare.bind(app.sessions);
+    let release, preparations = 0, requests = 0;
+    const gate = new Promise(resolve => { release = resolve; });
+    app.sessions.prepare = async (...args) => { preparations++; await gate; return original(...args); };
+    const start = app.runs.start.bind(app.runs);
+    app.runs.start = (...args) => { requests++; return start(...args); };
+    const token = 'fixture-token-'.repeat(4), server = createServer(app, token);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+        const options = {method: 'POST', headers: {Authorization: 'Bearer ' + token, 'Idempotency-Key': 'concurrent-http-key-123456'}, body: JSON.stringify({session_id: SID, input: 'x'})};
+        const url = `http://127.0.0.1:${server.address().port}/runs`;
+        const first = fetch(url, options), second = fetch(url, options);
+        await wait(() => requests === 2);
+        assert.equal(preparations, 1);
+        assert.equal(app.runs.active().runs, 1, 'preflight protects a pending submission during shutdown');
+        const shutdown = await fetch(`http://127.0.0.1:${server.address().port}/shutdown`, {method: 'POST', headers: {Authorization: 'Bearer ' + token}});
+        assert.equal(shutdown.status, 409);
+        assert.equal(sdk.calls.length, 0);
+        release();
+        const responses = await Promise.all([first, second]);
+        assert.deepEqual(responses.map(response => response.status), [200, 200]);
+        const [one, two] = await Promise.all(responses.map(response => response.json()));
+        assert.equal(one.delivery, 'accepted'); assert.equal(two.delivery, 'accepted');
+        assert.equal(one.run_id, two.run_id);
+        await wait(() => app.store.run(one.run_id).status === 'completed');
+        assert.equal(sdk.calls.length, 1);
+    } finally { release(); server.close(); }
+});
+
+test('an in-flight key cannot be reused for another payload or compact operation', async () => {
+    const {app, sdk} = setup(async function* (input) { await input.next(); yield ok; });
+    const original = app.sessions.prepare.bind(app.sessions);
+    let release; const gate = new Promise(resolve => { release = resolve; });
+    app.sessions.prepare = async (...args) => { await gate; return original(...args); };
+    const key = 'pending-digest-key-123456', body = {session_id: SID, input: 'x'};
+    const first = app.runs.start(body, key);
+    await assert.rejects(app.runs.start({...body, input: 'different'}, key), error => error.status === 409 && error.delivery === 'rejected');
+    await assert.rejects(app.runs.start(body, key, 'compact'), error => error.status === 409 && error.delivery === 'rejected');
+    await assert.rejects(app.runs.start(body, 'another-pending-key-123456'), error => error.status === 409);
+    release(); const accepted = await first;
+    await wait(() => app.store.run(accepted.run_id).status === 'completed');
+    assert.equal(sdk.calls.length, 1);
+});
+
+
+test('an idle shutdown closes admission before the delayed process exit', async () => {
+    const {app, sdk} = setup(async function* (input) { await input.next(); yield ok; });
+    const token = 'shutdown-fixture-'.repeat(3), server = createServer(app, token);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+        const base = `http://127.0.0.1:${server.address().port}`;
+        const headers = {Authorization: 'Bearer ' + token};
+        assert.equal((await fetch(base + '/shutdown', {method: 'POST', headers})).status, 200);
+        const response = await fetch(base + '/runs', {method: 'POST', headers: {...headers, 'Idempotency-Key': 'after-shutdown-key-123456'}, body: JSON.stringify({session_id: SID, input: 'x'})});
+        assert.equal(response.status, 503);
+        assert.equal((await response.json()).delivery, 'rejected');
+        assert.equal(sdk.calls.length, 0);
+    } finally { server.close(); }
+});
+
+
+test('concurrent preflight failures share a rejection and release the original key for retry', async () => {
+    const {app, sdk} = setup(async function* (input) { await input.next(); yield ok; });
+    const original = app.sessions.prepare.bind(app.sessions);
+    let release, refuse = true;
+    const gate = new Promise(resolve => { release = resolve; });
+    app.sessions.prepare = async (...args) => {
+        await gate;
+        if (refuse) throw new BridgeError('preflight rejected', 409, {delivery: 'rejected'});
+        return original(...args);
+    };
+    const body = {session_id: SID, input: 'x'}, key = 'retry-preflight-key-123456';
+    const attempts = Promise.allSettled([app.runs.start(body, key), app.runs.start(body, key)]);
+    release(); const [first, second] = await attempts;
+    assert.equal(first.status, 'rejected'); assert.equal(second.status, 'rejected');
+    assert.equal(first.reason, second.reason);
+    assert.equal(first.reason.delivery, 'rejected');
+    assert.equal(app.runs.active().runs, 0);
+    assert.equal(sdk.calls.length, 0);
+    refuse = false;
+    const accepted = await app.runs.start(body, key);
+    await wait(() => app.store.run(accepted.run_id).status === 'completed');
+    assert.equal(sdk.calls.length, 1);
 });

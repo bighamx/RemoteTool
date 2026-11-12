@@ -93,6 +93,7 @@ export class RunManager {
     constructor({store, sdk, prepare, executable, onModels}) {
         this.store = store; this.sdk = sdk; this.prepare = prepare; this.executable = executable; this.onModels = onModels;
         this.buffers = new Map(); this.live = new Map(); this.listeners = new Map(); this.starting = new Set();
+        this.pendingStarts = new Map();
     }
     // ---- events -------------------------------------------------------------
     buffer(runId) {
@@ -166,15 +167,18 @@ export class RunManager {
             if (existing.digest !== digest) throw new BridgeError('发送标识已被另一条消息使用', 409, {delivery: 'rejected'});
             return {...this.doc(this.store.run(existing.run)), delivery: 'accepted'};
         }
+        const inFlight = this.pendingStarts.get(key);
+        if (inFlight) {
+            if (inFlight.digest !== digest) throw new BridgeError('发送标识已被另一条消息使用', 409, {delivery: 'rejected'});
+            return inFlight.promise;
+        }
         if (this.starting.has(body.session_id)) throw new BridgeError('此会话正在开始另一轮任务', 409, {delivery: 'rejected'});
         this.guard(body.session_id);
         this.starting.add(body.session_id);
-        try {
+        const pending = Promise.resolve().then(async () => {
             const plan = await this.prepare(body.session_id, kind);
-            // Another request with the same key may have finished its preflight first.
-            const raced = this.store.receipt(key);
-            if (raced) return this.start(body, key, kind);
             this.guard(body.session_id);
+            const message = buildMessage(input || '请查看附件', files);
             const run = {id: randomUUID(), session_id: body.session_id, kind, status: 'starting', created_at: Date.now(), digest,
                 preview: input.slice(0, 200), attachments: files.length, approval: null, error: null, usage: null};
             this.store.data.runs[run.id] = run;
@@ -186,10 +190,12 @@ export class RunManager {
                 throw new BridgeError('发送回执保存失败，未开始执行', 503, {delivery: 'rejected'});
             }
             this.emit(run, 'run.started', {status: run.status});
-            const message = buildMessage(input || '请查看附件', files);
             void this.execute(run, plan, message, meta).catch(() => {});
             return {...this.doc(run), delivery: 'accepted'};
-        } finally { this.starting.delete(body.session_id); }
+        });
+        this.pendingStarts.set(key, {digest, promise: pending});
+        try { return await pending; }
+        finally { this.pendingStarts.delete(key); this.starting.delete(body.session_id); }
     }
     guard(session) {
         if (this.store.liveRun(session)) throw new BridgeError('此会话已有任务执行中，可以插话', 409, {delivery: 'rejected', code: 'run_active'});
@@ -199,7 +205,7 @@ export class RunManager {
     // ---- execution ----------------------------------------------------------
     async execute(run, plan, message, meta) {
         const abort = new AbortController(), input = new InputQueue();
-        const runtime = {abort, input, query: null, stopRequested: false, outstanding: 1, idle: null, approvals: new Map(), chain: Promise.resolve(), texts: new Map(), started: false};
+        const runtime = {abort, input, query: null, stopRequested: false, outstanding: 1, idle: null, approvals: new Map(), chain: Promise.resolve(), texts: new Map(), started: false, inputConsumed: false};
         this.live.set(run.id, runtime);
         input.push(message);
         let result = null;
@@ -216,7 +222,11 @@ export class RunManager {
                 ...(plan.resume ? {resume: run.session_id, ...(plan.resumeSessionAt ? {resumeSessionAt: plan.resumeSessionAt} : {})} : {sessionId: run.session_id}),
                 canUseTool: (tool, toolInput, context) => this.permission(run, runtime, tool, toolInput, context),
             };
-            runtime.query = this.sdk.query({prompt: input, options});
+            // The SDK can consume stdin before it yields any native event.
+            async function* prompt() {
+                for await (const item of input) { runtime.inputConsumed = true; yield item; }
+            }
+            runtime.query = this.sdk.query({prompt: prompt(), options});
             for await (const msg of runtime.query) {
                 if (!runtime.started) {
                     runtime.started = true; run.status = 'running';
@@ -232,14 +242,16 @@ export class RunManager {
                     else arm();
                 }
             }
+            const mayHaveExecuted = runtime.started || runtime.inputConsumed;
             if (runtime.stopRequested) this.finish(run, 'cancelled', '已停止；停止前已开始的工具操作请核对实际结果。');
-            else if (!result) this.finish(run, runtime.started ? 'acceptance_unknown' : 'failed', readableFailure(null, runtime.started));
+            else if (!result) this.finish(run, mayHaveExecuted ? 'acceptance_unknown' : 'failed', readableFailure(null, mayHaveExecuted));
             else if (result.is_error) this.finish(run, 'failed', RESULT_ERRORS[result.subtype] || resultFailure(result));
             else this.finish(run, 'completed', null);
         } catch (error) {
             if (/resume rejected/i.test(String(error?.message))) delete meta.rewind;
+            const mayHaveExecuted = runtime.started || runtime.inputConsumed;
             if (runtime.stopRequested) this.finish(run, 'cancelled', '已停止；停止前已开始的工具操作请核对实际结果。');
-            else this.finish(run, runtime.started ? 'acceptance_unknown' : 'failed', readableFailure(error, runtime.started));
+            else this.finish(run, mayHaveExecuted ? 'acceptance_unknown' : 'failed', readableFailure(error, mayHaveExecuted));
         } finally {
             clearTimeout(runtime.idle); clearTimeout(runtime.killer);
             for (const pending of runtime.approvals.values()) pending.resolve({behavior: 'deny', message: '任务已结束'});
@@ -418,7 +430,10 @@ export class RunManager {
         const run = this.store.liveRun(session), runtime = run && this.live.get(run.id);
         return runtime?.query?.setPermissionMode ? runtime.query.setPermissionMode(mode).then(() => true, () => false) : Promise.resolve(false);
     }
-    active() { return {runs: this.live.size, waiting: [...this.live.values()].filter(runtime => runtime.approvals.size).length}; }
+    active() {
+        const preflighting = [...this.starting].filter(session => !this.store.liveRun(session)).length;
+        return {runs: this.live.size + preflighting, waiting: [...this.live.values()].filter(runtime => runtime.approvals.size).length};
+    }
 }
 
 function resultFailure(result) {

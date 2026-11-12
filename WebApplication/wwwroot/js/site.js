@@ -169,14 +169,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const path = location.pathname.toLowerCase();
         let current = 'home';
         const route = location.hash.match(/^#\/([^?]*)/)?.[1];
-        if (route) current = ({home:'home',storage:'storage',cloudflare:'cloudflare',identity:'identity',system:'controls',processes:'processes',desktop:'screenshot',terminal:'terminal',docker:'docker','docker/images':'docker','docker/compose':'docker',files:'files',jobs:'hangfire',codex:'codex',hermes:'hermes'})[route] || 'home';
-        else if (path.startsWith('/agents/')) current = path.includes('hermes') ? 'hermes' : 'codex';
+        if (route) current = ({home:'home',storage:'storage',cloudflare:'cloudflare',identity:'identity',system:'controls',processes:'processes',desktop:'screenshot',terminal:'terminal',docker:'docker','docker/images':'docker','docker/compose':'docker',files:'files',jobs:'hangfire',codex:'codex',hermes:'hermes',claude:'claude'})[route] || 'home';
+        else if (path.startsWith('/agents/')) current = path.includes('claude') ? 'claude' : path.includes('hermes') ? 'hermes' : 'codex';
         else if (path.startsWith('/hangfire')) current = 'hangfire';
         else if (path.startsWith('/remote')) {
             const tab = new URLSearchParams(location.hash.slice(1)).get('tab') || 'controls';
             current = ['docker', 'images', 'compose'].includes(tab) ? 'docker' : tab;
         }
-        if(!['codex','hermes'].includes(route))document.body.classList.remove('mobile-chat-active');
+        if(!['codex','hermes','claude'].includes(route))document.body.classList.remove('mobile-chat-active');
         closeTools();
         document.querySelectorAll('.side-nav a').forEach(link => {
             const active = link.dataset.nav === current;

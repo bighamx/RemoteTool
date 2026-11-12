@@ -241,14 +241,13 @@ export class SessionService {
     async heldElsewhere(id) {
         if (this.store.liveRun(id)) return null; // our own SDK child is listed while it runs
         const rows = (await this.holders()).filter(row => row?.sessionId === id);
-        for (const row of rows) if (!(await this.ownChild(row, id))) return row;
+        for (const row of rows) if (!(await this.ownChild(row))) return row;
         return null;
     }
     /** The SDK's CLI child is reported like an interactive session; it may linger briefly after a turn. */
-    async ownChild(row, id) {
+    async ownChild(row) {
         if (this.isChild) { try { return await this.isChild(row.pid); } catch {} }
-        const last = this.store.runsFor(id)[0];
-        return !!last?.finished_at && Date.now() - last.finished_at < 15000 && Number(row.startedAt) >= last.created_at - 2000;
+        return false;
     }
     /**
      * Ends the desktop Claude process that holds this session so RemoteTool can continue it.
@@ -260,7 +259,7 @@ export class SessionService {
         if (!info) return {ready: true};
         if (this.store.liveRun(id)) throw new BridgeError('RemoteTool 正在执行此会话的任务', 409);
         const find = async () => {
-            for (const row of (await this.holders(true)).filter(row => row?.sessionId === id)) if (!(await this.ownChild(row, id))) return row;
+            for (const row of (await this.holders(true)).filter(row => row?.sessionId === id)) if (!(await this.ownChild(row))) return row;
             return null;
         };
         const target = await find();

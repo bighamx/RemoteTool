@@ -330,6 +330,10 @@
     background: color-mix(in srgb, var(--accent-danger) 9%, var(--bg-secondary))
 }
 
+.agent-banner.error strong {
+    color: inherit
+}
+
 .agent-banner-warn {
     color: var(--accent-warning);
     font-weight: 600
