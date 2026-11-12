@@ -6,7 +6,7 @@ import org.junit.Test
 class MarkdownFileLinksTest {
     @Test fun encodedAbsolutePathsAndLineNumbersResolveToTheSameFile() {
         assertEquals("E:/My Files/readme.md",markdownFilePath("E:/My%20Files/readme.md:42"))
-        assertEquals("E:/My Files/readme.md",markdownFilePath("file:///E:/My%20Files/readme.md#L42"))
+        assertNull(markdownFilePath("file:///E:/My%20Files/readme.md#L42"))
         assertEquals("/tmp/a+b.txt",markdownFilePath("/tmp/a+b.txt"))
         assertTrue(sameAttachmentPath("E:/My Files/readme.md","e:\\my files\\README.MD"))
     }

@@ -107,7 +107,7 @@ internal static class HermesNativeChecks {
                 db.Execute("INSERT INTO messages VALUES(6,'s','user',?)","@image:"+JsonSerializer.Serialize(blob));
             Check(View(6)["attachments"][0]["mime"].ToString()=="image/png","Hermes content-addressed images need no filename extension");
             Check(View(6)["attachments"][0]["sha256"].ToString()==upload["sha256"].ToString(),"extensionless image identity must be recovered too");
-            var output=Path.Combine(fixture,"download.apk");File.WriteAllText(output,"apk fixture");
+            var output=Path.Combine(store.Folder("s"),"download.apk");File.WriteAllText(output,"apk fixture");
             using(var db=new SQLiteConnection(Path.Combine(home,"state.db")))
                 db.Execute("INSERT INTO messages VALUES(7,'s','assistant',?)","MEDIA:"+output);
             var delivered=native.List("s").Select(card=>JsonSerializer.SerializeToNode(card)).Single(card=>card["name"].ToString()=="download.apk");

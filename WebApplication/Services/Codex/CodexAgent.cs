@@ -1362,8 +1362,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             }
             ct.ThrowIfCancellationRequested(); // No new write after the HTTP caller has left during preparation.
             lock (gate) { runs[run]!["status"] = "started"; runs[run]!["phase"] = "dispatching"; Persist(); }
-            var context = Obj(("chuckie-attachments", Obj(("kind", "application"), ("value", "生成供手机下载的文件时保存到：" + body.S("outbox") + "。输出目录按需创建，实际写入文件时再创建所需父目录。回复中每个文件使用独立一行 MEDIA:绝对路径。"))));
-            turnRequest["additionalContext"] = context;
+            if (body.S("outbox") is { Length: > 0 } outbox)
+                turnRequest["additionalContext"] = Obj(("chuckie-attachments", Obj(("kind", "application"),
+                    ("value", "生成给用户下载的文件保存到 " + outbox + "，回复中用标准 Markdown 链接 [名称](绝对路径) 给出，含空格的路径用 < > 包裹。"))));
             JsonObject result;
             if (desktopOwner) {
                 lock (gate) { runs[run]!["owner"] = "desktop"; Persist(); }

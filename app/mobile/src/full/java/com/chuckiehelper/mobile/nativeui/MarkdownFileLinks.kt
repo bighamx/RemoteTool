@@ -1,17 +1,12 @@
 package com.chuckiehelper.mobile.nativeui
 
-import java.net.URI
 import java.net.URLDecoder
 import org.json.JSONObject
 
 /** Only explicit absolute file destinations; web URLs and network shares remain outside attachments. */
 internal fun markdownFilePath(destination: String): String? = runCatching {
     var value = destination.trim().substringBefore('#').substringBefore('?')
-    if (value.startsWith("file:", true)) {
-        val uri = URI(value)
-        if (!uri.scheme.equals("file", true) || (!uri.host.isNullOrEmpty() && !uri.host.equals("localhost", true))) return null
-        value = uri.rawPath ?: return null
-    } else if (value.contains("://") || value.startsWith("//") || value.startsWith("\\\\")) return null
+    if (value.startsWith("file:", true) || value.contains("://") || value.startsWith("//") || value.startsWith("\\\\")) return null
     // '+' is a legal path character, never a URL form-space.
     value = URLDecoder.decode(value.replace(Regex("%(?![0-9A-Fa-f]{2})"), "%25").replace("+", "%2B"), "UTF-8").replace('\\', '/')
     if (Regex("^/[A-Za-z]:/").containsMatchIn(value)) value = value.drop(1)

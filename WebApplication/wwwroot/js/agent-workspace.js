@@ -605,27 +605,58 @@
             },
             messageTextRaw(m) {if (typeof m.content==='string') { if (m.content.startsWith('[{')) { try { const value=JSON.parse(m.content); if (Array.isArray(value)) return value.map(x=>this.asText(x)).filter(Boolean).join('\n')||m.content; } catch {} } return m.content; } if (Array.isArray(m.content)) return m.content.map(x=>this.asText(x)).filter(Boolean).join('\n'); return this.asText(m.text); },
             mediaMarkers(text) {const lines=text.replaceAll('\r\n','\n').split('\n');let fence=null,size=0;const markers=[];for(const [index,line] of lines.entries()){const delimiter=line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);if(fence){if(delimiter&&delimiter[1][0]===fence&&delimiter[1].length>=size&&!delimiter[2].trim())fence=null;continue;}if(delimiter){fence=delimiter[1][0];size=delimiter[1].length;continue;}const match=line.match(/^ {0,3}MEDIA:[ \t]*(.+?)[ \t]*$/i);if(match)markers.push({index,path:match[1].trim().replace(/^['"]|['"]$/g,'')});}return markers;},
+            markdownFilePath(destination) {
+                let value=this.asText(destination).trim();
+                if (/^file:/i.test(value)||value.includes('://')||/^(?:\/\/|\\\\)/.test(value)) return null;
+                try { value=decodeURIComponent(value); } catch { return null; }
+                value=value.replaceAll('\\','/').replace(/:\d+(?::\d+)?$/,'');
+                if (!/^(?:[a-z]:\/|\/)/i.test(value)) return null;
+                const prefix=/^[a-z]:\//i.test(value)?value.slice(0,3):'/', parts=[];
+                for (const part of value.slice(prefix.length).split('/')) {
+                    if (part==='..') parts.pop(); else if (part&&part!=='.') parts.push(part);
+                }
+                return prefix+parts.join('/');
+            },
+            markdownFilePaths(text) {
+                if (!markdown) return [];
+                const paths=[];
+                const visit=tokens=>{ for (const token of tokens||[]) {
+                    if (token.type==='link_open'||token.type==='image') {
+                        const path=this.markdownFilePath(token.attrGet(token.type==='image'?'src':'href'));
+                        if (path&&!paths.includes(path)) paths.push(path);
+                    }
+                    if (token.children) visit(token.children);
+                }};
+                visit(markdown.parse(text,{}));
+                return paths;
+            },
             normalPath(path) {const value=this.asText(path).replaceAll('\\','/');return /^[a-z]:\//i.test(value)?value.toLowerCase():value;},
             mediaMatches(message) {
                 if(message.role!=='assistant')return[];
                 const attached=message.attachments||[], byId=new Map();
-                for(const file of [...attached,...this.sessionFiles.filter(file=>file.outgoing)])if(file.id&&!byId.has(file.id))byId.set(file.id,file);
+                for(const file of [...attached,...this.sessionFiles])if(file.id&&!byId.has(file.id))byId.set(file.id,file);
                 const candidates=[...byId.values()];
-                return this.mediaMarkers(this.messageText(message)).map(marker=>{
-                    const path=this.normalPath(marker.path), name=path.split('/').at(-1), outbox=path.match(/\/outbox\/([^/]+)\//)?.[1], windows=/^[a-z]:\//i.test(path);
+                const text=this.messageText(message);
+                const markers=[...this.mediaMarkers(text),...this.markdownFilePaths(text).map(path=>({path,markdown:true}))];
+                return markers.map(marker=>{
+                    const canonical=this.markdownFilePath(marker.path);
+                    if (!canonical) return null;
+                    const path=this.normalPath(canonical), name=path.split('/').at(-1), outbox=path.match(/\/outbox\/([^/]+)\//)?.[1], windows=/^[a-z]:\//i.test(path);
                     const exact=candidates.filter(file=>file.mediaPath&&this.normalPath(file.mediaPath)===path);
+                    const inRoot=candidates.some(file=>file.deliveryRoot&&path.startsWith(this.normalPath(file.deliveryRoot).replace(/\/$/,'')+'/'));
+                    if (!exact.length&&!inRoot) return null;
                     const named=candidates.filter(file=>(windows?String(file.name||'').toLowerCase():String(file.name||''))===name);
                     const scoped=named.filter(file=>file.messageKey&&path.includes(`/outbox/${windows?String(file.messageKey).toLowerCase():file.messageKey}/`));
                     const own=named.filter(file=>!file.mediaPath&&!file.messageKey&&attached.some(item=>item.id===file.id));
                     const legacy=named.filter(file=>!file.mediaPath&&!file.messageKey);
                     const found=exact[0]||(scoped.length===1?scoped[0]:null)||(own.length===1?own[0]:null)||(!outbox&&legacy.length===1?legacy[0]:null);
-                    return {...marker,file:found||null};
-                });
+                    return marker.markdown&&!found ? null : {...marker,file:found||null};
+                }).filter(Boolean);
             },
             mediaFiles(message) {const ids=new Set();return this.mediaMatches(message).filter(marker=>marker.file&&!ids.has(marker.file.id)&&ids.add(marker.file.id)).map(marker=>marker.file);},
             unresolvedMedia(message) {return this.mediaMatches(message).filter(marker=>!marker.file);},
             linkedMediaIds(message) {return new Set(this.mediaFiles(message).map(file=>file.id));},
-            messageBody(message) {const text=this.messageText(message);const markers=this.mediaMarkers(text);if(message.role!=='assistant'||!markers.length)return text;const lines=new Set(markers.map(marker=>marker.index));return text.replaceAll('\r\n','\n').split('\n').filter((_,index)=>!lines.has(index)).join('\n').trim();},
+            messageBody(message) {const text=this.messageText(message);const markers=this.mediaMatches(message).filter(marker=>!marker.markdown&&marker.file);if(message.role!=='assistant'||!markers.length)return text;const lines=new Set(markers.map(marker=>marker.index));return text.replaceAll('\r\n','\n').split('\n').filter((_,index)=>!lines.has(index)).join('\n').trim();},
             renderMarkdown(text) {if(!markdown)return '';if(!markdownCache.has(text)){if(markdownCache.size>=200)markdownCache.clear();markdownCache.set(text,markdown.render(text));}return markdownCache.get(text);},
             mediaName(path) {return this.asText(path).replaceAll('\\','/').split('/').at(-1)||'附件';},
             mediaKind(file) {const mime=this.asText(file?.mime);return mime.startsWith('audio/')?'音频':mime.startsWith('video/')?'视频':mime.startsWith('image/')?'图片':'文件';},
@@ -791,7 +822,7 @@
                     this.historyHasMore=earlier.length?this.historyHasMore:!!result.has_more;
                     this.oldestId=this.messages[0]?.id||result.oldest_id;
                     const used=this.reconcileDelivered();this.reconcilePending(used);
-                    const signature=this.messages.filter(m=>m.role==='assistant'&&this.messageText(m).includes('MEDIA:')).map(m=>m.id).join('|');
+                    const signature=this.messages.filter(m=>m.role==='assistant'&&(this.messageText(m).includes('MEDIA:')||this.markdownFilePaths(this.messageText(m)).length)).map(m=>m.id).join('|');
                     if(Array.isArray(files?.data)){
                         this.startRead('files',epoch);
                         this.sessionFiles=files.data;this.mediaSignature=signature;this.filesRefreshAt=Date.now();

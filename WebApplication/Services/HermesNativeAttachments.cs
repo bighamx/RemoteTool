@@ -98,7 +98,8 @@ public sealed class HermesNativeAttachments(HermesProfiles profiles, HermesAttac
             System.IO.Path.Combine(profiles.Home,"cache","audio"),System.IO.Path.Combine(profiles.Home,"cache","video")};
         var comparison=OperatingSystem.IsWindows()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal;
         var allowed=homes.FirstOrDefault(home=>full.StartsWith(System.IO.Path.GetFullPath(home)+System.IO.Path.DirectorySeparatorChar,comparison));
-        if(allowed==null && !delivered) return false;
+        if (delivered && !uploads.IsDeliveryPath(session, full)) return false;
+        if (allowed == null) return false;
         if(allowed==root && System.IO.Path.GetRelativePath(root,full).Split(System.IO.Path.DirectorySeparatorChar).Any(part=>part.StartsWith('.'))) return false;
         var info=new FileInfo(full);
         // 500MB 上限只约束非交付引用; 助理用 MEDIA: 明确交付的文件(如大压缩包)不该因此丢卡片。
@@ -179,6 +180,7 @@ public sealed class HermesNativeAttachments(HermesProfiles profiles, HermesAttac
         var digest=source.Digest;
         return new {id=$"native_{message.Id}_{digest}",name=source.Name,size=source.Size,mime=source.Mime,
             mediaPath=message.Role=="assistant" ? source.Path?.Replace('\\','/') : null,
+            deliveryRoot=System.IO.Path.GetFullPath(uploads.Folder(session)).Replace('\\','/'),
             sha256=source.ContentHash ?? HermesAttachments.ImageHash(source.Path,source.Mime),
             uploadId=source.Path!=null && System.IO.Path.GetFullPath(source.Path).StartsWith(System.IO.Path.GetFullPath(uploads.Folder(session))+System.IO.Path.DirectorySeparatorChar,OperatingSystem.IsWindows()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal)
                 ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(System.IO.Path.GetRelativePath(uploads.Folder(session),source.Path)))).ToLowerInvariant() : null,

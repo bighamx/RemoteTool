@@ -40,9 +40,15 @@ fun presentHermesMessage(text: String, attached: List<JSONObject>, available: Li
     if (role != "assistant") return HermesPresentation(display, attached, emptyList())
     val files = attached.toMutableList()
     val unavailable = mutableListOf<String>()
-    val parsed = transformHermesMedia(display) { path ->
+    val parsed = transformHermesMedia(display) { reference ->
+        val path = markdownFilePath(reference) ?: return@transformHermesMedia false
         val name = path.substringAfterLast('/')
         val all = (attached + available).distinctBy { it.optString("id") }
+        if (all.none { file ->
+            val root = file.optString("deliveryRoot").trimEnd('/')
+            sameAttachmentPath(file.optString("mediaPath"), path) ||
+                root.isNotBlank() && path.startsWith(root + "/", ignoreCase = Regex("^[A-Za-z]:/").containsMatchIn(root))
+        }) return@transformHermesMedia false
         val candidates = all.filter {
             it.optString("name") == name
         }
@@ -73,8 +79,7 @@ fun presentHermesMessage(text: String, attached: List<JSONObject>, available: Li
         }
     }
     for (path in markdownFilePaths(display)) {
-        ((attached + available).firstOrNull { sameAttachmentPath(it.optString("mediaPath"), path) }
-            ?: markdownLinkAttachment(path))?.let { file ->
+        (attached + available).firstOrNull { sameAttachmentPath(it.optString("mediaPath"), path) }?.let { file ->
             if (files.none { it.optString("id") == file.optString("id") }) files += file
         }
     }

@@ -1552,7 +1552,7 @@ private fun MessageBubble(
                             if (role == "assistant" && path != null) {
                                 val file = presentation.files.firstOrNull { sameAttachmentPath(it.optString("mediaPath"), path) }
                                 if (file != null) openFile(file)
-                                else android.widget.Toast.makeText(context, "文件暂不可用", android.widget.Toast.LENGTH_SHORT).show()
+                                else markdownLinkAttachment(path)?.let(openFile)
                                 true
                             } else false
                         },

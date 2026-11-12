@@ -163,7 +163,7 @@ try {
             var text = prepared["input"] is JsonValue ? prepared["input"].ToString() : prepared["input"][0]["content"][0]["text"].ToString();
             JsonNode Recover(string sid, string content) => store.AddMessageAttachments(sid, new JsonObject {
                 ["data"] = new JsonArray(new JsonObject { ["id"] = 99, ["role"] = "user", ["content"] = content }) }.ToJsonString())["data"][0];
-            Check(text.StartsWith("测试") && text.Split('\n').Select(HermesNativeAttachments.ReferencePath).Contains(uploadedPath) && prepared["instructions"].ToString().Contains(uploadedPath), "Hermes persists ordinary file references in its conversation");
+            Check(text.StartsWith("测试") && text.Split('\n').Select(HermesNativeAttachments.ReferencePath).Contains(uploadedPath), "Hermes persists ordinary file references in its conversation");
             store.Bind(session,"99",[id]);
             Check(Recover(session, text)["attachments"][0]["id"].ToString() == id, "Hermes resolves attachments through confirmed message binding");
             var steer = store.PrepareHermesSteer(uploadInput, session, key).GetProperty("input").GetString();
@@ -178,7 +178,7 @@ try {
             var imageUpload = new FormFile(imageStream,0,imageStream.Length,"file","pixel.png");
             var image = JsonSerializer.SerializeToNode(await store.Upload(session,imageUpload,default));
             var native = JsonNode.Parse(store.PrepareRun(Body(session,[image["id"].ToString()]),key).GetRawText());
-            Check(native["input"][0]["content"][0]["text"].ToString().StartsWith("测试\n\n@image:"), "Hermes image input keeps user text plus a durable native file reference");
+            Check(native["input"][0]["content"][0]["text"].ToString() == "测试", "Hermes inline image input keeps one native image without a duplicate path hint");
             Check(native["input"][0]["content"][1]["type"].ToString() == "image_url", "Hermes uses native multimodal image input");
             Check(native["attachment_ids"] == null, "Hermes API does not receive bridge attachment IDs");
             var imageId=image["id"].ToString();
