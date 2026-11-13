@@ -811,7 +811,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             if (method == "item/completed" && item.S("phase") == "final_answer")
                 lock (gate) runs[run]!["output"] = item.S("text");
             Emit(run, method.EndsWith("/started") ? "message.started" : "message.completed", ("item_id", item.S("id")),
-                ("phase", item.S("phase")), ("text", item.S("text")), ("timestamp", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+                ("phase", item.S("phase")), ("text", item.S("text")), ("citations", CodexCitations.Read(item)), ("timestamp", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
         } else if (method is "item/started" or "item/completed" && item != null && item.S("type") is not ("userMessage" or "agentMessage" or "reasoning")) {
             if (CodexCompactionEvent.Create(item, method.EndsWith("/completed")) is { } compaction) {
                 var phase = compaction.S("event"); compaction.Remove("event");
@@ -1968,7 +1968,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                         attachedIds = CodexRunAttachments.Read(runs,session,requestKey);
                     }
                     rows.Add(Obj(("id",MessageId(item.S("id"))),("native_item_id",item.S("id")),("role",role),("timestamp",timestamp),("content",text),("phase",role=="assistant"?item.S("phase"):null),
-                        ("turn_id", turn.S("id")), ("client_request_id", requestKey), ("attachment_ids", attachedIds), ("editable", firstUser)));
+                        ("turn_id", turn.S("id")), ("client_request_id", requestKey), ("attachment_ids", attachedIds), ("editable", firstUser), ("citations", role == "assistant" ? CodexCitations.Read(item) : null)));
                 }
                 var toolCount = turn.A("items").Count(item => item.S("type") is
                     "commandExecution" or "fileChange" or "mcpToolCall" or "dynamicToolCall" or "webSearch" or "imageView" or "imageGeneration" or "collabAgentToolCall");

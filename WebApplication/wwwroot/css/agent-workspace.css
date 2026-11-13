@@ -1119,7 +1119,8 @@ body .agent-workspace .agent-setup-banner strong {
 
 .ivu-modal-content {
     background: var(--bg-secondary);
-    color: var(--text-primary)
+    color: var(--text-primary);
+    padding: 20px;
 }
 
 .ivu-modal-header {
@@ -1893,6 +1894,24 @@ body .agent-workspace .agent-setup-banner strong {
     color: var(--accent-primary);
     text-decoration: underline;
     overflow-wrap: anywhere
+}
+
+.agent-markdown .agent-citation {
+    margin: 0 2px;
+    font-size: .85em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap
+}
+
+.agent-citation.unavailable,
+.agent-citation-note {
+    color: var(--text-muted)
+}
+
+.agent-citation-note {
+    display: block;
+    margin-top: 6px;
+    font-size: 11px
 }
 
 .agent-markdown code {

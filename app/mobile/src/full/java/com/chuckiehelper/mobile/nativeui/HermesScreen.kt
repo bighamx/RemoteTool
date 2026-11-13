@@ -799,6 +799,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                     MessageBubble(message.role, message.text, message.attachments, api, model.files, agentName, message.delivery, message.timestamp,
                         narration = message.narration || message.localKey?.startsWith("narration-") == true, narrationTexts = model.narrationTexts,
                         streaming = item.streaming, reasoning = reasoningRow,
+                        renderCitations = agent == "codex", citationSources = model.citationsForMessage(message),
                         forkDisabledReason = when {
                             !model.supportsMessageActions -> "当前连接尚未支持，请重新连接刷新或更新该设备服务端"
                             message.serverId <= 0 -> "消息尚未绑定已保存记录，请刷新历史"
@@ -1491,6 +1492,8 @@ private fun MessageBubble(
     editDisabledReason: String? = null,
     streaming: Boolean = false,
     reasoning: Boolean = false,
+    renderCitations: Boolean = false,
+    citationSources: List<JSONObject> = emptyList(),
 ) {
     val context = LocalContext.current
     var preview by remember { mutableStateOf<JSONObject?>(null) }
@@ -1562,6 +1565,7 @@ private fun MessageBubble(
                         footer = if (inlineTime) metadata else "",
                         onBubbleTap = openActions,
                         streaming = streaming && role == "assistant",
+                        renderCitations = renderCitations && role == "assistant", citationSources = citationSources,
                         onLinkTap = { destination ->
                             val path = markdownFilePath(destination)
                             if (role == "assistant" && path != null) {

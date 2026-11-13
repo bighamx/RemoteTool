@@ -33,7 +33,7 @@ public static class RemoteToolPaths
     public static string CodexBridge => Path.Combine(ProgramData, "codex-bridge");
 
     /// <summary>Bridge state journal (runs/providers/model selections) for the current protocol.</summary>
-    public const int CodexBridgeVersion = 44;
+    public const int CodexBridgeVersion = 45;
     public static string CodexState => Path.Combine(CodexBridge, "state-v11");
 
     public static string ClaudeBridge => Path.Combine(ProgramData, "claude-bridge");

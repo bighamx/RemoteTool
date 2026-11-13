@@ -116,8 +116,8 @@ internal fun MobileNavigationEditor(settings: MobileNavigationSettings, close: (
         }
     }
     val colors = MaterialTheme.colorScheme
-    ModalBottomSheet(onDismissRequest = close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Surface(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("你的底栏", style = MaterialTheme.typography.titleLarge)
@@ -223,7 +223,7 @@ internal fun MobileDestinationIcon(item: MobileDestination, modifier: Modifier =
 }
 
 @Composable
-internal fun FullMobileNavigation(order: List<String>, route: String, onRoute: (String) -> Unit) {
+internal fun FullMobileNavigation(order: List<String>, route: String, deviceName: String = "", onRoute: (String) -> Unit) {
     val visible = normalizeMobileNavigation(order).take(5)
     NavigationBar {
         (visible + "更多").forEach { target ->
@@ -237,7 +237,8 @@ internal fun FullMobileNavigation(order: List<String>, route: String, onRoute: (
                 horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 CompositionLocalProvider(LocalContentColor provides color) {
                     if (item == null) Icon(Icons.Outlined.MoreHoriz, null, Modifier.size(24.dp)) else MobileDestinationIcon(item, Modifier.size(24.dp))
-                    Text(item?.label ?: "更多", color = color, style = MaterialTheme.typography.labelSmall,
+                    val label = if (target == "系统" && !selected) deviceName.ifBlank { "系统" } else item?.label ?: "更多"
+                    Text(label, color = color, style = MaterialTheme.typography.labelSmall,
                         maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
             }

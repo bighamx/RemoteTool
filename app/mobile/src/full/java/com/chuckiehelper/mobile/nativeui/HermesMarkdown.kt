@@ -35,7 +35,8 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal fun createMessageMarkwon(context: Context, onLinkTap: ((String) -> Boolean)? = null): Markwon = Markwon.builder(context)
+internal fun createMessageMarkwon(context: Context, onLinkTap: ((String) -> Boolean)? = null,
+    renderCitations: Boolean = false, citationSources: List<org.json.JSONObject> = emptyList(), streaming: Boolean = false): Markwon = Markwon.builder(context)
     .usePlugin(TablePlugin.create(context))
     .usePlugin(StrikethroughPlugin.create())
     .usePlugin(object : AbstractMarkwonPlugin() {
@@ -46,6 +47,12 @@ internal fun createMessageMarkwon(context: Context, onLinkTap: ((String) -> Bool
             }
         }
         override fun afterSetText(textView: TextView) {
+            if (renderCitations && textView.text is Spanned) {
+                val rendered = renderCodexCitations(textView.text as Spanned, citationSources, streaming) { view, url ->
+                    if (onLinkTap?.invoke(url) != true) fallback.resolve(view, url)
+                }
+                textView.setText(rendered, TextView.BufferType.SPANNABLE)
+            }
             val text = textView.text as? Spannable ?: return
             // Only explicit HTTP(S) URLs. Domain guessing turns filenames like
             // agents.md and Chinese prose into bogus links; code stays literal.
@@ -71,10 +78,14 @@ private data class MarkdownFrame(val source: String, val parsed: Spanned)
 
 @Composable
 fun HermesMarkdown(text: String, modifier: Modifier = Modifier, footer: String = "", onBubbleTap: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
-    streaming: Boolean = false, onLinkTap: ((String) -> Boolean)? = null, textSizeSp: Float = 15f) {
+    streaming: Boolean = false, onLinkTap: ((String) -> Boolean)? = null, textSizeSp: Float = 15f,
+    renderCitations: Boolean = false, citationSources: List<org.json.JSONObject> = emptyList()) {
     val context = LocalContext.current
     val currentLinkTap by rememberUpdatedState(onLinkTap)
-    val markwon = remember(context) { createMessageMarkwon(context) { currentLinkTap?.invoke(it) == true } }
+    val citationKey = if (renderCitations) citationSources.joinToString { it.toString() } else ""
+    val markwon = remember(context, citationKey, renderCitations, streaming && renderCitations) {
+        createMessageMarkwon(context, { currentLinkTap?.invoke(it) == true }, renderCitations, citationSources, streaming)
+    }
     val color = MaterialTheme.colorScheme.onSurface.toArgb()
     val link = MaterialTheme.colorScheme.primary.toArgb()
     val footerColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f).toArgb()

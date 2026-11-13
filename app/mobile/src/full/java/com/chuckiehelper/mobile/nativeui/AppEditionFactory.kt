@@ -48,6 +48,7 @@ private class FullEdition(
     override fun reloadSettings() { updates.reloadCloudSettings(); navigation.reload() }
     override fun openUpdates() = updates.open()
     override fun isNavigationRoute(route: String) = mobileDestinations.any { it.route == route }
+    override fun isRootRoute(route: String) = route == "更多" || route in navigation.order.take(5)
     override fun ownsToolbar(route: String) = route in listOf("Codex", "Hermes", "Claude Code", "文件", "Cloudflare", "空间管理")
     private fun draft(deviceId: String?) = shares.ready?.takeIf { it.deviceId == deviceId }
     override fun shareId(deviceId: String?) = draft(deviceId)?.id
@@ -58,13 +59,11 @@ private class FullEdition(
         ShareTargetScreen(shares, api, deviceId, deviceName, changeDevice)
     }
     @Composable override fun Navigation(route: String, deviceName: String, onRoute: (String) -> Unit) {
-        FullMobileNavigation(navigation.order, route, onRoute)
+        FullMobileNavigation(navigation.order, route, deviceName, onRoute)
     }
-    @Composable override fun ToolbarActions(route: String) {
+    @Composable override fun ToolbarActions(route: String, onDetail: (String) -> Unit) {
         if (route != "更多") return
-        var editing by remember { mutableStateOf(false) }
-        IconButton(onClick = { editing = true }) { Icon(Icons.Outlined.Tune, "自定义底栏") }
-        if (editing) MobileNavigationEditor(navigation) { editing = false }
+        IconButton(onClick = { onDetail("自定义底栏") }) { Icon(Icons.Outlined.Tune, "自定义底栏") }
     }
     @Composable override fun MoreItems(onDetail: (String) -> Unit) {
         navigation.order.drop(5).forEach { route ->
@@ -76,6 +75,7 @@ private class FullEdition(
         onDetail: (String) -> Unit, onClose: () -> Unit): Boolean {
         val sharedDraft = draft(deviceId)
         when (route) {
+            "自定义底栏" -> MobileNavigationEditor(navigation, onClose)
             "Claude Code" -> screens.SaveableStateProvider("claude-$deviceId") {
                 HermesScreen(api, deviceId, agent = "claude", incoming = sharedDraft?.takeIf { it.agent == "claude" }, onSharedHandled = { shares.finishDelivery(it) })
             }

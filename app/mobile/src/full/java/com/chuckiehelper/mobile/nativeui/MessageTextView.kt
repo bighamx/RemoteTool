@@ -34,16 +34,18 @@ internal class MessageTextView(context: Context) : TextView(context) {
     var appliedLinkColor: Int = 0
     private var renderedSource: String? = null
     private var renderedMarkdown = false
+    private var renderedMarkwon: Markwon? = null
 
     fun renderMarkdown(source: String, parsed: Spanned, markwon: Markwon) {
-        if (renderedSource == source && renderedMarkdown) return
+        if (renderedSource == source && renderedMarkdown && renderedMarkwon === markwon) return
         markwon.setParsedMarkdown(this, parsed)
         renderedSource = source
         renderedMarkdown = true
+        renderedMarkwon = markwon
     }
 
     fun renderMessage(source: String, markdown: Boolean, markwon: Markwon) {
-        if (renderedSource == source && renderedMarkdown == markdown) return
+        if (renderedSource == source && renderedMarkdown == markdown && (!markdown || renderedMarkwon === markwon)) return
         val previous = renderedSource
         if (markdown) markwon.setMarkdown(this, source)
         else if (!renderedMarkdown && previous != null && source.startsWith(previous))
@@ -51,6 +53,7 @@ internal class MessageTextView(context: Context) : TextView(context) {
         else setText(source, BufferType.EDITABLE)
         renderedSource = source
         renderedMarkdown = markdown
+        renderedMarkwon = if (markdown) markwon else null
     }
 
     // Read-only messages have no caret to follow. TextView's pre-draw otherwise

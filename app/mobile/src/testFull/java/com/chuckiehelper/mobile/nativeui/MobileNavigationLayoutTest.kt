@@ -90,11 +90,10 @@ class MobileNavigationLayoutTest {
     @Test fun editionKeepsFilesAsARealTabAndOpensTheEditorFromTheToolbar() {
         var edition: AppEdition? = null
         var clicked: String? = null
-        compose.setContent { MaterialTheme { Column { val current = rememberAppEdition(); SideEffect { edition = current }; current.ToolbarActions("更多"); current.MoreItems { clicked = it } } } }
+        compose.setContent { MaterialTheme { Column { val current = rememberAppEdition(); SideEffect { edition = current }; current.ToolbarActions("更多") { clicked = it }; current.MoreItems { clicked = it } } } }
         compose.onNodeWithText("自定义底栏").assertDoesNotExist()
         compose.onNodeWithContentDescription("自定义底栏").assertIsDisplayed().performClick()
-        compose.onNodeWithText("保存布局").assertIsDisplayed()
-        compose.onNodeWithText("取消").performClick()
+        compose.runOnIdle { assertEquals("自定义底栏", clicked) }
         compose.onNodeWithText("文件").performClick()
         compose.runOnIdle {
             assertEquals("文件", clicked)

@@ -136,9 +136,18 @@ fun NativeApp(model: NativeModel) {
         val choosingShare = edition.choosingShare(session?.device?.id)
         LaunchedEffect(route) { route = edition.normalizeRoute(route) }
         var detail by remember { mutableStateOf<String?>(null) }
+        var detailParents by remember { mutableStateOf(emptyList<String>()) }
+        val openDetail: (String) -> Unit = { destination ->
+            detail?.takeIf { it != destination }?.let { detailParents = detailParents + it }
+            detail = destination
+        }
+        val closeDetail: () -> Unit = {
+            detail = detailParents.lastOrNull()
+            detailParents = detailParents.dropLast(1)
+        }
         SideEffect { com.chuckiehelper.mobile.diagnostics.CrashReports.screen(if (session == null) "设备" else detail ?: route) }
         LaunchedEffect(edition.shareId(session?.device?.id)) {
-            edition.shareRoute(session?.device?.id)?.let { detail = null; route = it }
+            edition.shareRoute(session?.device?.id)?.let { detail = null; detailParents = emptyList(); route = it }
         }
         val scope = rememberCoroutineScope()
         val currentScene = NativeScene(
@@ -148,7 +157,7 @@ fun NativeApp(model: NativeModel) {
         val previousScene = when {
             currentScene.overlay != null -> currentScene.copy(overlay =
                 if (currentScene.overlay in listOf("diagnostics", "storage") && settings) "settings" else null)
-            detail != null -> currentScene.copy(detail = null)
+            detail != null -> currentScene.copy(detail = detailParents.lastOrNull())
             model.browsingDevices && model.session != null -> currentScene.copy(devices = false)
             else -> null
         }
@@ -159,15 +168,16 @@ fun NativeApp(model: NativeModel) {
                 model.message = null
             }
         }
-        LaunchedEffect(model.session) { detail = null }
+        LaunchedEffect(model.session) { detail = null; detailParents = emptyList() }
         LaunchedEffect(route, detail, model.browsingDevices, model.loginNeeded, model.session) { exitArmed = false }
         // After the first root back, release the callback so Android can preview
         // and complete the second gesture itself instead of an explicit finish().
         BackHandler(enabled = currentScene.overlay == null && model.session != null &&
             (model.browsingDevices || detail != null || model.loginNeeded || !exitArmed)) {
             if (model.browsingDevices) model.returnToDevice()
-            else if (detail != null) detail = null
+            else if (detail != null) closeDetail()
             else if (model.loginNeeded) model.showDevices()
+            else if (!edition.isRootRoute(route)) route = "更多"
             else {
                 exitArmed = true
                 exitToast.show()
@@ -179,7 +189,7 @@ fun NativeApp(model: NativeModel) {
                 "diagnostics" -> diagnostics = false
                 "storage" -> storage = false
                 "settings" -> settings = false
-                else -> if (model.browsingDevices) model.returnToDevice() else detail = null
+                else -> if (model.browsingDevices) model.returnToDevice() else closeDetail()
             }
         }) { scene ->
         val renderedSession = model.session.takeUnless { scene.devices }
@@ -251,14 +261,14 @@ fun NativeApp(model: NativeModel) {
                                 onClick = {
                                     if (scene.devices) model.returnToDevice()
                                     else if (scene.detail in listOf("Hermes", "Codex")) backDispatcher?.onBackPressed()
-                                    else detail = null
+                                    else closeDetail()
                                 }
                             ) {
                                 Icon(Icons.Outlined.ArrowBack, "返回")
                             }
                     },
                     actions = {
-                        if (!choosingShare && renderedSession != null && !model.loginNeeded && scene.detail == null) edition.ToolbarActions(route)
+                        if (!choosingShare && renderedSession != null && !model.loginNeeded && scene.detail == null) edition.ToolbarActions(route, openDetail)
                         if (renderedSession != null && serverUpdatesSupported) IconButton(onClick = { serverUpdatesOpen = true }) {
                             Icon(Icons.Outlined.SystemUpdateAlt, "服务端更新")
                         }
@@ -313,15 +323,15 @@ fun NativeApp(model: NativeModel) {
                                 when {
                                     page == "端口转发" -> TunnelScreen(api, renderedSession.device.id, renderedSession.device.name)
                                     edition.Page(page, api, renderedSession.device.id, error,
-                                        onDetail = { detail = it }, onClose = { if (detail != null) detail = null else route = "更多" }) -> Unit
+                                        onDetail = openDetail, onClose = { if (detail != null) closeDetail() else route = "更多" }) -> Unit
                                     else ->
                                         Column(
                                             Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
                                             verticalArrangement = Arrangement.spacedBy(12.dp),
                                         ) {
                                             CloudAccountEntry(cloud)
-                                            edition.MoreItems { if (edition.isNavigationRoute(it)) { detail = null; route = it } else detail = it }
-                                            if (!edition.isNavigationRoute("端口转发")) ToolRow("端口转发", "TCP / UDP · 双向局域网访问", Icons.Outlined.SwapHoriz) { detail = "端口转发" }
+                                            edition.MoreItems(openDetail)
+                                            if (!edition.isNavigationRoute("端口转发")) ToolRow("端口转发", "TCP / UDP · 双向局域网访问", Icons.Outlined.SwapHoriz) { openDetail("端口转发") }
                                             ToolRow("手机操控", "MCP · 无障碍 · Shizuku · Root", Icons.Outlined.PhoneAndroid) { phoneTools = true }
                                             ToolRow("设置", if (edition.showUpdates) "更新 · 日志 · 开机自启" else "日志 · 开机自启", Icons.Outlined.Settings) { settings = true }
                                         }

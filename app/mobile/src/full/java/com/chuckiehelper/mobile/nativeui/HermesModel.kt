@@ -33,6 +33,7 @@ data class HermesMessage(
     val messageUid: String? = null,
     /** Original string ID for providers such as Claude; serverId is only a local display identity. */
     val nativeId: String? = null,
+    val citations: List<JSONObject> = emptyList(),
 )
 
 data class HermesEvent(val type: String, val text: String, val detail: String = "", val itemId: String? = null)
@@ -596,6 +597,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     private fun setSubmitting(session: String?, value: Boolean) { conversationUi = conversationUi.submitting(session, value) }
     var pendingText by mutableStateOf("")
         private set
+    private val citationSources = mutableStateMapOf<String, List<JSONObject>>()
+    internal fun citationsForMessage(message: HermesMessage): List<JSONObject> {
+        if (agent != "codex" || message.role != "assistant") return emptyList()
+        if (message.citations.isNotEmpty()) return message.citations
+        val identity = if (message.serverId > 0) "server:${message.serverId}"
+            else assistantRowIdentities[message.localKey] ?: message.localKey
+        return identity?.let { citationSources[it] }.orEmpty()
+    }
     var pendingTextTimestamp by mutableStateOf<Long?>(null)
         private set
 
@@ -1145,6 +1154,11 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
         if (uid != null) pendingMessageUid = uid
         if (item == null && agent != "hermes") return
+        if (agent == "codex" && item != null && event.has("citations")) {
+            val key = chatAssistantIdentity(run, item, null)
+            citationSources[key] = event.array("citations").objects()
+            if (citationSources.size > 128) citationSources.keys.firstOrNull { it != key }?.let(citationSources::remove)
+        }
         event.optString("phase").takeIf { it.isNotBlank() && it != "null" }?.let { pendingPhase = it }
     }
     /** Shared by the SSE dispatcher and the history/stream interleaving regression tests. */
@@ -2173,6 +2187,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         if (id != selectedId || api !== connection || generation != openingGeneration) return
         // Native order and content are authoritative. Local snapshots never contribute rows.
         var history = withConfirmedKeys(id, response.array("data").objects().mapNotNull { row -> agentHistoryMessage(agent, row) })
+        if (agent == "codex") history = history.map { row ->
+            val citations = citationsForMessage(row).ifEmpty {
+                cachedHistory[id]?.firstOrNull { it.serverId == row.serverId && it.text == row.text }?.citations.orEmpty()
+            }
+            if (citations.isNotEmpty() && row.citations.isEmpty()) row.copy(citations = citations) else row
+        }
         if (isClaude) history = mergeClaudeHistory(cachedHistory[id].orEmpty(), history, earlier)
         history = mergeAgentCompactionNotices(agent, history, compactionNotices.filter { it.session == id })
         historyHasMore = if (isClaude && !earlier && history.firstOrNull()?.nativeId != response.array("data").optJSONObject(0)?.cleanSetting("id")) historyHasMore else response.optBoolean("has_more", false)

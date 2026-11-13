@@ -64,6 +64,16 @@
         ? window.markdownit({ html: false, breaks: true, linkify: true }) : null;
     const markdownCache = new Map();
     if (markdown) {
+        const originalText = markdown.renderer.rules.text;
+        markdown.renderer.rules.text = (tokens, index, options, env, renderer) => {
+            const value=tokens[index].content;
+            if(env?.citations && value.includes('\uE200')) {
+                let links=0;
+                for(let i=0;i<index;i++){if(tokens[i].type==='link_open')links++;else if(tokens[i].type==='link_close')links--;}
+                if(!links)return window.RemoteToolCitations.text(value,env.sources,env.citations,markdown.utils.escapeHtml);
+            }
+            return originalText?originalText(tokens,index,options,env,renderer):markdown.utils.escapeHtml(value);
+        };
         markdown.disable('image');
         markdown.linkify.set({fuzzyLink:false,fuzzyEmail:false,fuzzyIP:false});
         markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
@@ -708,7 +718,27 @@
             unresolvedMedia(message) {return this.mediaMatches(message).filter(marker=>!marker.file);},
             linkedMediaIds(message) {return new Set(this.mediaFiles(message).map(file=>file.id));},
             messageBody(message) {const text=this.messageText(message);const markers=this.mediaMatches(message).filter(marker=>!marker.markdown&&marker.file);if(message.role!=='assistant'||!markers.length)return text;const lines=new Set(markers.map(marker=>marker.index));return text.replaceAll('\r\n','\n').split('\n').filter((_,index)=>!lines.has(index)).join('\n').trim();},
-            renderMarkdown(text) {if(!markdown)return '';if(!markdownCache.has(text)){if(markdownCache.size>=200)markdownCache.clear();markdownCache.set(text,markdown.render(text));}return markdownCache.get(text);},
+            messageCitations(message) {
+                if(this.agent!=='codex'||message.role!=='assistant')return [];
+                if(Array.isArray(message.citations)&&message.citations.length)return message.citations;
+                const native=message.native_item_id||message.item_id;
+                const live=native&&this.liveSegments.find(segment=>String(segment.id)===String(native)&&segment.citations?.length);
+                if(live)return live.citations;
+                const saved=this.messages.find(row=>row.role==='assistant'&&row.id===message.id&&row.content===message.content&&row.citations?.length);
+                return saved?.citations||[];
+            },
+            renderMarkdown(text,sources=[],streaming=false) {
+                if(!markdown)return '';
+                const enabled=this.agent==='codex'&&!!window.RemoteToolCitations;
+                const key=enabled?JSON.stringify([text,sources,streaming]):text;
+                if(!markdownCache.has(key)){
+                    if(markdownCache.size>=200)markdownCache.clear();
+                    const state={numbers:new Map(),missing:false,streaming};
+                    const html=markdown.render(text,enabled?{sources,citations:state}:{});
+                    markdownCache.set(key,html+(state.missing&&!streaming?'<small class="agent-citation-note">部分引用链接未随消息返回</small>':''));
+                }
+                return markdownCache.get(key);
+            },
             mediaName(path) {return this.asText(path).replaceAll('\\','/').split('/').at(-1)||'附件';},
             mediaKind(file) {const mime=this.asText(file?.mime);return mime.startsWith('audio/')?'音频':mime.startsWith('video/')?'视频':mime.startsWith('image/')?'图片':'文件';},
             canPreviewFile(file) {const mime=this.asText(file?.mime).split(';')[0].trim().toLowerCase();if(['image/png','image/jpeg','image/gif','image/webp','image/avif','text/plain','application/json','application/pdf'].includes(mime))return true;if(!mime.startsWith('video/')&&!mime.startsWith('audio/'))return false;if(!previewSupport.has(mime))previewSupport.set(mime,!!document.createElement(mime.startsWith('video/')?'video':'audio').canPlayType(mime));return previewSupport.get(mime);},
@@ -864,9 +894,9 @@
                     result=result||await api.get(`${base}/sessions/${api.id(id)}/messages?limit=80`);
                     if(!current())return;
                     if(!Array.isArray(result.data))throw new Error('会话历史格式无效，请重试');
-                    const recent=result.data, previous=this.historyCacheState?[]:this.messages, tail=previous.at(-1);
+                    const recent=this.agent==='codex'?result.data.map(row=>{const citations=this.messageCitations(row);return citations.length&&!row.citations?.length?{...row,citations}:row;}):result.data, previous=this.historyCacheState?[]:this.messages, tail=previous.at(-1);
                     this.historyLoadedEpoch=epoch;this.historyCacheState='';
-                    void historyCache?.write(id,result);
+                    void historyCache?.write(id,{...result,data:recent});
                     const continuous=tail!=null&&recent.some(row=>historyIdentity(row)===historyIdentity(tail));
                     const ids=new Set(recent.map(historyIdentity));
                     const earlier=continuous?previous.filter(row=>row.id!=null&&!ids.has(historyIdentity(row))):[];
@@ -1096,7 +1126,7 @@
                         segment=last;segment.id=id;segment.messageUid=uid;
                     }
                     if(!segment){segment={id,text:'',phase:event.phase||'commentary',createdAt:this.messageStamp(event)||Date.now(),nativeItem:!!event.item_id,messageUid:uid,historyIds:[...this.streamHistoryIds]};this.liveSegments.push(segment);}
-                    if(event.phase)segment.phase=event.phase;
+                    if(event.phase)segment.phase=event.phase;if(Array.isArray(event.citations))segment.citations=event.citations;
                     if(type==='message.delta')segment.text+=this.asText(event.delta);
                     else if(type==='message.snapshot'||type==='message.completed')segment.text=this.asText(event.text)||segment.text;
                     if(type==='message.completed'){segment.complete=true;this.loadHistory();}

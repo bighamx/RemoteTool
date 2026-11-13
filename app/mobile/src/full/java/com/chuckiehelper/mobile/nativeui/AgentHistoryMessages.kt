@@ -32,5 +32,5 @@ internal fun agentHistoryMessage(agent: String, row: JSONObject): HermesMessage?
         nativeTurnId = row.optString("turn_id").takeIf { it.isNotBlank() && it != "null" },
         editable = row.optBoolean("editable", true),
         requestKey = row.optString("client_request_id").takeIf { it.isNotBlank() && it != "null" },
-        messageUid = uid, nativeId = nativeId)
+        messageUid = uid, nativeId = nativeId, citations = if (agent == "codex") row.array("citations").objects() else emptyList())
 }
