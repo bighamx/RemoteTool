@@ -37,6 +37,7 @@ public static class RemoteToolPaths
     public static string CodexState => Path.Combine(CodexBridge, "state-v11");
 
     public static string ClaudeBridge => Path.Combine(ProgramData, "claude-bridge");
+    public static string ClaudeManagedTools => Path.Combine(ProgramData, "claude-tools");
     /// <summary>Claude SDK bridge implementation revision; must match BRIDGE_VERSION in Tools/ClaudeBridge/server.mjs.</summary>
     public const int ClaudeBridgeVersion = 7;
 

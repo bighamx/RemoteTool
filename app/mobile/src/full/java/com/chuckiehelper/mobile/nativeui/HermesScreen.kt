@@ -471,7 +471,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
         if (agent == "claude" && !displayList && model.claudeSession?.optBoolean("rewind_pending") == true)
             TextButton(enabled = !model.submitting, onClick = { model.cancelClaudeRewind() }) { Text("撤回将在下次发送时生效 · 取消撤回") }
         var setupVisible by remember(agent,model.profile){mutableStateOf(false) }
-        AgentSetupCard(api,agent,model.profile,model.capabilities.optInt("state_version")){ setupVisible=it }
+        AgentSetupCard(api,agent,model.profile,model.capabilities.optInt("state_version"),onConfigured={model.reconnect()}){ setupVisible=it }
         if (agent == "claude" && !displayList && model.selectedId != null) TextButton(onClick = { permissionsDialog = true }) { Text("权限：" + when (model.claudeSession?.cleanSetting("permission_mode")) { "acceptEdits" -> "自动批准文件编辑"; "plan" -> "计划模式"; else -> "按本机规则询问" }, style = MaterialTheme.typography.labelSmall) }
         if (agent == "codex" && !displayList && accessMode == "full") TextButton(onClick = { permissionsDialog = true }) {
             Text("权限设置：完全访问", style = MaterialTheme.typography.labelSmall)

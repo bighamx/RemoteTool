@@ -26,7 +26,7 @@ public sealed class ClaudeBridge(IConfiguration configuration, IWebHostEnvironme
     public sealed record Health(int Port, string Token, int Protocol, int Version, int ActiveRuns, int Waiting, int Pid);
 
     /// <summary>Home directory of the account Claude Code must run as (the desktop user on a Windows service).</summary>
-    private static string UserProfile() {
+    internal static string UserProfile() {
         if (OperatingSystem.IsWindows() && InteractiveProcessLauncher.IsRunningInSession0) {
             var sid = InteractiveProcessLauncher.GetInteractiveUserSid();
             var profile = sid == null ? null : Registry.GetValue($@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}", "ProfileImagePath", null)?.ToString();
@@ -35,18 +35,61 @@ public sealed class ClaudeBridge(IConfiguration configuration, IWebHostEnvironme
         return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     }
 
-    private string FindExecutable(string setting, string name) {
+    internal string FindExecutable(string setting, string name) {
         var configured = configuration["Claude:" + setting];
         if (!string.IsNullOrWhiteSpace(configured)) return File.Exists(configured) ? Path.GetFullPath(configured) : throw new InvalidOperationException($"Claude:{setting} 指向的程序不存在");
+        var installed = Installation()?[setting]?.ToString();
+        if (!string.IsNullOrWhiteSpace(installed) && Path.IsPathFullyQualified(installed) && File.Exists(installed)) return installed;
         var home = UserProfile();
         var directories = new[] { Path.Combine(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin" }
-            .Concat(OperatingSystem.IsWindows() ? new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs") } : Array.Empty<string>())
+            .Concat(OperatingSystem.IsWindows() ? new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs"), Path.Combine(home, "AppData", "Roaming", "npm") } : Array.Empty<string>())
             .Concat((Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator));
         foreach (var directory in directories.Where(x => !string.IsNullOrWhiteSpace(x))) {
             var path = Path.Combine(directory, name + (OperatingSystem.IsWindows() ? ".exe" : ""));
             if (File.Exists(path)) return path;
+            if (name == "claude") {
+                var native = Path.Combine(directory, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+                if (OperatingSystem.IsWindows() && File.Exists(native)) return native;
+            }
         }
         throw new InvalidOperationException($"未找到 {name}，请安装后配置 Claude:{setting} 的绝对路径");
+    }
+
+    private static JsonObject? Installation() {
+        try { return JsonNode.Parse(File.ReadAllText(Path.Combine(RemoteToolPaths.ClaudeManagedTools, "installation.json"))) as JsonObject; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { return null; }
+    }
+    internal bool PendingRestart => Installation()?["restart_pending"]?.ToString() == "true";
+    internal string ResolveScript(bool requireSdk = true) {
+        var installed = Installation();
+        var script = installed?["script"]?.ToString();
+        if (installed?["bridge_version"]?.ToString() == RemoteToolPaths.ClaudeBridgeVersion.ToString() && !string.IsNullOrWhiteSpace(script)
+            && Path.IsPathFullyQualified(script) && File.Exists(script) && (!requireSdk || SdkInstalled(script))) return script;
+        return FindScript(AppContext.BaseDirectory, environment.ContentRootPath, requireSdk);
+    }
+    internal static bool SdkInstalled(string script) {
+        var sdk = Path.Combine(Path.GetDirectoryName(script)!, "node_modules", "@anthropic-ai", "claude-agent-sdk");
+        return File.Exists(Path.Combine(sdk, "package.json")) && File.Exists(Path.Combine(sdk, "sdk.mjs"));
+    }
+    internal static string FindScript(string baseDirectory, string contentRoot, bool requireSdk = true) {
+        var candidates = new List<string>();
+        foreach (var root in new[] { baseDirectory, contentRoot }) {
+            candidates.Add(Path.Combine(root, "claude", "server.mjs"));
+            candidates.Add(Path.Combine(root, "Tools", "ClaudeBridge", "server.mjs"));
+        }
+        foreach (var root in new[] { baseDirectory, contentRoot }) {
+            for (var directory = new DirectoryInfo(root); directory != null; directory = directory.Parent) {
+                if (!File.Exists(Path.Combine(directory.FullName, "WebApplication.csproj"))) continue;
+                candidates.Add(Path.Combine(directory.FullName, "Tools", "ClaudeBridge", "server.mjs"));
+                break;
+            }
+        }
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var scripts = candidates.Distinct(comparer).Where(File.Exists).ToArray();
+        var script = scripts.FirstOrDefault(SdkInstalled) ?? scripts.FirstOrDefault()
+            ?? throw new InvalidOperationException("Claude 桥接文件未发布，请重新安装服务端");
+        if (requireSdk && !SdkInstalled(script)) throw new InvalidOperationException($"请在 Claude 桥接目录 {Path.GetDirectoryName(script)} 执行 npm ci --omit=dev --omit=optional 安装官方 SDK，然后重试");
+        return script;
     }
 
     private static async Task<HttpResponseMessage> Raw(HttpMethod method, int port, string token, string path, string? body, string? key, string? lastEvent, TimeSpan? budget, CancellationToken ct) {
@@ -95,9 +138,9 @@ public sealed class ClaudeBridge(IConfiguration configuration, IWebHostEnvironme
         await gate.WaitAsync(ct);
         try {
             if (await Probe(ct) is { } live) {
-                if (live.Protocol == Protocol && live.Version >= RemoteToolPaths.ClaudeBridgeVersion) return live;
+                if (live.Protocol == Protocol && live.Version >= RemoteToolPaths.ClaudeBridgeVersion && !PendingRestart) return live;
                 // Never interrupt running or waiting tasks to upgrade; an idle old worker exits on request.
-                if (live.ActiveRuns > 0) {
+                if (live.ActiveRuns > 0 || live.Waiting > 0) {
                     if (live.Protocol == Protocol) return live;
                     throw new InvalidOperationException("Claude 桥接正在执行旧版本任务；任务结束后会自动更新，请稍后重试");
                 }
@@ -110,11 +153,7 @@ public sealed class ClaudeBridge(IConfiguration configuration, IWebHostEnvironme
                 }
                 for (var i = 0; i < 40 && await Probe(ct) != null; i++) await Task.Delay(100, ct);
             }
-            var candidates = new[] { Path.Combine(AppContext.BaseDirectory, "claude", "server.mjs"), Path.Combine(environment.ContentRootPath, "Tools", "ClaudeBridge", "server.mjs") }.Where(File.Exists).ToArray();
-            static bool Installed(string script) => Directory.Exists(Path.Combine(Path.GetDirectoryName(script)!, "node_modules", "@anthropic-ai", "claude-agent-sdk"));
-            var script = candidates.FirstOrDefault(Installed) ?? candidates.FirstOrDefault()
-                ?? throw new InvalidOperationException("Claude 桥接文件未发布，请重新安装服务端");
-            if (!Installed(script)) throw new InvalidOperationException("请在服务端 claude 目录（源码为 WebApplication/Tools/ClaudeBridge）执行 npm ci --omit=dev --omit=optional 安装官方 SDK，然后重试");
+            var script = ResolveScript();
             var node = FindExecutable("NodeExecutable", "node");
             var claude = FindExecutable("Executable", "claude");
             Directory.CreateDirectory(Root);
@@ -155,6 +194,7 @@ public sealed class ClaudeBridge(IConfiguration configuration, IWebHostEnvironme
             } else {
                 // No redirected pipes: the worker must outlive this host, and a closed pipe must not kill it.
                 var start = new ProcessStartInfo(node) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(script)! };
+                start.Environment["PATH"] = Path.GetDirectoryName(node) + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
                 foreach (var value in arguments) start.ArgumentList.Add(value);
                 // Session markers inherited from a Claude terminal would make runs child sessions without transcripts.
                 foreach (var name in new[] { "CLAUDE_CONFIG_DIR", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_SESSION_ID",
@@ -163,7 +203,13 @@ public sealed class ClaudeBridge(IConfiguration configuration, IWebHostEnvironme
             }
             for (var i = 0; i < 60; i++) {
                 await Task.Delay(150, ct);
-                if (await Probe(ct) is { } ready && ready.Protocol == Protocol) return ready;
+                if (await Probe(ct) is { } ready && ready.Protocol == Protocol) {
+                    if (Installation() is { } installed && installed["restart_pending"]?.ToString() == "true") {
+                        installed["restart_pending"] = false;
+                        Codex.CodexJson.Atomic(Path.Combine(RemoteToolPaths.ClaudeManagedTools, "installation.json"), installed);
+                    }
+                    return ready;
+                }
             }
             throw new InvalidOperationException("Claude 桥接未启动，请检查 Node.js 20+、SDK 安装与本机 Claude Code");
         } finally { gate.Release(); }

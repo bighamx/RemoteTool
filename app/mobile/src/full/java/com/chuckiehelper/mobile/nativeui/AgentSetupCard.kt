@@ -28,6 +28,9 @@ internal fun setupRelatedFailure(value:String):Boolean=
     value.contains("尚未安装")||value.contains("Hermes 尚未接入")||value.contains("codex_tools_missing")||
     value.contains("找不到 Codex")||value.contains("Codex 工具程序")
 
+internal fun agentSetupBusy(state:JSONObject?):Boolean =
+    state?.optJSONObject("install")?.optBoolean("busy") == true || state?.optString("state") == "installing"
+
 private fun setupBadge(state:String):String=when(state){
     "not_installed"->"未安装"
     "configure"->"需要启用"
@@ -48,7 +51,7 @@ private fun setupTint(state:String,colors:ColorScheme):Color=when(state){
 }
 
 @Composable
-internal fun AgentSetupCard(api:NativeApi,agent:String,profile:String="default",refreshKey:Int=0,onVisibility:(Boolean)->Unit={}){
+internal fun AgentSetupCard(api:NativeApi,agent:String,profile:String="default",refreshKey:Int=0,onConfigured:()->Unit={},onVisibility:(Boolean)->Unit={}){
     var result by remember(api,agent,profile){mutableStateOf<JSONObject?>(null)}
     var retry by remember{mutableIntStateOf(0)}
     var details by remember{mutableStateOf(false)}
@@ -56,10 +59,28 @@ internal fun AgentSetupCard(api:NativeApi,agent:String,profile:String="default",
     var message by remember{mutableStateOf<String?>(null)}
     var polling by remember{mutableStateOf(false)}
     val scope=rememberCoroutineScope()
+    var configurationPending by remember(api,agent,profile){mutableStateOf(false)}
+    val configuredCallback by rememberUpdatedState(onConfigured)
     LaunchedEffect(api,agent,profile,retry,refreshKey){
-        try{result=api.json("/api/agent-setup/$agent?profile=${q(profile)}")}
-        catch(e:CancellationException){throw e}
+        try {
+            var current=api.json("/api/agent-setup/$agent?profile=${q(profile)}")
+            result=current
+            val wasInstalling=agentSetupBusy(current)||configurationPending
+            while(agentSetupBusy(current)) {
+                polling=true
+                kotlinx.coroutines.delay(3000)
+                try {
+                    current=api.json("/api/agent-setup/$agent?profile=${q(profile)}")
+                    result=current
+                    current.optJSONObject("install")?.optString("message")?.takeIf{it.isNotBlank()}?.let{message=it}
+                } catch(e:CancellationException){throw e}
+                catch(_:Exception){message="正在重新连接，配置任务继续在服务端执行。"}
+            }
+            configurationPending=false
+            if(wasInstalling && (current.optString("state")=="ready" || current.optJSONObject("install")?.optString("phase")=="ready"))configuredCallback()
+        } catch(e:CancellationException){throw e}
         catch(_:Exception){result=null}
+        finally{polling=false}
     }
     val state=result?:return
     val phase=state.optString("state")
@@ -77,28 +98,33 @@ internal fun AgentSetupCard(api:NativeApi,agent:String,profile:String="default",
                 Text(state.optString("title"),style=MaterialTheme.typography.titleSmall)
             }
             Text(state.optString("message"),style=MaterialTheme.typography.bodySmall)
-            install?.optString("message")?.takeIf{it.isNotBlank()}?.let{
+            val stepMessage=install?.optString("message").orEmpty()
+            stepMessage.takeIf{it.isNotBlank() && it!=state.optString("message")}?.let{
                 Text(it,style=MaterialTheme.typography.bodySmall,color=colors.onSurfaceVariant)
             }
-            message?.let{Text(it,style=MaterialTheme.typography.bodySmall)}
+            message?.takeIf{it!=state.optString("message") && it!=stepMessage}?.let{Text(it,style=MaterialTheme.typography.bodySmall)}
             Row(verticalAlignment=Alignment.CenterVertically){
                 TextButton(enabled=!busy,onClick={details=true}){Text("安装与配置步骤")}
                 TextButton(enabled=!busy&&!polling,onClick={retry++}){Text(if(polling)"安装中…" else "重新检测")}
             }
-            if(state.optBoolean("canInstall") && install?.optString("phase")!="ready")Button(enabled=!busy,onClick={busy=true;polling=true;message=null;scope.launch{
+            if(state.optBoolean("canInstall") && install?.optString("phase")!="ready")Button(enabled=!busy&&!agentSetupBusy(state),onClick={busy=true;message=null;scope.launch{
                 try{
                     val started=api.json("/api/agent-setup/$agent/install",obj());message=started.optString("message")
-                    var rounds=0
-                    while(rounds<200){
-                        kotlinx.coroutines.delay(3000);rounds++
-                        val now=api.json("/api/agent-setup/$agent?profile=${q(profile)}")
-                        now.optJSONObject("install")?.optString("message")?.takeIf{it.isNotBlank()}?.let{message=it}
-                        if(now.optString("state")!="installing")break
-                    }
                     retry++
                 }
-                catch(e:CancellationException){throw e}catch(e:Exception){message=e.message}finally{busy=false;polling=false}
+                catch(e:CancellationException){throw e}catch(e:Exception){message=e.message}finally{busy=false}
             }}){Text(if(busy)"安装中…" else if(agent=="codex")"一键安装 Codex" else "一键安装 Hermes")}
+            if(state.optBoolean("canConfigureClaude"))Button(enabled=!busy&&!agentSetupBusy(state),onClick={
+                busy=true;configurationPending=true;message="正在提交 Claude 配置任务…"
+                scope.launch {
+                    try {
+                        val started=api.json("/api/agent-setup/claude/configure",obj())
+                        message=started.optString("message")
+                    } catch(e:CancellationException){throw e}
+                    catch(e:Exception){message=e.message}
+                    finally{busy=false;retry++}
+                }
+            }){Text(if(busy||agentSetupBusy(state))"配置中…" else "一键配置 Claude")}
             if(state.optBoolean("canConfigureApi"))Button(enabled=!busy,onClick={busy=true;scope.launch{
                 try{val r=api.json("/api/agent-setup/hermes/configure",obj());message=r.optString("message");retry++}
                 catch(e:CancellationException){throw e}catch(e:Exception){message=e.message}finally{busy=false}

@@ -12,6 +12,11 @@ AssemblyLoadContext.Default.Resolving += (_, name) => {
     return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null;
 };
 var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(dll);
+if (args.Contains("--claude-config-only")) { await ClaudeConfigurationChecks.Run(assembly); await ClaudeBridgeRestartChecks.Run(assembly); return; }
+ClaudeBridgePathChecks.Run(assembly);
+if (args.Contains("--claude-paths-only")) return;
+await ClaudeConfigurationChecks.Run(assembly);
+await ClaudeBridgeRestartChecks.Run(assembly);
 await HermesSessionCreateChecks.Run(assembly);
 if (args.Contains("--hermes-create-only")) return;
 var agent = assembly.GetType("RemoteTool.WebApi.Services.Codex.CodexAgent", true)!;

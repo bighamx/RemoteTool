@@ -4,9 +4,13 @@ RemoteTool 通过官方 `@anthropic-ai/claude-agent-sdk` 驱动服务端机器�
 
 ## 安装
 
+打开 Web 或主 App 的 Claude 页面，点击“一键配置 Claude”。服务端会检查现有安装，按需安装 Node.js 24、官方 Claude Code 和锁定版本的 SDK，保存程序路径并验证桥接；页面显示步骤进度，重新进入后可继续查看。自动安装文件位于 RemoteTool 数据目录的 `claude-tools`，Node 下载通过官方 SHA-256 清单校验。配置完成后，按登录提示完成账号登录。
+
+也可手动安装：
+
 1. 在运行 RemoteTool 的系统用户下安装官方 Claude Code（需支持 `claude auth status --json` 与 `claude agents --json`；以 2.1.322 验证）和 Node.js 20+。
 2. 在该用户下执行 `claude auth login`，用 `claude auth status` 确认已登录。Windows 服务以 SYSTEM 运行时，桥接会像 Codex 一样在已登录的桌面用户会话中启动（需要桌面用户已登录）。
-3. 源码运行：在 `WebApplication/Tools/ClaudeBridge` 执行 `npm ci --omit=dev --omit=optional`。发布包：在发布目录 `claude` 下执行同一命令。桥接使用本机已安装的 `claude`，不需要 SDK 捆绑的可选二进制。
+3. 源码运行：在 `WebApplication/Tools/ClaudeBridge` 执行 `npm ci --omit=dev --omit=optional`；网站指向项目的 `bin/Debug/net8.0` 等输出目录时也会查找上级项目中的这份安装。发布包：在发布目录 `claude` 下执行同一命令。缺少 SDK 时错误提示会显示准确的安装目录。桥接使用本机已安装的 `claude`，不需要 SDK 捆绑的可选二进制。
 4. 打开 Web 或 Android 主 App 的 Claude Code 页面，就绪卡片只检查安装与登录，不发送提示词。
 
 可选配置（环境变量用双下划线，如 `Claude__Executable`）：
@@ -22,7 +26,7 @@ RemoteTool 通过官方 `@anthropic-ai/claude-agent-sdk` 驱动服务端机器�
 }
 ```
 
-- 未配置路径时在 PATH、用户 `.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 查找；Windows 需指向 `claude.exe` / `node.exe`。
+- 显式程序路径优先，其次使用自动配置保存的路径，再查找 PATH、用户 `.local/bin`、Windows 用户 npm 安装目录和 Unix 常用目录。Windows 支持定位 npm 安装包中的原生 `claude.exe`。
 - `AllowCustomEndpoint=false`（默认）时，配置了非官方 `ANTHROPIC_BASE_URL` 或 Bedrock/Vertex/Foundry 的项目会被拒绝执行；设为 `true` 后按本机 Claude Code 配置原样执行。
 - 用户配置、CLAUDE.md、hooks、skills、插件和 MCP 由官方 Claude Code 加载；RemoteTool 不复制凭据，不提供远程登录。
 

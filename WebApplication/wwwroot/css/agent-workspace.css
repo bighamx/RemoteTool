@@ -362,6 +362,10 @@
     overflow-anchor: auto
 }
 
+body .agent-workspace .agent-setup-banner strong {
+    color: var(--text-primary)
+}
+
 .agent-timeline-wrap {
     position: relative;
     display: flex;
