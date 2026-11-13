@@ -39,17 +39,23 @@ class HistoryColdStartTest {
             HermesModel::class.java.getDeclaredField("api").apply { isAccessible = true }
                 .set(model, NativeApi("http://127.0.0.1:${server.localPort}"))
             try {
-                model.select(obj("id" to session, "title" to "已结束的会话"))
-                // 首次渲染与磁盘回读的先后由调度决定(慢机器上回读可能已经完成),
-                // 断言点在于任何时候都不把旧的待同步回执当成消息显示出来。
-                assertTrue("Do not flash an old receipt before reading the cache",
-                    model.messages.none { it.text.contains("旧的待同步回复") })
+                val modelCache = HermesModel::class.java.getDeclaredField("historyCache")
+                    .apply { isAccessible = true }.get(model) as AgentHistoryCache
+                // read() is synchronized on this instance. Hold the actual disk
+                // reader until the initial-loading assertions have completed.
+                synchronized(modelCache) {
+                    model.select(obj("id" to session, "title" to "已结束的会话"))
+                    assertTrue("Do not flash an old receipt before reading the cache",
+                        model.messages.none { it.text.contains("旧的待同步回复") })
+                    assertTrue(model.historyLoading)
+                }
                 val deadline = System.nanoTime() + 5_000_000_000L
                 while (model.messages.none { it.serverId == latest.serverId } && System.nanoTime() < deadline) {
                     shadowOf(Looper.getMainLooper()).idle()
                     Thread.sleep(10)
                 }
                 assertEquals(latest, model.messages.lastOrNull())
+                assertEquals(listOf(1L, 2L), model.messages.filter { it.serverId > 0 }.map { it.serverId })
                 assertFalse("A replayed history window is no longer initial loading", model.historyLoading)
                 assertTrue("The receipt remains available for reconciliation", model.finalSyncPending)
             } finally {
