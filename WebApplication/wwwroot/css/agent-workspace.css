@@ -643,6 +643,24 @@
     color: var(--text-muted)
 }
 
+.agent-run-timers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    padding: 0 4px 6px;
+    color: var(--text-muted);
+    font-size: 11px
+}
+
+.agent-run-timers > span {
+    flex: 1;
+    white-space: nowrap
+}
+
+.agent-run-timers time {
+    font-variant-numeric: tabular-nums
+}
+
 .agent-live-tool {
     display: flex;
     align-items: center;

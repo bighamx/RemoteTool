@@ -21,6 +21,7 @@
     const echoKey = id => `remotetool:web:delivered:${storageAgent}:${id}`;
     const draftKey = id => `remotetool:web:draft:${storageAgent}:${id}`;
     const draftFilesKey = id => `remotetool:web:draft-files:${storageAgent}:${id}`;
+    const runTimingKey = id => `remotetool:web:run-timing:${storageAgent}:${id}`;
     const selectedSessionKey = `remotetool:web:selected:${storageAgent}`;
     // Web Crypto's randomUUID only exists in a secure context (https or localhost).
     // Over the LAN plain http address it is undefined, which broke send/compact/fork/queue
@@ -90,6 +91,7 @@
             showMoveDialog: false, moveTarget: null, moveMoving: false, moveSearch: '', moveError: '',
             showCreateDialog: false, createTitle: '', createProjectId: '', createMode: 'existing', createRoot: '', createRoots: [], createProjectName: '', createProjectSearch: '', createBrowser: false, createBrowserPath: '', createBrowserDirs: [], createBrowserLoading: false, createBrowserError: '', createBrowserNew: '', createBrowserMkdir: false, creating: false, createError: '', showEditDialog: false, editText: '', editTarget: null, editFiles: [], editing: false, editError: '', messageMenu: null, sessionMenu: null,
             reasoningRun: null, reasoningEnded: false, reasoningSegmentId: null, reasoningIndex: 0, reasoningStartedAt: 0,
+            runTiming: {}, runTimingDirty: false, runNow: Date.now(), runClockTimer: null,
             liveSegments: [], liveTools: [], streamRun: null, streamSeq: 0, streamConnected: false, streamGone: false, toolTimer: null, externalRunning: false, externalActivity: null, toolsCollapsed: true, apiServer: null, enablingApiServer: false,
             // 思考过程显示开关: 输入框左侧菜单里切换, 记在 localStorage。
             showReasoning: localStorage.getItem('remotetool:web:showReasoning') !== '0' }),
@@ -251,6 +253,17 @@
                 return out;
             },
             statusText() { if (this.activeRun) return ({starting:'正在启动',submitting:'正在提交',running:'正在执行',waiting:'等待确认',waiting_for_approval:'等待确认',stopping:'正在停止'})[this.runStatus] || this.runStatus || '正在执行'; if(this.externalRunning)return this.agent==='claude'?(this.externalActivity?.external_status==='busy'?'电脑上正在执行':'电脑占用中'):this.externalActivity?.kind==='compact'?'其他客户端正在压缩上下文':'其他客户端正在执行'; const value=this.selected?.status; return (typeof value==='object'?value?.type:value) || '空闲'; },
+            runTimers() {
+                const activity=this.externalRunning?this.externalActivity:null;
+                const compacting=activity&&(activity.kind==='compact'||['context compression started','context compression in progress'].includes(activity.activity_text));
+                const started=activity?this.messageStamp({timestamp:compacting?activity.phase_started_at:activity.started_at}):this.runTiming.startedAt;
+                const response=activity?this.messageStamp({timestamp:activity.last_response_at}):this.runTiming.lastResponseAt;
+                const last=compacting&&(!started||response<started)?null:response;
+                return [
+                    {label:compacting?'等待压缩':!last?'等待响应':activity?'上次保存响应':'上次响应',since:last||started},
+                    {label:compacting?'压缩':'已运行',since:started}
+                ];
+            },
             contextPercent() { const tokens=Number(this.context.context?.tokens||0);const limit=Number(this.context.context?.limit||0);return limit>0?Math.min(100,Math.max(0,Math.round(tokens/limit*100))):0; },
             activeProvider() {return (this.providersState.endpoints||[]).find(row=>row.id===this.providersState.provider);},
             officialProviderInUse() {return this.providersState.official_provider ?? (this.providersState.provider ? this.providersState.provider==='openai' : true);},
@@ -775,6 +788,7 @@
                 }
                 const fromList=this.mobileViewport&&this.sessionsOpen;
                 this.mobileComposerOpen=false;this.inspectorOpen=false;
+                this.saveRunTiming();this.runTiming={};
                 this.stopEventStream();
                 this.resetReasoning();
                 this.olderLoading=false;
@@ -953,6 +967,54 @@
                 }catch(error){if(current())this.error=error.message;}
             },
             async takeover() {if(this.agent==='hermes'||!this.externalRunning||!this.selectedId||this.takingOver)return;const activity=this.externalActivity||{};const question=this.agent==='claude'?(activity.external_status==='busy'?`电脑上的 Claude Code（PID ${activity.pid}）正在执行任务。接管会结束该进程并中断这个任务，已完成的内容保留在会话记录中。继续？`:`将结束电脑上占用此会话的 Claude Code 进程（PID ${activity.pid}），之后由 Web 端继续。会话记录保留，电脑上可用 claude --resume 再打开。继续？`):'将中断其他客户端正在执行的任务，并由 Web 端接管会话。继续？';if(!confirm(question))return;this.takingOver=true;try{const id=this.selectedId;const result=await api.post(`${base}/sessions/${api.id(id)}/takeover`,this.agent==='claude'?{expected_pid:activity.pid,expected_started_at:activity.started_at,expected_status:activity.external_status||null}:{expected_activity_id:activity.activity_id||''});if(!result.ready)throw new Error('接管尚未确认');this.externalRunning=false;this.externalActivity=null;await this.refreshAll();}catch(e){this.error=e.message;if(e.code==='holder_busy'||e.code==='holder_changed')void this.loadStatus();}finally{this.takingOver=false;}},
+            runElapsed(since) {
+                if(!since)return '—';
+                const seconds=Math.max(0,Math.floor((this.runNow-since)/1000));
+                const minutes=String(Math.floor(seconds/60)%60).padStart(2,'0');
+                const rest=String(seconds%60).padStart(2,'0');
+                return seconds<3600?`${minutes}:${rest}`:`${Math.floor(seconds/3600)}:${minutes}:${rest}`;
+            },
+            startRunTiming(runId,run={}) {
+                if(this.runTiming.runId!==runId){
+                    let saved;
+                    try{saved=JSON.parse(localStorage.getItem(runTimingKey(this.selectedId))||'null');}catch{}
+                    this.runTiming={runId,startedAt:null,lastResponseAt:null,sequence:-1,lastEvent:null};
+                    if(saved?.runId===runId){
+                        this.runTiming.startedAt=this.messageStamp({timestamp:saved.startedAt})||null;
+                        this.runTiming.lastResponseAt=this.messageStamp({timestamp:saved.lastResponseAt})||null;
+                        this.runTiming.sequence=Number.isSafeInteger(saved.sequence)?saved.sequence:-1;
+                        this.runTiming.lastEvent=typeof saved.lastEvent==='number'?saved.lastEvent:null;
+                    }
+                }
+                const started=this.messageStamp({timestamp:run.started_at||run.created_at});
+                if(started)this.runTiming.startedAt=started;
+                this.runNow=Date.now();this.runTimingDirty=true;
+            },
+            saveRunTiming() {
+                if(!this.runTimingDirty||!this.selectedId||!this.runTiming.runId)return;
+                try{localStorage.setItem(runTimingKey(this.selectedId),JSON.stringify(this.runTiming));this.runTimingDirty=false;}catch{}
+            },
+            recordRunResponse(event) {
+                if(!this.activeRun||event.run_id&&event.run_id!==this.activeRun)return;
+                if(this.runTiming.runId!==this.activeRun)this.startRunTiming(this.activeRun);
+                const timing=this.runTiming,value=Number(event.seq??-1),seq=Number.isSafeInteger(value)?value:-1;
+                if(seq>=0&&seq<=timing.sequence)return;
+                if(seq<0){
+                    const text=JSON.stringify(event);let fingerprint=2166136261;
+                    for(let i=0;i<text.length;i++)fingerprint=Math.imul(fingerprint^text.charCodeAt(i),16777619);
+                    if(fingerprint===timing.lastEvent)return;
+                    timing.lastEvent=fingerprint;
+                }
+                timing.sequence=Math.max(timing.sequence,seq);
+                const type=event.type||event.event||'';
+                if(type.startsWith('tool.')||type.startsWith('reasoning.')||['message.delta','message.interim','message.snapshot','message.completed','approval.request','response.output_text.delta'].includes(type))
+                    timing.lastResponseAt=Math.max(timing.lastResponseAt||0,Date.now());
+                this.runTimingDirty=true;
+            },
+            updateRunClock() {
+                this.saveRunTiming();
+                if(document.visibilityState==='visible'&&this.workspaceVisible()&&(this.activeRun||this.externalRunning))this.runNow=Date.now();
+            },
             stopEventStream() {streamAbort?.abort();streamAbort=null;this.streamRun=null;this.streamConnected=false;},
             resetReasoning(runId=null) {
                 if(reasoningTimer!==null)clearTimeout(reasoningTimer);
@@ -985,9 +1047,10 @@
                 localStorage.setItem('remotetool:web:showReasoning',this.showReasoning?'1':'0');
                 // 只切显示: 不动 liveSegments/累积状态, 关掉再打开能立刻看到本轮已有内容。
             },
-            ensureEventStream(runId,run={}) {if(this.streamRun===runId)return;const sameReasoningRun=this.reasons&&this.reasoningRun===runId;if(this.reasons&&!sameReasoningRun)this.resetReasoning(runId);this.stopEventStream();this.streamRun=runId;if(!sameReasoningRun)this.streamSeq=0;this.streamGone=false;const started=Number(run.created_at||run.started_at||0)*1000;this.streamHistoryIds=this.messages.filter(m=>!started||this.messageStamp(m)<started).map(m=>String(m.id));if(!sameReasoningRun)this.liveSegments=this.liveSegments.filter(s=>s.complete).slice(-100);this.liveTools=[];this.watchEventStream(runId,this.epoch);},
+            ensureEventStream(runId,run={}) {this.startRunTiming(runId,run);if(this.streamRun===runId)return;const sameReasoningRun=this.reasons&&this.reasoningRun===runId;if(this.reasons&&!sameReasoningRun)this.resetReasoning(runId);this.stopEventStream();this.streamRun=runId;if(!sameReasoningRun)this.streamSeq=0;this.streamGone=false;const started=Number(run.created_at||run.started_at||0)*1000;this.streamHistoryIds=this.messages.filter(m=>!started||this.messageStamp(m)<started).map(m=>String(m.id));if(!sameReasoningRun)this.liveSegments=this.liveSegments.filter(s=>s.complete).slice(-100);this.liveTools=[];this.watchEventStream(runId,this.epoch);},
             async watchEventStream(runId,epoch) {let failures=0;while(this.streamRun===runId&&this.epoch===epoch&&this.activeRun===runId){const controller=new AbortController();streamAbort=controller;const started=Date.now();try{await RemoteToolSse({url:`${base}/runs/${api.id(runId)}/events`,lastId:this.streamSeq,signal:controller.signal,onConnected:()=>{if(this.streamRun===runId)this.streamConnected=true;},onEvent:event=>{if(this.streamRun===runId&&this.epoch===epoch)this.onRunEvent(event);}});if(Date.now()-started>15000)failures=0;}catch(error){if(controller.signal.aborted)break;if(error.status===404){this.streamGone=true;await this.loadHistory(epoch);break;}}finally{if(streamAbort===controller)streamAbort=null;this.streamConnected=false;}if(this.streamRun!==runId||this.epoch!==epoch||this.activeRun!==runId)break;failures++;await new Promise(resolve=>setTimeout(resolve,Math.min(30000,1500*2**Math.min(failures-1,4))));}},
             onRunEvent(event) {const seq=Number(event.seq||0);const type=event.type||event.event||'';if(seq&&seq<=this.streamSeq)return;if(type==='stream.gap'||(seq&&this.streamSeq&&seq>this.streamSeq+1)){this.loadHistory();this.refreshActiveTools();}if(seq)this.streamSeq=seq;if(type==='stream.gap')return;
+                this.recordRunResponse(event);
                 if(type==='reasoning.delta'){
                     const runId=this.activeRun;
                     if(!this.reasons||!runId||event.run_id&&event.run_id!==runId||typeof event.delta!=='string'||!event.delta)return;
@@ -1441,8 +1504,8 @@
         created() { this.loadProfiles(); },
         unmounted() { this.resetReasoning();clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
         watch: {adminOpen() {this.syncAdminClass();}, sessionsOpen() {this.syncMobileShell();}, inspectorOpen(value) {if(value){this.loadModels();this.loadClaudeUsage();}}, selectedId() { this.schedules=[]; }, draft(value) {if(this.selectedId)localStorage.setItem(draftKey(this.selectedId),value);this.$nextTick(()=>this.resizeComposer());}, attachments: {deep:true,handler(value){if(agent==='hermes'&&this.selectedId)localStorage.setItem(draftFilesKey(this.selectedId),JSON.stringify(value));}}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
-        mounted() {this.syncAdminClass();this.loadAgentSetup();mobileQuery=window.matchMedia?.(mobileMedia);mobileQuery?.addEventListener('change',this.onMobileLayoutChange);this.syncMobileShell();void this.refreshSessions().finally(()=>{this.loadCapabilities();this.loadCurrentUsage();});this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible'&&this.workspaceVisible())this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('popstate',this.onContextMenuPopState);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible'||!this.workspaceVisible())return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadSchedules();this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
-        beforeUnmount() {mobileQuery?.removeEventListener('change',this.onMobileLayoutChange);this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('popstate',this.onContextMenuPopState);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}
+        mounted() {this.runClockTimer=setInterval(()=>this.updateRunClock(),1000);this.syncAdminClass();this.loadAgentSetup();mobileQuery=window.matchMedia?.(mobileMedia);mobileQuery?.addEventListener('change',this.onMobileLayoutChange);this.syncMobileShell();void this.refreshSessions().finally(()=>{this.loadCapabilities();this.loadCurrentUsage();});this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible'&&this.workspaceVisible())this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('popstate',this.onContextMenuPopState);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible'||!this.workspaceVisible())return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadSchedules();this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
+        beforeUnmount() {this.saveRunTiming();clearInterval(this.runClockTimer);mobileQuery?.removeEventListener('change',this.onMobileLayoutChange);this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('popstate',this.onContextMenuPopState);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}
     });
     app.use(ViewUIPlus);
     app.mount(root);
