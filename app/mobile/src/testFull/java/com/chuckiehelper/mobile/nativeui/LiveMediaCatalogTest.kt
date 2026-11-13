@@ -11,7 +11,8 @@ class LiveMediaCatalogTest {
         assertEquals("", display.text)
     }
     private val message = "图片已生成\nMEDIA:C:\\ProgramData\\outbox\\current\\icon.png"
-    private fun file(key: String) = obj("id" to key,"name" to "icon.png","messageKey" to key,"mime" to "image/png","url" to "/file/$key")
+    private fun file(key: String) = obj("id" to key,"name" to "icon.png","messageKey" to key,"mime" to "image/png","url" to "/file/$key",
+        "mediaPath" to "C:/ProgramData/outbox/$key/icon.png", "deliveryRoot" to "C:/ProgramData/outbox")
     @Test fun interimImageRequestsAFilesRefreshBeforeTheTaskCompletes() {
         assertTrue(needsMediaCatalogRefresh(message,emptyList()))
         assertFalse(needsMediaCatalogRefresh(message,listOf(file("current"))))
@@ -24,5 +25,18 @@ class LiveMediaCatalogTest {
     @Test fun repeatedResolvedMediaDoesNotNeedRepeatedNetworkReads() {
         assertFalse(needsMediaCatalogRefresh("普通旁白",emptyList()))
         assertFalse(needsMediaCatalogRefresh("$message\nMEDIA:C:\\ProgramData\\outbox\\current\\icon.png",listOf(file("current"))))
+    }
+    @Test fun refreshDoesNotTurnAnUnregisteredPathIntoAnAttachment() {
+        val text = "MEDIA:C:/outside/icon.png"
+        assertTrue(needsMediaCatalogRefresh(text, listOf(file("current"))))
+        val shown = presentHermesMessage(text, emptyList(), listOf(file("current")))
+        assertEquals(text, shown.text)
+        assertTrue(shown.files.isEmpty())
+        assertTrue(shown.unavailable.isEmpty())
+    }
+    @Test fun codeExamplesAndRelativeMarkersDoNotRequestARefresh() {
+        assertFalse(needsMediaCatalogRefresh("```text\n$message\n```", emptyList()))
+        assertFalse(needsMediaCatalogRefresh("    MEDIA:/tmp/icon.png", emptyList()))
+        assertFalse(needsMediaCatalogRefresh("MEDIA:icon.png", emptyList()))
     }
 }

@@ -87,7 +87,11 @@ fun presentHermesMessage(text: String, attached: List<JSONObject>, available: Li
 }
 
 fun needsMediaCatalogRefresh(text: String, available: List<JSONObject>): Boolean =
-    presentHermesMessage(text, emptyList(), available).unavailable.isNotEmpty()
+    // The first delivery can arrive before the catalog contains any trusted paths.
+    // Refreshing the catalog leaves attachment authorization to the server.
+    extractHermesMedia(text).paths.distinct().any { path ->
+        presentHermesMessage("MEDIA:$path", emptyList(), available).files.isEmpty()
+    }
 
 fun hermesFileKind(file: JSONObject): String {
     val mime = file.optString("mime")
