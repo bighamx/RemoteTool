@@ -311,7 +311,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             "/compact", "/compress" -> model.compact()
             "/status" -> model.reconnect()
             "/providers" -> {
-                if (agent != "claude") { providers = true; model.fetchProviders() }
+                if (agent != "claude" || model.capabilities.optJSONObject("features")?.optBoolean("providers") == true) { providers = true; model.fetchProviders() }
             }
             "/account", "/workspace" -> {
                 if (agent == "codex") { accountsPanel = true; model.fetchAccounts() }
@@ -441,11 +441,11 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                         },
                     )
                     if (agent != "hermes" && !displayList && model.selectedId != null) DropdownMenuItem(
-                        text = { Text("会话权限") }, onClick = { menu = false; permissionsDialog = true })
+                        text = { Text(if (agent == "claude") "会话权限 · " + claudePermissionLabel(model.claudeSession?.cleanSetting("permission_mode")) else "会话权限") }, onClick = { menu = false; permissionsDialog = true })
                     if (agent == "codex") DropdownMenuItem(text = { Text("账户与工作空间") }, onClick = { menu = false; accountsPanel = true; model.fetchAccounts() })
                     if (agent == "codex") DropdownMenuItem(text = { Text("标题生成模型") }, onClick = { menu = false; titleModelDialog = true; model.fetchTitleModel() })
                     ((if (agent != "claude" || model.selectedId != null && !displayList) listOf("模型选择" to "/model") else emptyList()) +
-                        (if (displayList && agent != "claude") listOf("Provider 管理" to "/providers") else emptyList()) +
+                        (if (displayList && agent != "claude" || agent == "claude" && model.capabilities.optJSONObject("features")?.optBoolean("providers") == true) listOf("Provider 管理" to "/providers") else emptyList()) +
                         listOf("刷新与重连" to "/status"))
                         .forEach { (name, value) ->
                             DropdownMenuItem(
@@ -462,8 +462,8 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             }
             }
         }
-        if (agent != "hermes") CodexUsage(model, compact = true) { if (agent == "codex") { accountsPanel = true; model.fetchAccounts() } else model.fetchUsage() }
-        if (agent == "claude") model.usage?.cleanSetting("message")?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (agent == "codex" || agent == "claude" && claudeQuotaVisible(model.usage)) CodexUsage(model, compact = true) { if (agent == "codex") { accountsPanel = true; model.fetchAccounts() } else model.fetchUsage() }
+        if (agent == "claude" && claudeQuotaVisible(model.usage)) model.usage?.cleanSetting("message")?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         if (agent == "claude" && !displayList && model.claudeUnresolvedRun != null) {
             Text("上次任务结果待核对。请先检查历史，确认前不会重新发送。", Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.bodySmall)
             TextButton(enabled = !model.submitting, onClick = { acknowledgeClaude = true }) { Text("已核对任务结果…") }
@@ -472,7 +472,6 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             TextButton(enabled = !model.submitting, onClick = { model.cancelClaudeRewind() }) { Text("撤回将在下次发送时生效 · 取消撤回") }
         var setupVisible by remember(agent,model.profile){mutableStateOf(false) }
         AgentSetupCard(api,agent,model.profile,model.capabilities.optInt("state_version"),onConfigured={model.reconnect()}){ setupVisible=it }
-        if (agent == "claude" && !displayList && model.selectedId != null) TextButton(onClick = { permissionsDialog = true }) { Text("权限：" + when (model.claudeSession?.cleanSetting("permission_mode")) { "acceptEdits" -> "自动批准文件编辑"; "plan" -> "计划模式"; else -> "按本机规则询问" }, style = MaterialTheme.typography.labelSmall) }
         if (agent == "codex" && !displayList && accessMode == "full") TextButton(onClick = { permissionsDialog = true }) {
             Text("权限设置：完全访问", style = MaterialTheme.typography.labelSmall)
         }
@@ -1924,6 +1923,7 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
                 item {
                     Text(
                         if (model.agent == "codex") "新增或编辑 Responses API 兼容端点。已有密钥不会返回手机。"
+                        else if (model.agent == "claude") "新增或编辑 Anthropic Messages API 兼容端点。已有密钥不会返回手机。"
                         else "新增或编辑 OpenAI / Responses / Anthropic 兼容端点。已有密钥不会返回手机。",
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -1955,7 +1955,7 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
                             )
                             Row {
                                 if(editable)TextButton(enabled=!model.providerBusy,onClick={editing=endpoint;adding=true}){Text("编辑")}
-                                TextButton(enabled=!model.providerBusy,onClick={model.providerAction(provider.getString("slug"),enabled=!enabled)}){Text(if(enabled)"禁用" else "启用")}
+                                if (model.agent != "claude" || editable) TextButton(enabled=!model.providerBusy,onClick={model.providerAction(provider.getString("slug"),enabled=!enabled)}){Text(if(enabled)"禁用" else "启用")}
                                 if(editable)TextButton(enabled=!model.providerBusy,onClick={deleting=provider}){Text("删除",color=MaterialTheme.colorScheme.error)}
                             }
                         }
@@ -1987,7 +1987,7 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
             remember(original) { mutableStateOf(original?.optString("model").orEmpty()) }
         var key by remember(original) { mutableStateOf("") }
         var transport by
-            remember(original) { mutableStateOf(original?.optString("api_mode").orEmpty()) }
+            remember(original) { mutableStateOf(original?.optString("api_mode").orEmpty().ifBlank { if (model.agent == "claude") "anthropic_messages" else "" }) }
         AlertDialog(
             onDismissRequest = {
                 if(!model.providerBusy){adding = false;key = ""}
@@ -2025,7 +2025,7 @@ private fun HermesProviderDialog(model: HermesModel, onClose: () -> Unit) {
                         visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
                     )
-                    (if (model.agent == "codex") listOf("codex_responses" to "Responses API") else listOf(
+                    (if (model.agent == "codex") listOf("codex_responses" to "Responses API") else if (model.agent == "claude") listOf("anthropic_messages" to "Anthropic Messages") else listOf(
                             "" to "自动识别",
                             "chat_completions" to "Chat Completions",
                             "codex_responses" to "Responses API",

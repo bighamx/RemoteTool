@@ -73,3 +73,20 @@ test('a late accepted lookup reaches the same review state without replaying the
     assert.equal(state.sendBlocked, true);
     assert.equal(h.posts.length, 0);
 });
+
+
+test('late quota from a previous Claude selection cannot restore an unavailable quota row', async () => {
+    const h = createHarness([], 'claude'), state = h.state;
+    let finishOld;
+    h.api.get = async route => {
+        if (route.includes('session-1')) return new Promise(resolve => { finishOld = resolve; });
+        assert.match(route, /usage\?session=session-2/);
+        return {available: false, rateLimitsByLimitId: {}};
+    };
+    const pending = state.loadClaudeUsage();
+    state.selectedId = 'session-2';
+    await state.loadClaudeUsage();
+    finishOld({available: true});
+    await pending;
+    assert.equal(state.claudeUsage.available, false);
+});

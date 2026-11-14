@@ -185,7 +185,6 @@ public sealed class ClaudeBridge(IConfiguration configuration, IWebHostEnvironme
                 throw new InvalidOperationException("Claude 桥接进程无响应；为保护运行中的任务未自动重启，请稍后重试或在服务端检查");
             }
             var arguments = new List<string> { script, "--state", Root, "--claude", claude, "--attachments", attachments };
-            if (configuration.GetValue<bool>("Claude:AllowCustomEndpoint")) arguments.Add("--allow-custom-endpoint");
             if (OperatingSystem.IsWindows() && InteractiveProcessLauncher.IsRunningInSession0) {
                 // Same model as Codex: run as the signed-in desktop user, who owns the Claude login.
                 var command = string.Join(" ", new[] { node }.Concat(arguments).Select(value => "\"" + value.Replace("\"", "\\\"") + "\""));

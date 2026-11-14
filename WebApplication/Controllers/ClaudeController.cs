@@ -38,7 +38,13 @@ public sealed class ClaudeController(ClaudeBridge bridge, [FromKeyedServices("cl
         Forward(HttpMethod.Get, $"sessions/{Id(id)}/tools/{Id(summaryId)}?offset={Math.Max(0, offset)}", null, ct);
     [HttpGet("model-options")] public Task Models([FromQuery] string session, CancellationToken ct) =>
         Forward(HttpMethod.Get, "model-options" + (string.IsNullOrEmpty(session) ? "" : "?session=" + Id(session)), null, ct);
-    [HttpGet("usage")] public Task Usage(CancellationToken ct) => Forward(HttpMethod.Get, "usage", null, ct);
+    [HttpGet("usage")] public Task Usage([FromQuery] string session, CancellationToken ct) =>
+        Forward(HttpMethod.Get, "usage" + (string.IsNullOrEmpty(session) ? "" : "?session=" + Id(session)), null, ct);
+    [HttpGet("providers")] public Task Providers([FromQuery] bool include_disabled, CancellationToken ct) =>
+        Forward(HttpMethod.Get, "providers?include_disabled=" + include_disabled.ToString().ToLowerInvariant(), null, ct);
+    [HttpPost("providers")] public Task SaveProvider([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "providers", body.GetRawText(), ct);
+    [HttpPost("providers/state")] public Task ProviderState([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "providers/state", body.GetRawText(), ct);
+    [HttpPost("providers/delete")] public Task DeleteProvider([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "providers/delete", body.GetRawText(), ct);
 
     [HttpPost("sessions/{id}/compact")] public Task Compact(string id, CancellationToken ct) {
         if (!ValidKey(Key)) return Reject(400, "压缩需要唯一请求标识");

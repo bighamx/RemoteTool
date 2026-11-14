@@ -9,21 +9,22 @@ import {StateStore, BridgeError, TERMINAL, validId} from './state.mjs';
 import {RunManager} from './runs.mjs';
 import {SessionService} from './sessions.mjs';
 import {ClaudeUsage} from './usage.mjs';
+import {ClaudeProviders} from './providers.mjs';
 
 export const PROTOCOL = 2;      // API contract with the C# host; a change requires an idle restart.
-export const BRIDGE_VERSION = 7; // Implementation revision; RemoteToolPaths.ClaudeBridgeVersion must match.
+export const BRIDGE_VERSION = 8; // Implementation revision; RemoteToolPaths.ClaudeBridgeVersion must match.
 
 function args(argv) {
     const result = {};
     for (let i = 0; i < argv.length; i++) {
-        if (argv[i] === '--allow-custom-endpoint') result.allowCustom = true;
-        else if (argv[i].startsWith('--')) result[argv[i].slice(2)] = argv[++i];
+        if (argv[i].startsWith('--')) result[argv[i].slice(2)] = argv[++i];
     }
     return result;
 }
 
-export function createApp({root, executable, attachments, sdk, allowCustom = false, exec = promisify(execFile)}) {
+export function createApp({root, executable, attachments, sdk, exec = promisify(execFile)}) {
     const store = new StateStore(path.join(root, 'journal'));
+    const providers = new ClaudeProviders(root);
     const cache = (ttl, work) => { let value, at = 0, pending = null; return async (fresh = false) => {
         if (!fresh && value && Date.now() - at < ttl) return value;
         pending ||= work().then(result => { value = result; at = Date.now(); return result; }).finally(() => { pending = null; });
@@ -33,7 +34,7 @@ export function createApp({root, executable, attachments, sdk, allowCustom = fal
         try {
             const {stdout} = await exec(executable, ['auth', 'status', '--json'], {timeout: 15000, maxBuffer: 65536, windowsHide: true});
             const status = JSON.parse(stdout);
-            const ready = status.loggedIn === true && (allowCustom || status.apiProvider === 'firstParty');
+            const ready = status.loggedIn === true;
             return {ready, method: status.authMethod || null, provider: status.apiProvider || null,
                 message: ready ? 'Claude Code 已登录' : '请在运行 RemoteTool 的系统用户下执行 claude auth login 完成登录'};
         } catch { return {ready: false, message: '无法读取 Claude Code 登录状态，请在服务端用户下执行 claude auth status'}; }
@@ -44,7 +45,7 @@ export function createApp({root, executable, attachments, sdk, allowCustom = fal
         if (!Array.isArray(rows)) throw new Error('Invalid agents response');
         return rows;
     });
-    const sessions = new SessionService({store, sdk, auth: () => auth(), holders: fresh => holders(fresh), allowCustomEndpoint: allowCustom});
+    const sessions = new SessionService({store, sdk, auth: () => auth(), holders: fresh => holders(fresh), providers});
     sessions.attachmentRoot = attachments || null;
     // Only an OS-reported parent PID proves that this worker owns the CLI process.
     sessions.isChild = async pid => {
@@ -61,8 +62,10 @@ export function createApp({root, executable, attachments, sdk, allowCustom = fal
         onModels: list => { if (Array.isArray(list) && list.length) { store.data.models = {list, at: Date.now()}; try { store.save(); } catch {} } }});
     sessions.runs = runs;
     const sweeper = setInterval(() => runs.sweep(), 60000); sweeper.unref?.();
-    const usage = new ClaudeUsage({sdk, executable, cwd: root, auth, officialOnly: !allowCustom});
-    return {store, sessions, runs, auth, usage};
+    const usage = new ClaudeUsage({sdk, executable, cwd: root, auth, officialOnly: false});
+    const setup = async fresh => providers.list().endpoints.length > 1
+        ? {ready: true, provider: 'custom', method: 'api_key', message: 'Claude 供应商已配置'} : auth(fresh);
+    return {store, sessions, runs, auth: setup, usage, providers};
 }
 
 function send(res, code, data) {
@@ -122,7 +125,7 @@ export function createServer(app, token) {
                     stopping = true;
                     send(res, 200, {stopping: true}); setTimeout(() => process.emit('remotetool-shutdown'), 50); return;
                 case 'GET /capabilities': data = {protocol: PROTOCOL, version: BRIDGE_VERSION, features: {steer: true, approvals: true, ask_user_question: true, fork: true, rewind: true, rename: true,
-                    pin: true, delete: true, model: true, permissions: true, compact: true, attachments: true, external_session_activity: true, acknowledge_unknown: true, usage: true}}; break;
+                    pin: true, delete: true, model: true, providers: true, permissions: true, compact: true, attachments: true, external_session_activity: true, acknowledge_unknown: true, usage: true}}; break;
                 case 'GET /setup': data = {...await app.auth(q('fresh') === 'true'), protocol: PROTOCOL}; break;
                 case 'GET /sessions': data = await app.sessions.list(q('cursor')); break;
                 case 'POST /sessions': data = app.sessions.create(body); break;
@@ -143,7 +146,13 @@ export function createServer(app, token) {
                 case 'GET /sessions/:id/activity': data = await app.sessions.activity(id); break;
                 case 'GET /sessions/:id/active-run': data = app.sessions.activeRun(id); break;
                 case 'GET /model-options': data = app.sessions.modelOptions(q('session')); break;
-                case 'GET /usage': data = await app.usage.read(); break;
+                case 'GET /providers': data = app.providers.list(q('include_disabled') === 'true'); break;
+                case 'POST /providers': data = app.providers.save(body); break;
+                case 'POST /providers/:id':
+                    if (id !== 'state' && id !== 'delete') throw new BridgeError('接口不存在', 404);
+                    data = app.providers.change(body, id === 'delete'); break;
+                case 'GET /usage': data = await app.sessions.hasSubscriptionUsage(q('session'))
+                    ? await app.usage.read() : {available: false, rateLimitsByLimitId: {}}; break;
                 case 'POST /runs': data = await app.runs.start(body, key); break;
                 case 'GET /runs/:id': data = id === 'lookup' ? app.runs.lookup(q('key')) : app.runs.doc(app.store.run(id)); break;
                 case 'GET /runs/:id/events': return stream(app, req, res, id);
@@ -189,7 +198,7 @@ async function main() {
     const fd = fs.openSync(lock, 'wx', 0o600); fs.writeFileSync(fd, String(process.pid)); fs.closeSync(fd);
     const release = () => { try { if (Number(fs.readFileSync(lock, 'utf8')) === process.pid) fs.unlinkSync(lock); } catch {} };
     const sdk = await import('@anthropic-ai/claude-agent-sdk');
-    const app = createApp({root, executable, attachments: options.attachments, sdk, allowCustom: options.allowCustom === true});
+    const app = createApp({root, executable, attachments: options.attachments, sdk});
     const server = createServer(app, config.token);
     server.requestTimeout = 0; server.headersTimeout = 30000; // SSE streams are long-lived
     process.on('remotetool-shutdown', () => { server.close(); release(); process.exit(0); });

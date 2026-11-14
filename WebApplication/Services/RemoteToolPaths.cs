@@ -39,7 +39,7 @@ public static class RemoteToolPaths
     public static string ClaudeBridge => Path.Combine(ProgramData, "claude-bridge");
     public static string ClaudeManagedTools => Path.Combine(ProgramData, "claude-tools");
     /// <summary>Claude SDK bridge implementation revision; must match BRIDGE_VERSION in Tools/ClaudeBridge/server.mjs.</summary>
-    public const int ClaudeBridgeVersion = 7;
+    public const int ClaudeBridgeVersion = 8;
 
     public static string CodexAttachments => Path.Combine(ProgramData, "codex-attachments");
     /// <summary>自托管安装的 Codex 运行时（npm 前缀、状态与已验证的可执行文件）。</summary>

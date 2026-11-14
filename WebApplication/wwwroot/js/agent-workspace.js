@@ -97,7 +97,7 @@
             adminOpen:false,adminFiles:[],adminDoc:null,adminText:'',adminOriginal:'',adminPreview:false,adminMode:'files',adminBusy:false,adminError:'',adminConflict:false,adminGateway:{},adminUpdate:{},adminSettings:{},adminProvider:{},adminProviderDialog:false,adminEndpoints:[],adminProviders:[],adminShowDisabled:false,adminSettingsOriginal:'',adminProviderOriginal:'',adminLogText:'',adminLogKey:'',adminLogOffset:0,adminLogFollow:true,patches:[],patchPending:0,patchManifestPresent:true,patchBusy:false,patchError:'',patchConfirm:null,patchApplyLog:'',patchAgentOffer:null,patchAgentRunId:'',patchRestartHint:false,
             codexUsage:null,usageLoading:false,usageError:'',usageEpoch:0,showWorkspaceDialog:false,workspaces:{},workspaceUsages:{},workspaceLoading:false,workspaceError:'',workspaceEpoch:0,switchingWorkspace:'',usageTimer:null,
             messages: [], historyLoading: false, historyCacheState: '', historyLoadedEpoch: -1, historyFailedEpoch: -1, historyHasMore: false, oldestId: null, olderLoading: false, followLatest: true, showJumpToLatest: false, lastTimelineTop: 0, lastTimelineHeight: 0, scrollFrame: null, draft: '', attachments: [], sessionFiles: [], mediaSignature: '', filesRefreshAt: 0, uploading: false, sending: false, pending: null, delivered: [], schedules: [], showSchedule: false, scheduleText: '', scheduleAt: '', scheduleError: '', scheduleBusy: false, scheduleSession: '', scheduleClientKey: '', scheduleRequest: null,
-            approvalBusy:false, approvalAnswers:{}, takingOver:false, permissionsChoices:[], createPermission:'default', claudeUsage:null, acknowledging:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsInfo:'',permissionsError:'',showPermissionsDialog:false, activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelDefaults: {}, modelsError: '', modelSessionSupported: true, providersState: {}, globalModelOptions: {}, providerSwitch: {provider:'',model:'',effort:'',tier:''}, codexProviderEdit: null, modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
+            approvalBusy:false, approvalAnswers:{}, takingOver:false, permissionsChoices:[], createPermission:'default', claudeUsage:null, acknowledging:false, showClaudeProviders:false,claudeProvidersSupported:false, permissionsMode:'default',permissionsChoice:'default',permissionsLoading:false,permissionsLoaded:false,permissionsSaving:false,permissionsInfo:'',permissionsError:'',showPermissionsDialog:false, activeRun: null, runStatus: '', approval: null, context: {}, queue: [], models: [], modelDefaults: {}, modelsError: '', modelSessionSupported: true, providersState: {}, globalModelOptions: {}, providerSwitch: {provider:'',model:'',effort:'',tier:''}, codexProviderEdit: null, modelSelection: { provider: '', model: '', effort: '', tier: '' }, projects: [], accounts: {}, selectedAccount: '', dialog: null, toolOffset: 0, timer: null, epoch: 0, streamHistoryIds: [],
             groupByProject: localStorage.getItem(`remotetool:web:groupByProject:${agent}`) === '1',
             collapsedGroups: (() => { try { return JSON.parse(localStorage.getItem(`remotetool:web:collapsedGroups:${agent}`) || '[]'); } catch { return []; } })(),
             showMoveDialog: false, moveTarget: null, moveMoving: false, moveSearch: '', moveError: '',
@@ -144,7 +144,7 @@
             mobileModelSummary() {
                 const selection=this.readModelSelection(this.selected);
                 const provider=this.models.find(row=>this.providerMatches(row,selection.provider));
-                const name=this.agent==='claude'?'Claude':provider?.name||(this.officialProviderInUse&&(!selection.provider||selection.provider===this.providersState.provider)?'OpenAI':selection.provider||this.activeProvider?.name||this.agentName);
+                const name=this.agent==='claude'?(provider?.name||'Claude'):provider?.name||(this.officialProviderInUse&&(!selection.provider||selection.provider===this.providersState.provider)?'OpenAI':selection.provider||this.activeProvider?.name||this.agentName);
                 const effort=({low:'低思考',medium:'中思考',high:'高思考',xhigh:'超高思考',minimal:'极低思考',none:'无思考'})[selection.effort]||selection.effort;
                 return [name,selection.model||'默认模型',effort].filter(Boolean).join(' · ');
             },
@@ -342,7 +342,7 @@
             },
             editAdminProvider(endpoint = null) {
                 if (this.adminBusy || this.adminProviderOriginal && JSON.stringify(this.adminProvider)!==this.adminProviderOriginal && !confirm('放弃提供方未保存的修改？')) return;
-                this.adminProvider=endpoint?{...endpoint,api_key:''}:{name:'',base_url:'',model:'',api_key:'',api_mode:''};
+                this.adminProvider=endpoint?{...endpoint,api_key:''}:{name:'',base_url:'',model:'',api_key:'',api_mode:this.agent==='claude'?'anthropic_messages':''};
                 this.adminProviderOriginal=JSON.stringify(this.adminProvider);
                 this.adminProviderDialog=true;
             },
@@ -382,7 +382,7 @@
                 if (!this.adminMayLeave()) return;
                 await this.adminAction(async()=>{
                     this.adminDoc=null;this.adminText='';this.adminOriginal='';
-                    if(mode==='models') {const data=await api.get(`${base}/default-model`);this.adminSettings={provider:data.provider||'',model:data.model||'',reasoning_effort:data.reasoning_effort||''};await this.reloadAdminProviders();this.adminProvider={name:'',base_url:'',model:'',api_key:'',api_mode:''};}
+                    if(mode==='models') {const data=await api.get(`${base}/default-model`);this.adminSettings={provider:data.provider||'',model:data.model||'',reasoning_effort:data.reasoning_effort||''};await this.reloadAdminProviders();this.adminProvider={name:'',base_url:'',model:'',api_key:'',api_mode:this.agent==='claude'?'anthropic_messages':''};}
                     if(mode==='title') {this.adminSettings={...await api.get(`${base}/title-model`),api_key:''};}
                     this.adminMode=mode;
                     if(mode==='gateway') { void this.pollAdminGateway(); void this.loadAdminUpdate(); }
@@ -449,6 +449,7 @@
                 this.models=catalog.providers||[];this.modelSessionSupported=catalog.session_model_supported!==false;
             },
             async openProviderManagement() {
+                if(this.agent==='claude'){this.closeSessionMenus();this.showClaudeProviders=true;await this.adminAction(()=>this.reloadAdminProviders());return;}
                 this.adminOpen=true;window.addEventListener('beforeunload',this.guardAdminUnload);
                 await this.openAdminSettings('models');
             },
@@ -459,7 +460,7 @@
                     await this.reloadAdminProviders();this.$Message.success(remove?'供应商已删除':'供应商状态已更新');
                 });
             },
-            async saveAdminProvider() {await this.adminAction(async()=>{const result=await api.post(`${base}/providers`,Object.fromEntries(Object.entries({...this.adminProvider,make_default:false}).filter(([key,value])=>key!=='api_key'||!!value)));if(result.confirm_required){this.adminError='配置需要额外确认，请在电脑上完成。';return;}this.adminProvider.api_key='';this.adminProviderOriginal=JSON.stringify(this.adminProvider);this.adminProviderDialog=false;await this.reloadAdminProviders();this.$Message.success('已保存');});},
+            async saveAdminProvider() {await this.adminAction(async()=>{const result=await api.post(`${base}/providers`,Object.fromEntries(Object.entries({...this.adminProvider,make_default:false}).filter(([key,value])=>key!=='api_key'||!!value)));if(result.confirm_required){this.adminError='配置需要额外确认，请在电脑上完成。';return;}this.adminProvider.api_key='';this.adminProviderOriginal=JSON.stringify(this.adminProvider);this.adminProviderDialog=false;await this.reloadAdminProviders();if(this.agent==='claude')await this.loadModels();this.$Message.success('已保存');});},
             async restartAdminGateway(wait) { if(!confirm(wait?'暂停接收新任务，等待全部 Profile 空闲后重启？':'重启当前设备的网关？将影响全部 Profile。'))return;await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/restart`,{wait});}); },
             async cancelAdminGateway() {await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/cancel`,{});});},
             async updateAdminHermes() {if(!confirm('等待全部 Profile 空闲后按官方流程更新并重启？将自动确认恢复本地修改。'))return;await this.adminAction(async()=>{this.adminGateway=await api.post(`${base}/admin/gateway/update`,{});});},
@@ -982,7 +983,11 @@
                 const search=query.toString();
                 history.replaceState(history.state, '', `${location.pathname}${location.search}#/${agent}${search?'?'+search:''}`);
             },
-            async loadCapabilities() {if(this.agent!=='hermes')return;try{const result=await api.get(`${base}/capabilities`);this.apiServer=result.api_server||null;}catch{this.apiServer=null;}},
+            async loadCapabilities() {
+                if(this.agent==='codex')return;
+                try{const result=await api.get(`${base}/capabilities`);if(this.agent==='claude')this.claudeProvidersSupported=result.features?.providers===true;else this.apiServer=result.api_server||null;}
+                catch{if(this.agent==='claude')this.claudeProvidersSupported=false;else this.apiServer=null;}
+            },
             async enableApiServer(restart=false) {if(this.agent!=='hermes'||this.enablingApiServer)return;
                 if(restart&&!confirm('将修改本机 Hermes 的 .env 并重启 Hermes 网关。正在运行的 Hermes 会话会被中断。继续？'))return;
                 this.enablingApiServer=true;this.error='';
@@ -1293,7 +1298,7 @@
                 try { await api.post(`${base}/sessions/${api.id(session.id)}/archive`, { archived: archived }); this.sessions = this.sessions.map(s => s.id === session.id ? { ...s, archived: archived } : s); this.$Message.success(archived ? '已存档' : '已取消存档'); }
                 catch (e) { this.error = e.message; }
             },
-            async saveModel() { if(!this.selectedId||!this.modelSelection.model)return;if(this.agent==='hermes'&&!this.modelSessionSupported){this.error='当前 Hermes 版本仅支持全局模型设置，请打开 Hermes 管理';return;} try {const choice=this.modelSelection;const body={provider:choice.provider,model:choice.model,reasoning_effort:choice.effort};if(this.agent==='codex')body.service_tier=choice.tier;else if(this.agent==='hermes')body.model_options={reasoning:choice.effort==='none'?{enabled:false}:choice.effort?{enabled:true,effort:choice.effort}:{}};await api.post(`${base}/sessions/${api.id(this.selectedId)}/model`,body); this.$Message.success('模型设置已更新'); await this.refreshSessions();await this.loadSessionDetail();await this.loadModels(); } catch(e) { this.error=e.message; } },
+            async saveModel() { if(!this.selectedId||!this.modelSelection.model)return;if(this.agent==='hermes'&&!this.modelSessionSupported){this.error='当前 Hermes 版本仅支持全局模型设置，请打开 Hermes 管理';return;} try {const choice=this.modelSelection;const body={provider:choice.provider,model:choice.model,reasoning_effort:choice.effort};if(this.agent==='codex')body.service_tier=choice.tier;else if(this.agent==='hermes')body.model_options={reasoning:choice.effort==='none'?{enabled:false}:choice.effort?{enabled:true,effort:choice.effort}:{}};await api.post(`${base}/sessions/${api.id(this.selectedId)}/model`,body); this.$Message.success('模型设置已更新'); await this.refreshSessions();await this.loadSessionDetail();if(this.agent==='claude'){this.claudeUsage=null;await this.loadClaudeUsage();}await this.loadModels(); } catch(e) { this.error=e.message; } },
             openCreateDialog() {this.createTitle='';this.createProjectId='';this.createRoot='';this.createRoots=[];this.createProjectName='';this.createProjectSearch='';this.createMode='existing';this.createBrowser=false;this.createBrowserError='';this.createError='';this.createPermission='default';if(this.agent==='claude'&&this.selected?.cwd){this.createRoot=this.selected.cwd;this.createBrowserPath=this.selected.cwd;}this.showCreateDialog=true;if(this.agent==='codex')this.loadCodexAdmin();},
             pickCreateProject(project) {this.createProjectId=project?.id||'';const roots=this.projectRootsOf(project);this.createRoot=roots[0]||'';},
             toggleCreateRoot(path) {const rows=this.createRoots.slice();const at=rows.indexOf(path);if(at<0){if(rows.length>=16)return;rows.push(path);}else rows.splice(at,1);this.createRoots=rows;if(!rows.includes(this.createRoot))this.createRoot=rows[0]||'';},
@@ -1403,7 +1408,12 @@
             approvalOtherText(question) {const value=this.approvalAnswers[question.id];return Array.isArray(value)?value.find(item=>!question.options?.some(option=>option.label===item))||'':'';},
             approvalComplete() {return (this.approval?.questions||[]).every(question=>(this.approvalAnswers[question.id]||[]).some(item=>String(item).trim()));},
             async submitApprovalAnswers() {if(!this.approvalComplete())return;const answers={};for(const question of this.approval.questions||[])answers[question.id]={answers:this.approvalAnswers[question.id]};await this.submitApproval({answers});},
-            async loadClaudeUsage() {if(this.agent!=='claude')return;try{this.claudeUsage=await api.get(`${base}/usage`);}catch{this.claudeUsage=this.claudeUsage?.available?{...this.claudeUsage,stale:true,message:'额度刷新失败，当前显示上次读取结果'}:{available:false,message:'额度暂时无法读取，请稍后重试'};}},
+            async loadClaudeUsage() {
+                if(this.agent!=='claude')return;
+                const id=this.selectedId,current=this.startRead('claudeUsage');
+                try{const result=await api.get(`${base}/usage${id?'?session='+api.id(id):''}`);if(current()&&this.selectedId===id)this.claudeUsage=result;}
+                catch{if(current()&&this.selectedId===id)this.claudeUsage=this.claudeUsage?.available?{...this.claudeUsage,stale:true,message:'额度刷新失败，当前显示上次读取结果'}:{available:false};}
+            },
             async compact() {if(!confirm('压缩此会话上下文？'))return;try{await api.post(`${base}/sessions/${api.id(this.selectedId)}/compact`,{}, {'Idempotency-Key':newKey()});await this.loadStatus();}catch(e){this.error=e.message;}},
             async stopRun() {if(!this.activeRun)return;try{await api.post(`${base}/runs/${api.id(this.activeRun)}/stop`);await this.loadStatus();}catch(e){this.error=e.message;}},
             async loadPermissions(epoch=this.epoch) {
@@ -1557,7 +1567,7 @@
         },
         created() { this.loadProfiles(); },
         unmounted() { this.resetReasoning();clearTimeout(adminTimer);window.removeEventListener('beforeunload',this.guardAdminUnload); },
-        watch: {adminOpen() {this.syncAdminClass();}, sessionsOpen() {this.syncMobileShell();}, inspectorOpen(value) {if(value){this.loadModels();this.loadClaudeUsage();}}, selectedId() { this.schedules=[]; }, draft(value) {if(this.selectedId)localStorage.setItem(draftKey(this.selectedId),value);this.$nextTick(()=>this.resizeComposer());}, attachments: {deep:true,handler(value){if(agent==='hermes'&&this.selectedId)localStorage.setItem(draftFilesKey(this.selectedId),JSON.stringify(value));}}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
+        watch: {adminOpen() {this.syncAdminClass();}, sessionsOpen() {this.syncMobileShell();}, inspectorOpen(value) {if(value){this.loadModels();this.loadClaudeUsage();}}, selectedId() { this.schedules=[];this.claudeUsage=null; }, draft(value) {if(this.selectedId)localStorage.setItem(draftKey(this.selectedId),value);this.$nextTick(()=>this.resizeComposer());}, attachments: {deep:true,handler(value){if(agent==='hermes'&&this.selectedId)localStorage.setItem(draftFilesKey(this.selectedId),JSON.stringify(value));}}, dialog(value) {if(!value?.activeTools&&this.toolTimer){clearInterval(this.toolTimer);this.toolTimer=null;}} },
         mounted() {this.runClockTimer=setInterval(()=>this.updateRunClock(),1000);this.syncAdminClass();this.loadAgentSetup();mobileQuery=window.matchMedia?.(mobileMedia);mobileQuery?.addEventListener('change',this.onMobileLayoutChange);this.syncMobileShell();void this.refreshSessions().finally(()=>{this.loadCapabilities();this.loadCurrentUsage();});this.usageTimer=setInterval(()=>{if(document.visibilityState==='visible'&&this.workspaceVisible())this.loadCurrentUsage();},60000);window.addEventListener('click',this.closeMessageMenu);window.addEventListener('click',this.closeSessionMenu);document.addEventListener('click',this.closeSessionMenus,true);window.addEventListener('keydown',this.escapeMessageMenu);window.addEventListener('popstate',this.onContextMenuPopState);window.addEventListener('workspace-route-change',this.onWorkspaceRouteChange);if(window.ResizeObserver&&this.$refs.timeline){timelineResizeObserver=new ResizeObserver(()=>this.queueFollowLatest());timelineResizeObserver.observe(this.$refs.timeline.firstElementChild||this.$refs.timeline);}this.timer=setInterval(()=>{if(document.visibilityState!=='visible'||!this.workspaceVisible())return;if(Date.now()-this.sessionStatusRefreshAt>=20000)this.refreshSessionStatuses();if(this.selectedId){this.loadSchedules();this.loadStatus();if(!this.streamConnected||this.streamGone||this.liveSegments.some(segment=>segment.complete))this.loadHistory();}},10000);},
         beforeUnmount() {++setupReadVersion;clearTimeout(setupTimer);this.saveRunTiming();clearInterval(this.runClockTimer);mobileQuery?.removeEventListener('change',this.onMobileLayoutChange);this.stopEventStream();timelineResizeObserver?.disconnect();timelineResizeObserver=null;if(this.scrollFrame!==null)cancelAnimationFrame(this.scrollFrame);clearInterval(this.timer);clearInterval(this.usageTimer);clearInterval(this.toolTimer);window.removeEventListener('click',this.closeMessageMenu);window.removeEventListener('click',this.closeSessionMenu);document.removeEventListener('click',this.closeSessionMenus,true);window.removeEventListener('keydown',this.escapeMessageMenu);window.removeEventListener('popstate',this.onContextMenuPopState);window.removeEventListener('workspace-route-change',this.onWorkspaceRouteChange);}
     });

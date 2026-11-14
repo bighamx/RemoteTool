@@ -34,9 +34,9 @@ export class SessionService {
      * @param {() => Promise<object>} deps.auth   cached `claude auth status`
      * @param {() => Promise<Array>} deps.holders cached `claude agents --json`
      */
-    constructor({store, sdk, auth, holders, allowCustomEndpoint = false, env = process.env}) {
+    constructor({store, sdk, auth, holders, providers, env = process.env}) {
         this.store = store; this.sdk = sdk; this.auth = auth; this.holders = holders;
-        this.allowCustomEndpoint = allowCustomEndpoint; this.env = env; this.runs = null; this.cache = new Map(); this.contexts = new Map();
+        this.providers = providers; this.env = env; this.runs = null; this.cache = new Map(); this.contexts = new Map();
     }
     async info(id) {
         if (!validId(id)) throw new BridgeError('无效会话标识');
@@ -57,7 +57,7 @@ export class SessionService {
         return {id, title: String(title).slice(0, 200), preview: (info?.firstPrompt || '').slice(0, 200), cwd: info?.cwd || meta?.cwd || '',
             git_branch: info?.gitBranch || null, last_active: Math.max(info?.lastModified || 0, meta?.last_active || 0) || meta?.created_at || null,
             started_at: info?.createdAt || meta?.created_at || null, pinned: meta?.pinned === true, status: this.status(id),
-            native: !!info, permission_mode: meta?.permission_mode || 'default', model: meta?.model || null, reasoning_effort: meta?.effort || null};
+            native: !!info, provider: meta?.provider || 'anthropic', permission_mode: meta?.permission_mode || 'default', model: meta?.model || null, reasoning_effort: meta?.effort || null};
     }
     /** Context usage for list rows, same fields as Codex/Hermes; cached per transcript revision. */
     async listContext(info) {
@@ -169,7 +169,7 @@ export class SessionService {
         if (body.message_id && !row) throw new BridgeError('消息不存在或已变化，请刷新历史', 409);
         const upTo = row ? String(row.last_uuid || row.id) : null;
         const result = await this.sdk.forkSession(id, {...(upTo ? {upToMessageId: upTo} : {}), title: body.title || undefined});
-        const fresh = this.store.ensureMeta(result.sessionId, {native: true, permission_mode: meta?.permission_mode || 'default', model: meta?.model || null,
+        const fresh = this.store.ensureMeta(result.sessionId, {native: true, provider: meta?.provider || 'anthropic', permission_mode: meta?.permission_mode || 'default', model: meta?.model || null,
             effort: meta?.effort || null, parent_session_id: id, last_active: Date.now()});
         this.store.save();
         return {session: this.row(await this.info(result.sessionId), fresh)};
@@ -197,10 +197,14 @@ export class SessionService {
     }
     async setModel(id, body) {
         await this.require(id);
-        const model = typeof body.model === 'string' && body.model.trim() && body.model !== 'default' ? body.model.trim().slice(0, 120) : null;
+        const provider = body.provider || this.store.meta(id)?.provider || 'anthropic';
+        const endpoint = this.providers.get(provider);
+        if (body.model != null && (typeof body.model !== 'string' || body.model.length > 200 || /[\x00-\x1f\x7f]/.test(body.model)))
+            throw new BridgeError('模型 ID 无效');
+        const model = body.model?.trim() && body.model !== 'default' ? body.model.trim() : endpoint?.model || null;
         const effort = EFFORTS.has(body.reasoning_effort) ? body.reasoning_effort : null;
-        this.store.ensureMeta(id, {model, effort}); this.store.save();
-        return {success: true, model, reasoning_effort: effort, applies: 'next_turn'};
+        this.store.ensureMeta(id, {provider, model, effort}); this.store.save();
+        return {success: true, provider, model, reasoning_effort: effort, applies: 'next_turn'};
     }
     async permissions(id) {
         const {meta} = await this.require(id);
@@ -293,24 +297,34 @@ export class SessionService {
         const models = (this.store.data.models?.list?.length ? this.store.data.models.list : FALLBACK_MODELS).map(model => ({
             model: model.value, id: model.value, displayName: model.displayName || model.value, description: model.description || '',
             supportedReasoningEfforts: (model.supportedEffortLevels || []).map(level => ({reasoningEffort: level}))}));
-        return {providers: [{id: 'anthropic', slug: 'anthropic', name: 'Claude', models}], provider: 'anthropic',
+        const providers = this.providers.list().endpoints.map(row => ({...row, models: row.id === 'anthropic' ? models : [{model: row.model, id: row.model, displayName: row.model}]}));
+        return {providers, provider: meta?.provider || 'anthropic',
             model: meta?.model || '', reasoning_effort: meta?.effort || '', session_model_supported: true, catalog_cached: !!this.store.data.models};
+    }
+    async hasSubscriptionUsage(id) {
+        if (!id) return officialEnvironment(this.env);
+        const {info, meta} = await this.require(id);
+        if (meta?.provider && meta.provider !== 'anthropic') return false;
+        const resolved = await this.sdk.resolveSettings?.({cwd: info?.cwd || meta?.cwd, settingSources: ['user', 'project', 'local']});
+        return officialEnvironment(this.env) && officialEnvironment(resolved?.effective?.env);
     }
     /** Preflight for a new turn. Never sends a prompt. */
     async prepare(id, kind) {
-        const {info, meta} = await this.require(id);
+        const {info, meta: stored} = await this.require(id);
+        // Model edits during asynchronous ownership checks apply to the next turn.
+        const meta = stored ? {...stored} : null;
         const cwd = info?.cwd || meta?.cwd;
         if (!cwd || !fs.statSync(cwd, {throwIfNoEntry: false})?.isDirectory()) throw new BridgeError('会话的项目目录不存在：' + (cwd || '未知'), 409, {delivery: 'rejected'});
         if (kind === 'compact' && !info) throw new BridgeError('会话还没有可压缩的历史', 409, {delivery: 'rejected'});
-        const status = await this.auth();
-        if (!status.ready) throw new BridgeError(status.message, 409, {delivery: 'rejected', code: 'claude_not_ready'});
-        if (!this.allowCustomEndpoint) {
-            // Fail closed: settings that cannot be read could route the session through an unknown endpoint.
-            let effective = null;
-            try { effective = (await this.sdk.resolveSettings({cwd, settingSources: ['user', 'project', 'local']}))?.effective || null; } catch {}
-            if (!effective) throw new BridgeError('无法读取此项目的 Claude Code 设置，未开始执行；请检查项目中的 settings.json', 409, {delivery: 'rejected', code: 'settings_unreadable'});
-            if (!officialEnvironment(this.env) || !officialEnvironment(effective.env || {}))
-                throw new BridgeError('此项目配置了非官方模型端点；如需使用请在服务端设置 Claude:AllowCustomEndpoint=true', 409, {delivery: 'rejected', code: 'custom_endpoint'});
+        const provider = this.providers.get(meta?.provider);
+        if (!provider) {
+            const status = await this.auth();
+            if (!status.ready) {
+                const effective = (await this.sdk.resolveSettings({cwd, settingSources: ['user', 'project', 'local']}))?.effective;
+                const env = {...this.env, ...effective?.env};
+                if (!env.ANTHROPIC_API_KEY && !env.ANTHROPIC_AUTH_TOKEN && officialEnvironment(env))
+                    throw new BridgeError(status.message, 409, {delivery: 'rejected', code: 'claude_not_ready'});
+            }
         }
         if (info) {
             let held;
@@ -319,7 +333,8 @@ export class SessionService {
             if (held) throw new BridgeError('电脑上的 Claude Code 正在使用此会话（PID ' + held.pid + '），请先结束该进程再远程继续', 409, {delivery: 'rejected', code: 'session_held'});
         }
         return {cwd, resume: !!info, resumeSessionAt: info ? meta?.rewind?.at || null : null,
-            permissionMode: meta?.permission_mode || 'default', model: meta?.model || null, effort: meta?.effort || null, officialOnly: !this.allowCustomEndpoint,
+            permissionMode: meta?.permission_mode || 'default', model: meta?.model || provider?.model || null, effort: meta?.effort || null,
+            environment: provider ? this.providers.environment(provider) : null,
             appendSystemPrompt: this.attachmentPrompt(id)};
     }
     attachmentPrompt(id) {

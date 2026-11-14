@@ -1973,7 +1973,10 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun showLogin() { loginVisible = true }
     fun fetchUsage() = viewModelScope.launch {
         val connection = api
-        try { val result = connection.json("$root/usage"); if (api === connection) {
+        val session = selectedId
+        val provider = sessionProvider
+        val query = if (isClaude && session != null) "?session=${android.net.Uri.encode(session)}" else ""
+        try { val result = connection.json("$root/usage$query"); if (api === connection && (!isClaude || selectedId == session && sessionProvider == provider)) {
             usage = result
             // 统一存储：当前工作空间的用量行同步额度窗口，切进对话框时显示同一份数据。
             val current = workspaces.optString("current")
@@ -1983,7 +1986,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             }
         } }
         catch (e: CancellationException) { throw e }
-        catch (_: Exception) { if (api === connection) usage = if (isClaude && usage?.optBoolean("available") == true)
+        catch (_: Exception) { if (api === connection && (!isClaude || selectedId == session && sessionProvider == provider)) usage = if (isClaude && usage?.optBoolean("available") == true)
             JSONObject(usage.toString()).put("stale", true).put("message", "额度刷新失败，当前显示上次读取结果")
             else if (isClaude) obj("available" to false, "message" to "Claude 额度暂时无法读取，请稍后重试") else null }
     }
@@ -2020,6 +2023,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             watching?.cancel(); streamJob?.cancel()
         }
         if (selectedId != id) {
+            if (isClaude) usage = null
             claudeSession = null
             externalActivity = null; externalHistoryRevision = null; sessionControl = null; controlMessage = null; runVerifiedAt = 0
             runSession = null
@@ -3380,6 +3384,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (selectedId == id && api === connection) {
                 runtime = listOf(providerDisplayName(provider), model).filter { it.isNotBlank() }.joinToString(" · ")
                 sessionProvider = provider; sessionModel = model; sessionEffort = effort; sessionTier = tier
+                if (isClaude) { usage = null; fetchUsage() }
             }
         }
         val options = connection.json(modelOptionsPath())

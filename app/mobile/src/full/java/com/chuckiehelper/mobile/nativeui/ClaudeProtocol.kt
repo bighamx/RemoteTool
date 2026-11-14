@@ -2,6 +2,14 @@ package com.chuckiehelper.mobile.nativeui
 
 import org.json.JSONObject
 
+internal fun claudeQuotaVisible(usage: JSONObject?): Boolean = usage?.optBoolean("available") == true
+
+internal fun claudePermissionLabel(mode: String?): String = when (mode) {
+    "acceptEdits" -> "自动批准文件编辑"
+    "plan" -> "计划模式"
+    else -> "按本机规则询问"
+}
+
 /** Takeover must target the exact desktop process and state the user confirmed. */
 internal fun claudeTakeoverRequest(activity: JSONObject?): JSONObject {
     require(activity?.optBoolean("available") == true && activity.optBoolean("running") && activity.optLong("pid") > 1 && activity.optLong("started_at") > 0) { "占用信息已失效，请刷新后重新确认" }

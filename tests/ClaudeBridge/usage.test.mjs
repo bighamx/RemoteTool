@@ -9,6 +9,15 @@ const method = 'usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET';
 const snapshot = () => ({rate_limits_available: true, rate_limits: {five_hour: {utilization: 0, resets_at: null}, seven_day: {utilization: 64, resets_at: '2026-11-13T02:00:00.292+00:00'}}});
 const auth = async () => ({ready: true});
 
+test('third-party and API-key logins omit subscription quota without starting a query', async () => {
+    for (const status of [{ready: true, provider: 'custom'}, {ready: true, provider: 'firstParty', method: 'api_key'}]) {
+        const usage = new ClaudeUsage({sdk: {query() { throw new Error('Unexpected quota query'); }}, executable: 'claude', cwd: os.tmpdir(), auth: async () => status});
+        const result = await usage.read();
+        assert.equal(result.available, false);
+        assert.deepEqual(result.rateLimitsByLimitId, {});
+    }
+});
+
 test('structured utilization is a percentage: zero and one are not missing or 100 percent', () => {
     const value = snapshot(); value.rate_limits.five_hour.utilization = 1;
     let result = usageSnapshot(value, 100);

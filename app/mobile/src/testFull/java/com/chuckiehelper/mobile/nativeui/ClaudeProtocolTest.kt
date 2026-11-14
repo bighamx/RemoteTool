@@ -5,6 +5,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ClaudeProtocolTest {
+    @Test fun unavailableQuotaIsHiddenWhileAnActualZeroPercentWindowRemainsVisible() {
+        assertFalse(claudeQuotaVisible(null))
+        assertFalse(claudeQuotaVisible(obj("available" to false, "message" to "当前登录方式不提供额度")))
+        assertTrue(claudeQuotaVisible(obj("available" to true, "rateLimitsByLimitId" to obj("claude" to obj("primary" to obj("usedPercent" to 0))))))
+        assertEquals("自动批准文件编辑", claudePermissionLabel("acceptEdits"))
+        assertEquals("计划模式", claudePermissionLabel("plan"))
+    }
     private fun message(id: String, role: String = "assistant", text: String = id, type: String = "") =
         agentHistoryMessage("claude", obj("id" to id, "role" to role, "content" to text, "type" to type, "timestamp" to 1794400000000L))!!
 

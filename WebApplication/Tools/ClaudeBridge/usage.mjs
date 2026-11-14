@@ -45,6 +45,8 @@ export class ClaudeUsage {
         try {
             const auth = await Promise.race([this.auth(), deadline]);
             if (!auth.ready) return {available: false, rateLimitsByLimitId: {}, source: SOURCE, stale: false, message: auth.message || '请先登录官方 Claude Code'};
+            if (auth.provider && auth.provider !== 'firstParty' || /api.?key/i.test(auth.method || ''))
+                return {available: false, rateLimitsByLimitId: {}, source: SOURCE, stale: false, message: ''};
             // Keep stdin open without ever yielding a user message. Closing/aborting releases it.
             async function* input() { if (!abort.signal.aborted) await new Promise(resolve => abort.signal.addEventListener('abort', resolve, {once: true})); }
             query = this.sdk.query({prompt: input(), options: {

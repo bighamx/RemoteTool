@@ -23,7 +23,7 @@ export function readableFailure(error, started) {
     const text = String(error?.message || error || '');
     if (/resume rejected/i.test(text)) return '无法从所选位置回退会话，请刷新历史后重试。';
     if (/ENOENT|spawn/i.test(text)) return '无法启动本机 Claude Code，请检查 Claude:Executable 配置。';
-    if (/login|auth|401|unauthori[sz]ed|credential/i.test(text)) return 'Claude Code 登录失效，请在服务端用户下执行 claude auth login。';
+    if (/login|auth|401|unauthori[sz]ed|credential/i.test(text)) return 'Claude 鉴权失败，请检查当前供应商的 API Key 或本机 Claude 登录状态。';
     if (/rate.?limit|429|usage limit/i.test(text)) return 'Claude 账户额度已用尽或请求过于频繁，请稍后重试。';
     if (/overloaded|529|5\d\d/i.test(text)) return 'Claude 服务暂时不可用，请稍后重试。';
     return started ? '连接中断，本轮结果待核对；请查看会话历史，未自动重发。' : 'Claude Code 未能开始执行本轮任务，请检查本机安装与登录状态。';
@@ -205,7 +205,7 @@ export class RunManager {
     // ---- execution ----------------------------------------------------------
     async execute(run, plan, message, meta) {
         const abort = new AbortController(), input = new InputQueue();
-        const runtime = {abort, input, query: null, stopRequested: false, outstanding: 1, idle: null, approvals: new Map(), chain: Promise.resolve(), texts: new Map(), started: false, inputConsumed: false};
+        const runtime = {abort, input, query: null, nativeCatalog: !plan.environment, stopRequested: false, outstanding: 1, idle: null, approvals: new Map(), chain: Promise.resolve(), texts: new Map(), started: false, inputConsumed: false};
         this.live.set(run.id, runtime);
         input.push(message);
         let result = null;
@@ -216,8 +216,7 @@ export class RunManager {
                 systemPrompt: plan.appendSystemPrompt ? {type: 'preset', preset: 'claude_code', append: plan.appendSystemPrompt} : {type: 'preset', preset: 'claude_code'},
                 permissionMode: plan.permissionMode || 'default', includePartialMessages: true, abortController: abort,
                 stderr: () => {},
-                // Pin the official endpoint for the spawned CLI when custom endpoints are not allowed.
-                ...(plan.officialOnly ? {env: {...process.env, ANTHROPIC_BASE_URL: 'https://api.anthropic.com'}} : {}),
+                ...(plan.environment ? {env: {...process.env, ...plan.environment}, settings: {env: plan.environment}} : {}),
                 ...(plan.model ? {model: plan.model} : {}), ...(plan.effort ? {effort: plan.effort} : {}),
                 ...(plan.resume ? {resume: run.session_id, ...(plan.resumeSessionAt ? {resumeSessionAt: plan.resumeSessionAt} : {})} : {sessionId: run.session_id}),
                 canUseTool: (tool, toolInput, context) => this.permission(run, runtime, tool, toolInput, context),
@@ -272,7 +271,7 @@ export class RunManager {
     handle(run, runtime, msg, meta) {
         if (msg.parent_tool_use_id) return null;
         if (msg.type === 'system' && msg.subtype === 'init') {
-            if (this.onModels && runtime.query?.supportedModels) runtime.query.supportedModels().then(models => this.onModels(models)).catch(() => {});
+            if (runtime.nativeCatalog && this.onModels && runtime.query?.supportedModels) runtime.query.supportedModels().then(models => this.onModels(models)).catch(() => {});
             return null;
         }
         if (msg.type === 'system' && msg.subtype === 'compact_boundary') { this.emit(run, 'context.compacted', {}); return null; }

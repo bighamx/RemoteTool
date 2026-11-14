@@ -27,6 +27,8 @@ internal static class ClaudeBridgeRestartChecks
         try {
             var config = new ConfigurationBuilder().Build();
             var type = assembly.GetType("RemoteTool.WebApi.Services.ClaudeBridge", true)!;
+            var bridgeVersion = (int)assembly.GetType("RemoteTool.WebApi.Services.RemoteToolPaths", true)!
+                .GetField("ClaudeBridgeVersion")!.GetRawConstantValue()!;
             var bridge = Activator.CreateInstance(type, config, new Environment(temporary))!;
             string node;
             try { node = (string)type.GetMethod("FindExecutable", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(bridge, ["NodeExecutable", "node"])!; }
@@ -40,7 +42,7 @@ internal static class ClaudeBridgeRestartChecks
             const string token = "isolated-claude-fixture-credential-01234567890123456789";
             File.WriteAllText(Path.Combine(data, "connection.json"), new JsonObject { ["token"] = token }.ToJsonString());
             var manifestPath = Path.Combine(tools, "installation.json");
-            File.WriteAllText(manifestPath, new JsonObject { ["NodeExecutable"] = node, ["Executable"] = node, ["script"] = Path.Combine(scripts, "server.mjs"), ["bridge_version"] = 7, ["restart_pending"] = true }.ToJsonString());
+            File.WriteAllText(manifestPath, new JsonObject { ["NodeExecutable"] = node, ["Executable"] = node, ["script"] = Path.Combine(scripts, "server.mjs"), ["bridge_version"] = bridgeVersion, ["restart_pending"] = true }.ToJsonString());
             using var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start(); var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
             File.WriteAllText(Path.Combine(data, "status.json"), new JsonObject { ["port"] = port, ["pid"] = System.Environment.ProcessId }.ToJsonString());
             using var listener = new HttpListener(); listener.Prefixes.Add($"http://127.0.0.1:{port}/"); listener.Start();
@@ -51,7 +53,7 @@ internal static class ClaudeBridgeRestartChecks
                         var context = await listener.GetContextAsync(); var path = context.Request.Url!.AbsolutePath;
                         JsonObject result;
                         if (path == "/health" && stopped) { context.Response.StatusCode = 404; result = new(); }
-                        else if (path == "/health") result = new() { ["protocol"] = 2, ["version"] = 7, ["active_runs"] = active ? 1 : 0, ["waiting"] = waiting ? 1 : 0, ["pid"] = System.Environment.ProcessId };
+                        else if (path == "/health") result = new() { ["protocol"] = 2, ["version"] = bridgeVersion, ["active_runs"] = active ? 1 : 0, ["waiting"] = waiting ? 1 : 0, ["pid"] = System.Environment.ProcessId };
                         else if (path == "/shutdown") { shutdowns++; stopped = true; result = new() { ["stopping"] = true }; }
                         else result = new() { ["fixture"] = true };
                         var bytes = Encoding.UTF8.GetBytes(result.ToJsonString()); context.Response.ContentType = "application/json";

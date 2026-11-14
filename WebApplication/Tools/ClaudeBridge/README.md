@@ -20,15 +20,14 @@ RemoteTool 通过官方 `@anthropic-ai/claude-agent-sdk` 驱动服务端机器�
   "Claude": {
     "Enabled": true,
     "Executable": "/absolute/path/to/claude",
-    "NodeExecutable": "/absolute/path/to/node",
-    "AllowCustomEndpoint": false
+    "NodeExecutable": "/absolute/path/to/node"
   }
 }
 ```
 
 - 显式程序路径优先，其次使用自动配置保存的路径，再查找 PATH、用户 `.local/bin`、Windows 用户 npm 安装目录和 Unix 常用目录。Windows 支持定位 npm 安装包中的原生 `claude.exe`。
-- `AllowCustomEndpoint=false`（默认）时，配置了非官方 `ANTHROPIC_BASE_URL` 或 Bedrock/Vertex/Foundry 的项目会被拒绝执行；设为 `true` 后按本机 Claude Code 配置原样执行。
-- 用户配置、CLAUDE.md、hooks、skills、插件和 MCP 由官方 Claude Code 加载；RemoteTool 不复制凭据，不提供远程登录。
+- 默认支持本机 Claude Code 配置中的第三方端点及 Bedrock/Vertex/Foundry。Web 和主 App 的“Provider 管理”可添加 Anthropic Messages API 兼容供应商，在会话模型设置中选择后于下一轮生效。供应商密钥保存在服务端 `claude-bridge/providers.json`，接口仅返回配置状态；会话执行时传入所选配置。保存及删除前保留一份 `.bak`。
+- 用户配置、CLAUDE.md、hooks、skills、插件和 MCP 由官方 Claude Code 加载；RemoteTool 不复制本机 Claude 登录凭据，不提供远程登录。
 
 ## 功能
 
@@ -36,7 +35,7 @@ RemoteTool 通过官方 `@anthropic-ai/claude-agent-sdk` 驱动服务端机器�
 - 执行：流式回复与思考过程、工具进度、执行中插话（同一进程的流式输入）、停止（先 `interrupt()`，10 秒未结束才强制终止）、`/compact` 压缩、附件（图片内联，其他文件给出路径）与 `MEDIA:` 回传文件。
 - 审批：工具授权“仅允许本次 / 拒绝”；只有 Claude 原生给出建议规则（`suggestions`）时才显示“允许并保存 Claude 建议的规则”，保存位置由原生建议决定。`AskUserQuestion` 在页面内选择或自填回答。计划模式的 `ExitPlanMode` 作为审批显示计划内容。
 - 设置：每个会话的模型与推理强度（下一轮生效），权限模式 `default` / `acceptEdits` / `plan`（执行中修改立即作用于当前任务）。不提供绕过权限模式。
-- 状态：上下文用量（原生 `contextWindow`，未知时估算并标注）、累计 Token、通过官方 SDK 的结构化 `/usage` 控制接口主动读取账户额度（不发送提示词、不调用模型、不保存临时会话；60 秒缓存并合并并发请求）。失败时标注上次结果，API key 等不适用订阅额度的登录方式明确说明；不会把 `allowed` 事件或空使用率当成剩余 100%。
+- 状态：上下文用量（原生 `contextWindow`，未知时估算并标注）、累计 Token、通过官方 SDK 的结构化 `/usage` 控制接口主动读取账户额度（不发送提示词、不调用模型、不保存临时会话；60 秒缓存并合并并发请求）。失败时标注上次结果，API key 和第三方供应商没有额度数据时隐藏额度区域；不会把 `allowed` 事件或空使用率当成剩余 100%。
 
 ## 会话占用与安全
 

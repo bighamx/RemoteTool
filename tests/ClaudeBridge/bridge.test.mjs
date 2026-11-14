@@ -129,7 +129,7 @@ test('a turn streams coalesced events, completes, and its receipt is idempotent'
     assert.equal(app.runs.eventsAfter(run.run_id).find(e => e.type === 'message.delta').delta, 'Hello');
     assert.equal(app.runs.eventsAfter(run.run_id).find(e => e.type === 'message.completed').item_id, 'm1:0');
     assert.equal(sdk.calls[0].options.resume, SID);
-    assert.equal(sdk.calls[0].options.env.ANTHROPIC_BASE_URL, 'https://api.anthropic.com', 'official endpoint pinned');
+    assert.equal(sdk.calls[0].options.env, undefined, 'native Claude settings are inherited');
     assert.match(sdk.calls[0].options.systemPrompt.append, /MEDIA:/);
     assert.equal(app.store.meta(SID).context_window, 1000000);
     assert.equal((await app.runs.start({session_id: SID, input: 'hi'}, key)).run_id, run.run_id, 'same key returns the accepted run');
@@ -222,7 +222,7 @@ test('failure before start is rejected-safe; an unknown result blocks until ackn
     assert.ok(await app.runs.start({session_id: SID, input: 'c'}, 'h'.repeat(20)));
 });
 
-test('preflight refuses sessions held by another Claude process and custom endpoints', async () => {
+test('preflight refuses sessions held by another Claude process', async () => {
     const {app, sdk} = setup(async function* () {}, {holders: [{sessionId: SID, pid: 42, status: 'idle'}]});
     await assert.rejects(app.runs.start({session_id: SID, input: 'x'}, 'q'.repeat(20)), e => e.code === 'session_held' && e.delivery === 'rejected');
     assert.equal((await app.sessions.activity(SID)).running, true);
@@ -230,13 +230,7 @@ test('preflight refuses sessions held by another Claude process and custom endpo
     assert.equal(Object.keys(app.store.data.receipts).length, 0, 'rejected sends leave no receipt');
     const own = setup(async function* () {}, {holders: [{sessionId: SID, pid: 43, status: 'busy'}], parent: process.pid});
     assert.equal((await own.app.sessions.activity(SID)).running, false, 'our own lingering SDK child is not an external holder');
-    const unreadable = setup(async function* () {});
-    unreadable.sdk.resolveSettings = async () => { throw new Error('bad settings'); };
-    await assert.rejects(unreadable.app.runs.start({session_id: SID, input: 'x'}, 'u'.repeat(20)), e => e.code === 'settings_unreadable' && e.delivery === 'rejected');
-    assert.equal(unreadable.sdk.calls.length, 0, 'unreadable settings never start the CLI');
-    const custom = setup(async function* () {});
-    custom.sdk.resolveSettings = async () => ({effective: {env: {ANTHROPIC_BASE_URL: 'https://gateway.example'}}});
-    await assert.rejects(custom.app.runs.start({session_id: SID, input: 'x'}, 'r'.repeat(20)), e => e.code === 'custom_endpoint');
+
 });
 
 test('rewind truncates history now and resumes at the kept entry on the next turn', async () => {
@@ -449,4 +443,79 @@ test('concurrent preflight failures share a rejection and release the original k
     const accepted = await app.runs.start(body, key);
     await wait(() => app.store.run(accepted.run_id).status === 'completed');
     assert.equal(sdk.calls.length, 1);
+});
+
+
+test('native third-party project settings work without an opt-in flag', async () => {
+    const {app, sdk} = setup(async function* (input) { await input.next(); yield init; yield ok; });
+    sdk.resolveSettings = async () => ({effective: {env: {ANTHROPIC_BASE_URL: 'https://gateway.example'}}});
+    app.sessions.env = {ANTHROPIC_BASE_URL: 'https://gateway.example', ANTHROPIC_AUTH_TOKEN: 'fixture'};
+    const run = await app.runs.start({session_id: SID, input: 'x'}, 'native-custom-endpoint-key');
+    await wait(() => app.runs.doc(app.store.run(run.run_id)).status === 'completed');
+    assert.equal(sdk.calls.length, 1);
+    assert.equal(sdk.calls[0].options.env, undefined);
+    assert.deepEqual(sdk.calls[0].options.settingSources, ['user', 'project', 'local']);
+});
+
+test('provider HTTP CRUD, model selection and SDK execution keep secrets private and sessions isolated', async () => {
+    const {app, sdk, root} = setup(async function* (input) { await input.next(); yield init; yield ok; });
+    const token = 'fixture-token'.repeat(4), server = createServer(app, token);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const request = async (route, body) => {
+        const response = await fetch(`http://127.0.0.1:${server.address().port}/${route}`, {
+            method: body ? 'POST' : 'GET', headers: {Authorization: 'Bearer '+token, 'Content-Type': 'application/json'},
+            ...(body ? {body: JSON.stringify(body)} : {})});
+        assert.equal(response.status, 200);
+        return response.json();
+    };
+    try {
+        const saved = await request('providers', {name: 'Gateway', base_url: 'http://127.0.0.1:1234', model: 'custom-model', api_key: 'test-only-secret', api_mode: 'anthropic_messages'});
+        assert.ok(!JSON.stringify(saved).includes('test-only-secret'));
+        const id = saved.endpoint.id;
+        await request('providers', {...saved.endpoint, name: 'Renamed'});
+        assert.equal(app.providers.get(id).api_key, 'test-only-secret', 'blank edits retain the key');
+        assert.ok(fs.existsSync(path.join(root, 'providers.json.bak')));
+        await request(`sessions/${SID}/model`, {provider: id, model: 'custom-model', reasoning_effort: 'high'});
+        assert.equal((await request('model-options?session='+SID)).provider, id);
+        assert.equal((await request('usage?session='+SID)).available, false);
+        app.sessions.auth = async () => { throw new Error('Official login must not gate a selected API provider'); };
+        const run = await app.runs.start({session_id: SID, input: 'x'}, 'managed-provider-request-key');
+        await wait(() => app.runs.doc(app.store.run(run.run_id)).status === 'completed');
+        const options = sdk.calls[0].options;
+        assert.equal(options.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:1234');
+        assert.equal(options.env.ANTHROPIC_API_KEY, 'test-only-secret');
+        assert.equal(options.env.CLAUDE_CODE_OAUTH_TOKEN, '');
+        assert.equal(options.settings.env.ANTHROPIC_CUSTOM_HEADERS, '');
+        assert.equal(options.settings.env.ANTHROPIC_AUTH_TOKEN, 'test-only-secret');
+        assert.equal(options.model, 'custom-model');
+        assert.ok(!JSON.stringify(app.store.data).includes('test-only-secret'));
+        assert.ok(!JSON.stringify(await request('providers')).includes('test-only-secret'));
+        const second = app.sessions.create({cwd: os.tmpdir()}).session;
+        assert.equal(app.sessions.modelOptions(second.id).provider, 'anthropic');
+        await request('providers/state', {id, enabled: false});
+        await assert.rejects(app.sessions.prepare(SID), /已删除或禁用/);
+        assert.ok(!(await request('providers')).endpoints.some(row => row.id === id));
+        assert.ok((await request('providers?include_disabled=true')).endpoints.some(row => row.id === id));
+        await request('providers/delete', {id});
+        assert.equal((await request('providers?include_disabled=true')).endpoints.length, 1);
+    } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+
+test('a concurrent model edit cannot mix the admitted provider credentials with another model', async () => {
+    const {app} = setup(async function* () {});
+    const first = app.providers.save({name: 'A', base_url: 'https://a.example', model: 'model-a', api_key: 'fixture-a'}).endpoint;
+    const second = app.providers.save({name: 'B', base_url: 'https://b.example', model: 'model-b', api_key: 'fixture-b'}).endpoint;
+    await app.sessions.setModel(SID, {provider: first.id, model: 'model-a'});
+    let unblock, entered;
+    const checking = new Promise(resolve => { entered = resolve; });
+    app.sessions.heldElsewhere = () => { entered(); return new Promise(resolve => { unblock = resolve; }); };
+    const pending = app.sessions.prepare(SID);
+    await checking;
+    await app.sessions.setModel(SID, {provider: second.id, model: 'model-b'});
+    unblock(null);
+    const admitted = await pending;
+    assert.equal(admitted.environment.ANTHROPIC_BASE_URL, 'https://a.example');
+    assert.equal(admitted.model, 'model-a');
+    assert.equal(app.sessions.modelOptions(SID).provider, second.id);
 });
