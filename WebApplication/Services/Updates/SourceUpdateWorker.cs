@@ -88,13 +88,20 @@ public sealed partial class Worker
             await process.WaitForExitAsync(timeout.Token);
         }
     }
-    async Task WarmBridge() {
-        if (runtime is ISourceUpdateRuntime source) { await source.WarmBridge(); return; }
+    /// <summary>
+    /// Warms the Codex bridge after a build/switch. A host with no logged-on interactive
+    /// desktop cannot start the bridge yet (IIS runs in session 0); that is a later-login
+    /// condition, not an update failure, so it returns false instead of throwing.
+    /// </summary>
+    async Task<bool> WarmBridge() {
+        if (runtime is ISourceUpdateRuntime source) { await source.WarmBridge(); return true; }
         using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(config.HealthUrl).GetLeftPart(UriPartial.Authority) + "/api/server-update/warm-bridge");
         request.Headers.Add("X-RemoteTool-Updater", config.WorkerToken);
         using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
         var state = JsonNode.Parse(await response.Content.ReadAsStringAsync());
+        if (state?["reason"]?.ToString() == "no_interactive_user") return false;
         if (state?["ready"]?.GetValue<bool>() != true) throw new IOException("新 Codex bridge 未就绪");
+        return true;
     }
     async Task RebuildSource() {
         if (config.Mode != "source" || config.ProjectDirectory == null || config.RuntimeDirectory == null) throw new IOException("未配置开发重编译目录");
@@ -139,8 +146,8 @@ public sealed partial class Worker
         foreach (var file in files.Where(ConfigurationFile)) File.Copy(Path.Combine(backup, Path.GetRelativePath(output, file)), file, true);
         var expected = BuildId(Path.Combine(output, "WebApplication.dll"));
         await Command("start", "apppool", "/apppool.name:" + config.Pool);
-        Phase("verifying", "核对重编译程序集与新 bridge"); await Verify(job.Sequence, expected); await WarmBridge();
-        Phase("completed", "源码重新编译完成，Web 与 Codex bridge 已恢复"); File.Delete(At("transaction.json"));
+        Phase("verifying", "核对重编译程序集与新 bridge"); await Verify(job.Sequence, expected); var bridgeWarm = await WarmBridge();
+        Phase("completed", bridgeWarm ? "源码重新编译完成，Web 与 Codex bridge 已恢复" : "源码重新编译完成；当前没有已登录的桌面用户，Codex bridge 将在有人登录后启动"); File.Delete(At("transaction.json"));
     }
     async Task Recover(JsonObject transaction) {
         if (transaction["kind"]?.ToString() != "source") { await Rollback(transaction); return; }

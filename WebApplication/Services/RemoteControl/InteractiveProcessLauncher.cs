@@ -6,6 +6,14 @@ using System.Runtime.InteropServices;
 namespace RemoteTool.WebApi.Services.RemoteControl;
 
 /// <summary>
+/// A host running in session 0 (IIS/Windows service) cannot start an interactive child
+/// process while no desktop user is logged on. Callers may treat this as a later-login
+/// condition instead of a hard failure — updates in particular must not roll back an
+/// otherwise healthy build just because nobody is logged in.
+/// </summary>
+public sealed class NoInteractiveUserException(string message) : InvalidOperationException(message);
+
+/// <summary>
 /// 提供在交互式桌面会话中启动进程的能力，用于绕过 IIS/Windows Service 的 Session 0 隔离。
 /// 要求应用程序池以 LocalSystem 身份运行。
 /// </summary>
@@ -16,7 +24,7 @@ public static class InteractiveProcessLauncher
             try { using var identity = new WindowsIdentity(token); return identity.User!.Value; }
             finally { CloseHandle(token); }
         }
-        throw new InvalidOperationException("No logged-on interactive user was found: " + detail);
+        throw new NoInteractiveUserException("No logged-on interactive user was found: " + detail);
     }
     private static void Log(string message)
         => AgentStartupLogger.Log("InteractiveProcessLauncher", message);

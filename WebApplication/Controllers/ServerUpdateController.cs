@@ -42,7 +42,14 @@ public sealed class ServerUpdateController(ServerUpdateService updates, CodexBri
     [AllowAnonymous, HttpPost("warm-bridge")]
     public async Task<IActionResult> WarmBridge(CancellationToken ct) {
         if (!updates.AuthenticateWorker(Request.Headers["X-RemoteTool-Updater"].ToString())) return Unauthorized();
-        using var response = await codex.SendAsync(HttpMethod.Get, "health", null, ct);
-        return new ContentResult { StatusCode = (int)response.StatusCode, ContentType = "application/json", Content = await response.Content.ReadAsStringAsync(ct) };
+        try {
+            using var response = await codex.SendAsync(HttpMethod.Get, "health", null, ct);
+            return new ContentResult { StatusCode = (int)response.StatusCode, ContentType = "application/json", Content = await response.Content.ReadAsStringAsync(ct) };
+        } catch (Services.RemoteControl.NoInteractiveUserException error) {
+            // Session 0 (IIS) with no logged-on desktop: the bridge starts on the next
+            // interactive login. Report it as a notice so an otherwise successful update
+            // is not turned into a failed one (and its rollback is not attempted).
+            return new JsonResult(new { ready = false, reason = "no_interactive_user", message = error.Message }) { StatusCode = 200 };
+        }
     }
 }
