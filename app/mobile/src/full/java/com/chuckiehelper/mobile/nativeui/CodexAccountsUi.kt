@@ -52,6 +52,17 @@ private fun quotaWindow(usage: JSONObject?, minutes: Int): JSONObject? {
         .firstOrNull { it.optInt("windowDurationMins") == minutes }
 }
 
+/** 列表页副标题行用的一行摘要，避免额度条单独占一行。 */
+internal fun codexUsageSummary(usage: JSONObject?): String {
+    fun part(label: String, minutes: Int): String? {
+        val window = quotaWindow(usage, minutes) ?: return null
+        val used = window.optDouble("usedPercent", -1.0)
+        if (used < 0 || !used.isFinite()) return null
+        return "$label ${(100 - used).coerceIn(0.0, 100.0).toInt()}%"
+    }
+    return listOfNotNull(part("5h", 300), part("周", 10080)).joinToString(" · ")
+}
+
 @Composable
 fun CodexUsage(model: HermesModel, compact: Boolean, onClick: () -> Unit = {}) {
     CodexUsageValues(model.usage, compact, onClick)
@@ -59,7 +70,7 @@ fun CodexUsage(model: HermesModel, compact: Boolean, onClick: () -> Unit = {}) {
 
 @Composable
 private fun CodexUsageValues(usage: JSONObject?, compact: Boolean, onClick: () -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = if (compact) 12.dp else 0.dp, vertical = if (compact) 3.dp else 6.dp)
+    Row(Modifier.fillMaxWidth().padding(horizontal = if (compact) 12.dp else 0.dp, vertical = if (compact) 2.dp else 6.dp)
         .clickable(enabled = compact, onClick = onClick), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         listOf("5 小时" to 300, "周额度" to 10080).forEach { (label, duration) ->
             val window = quotaWindow(usage, duration)
