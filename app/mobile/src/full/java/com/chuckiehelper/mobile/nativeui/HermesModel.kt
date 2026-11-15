@@ -2118,14 +2118,27 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
 
     /** 多端共享：本地没有跟踪时，向服务端查询该会话是否有其它设备发起的活跃 run，有则以观察者身份挂载。 */
     private suspend fun attachServerActiveRun(id: String, allowSubmitting: Boolean = false, required: Boolean = false, prefetched: JSONObject? = null) {
-        if (runId != null || submitting && !allowSubmitting) return
+        if (submitting && !allowSubmitting) return
         val connection = api
         val generation = openingGeneration
         try {
             val result = prefetched?.takeIf { it.has("run_id") } ?: connection.json("$root/sessions/${q(id)}/active-run")
-            if (selectedId != id || api !== connection || generation != openingGeneration || runId != null) return
+            if (selectedId != id || api !== connection || generation != openingGeneration) return
             activeRunCheckSession = id; activeRunCheckedAt = activityClock()
-            val serverRun = result.optString("run_id").takeIf { it.isNotBlank() && it != "null" } ?: return
+            val serverRun = result.optString("run_id").takeIf { it.isNotBlank() && it != "null" }
+            // App 被杀或网关重启后本地恢复的 run 可能早已不存在。不核对就会一直按「执行中」
+            // 处理，发送入口永远提示「请等待当前会话执行结束」，会话再也无法继续。
+            if (runId != null && runSession == id && serverRun != runId) {
+                val stale = runId
+                val started = stale?.let { runTimings[it]?.startedAt } ?: 0L
+                if (started == 0L || System.currentTimeMillis() - started > 20_000L) {
+                    pauseWatching(); runId = null; runSession = null; approval = null; runVerifiedAt = 0; runTurnId = null
+                    if (stale != null) { runTimings.remove(stale); backgroundRuns.remove(id) }
+                    prefs.edit().remove("run").remove("runSession").apply(); saveRuns(); setSubmitting(id, false)
+                }
+            }
+            if (runId != null) return
+            if (serverRun == null) return
             if (result.optString("status") !in setOf("started", "submitting", "running", "queued", "stopping", "waiting_for_approval", "waiting")) return
             startRunTiming(serverRun, result)
             runId = serverRun; runSession = id
@@ -2882,6 +2895,18 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     statusRecovering = false
                     if (error == readConnectionError) error = null
                     readConnectionError = null
+                    // 网关重启会让进行中的一轮变成 status=unknown：服务端此后拒绝该会话的所有新输入
+                    // （发送/停止都报 unknown_execution）。这里主动确认丢弃，会话才能继续。
+                    if (result.optString("status") == "unknown") {
+                        runCatching { connection.json("$root/runs/$id/resolve-unknown", obj()) }
+                        if (runId == id) {
+                            finishReasoning(id)
+                            clearRunTracking(watchedSession, id)
+                            setError(watchedSession, "上一次执行在网关重启时中断，已丢弃该任务；现在可以继续发送消息。")
+                            loadHistory(watchedSession)
+                        }
+                        return@launch
+                    }
                     noteRunActivity(watchedSession, result, requestedAt)
                     runVerifiedAt = requestedAt
                     runTurnId = result.optString("turn_id").takeIf { it.isNotBlank() && it != "null" }

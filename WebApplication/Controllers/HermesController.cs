@@ -682,6 +682,8 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
         }
         await Forward(HttpMethod.Post, $"v1/runs/{runId}/steer", body, key, ct);
     }
+    /// <summary>网关重启后这一轮结局未知：确认丢弃，否则该会话会被网关一直拒绝新输入。</summary>
+    [HttpPost("runs/{id}/resolve-unknown")] public Task ResolveUnknown(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"v1/runs/{Id(id)}/resolve-unknown", body, null, ct);
     [HttpPost("runs/{id}/approval")] public Task Approval(string id, [FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, $"v1/runs/{Id(id)}/approval", body, null, ct);
     [HttpPost("responses")] public Task Responses([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "v1/responses", body, null, ct);
 
