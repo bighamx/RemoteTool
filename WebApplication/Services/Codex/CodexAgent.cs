@@ -33,6 +33,10 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private readonly Dictionary<string, string> active = new();
     private readonly Dictionary<string, List<JsonObject>> events = new();
     private readonly Dictionary<string, string> itemTurns = new();
+    // 卡死看门狗: 上游彻底不返回时, run 会永远停在 started, 界面一直“运行中”。
+    private readonly Dictionary<string, string> upstreamErrors = new();   // 会话 -> 最近一次上游错误原文
+    private readonly Dictionary<string, long> lastEvents = new();         // run -> 最近一次事件(ms)
+    private Timer stallWatchdog;
 
     /// <summary>从 tokenUsage 里取上下文快照; 数值小到不可能是真实上下文(系统提示就有几 K)时返回 null。</summary>
     private static JsonObject? ContextFromUsage(JsonNode? usage) {
@@ -517,6 +521,53 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var accountStore = settings.S("account_store");
         if (string.IsNullOrWhiteSpace(accountStore)) accountStore = Path.Combine(Path.GetDirectoryName(home) ?? home, ".codex-switch");
         accounts = new CodexAccountStore(home, accountStore);
+        stallWatchdog = new Timer(_ => ReapStalledRuns(), null, TimeSpan.FromSeconds(45), TimeSpan.FromSeconds(45));
+    }
+
+    /// <summary>上游事件里的错误原文：params.message / params.error.message 都试，取到最后一行。</summary>
+    private static string UpstreamErrorText(JsonObject p) {
+        var text = p.S("message");
+        if (text.Length == 0) text = p["error"] is JsonObject detail ? detail.S("message") : p.S("error");
+        if (text.Length == 0) return "";
+        var line = text.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim() ?? "";
+        return line.Length > 1200 ? line[..1200] : line;
+    }
+
+    /// <summary>结束长时间没有任何上游事件的 run：有错误原文就原样展示，没有就给一条可复核的说明。</summary>
+    private void ReapStalledRuns() {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var ended = new List<(string Session, string Run, string Message, bool Recorded)>();
+        lock (gate) {
+            foreach (var entry in active.ToArray()) {
+                if (runs[entry.Value] is not JsonObject run) continue;
+                if (run.S("status") != "started") continue;
+                var last = lastEvents.GetValueOrDefault(entry.Value, run.L("started_at_ms"));
+                if (last <= 0) last = now;
+                var recorded = upstreamErrors.GetValueOrDefault(entry.Key) ?? "";
+                var limit = recorded.Length > 0 ? 5 * 60_000L : 15 * 60_000L;
+                if (now - last < limit) continue;
+                var minutes = (now - last) / 60_000;
+                run["status"] = "failed";
+                run["error"] = recorded.Length > 0 ? recorded
+                    : $"上游 {minutes} 分钟没有任何响应，已标记失败；可在会话里重新发起（本轮没有收到任何模型输出）。";
+                run.Remove("approval");
+                active.Remove(entry.Key); lastEvents.Remove(entry.Value); upstreamErrors.Remove(entry.Key);
+                ended.Add((entry.Key, entry.Value, run.S("error"), recorded.Length > 0));
+            }
+            if (ended.Count > 0) Persist();
+        }
+        foreach (var item in ended) {
+            try { Emit(item.Run, "run.failed"); } catch (Exception) { }
+            _ = InterruptStalled(item.Session, item.Run);
+        }
+    }
+
+    /// <summary>看门狗收尾后尽力中断上游那一轮，避免它自己再恢复写历史。</summary>
+    private async Task InterruptStalled(string session, string run) {
+        string turn; lock (gate) turn = runs[run]?.S("turn_id") ?? "";
+        if (turn.Length == 0) return;
+        try { await Runtime(session).Call("turn/interrupt", Obj(("threadId", session), ("turnId", turn))); }
+        catch (Exception error) when (error is CodexError or IOException or InvalidOperationException) { }
     }
     private async Task Launch() {
         var executable = CodexExecutable.Resolve(settings.S("executable"), home);
@@ -786,6 +837,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var session = p.S("threadId");
         var turnId = p.S("turnId", p["turn"].S("id", p["item"].S("turnId")));
         if (!AcceptNotification(origin, session, turnId, method, p)) return;
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        lock (gate) {
+            if (session.Length > 0 && active.TryGetValue(session, out var running)) lastEvents[running] = nowMs;
+            if (method == "error" && session.Length > 0 && UpstreamErrorText(p) is { Length: > 0 } text) upstreamErrors[session] = text;
+        }
         if (method == "item/tool/call" && message.ContainsKey("id") && p.S("tool").StartsWith("phone_", StringComparison.Ordinal)) {
             // Do not block ordered lifecycle notifications while Android executes.
             _ = HandlePhoneCall(message.DeepClone().AsObject(), origin, session);
@@ -1392,7 +1448,11 @@ internal sealed partial class CodexAgent : IAsyncDisposable
                 lock (gate) runs[run]!["model"] = turnRequest["model"]?.DeepClone();
             }
             ct.ThrowIfCancellationRequested(); // No new write after the HTTP caller has left during preparation.
-            lock (gate) { runs[run]!["status"] = "started"; runs[run]!["phase"] = "dispatching"; Persist(); }
+            lock (gate) {
+                runs[run]!["status"] = "started"; runs[run]!["phase"] = "dispatching";
+                var started = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                runs[run]!["started_at_ms"] = started; lastEvents[run] = started; Persist();
+            }
             if (body.S("outbox") is { Length: > 0 } outbox)
                 turnRequest["additionalContext"] = Obj(("chuckie-attachments", Obj(("kind", "application"),
                     ("value", "生成给用户下载的文件保存到 " + outbox + "，回复中用标准 Markdown 链接 [名称](绝对路径) 给出，含空格的路径用 < > 包裹。"))));

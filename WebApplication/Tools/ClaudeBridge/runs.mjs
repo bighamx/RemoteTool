@@ -5,6 +5,8 @@ import {BridgeError, TERMINAL, validId, validKey} from './state.mjs';
 import {ATTACHMENT_MARKER, toolLabel, toolPreview, resultText} from './history.mjs';
 
 const EVENT_CAP = 2000, DELTA_FLUSH_MS = 80, STEER_IDLE_MS = 4000, STOP_GRACE_MS = 10000, EVENT_RETAIN_MS = 15 * 60000;
+// 上游彻底不返回时 SDK 的异步流会一直挂着, 进程活着但永远没有结果; 超过这个时长就中止并给出错误。
+const STALL_MS = Number(process.env.REMOTETOOL_CLAUDE_STALL_MS || 10 * 60 * 1000);
 const IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp'};
 
 /** Minimal async queue used as the SDK's streaming-input prompt. */
@@ -19,8 +21,12 @@ class InputQueue {
 }
 
 /** Maps SDK/CLI failures to fixed messages; raw errors can carry headers or tokens from user plugins. */
-export function readableFailure(error, started) {
+export function readableFailure(error, started, detail = '') {
     const text = String(error?.message || error || '');
+    // 用户要求失败原因原样展示: 上游返回的原文优先, 但删掉可能带的密钥。
+    const raw = [text, detail].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    const secret = /sk-[A-Za-z0-9_-]{12,}|bearer\s+[A-Za-z0-9._-]{12,}|x-api-key\s*[:=]/i.test(raw);
+    if (raw && !secret && raw.length >= 16) return raw.slice(0, 800);
     if (/resume rejected/i.test(text)) return '无法从所选位置回退会话，请刷新历史后重试。';
     if (/ENOENT|spawn/i.test(text)) return '无法启动本机 Claude Code，请检查 Claude:Executable 配置。';
     if (/login|auth|401|unauthori[sz]ed|credential/i.test(text)) return 'Claude 鉴权失败，请检查当前供应商的 API Key 或本机 Claude 登录状态。';
@@ -210,12 +216,20 @@ export class RunManager {
         input.push(message);
         let result = null;
         const arm = () => { clearTimeout(runtime.idle); runtime.idle = setTimeout(() => { runtime.outstanding = 0; input.close(); }, STEER_IDLE_MS); };
+        // 卡死看门狗: 只要 SDK 还在出声(stderr 也算)就续命, 长时间全静默才判定上游无响应。
+        const stall = {last: Date.now(), fired: false, stderr: ''};
+        const watch = setInterval(() => {
+            if (stall.fired || abort.signal.aborted || Date.now() - stall.last < STALL_MS) return;
+            stall.fired = true;
+            try { abort.abort(new Error(`上游 ${Math.round(STALL_MS / 60000)} 分钟没有任何响应，已中止本轮`)); } catch {}
+        }, 15000);
+        if (typeof watch.unref === 'function') watch.unref();
         try {
             const options = {
                 cwd: plan.cwd, pathToClaudeCodeExecutable: this.executable, settingSources: ['user', 'project', 'local'],
                 systemPrompt: plan.appendSystemPrompt ? {type: 'preset', preset: 'claude_code', append: plan.appendSystemPrompt} : {type: 'preset', preset: 'claude_code'},
                 permissionMode: plan.permissionMode || 'default', includePartialMessages: true, abortController: abort,
-                stderr: () => {},
+                stderr: chunk => { stall.last = Date.now(); stall.stderr = (stall.stderr + String(chunk)).slice(-4000); },
                 ...(plan.environment ? {env: {...process.env, ...plan.environment}, settings: {env: plan.environment}} : {}),
                 ...(plan.model ? {model: plan.model} : {}), ...(plan.effort ? {effort: plan.effort} : {}),
                 ...(plan.resume ? {resume: run.session_id, ...(plan.resumeSessionAt ? {resumeSessionAt: plan.resumeSessionAt} : {})} : {sessionId: run.session_id}),
@@ -227,6 +241,7 @@ export class RunManager {
             }
             runtime.query = this.sdk.query({prompt: prompt(), options});
             for await (const msg of runtime.query) {
+                stall.last = Date.now();
                 if (!runtime.started) {
                     runtime.started = true; run.status = 'running';
                     if (plan.resumeSessionAt) { delete meta.rewind; }
@@ -243,16 +258,18 @@ export class RunManager {
             }
             const mayHaveExecuted = runtime.started || runtime.inputConsumed;
             if (runtime.stopRequested) this.finish(run, 'cancelled', '已停止；停止前已开始的工具操作请核对实际结果。');
-            else if (!result) this.finish(run, mayHaveExecuted ? 'acceptance_unknown' : 'failed', readableFailure(null, mayHaveExecuted));
+            else if (!result) this.finish(run, mayHaveExecuted ? 'acceptance_unknown' : 'failed', readableFailure(null, mayHaveExecuted, stall.stderr.trim().split('\n').slice(-3).join(' ').trim()));
             else if (result.is_error) this.finish(run, 'failed', RESULT_ERRORS[result.subtype] || resultFailure(result));
             else this.finish(run, 'completed', null);
         } catch (error) {
             if (/resume rejected/i.test(String(error?.message))) delete meta.rewind;
             const mayHaveExecuted = runtime.started || runtime.inputConsumed;
+            const detail = stall.stderr.trim().split('\n').slice(-3).join(' ').trim();
             if (runtime.stopRequested) this.finish(run, 'cancelled', '已停止；停止前已开始的工具操作请核对实际结果。');
-            else this.finish(run, mayHaveExecuted ? 'acceptance_unknown' : 'failed', readableFailure(error, mayHaveExecuted));
+            else if (stall.fired) this.finish(run, 'failed', readableFailure(error, mayHaveExecuted, detail));
+            else this.finish(run, mayHaveExecuted ? 'acceptance_unknown' : 'failed', readableFailure(error, mayHaveExecuted, detail));
         } finally {
-            clearTimeout(runtime.idle); clearTimeout(runtime.killer);
+            clearInterval(watch); clearTimeout(runtime.idle); clearTimeout(runtime.killer);
             for (const pending of runtime.approvals.values()) pending.resolve({behavior: 'deny', message: '任务已结束'});
             runtime.approvals.clear(); input.close();
             try { runtime.query?.close?.(); } catch {}

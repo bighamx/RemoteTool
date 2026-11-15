@@ -12,7 +12,7 @@ import {ClaudeUsage} from './usage.mjs';
 import {ClaudeProviders} from './providers.mjs';
 
 export const PROTOCOL = 2;      // API contract with the C# host; a change requires an idle restart.
-export const BRIDGE_VERSION = 8; // Implementation revision; RemoteToolPaths.ClaudeBridgeVersion must match.
+export const BRIDGE_VERSION = 9; // Implementation revision; RemoteToolPaths.ClaudeBridgeVersion must match.
 
 function args(argv) {
     const result = {};
