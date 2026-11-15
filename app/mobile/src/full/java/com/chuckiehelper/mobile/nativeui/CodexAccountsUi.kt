@@ -52,15 +52,15 @@ private fun quotaWindow(usage: JSONObject?, minutes: Int): JSONObject? {
         .firstOrNull { it.optInt("windowDurationMins") == minutes }
 }
 
-/** 列表页副标题行用的一行摘要，避免额度条单独占一行。 */
-internal fun codexUsageSummary(usage: JSONObject?): String {
-    fun part(label: String, minutes: Int): String? {
+/** 列表页顶部用的额度条数据：标签 + 剩余百分比。 */
+internal fun codexUsageBars(usage: JSONObject?): List<Pair<String, Int>> {
+    fun part(label: String, minutes: Int): Pair<String, Int>? {
         val window = quotaWindow(usage, minutes) ?: return null
         val used = window.optDouble("usedPercent", -1.0)
         if (used < 0 || !used.isFinite()) return null
-        return "$label ${(100 - used).coerceIn(0.0, 100.0).toInt()}%"
+        return label to (100 - used).coerceIn(0.0, 100.0).toInt()
     }
-    return listOfNotNull(part("5h", 300), part("周", 10080)).joinToString(" · ")
+    return listOfNotNull(part("5h", 300), part("周", 10080))
 }
 
 @Composable

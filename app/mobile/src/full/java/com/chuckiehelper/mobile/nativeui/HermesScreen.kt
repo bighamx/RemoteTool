@@ -401,23 +401,6 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                     if (model.recovering || !displayList && model.historyLoading && model.messages.isNotEmpty())
                         CircularProgressIndicator(Modifier.padding(start = 8.dp).size(14.dp), strokeWidth = 2.dp)
                 }
-                if (displayList && (model.runtime.isNotBlank() || agent == "codex")) Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (model.runtime.isNotBlank()) Text(
-                        model.runtime,
-                        style = MaterialTheme.typography.labelSmall.copy(lineHeight = 13.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (agent == "codex") {
-                        val usageText = codexUsageSummary(model.usage)
-                        if (usageText.isNotBlank()) {
-                            Spacer(Modifier.width(8.dp))
-                            Text(usageText, style = MaterialTheme.typography.labelSmall.copy(lineHeight = 13.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                        }
-                    }
-                }
             }
             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -480,6 +463,15 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             }
             }
         }
+        // 副标题独立成行, 不再和标题挤在同一列里, 否则右侧三个图标会按"标题+副标题"整体居中,
+        // 看起来比标题低一截(Codex 会话列表 vs 进入会话后就是这个问题)。
+        if (displayList && model.runtime.isNotBlank()) Text(
+            model.runtime,
+            style = MaterialTheme.typography.labelSmall.copy(lineHeight = 13.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        )
         if (!displayList && (agent == "codex" || agent == "claude" && claudeQuotaVisible(model.usage))) CodexUsage(model, compact = true) { if (agent == "codex") { accountsPanel = true; model.fetchAccounts() } else model.fetchUsage() }
         if (agent == "claude" && claudeQuotaVisible(model.usage)) model.usage?.cleanSetting("message")?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         if (agent == "claude" && !displayList && model.claudeUnresolvedRun != null) {
@@ -529,6 +521,7 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
         }
         if (model.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (displayList) {
+            if (agent == "codex") CodexUsageStrip(model.usage)
             OutlinedTextField(
                 filter,
                 { filter = it },
@@ -1315,6 +1308,33 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     }
 }
 
+/** Codex 额度条：紧贴搜索框上方，两段细进度条，整体高度约 20dp。 */
+@Composable
+private fun CodexUsageStrip(usage: JSONObject?) {
+    val bars = codexUsageBars(usage)
+    if (bars.isEmpty()) return
+    Row(
+        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        bars.forEach { (label, remaining) ->
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                Text("$label $remaining%", style = MaterialTheme.typography.labelSmall.copy(lineHeight = 12.sp),
+                    maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(6.dp))
+                LinearProgressIndicator(
+                    gapSize = 0.dp,
+                    progress = { remaining / 100f },
+                    modifier = Modifier.weight(1f).height(3.dp),
+                    drawStopIndicator = {},
+                    color = if (remaining < 20) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
+}
+
 /** 顶部栏专属开关的统一外观：同一高度、同一圆角、同一字号，位置固定在这一行。 */
 @Composable
 private fun AgentHeaderChip(
@@ -1328,8 +1348,9 @@ private fun AgentHeaderChip(
     Surface(
         onClick = onClick,
         shape = MaterialTheme.shapes.small,
-        color = if (selected) colors.primary else colors.surfaceVariant,
-        contentColor = if (selected) colors.onPrimary else colors.onSurfaceVariant,
+        // surfaceVariant 没在主题里定义过, 会退回 M3 默认的紫灰, 和绿主题不搭; 用主题自带的 secondaryContainer。
+        color = if (selected) colors.primary else colors.secondaryContainer,
+        contentColor = if (selected) colors.onPrimary else colors.onSecondaryContainer,
         border = BorderStroke(1.dp, if (selected) colors.primary else colors.outlineVariant),
     ) {
         Row(
