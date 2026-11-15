@@ -161,14 +161,8 @@ public sealed class ClaudeBridge(IConfiguration configuration, IWebHostEnvironme
             var attachments = RemoteToolPaths.Attachments("claude");
             Directory.CreateDirectory(attachments);
             if (OperatingSystem.IsWindows()) {
-                var acl = new DirectorySecurity(); acl.SetAccessRuleProtection(true, false);
-                var inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
-                var owners = new List<SecurityIdentifier> { WindowsIdentity.GetCurrent().User!, new(WellKnownSidType.LocalSystemSid, null) };
-                if (InteractiveProcessLauncher.IsRunningInSession0 && InteractiveProcessLauncher.GetInteractiveUserSid() is { } sid) owners.Add(new SecurityIdentifier(sid));
-                foreach (var identity in owners.Distinct())
-                    acl.AddAccessRule(new FileSystemAccessRule(identity, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
-                new DirectoryInfo(Root).SetAccessControl(acl);
-                new DirectoryInfo(attachments).SetAccessControl(acl);
+                GrantDirectoryAccess(Root);
+                GrantDirectoryAccess(attachments);
             } else File.SetUnixFileMode(Root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var connection = Path.Combine(Root, "connection.json");
             if (!File.Exists(connection)) {
@@ -220,5 +214,29 @@ public sealed class ClaudeBridge(IConfiguration configuration, IWebHostEnvironme
         // Run starts include a login/ownership preflight; give them longer than reads.
         var budget = stream ? (TimeSpan?)null : method == HttpMethod.Get ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(90);
         return await Raw(method, health.Port, health.Token, path, body, key, lastEvent, budget, ct);
+    }
+
+    /// <summary>只补显式授权, 保留父目录继承。旧实现用 SetAccessRuleProtection(true, false) 清空继承,
+    /// 一旦此刻拿不到交互用户 SID, 目录会只剩 SYSTEM, 交互用户立刻失去读写(升级/排障时会撞上)。</summary>
+    private static void GrantDirectoryAccess(string path) {
+        var directory = new DirectoryInfo(path);
+        if ((directory.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("Claude 数据目录不能是链接");
+        var acl = directory.GetAccessControl(AccessControlSections.Access);
+        // 之前开过保护模式的目录会丢掉父目录继承(交互用户的完全控制就是这么没的), 这里恢复继承。
+        var changed = false;
+        if (acl.AreAccessRulesProtected) { acl.SetAccessRuleProtection(false, true); changed = true; }
+        var inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+        var owners = new List<SecurityIdentifier> { WindowsIdentity.GetCurrent().User!, new(WellKnownSidType.LocalSystemSid, null) };
+        if (InteractiveProcessLauncher.IsRunningInSession0 && InteractiveProcessLauncher.GetInteractiveUserSid() is { } sid) owners.Add(new SecurityIdentifier(sid));
+        var covered = acl.GetAccessRules(true, true, typeof(SecurityIdentifier)).OfType<FileSystemAccessRule>()
+            .Where(rule => rule.AccessControlType == AccessControlType.Allow &&
+                (rule.FileSystemRights & FileSystemRights.FullControl) == FileSystemRights.FullControl)
+            .Select(rule => rule.IdentityReference).ToHashSet();
+        foreach (var identity in owners.Distinct()) {
+            if (covered.Contains(identity)) continue;
+            acl.AddAccessRule(new FileSystemAccessRule(identity, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
+            changed = true;
+        }
+        if (changed) directory.SetAccessControl(acl);
     }
 }
