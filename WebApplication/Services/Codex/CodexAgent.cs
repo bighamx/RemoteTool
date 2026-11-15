@@ -186,6 +186,24 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         [SQLite.Column("archived")] public int Archived { get; set; }
     }
 
+    private sealed class ThreadProviderRow { [SQLite.Column("model_provider")] public string ModelProvider { get; set; } }
+
+    /** 会话记录里的 provider。Codex 的 thread/resume 比对的是「运行时自身 model_provider」与这条记录，
+        不一致就拒绝装载（This chat uses X, but your current provider is Y），且不看请求参数。
+        读不到或库不可用时返回空，调用方回退到当前默认 provider。 */
+    private string ThreadProvider(string session) {
+        try {
+            var dbPath = Path.Combine(home, "state_5.sqlite");
+            if (!File.Exists(dbPath)) return "";
+            SQLitePCL.Batteries_V2.Init();
+            using var db = new SQLiteConnection(dbPath, SQLiteOpenFlags.ReadOnly | SQLiteOpenFlags.FullMutex);
+            db.BusyTimeout = TimeSpan.FromMilliseconds(250);
+            return db.Query<ThreadProviderRow>("SELECT model_provider FROM threads WHERE id=?", session).FirstOrDefault()?.ModelProvider ?? "";
+        } catch (Exception error) when (error is SQLiteException or IOException or UnauthorizedAccessException or DllNotFoundException or TypeInitializationException) {
+            return "";
+        }
+    }
+
     /** 定时消息投递前的归档检查：直读 state db，失败时按未归档处理（避免误取消）。 */
     private JsonObject ArchivedState(string session) {
         if (!System.Text.RegularExpressions.Regex.IsMatch(session, "^[a-zA-Z0-9_-]{1,160}$")) throw new CodexError("无效会话标识");
@@ -266,6 +284,14 @@ internal sealed partial class CodexAgent : IAsyncDisposable
     private async Task<CodexRpc> EnsureRuntime(string id, JsonObject selection = null) {
         var inherited = selection == null;
         if (inherited) selection = await SessionSelection(id, prepare: true);
+        if (selection == null) {
+            // 旧会话可能由别的 provider 创建（例如官方 openai），而全局默认已换成 custom；
+            // 运行时若仍按全局默认启动，thread/resume 会被 provider 归属校验直接拒绝。
+            var recorded = ThreadProvider(id);
+            var config = recorded.Length == 0 ? null : await Config();
+            if (recorded.Length > 0 && (recorded == "openai" || config?["model_providers"]?[recorded] != null))
+                selection = Obj(("modelProvider", recorded));
+        }
         CodexRpc client; lock (gate) sessionRpcs.TryGetValue(id, out client);
         if (client?.Running == true) return client;
         if (client != null) await ReleaseSessionCore(id);
@@ -313,8 +339,13 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         catch (CodexError error) when (error.Message.Contains("thread not loaded", StringComparison.OrdinalIgnoreCase)) {
             // app-server 重启或更换 CODEX_HOME 后线程不在内存：thread/resume 会从 rollout 重新装载。
             try {
-                await client.Call("thread/resume", Obj(("threadId", id)), readTimeout.Token);
-                return await client.Call("thread/read", Obj(("threadId", id), ("includeTurns", turns)), readTimeout.Token);
+                // 用该会话自己的运行时装载：它按会话记录的 provider 启动，避免归属校验拒绝。
+                var owner = await EnsureRuntime(id);
+                await owner.Call("thread/resume", Obj(("threadId", id)), readTimeout.Token);
+                return await owner.Call("thread/read", Obj(("threadId", id), ("includeTurns", turns)), readTimeout.Token);
+            } catch (CodexError resumeError) when (resumeError.Message.Contains("but your current provider is", StringComparison.OrdinalIgnoreCase)) {
+                // 运行时 provider 与会话记录不一致时 Codex 直接拒绝装载，读路径借此给出可判别错误。
+                throw new CodexError("该会话记录的服务商与当前 Codex 配置不一致，无法装载；请在 Codex 里把默认服务商切回该会话记录的那个，或新建会话。原始信息：" + resumeError.Message, 409, "provider_mismatch");
             } catch (CodexError resumeError) when (resumeError.Message.Contains("already has an active writer", StringComparison.OrdinalIgnoreCase)) {
                 // 线程被别的客户端装载中（典型：桌面端正开着该会话，实测跨进程独占锁）：
                 // 官方行为是立即报错不是阻塞，映射成可判别的 409，读数据走 thread/read 的回退即可。
