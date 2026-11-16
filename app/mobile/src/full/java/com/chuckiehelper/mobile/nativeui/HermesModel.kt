@@ -669,6 +669,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
 
     var runtime by mutableStateOf("")
+    /** 回落后真正生效的 provider（服务端 gateway_runtime 推断），只用于展示，不参与提交路由。 */
+    private var runtimeProvider by mutableStateOf("")
         private set
 
     var modelWarning by mutableStateOf<String?>(null)
@@ -2163,6 +2165,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val selection = readAgentSelection(result)
         sessionProvider = selection.provider; sessionModel = selection.model
         sessionEffort = selection.effort; sessionTier = selection.tier
+        // 回落后服务端会把真正生效的 provider 放在 runtime_provider 里；它只影响展示。
+        runtimeProvider = result.optString("runtime_provider").takeIf { agent == "hermes" }.orEmpty()
         updateRuntimeDisplay()
         saveSessionRuntime(id, sessionProvider, sessionModel, sessionEffort, sessionTier, result.optJSONObject("context"))
         if (loadRelated) {
@@ -2920,17 +2924,22 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
                     }
                     result.optJSONObject("runtime")?.let { rt ->
                         val sseProvider = rt.optString("provider")
-                        // Codex reports the actual routing provider, including custom and
-                        // official aliases. Hermes may report an unresolved billing shell.
-                        val sseProviderKnown = sseProvider.isNotBlank() && (agent == "codex" ||
-                            sseProvider != "custom" && modelOptions.array("providers").objects().any { providerMatches(it, sseProvider) })
-                        if (sseProviderKnown) {
-                            runtime = listOf(providerDisplayName(sseProvider), rt.optString("model")).filter { piece -> piece.isNotBlank() }.joinToString(" · ")
-                            if (selectedId == runSession) { sessionProvider = sseProvider; sessionModel = rt.optString("model") }
-                        } else if (sessionModel.isBlank()) {
-                            // Without a provider report, retain the confirmed selection.
-                            sessionModel = rt.optString("model")
-                            updateRuntimeDisplay()
+                        val sseModel = rt.optString("model")
+                        // 以网关回报的真实路由为准。以前要求 provider 必须出现在 modelOptions 目录里,
+                        // 目录还没加载(或回落到目录外的 provider)时就会一直挂着上一个 provider,
+                        // 出现"模型已经是回落后的、provider 还是旧的"。hermes 的 custom 是未解析的计费壳,
+                        // 既不能当名字显示, 也不能拿旧 provider 冒充, 这种情况只显示模型。
+                        val providerUnresolved = agent == "hermes" && sseProvider == "custom"
+                        val providerUsable = sseProvider.isNotBlank() && !providerUnresolved
+                        if (selectedId == runSession) {
+                            if (providerUsable) { sessionProvider = sseProvider; runtimeProvider = "" }
+                            if (sseModel.isNotBlank()) sessionModel = sseModel
+                        }
+                        when {
+                            providerUsable -> runtime = listOf(providerDisplayName(sseProvider), sseModel)
+                                .filter { piece -> piece.isNotBlank() }.joinToString(" · ")
+                            providerUnresolved -> runtime = sseModel.ifBlank { runtime }
+                            sseModel.isNotBlank() -> updateRuntimeDisplay()
                         }
                     }
                     if (
@@ -3228,7 +3237,8 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     /** Header and submission share one effective selection, including actual custom providers. */
     private fun updateRuntimeDisplay() {
         val selection = effectiveSelection()
-        runtime = listOf(providerDisplayName(selection.provider), selection.model).filter { it.isNotBlank() }.joinToString(" · ")
+        val shownProvider = runtimeProvider.ifBlank { selection.provider }
+        runtime = listOf(providerDisplayName(shownProvider), selection.model).filter { it.isNotBlank() }.joinToString(" · ")
     }
 
     private fun modelOptionsPath(session: String? = selectedId): String = "$root/model-options" +
@@ -3407,6 +3417,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             val id = session ?: throw java.io.IOException("请先选择会话")
             connection.json("$root/sessions/$id/model", body)
             if (selectedId == id && api === connection) {
+                runtimeProvider = ""
                 runtime = listOf(providerDisplayName(provider), model).filter { it.isNotBlank() }.joinToString(" · ")
                 sessionProvider = provider; sessionModel = model; sessionEffort = effort; sessionTier = tier
                 if (isClaude) { usage = null; fetchUsage() }

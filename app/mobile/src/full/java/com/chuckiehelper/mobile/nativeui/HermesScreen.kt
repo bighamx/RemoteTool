@@ -350,71 +350,31 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                 }
             }
         }) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f).clickable(enabled = !displayList && model.selectedId != null) {
+        val quotaSummary = if (agent == "codex" || agent == "claude" && claudeQuotaVisible(model.usage))
+            codexUsageBars(model.usage).joinToString(" · ") { (label, remaining) -> "$label $remaining%" } else ""
+        val showQuota: () -> Unit = {
+            if (agent == "codex") { accountsPanel = true; model.fetchAccounts() } else model.fetchUsage()
+        }
+        AgentPageHeader(
+            title = if (displayList) "$agentName 会话" else model.title,
+            isSessionList = displayList,
+            busy = model.loading || model.recovering || !displayList && model.historyLoading && model.messages.isNotEmpty(),
+            onTitleClick = if (!displayList && model.selectedId != null) ({
                 renameChat = obj("id" to model.selectedId, "title" to model.title)
-            }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (displayList) "$agentName 会话" else model.title,
-                        style = if (displayList) MaterialTheme.typography.titleSmall.copy(lineHeight = 18.sp) else MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f, fill = false),
-                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                    // 专属开关紧跟主标题，副标题行只放运行环境与额度，三端结构一致。
-                    if (displayList && agent == "hermes") {
-                        Spacer(Modifier.width(8.dp))
-                        Box {
-                            AgentHeaderChip(
-                                label = profile,
-                                selected = false,
-                                onClick = { profileMenu = true; onRefreshProfiles() },
-                                trailing = { Icon(Icons.Outlined.ArrowDropDown, "切换 Profile", Modifier.size(14.dp)) },
-                            )
-                            DropdownMenu(expanded = profileMenu, onDismissRequest = { profileMenu = false }) {
-                                profiles.forEach { row ->
-                                    val id = row.optString("id")
-                                    DropdownMenuItem(enabled = row.optBoolean("available") || id == profile,
-                                        text = { Column {
-                                            Text((if (id == profile) "✓ " else "") + row.optString("name", id))
-                                            row.optString("reason").takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
-                                        } }, onClick = { profileMenu = false; if (id != profile) onProfileSelected(id) })
-                                }
-                                if (profileError != null) DropdownMenuItem(text = { Text(profileError) }, enabled = false, onClick = {})
-                                if (profiles.isEmpty() && profileError == null) DropdownMenuItem(text = { Text("读取中…") }, enabled = false, onClick = {})
-                            }
-                        }
-                    }
-                    if (displayList && agent == "codex") {
-                        Spacer(Modifier.width(8.dp))
-                        AgentHeaderChip(
-                            label = if (model.groupByProject) "项目" else "最近",
-                            selected = model.groupByProject,
-                            onClick = { model.toggleGroupByProject() },
-                            leading = { Icon(if (model.groupByProject) Icons.Outlined.Subject else Icons.Outlined.FormatListBulleted, null, Modifier.size(14.dp)) },
-                        )
-                    }
-                    // 本地已有数据、正在同步最新历史：标题后的小型加载指示
-                    if (model.recovering || !displayList && model.historyLoading && model.messages.isNotEmpty())
-                        CircularProgressIndicator(Modifier.padding(start = 8.dp).size(14.dp), strokeWidth = 2.dp)
-                }
-            }
-            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            }) else null,
+        ) {
             IconButton(
+                enabled = !displayList || model.selectedId != null,
                 onClick = {
                     list = !displayList
                     model.refresh()
                 }, modifier = Modifier.size(36.dp)
             ) {
-                Icon(Icons.Outlined.ChatBubbleOutline, "会话列表", Modifier.size(20.dp))
+                Icon(Icons.Outlined.ChatBubbleOutline, "会话列表", Modifier.size(22.dp))
             }
-            IconButton(onClick = { createChat() }, enabled = !model.submitting, modifier = Modifier.size(36.dp).offset(x = 2.dp)) { Icon(Icons.Outlined.Add, "新建会话", Modifier.size(20.dp)) }
+            IconButton(onClick = { createChat() }, enabled = !model.submitting, modifier = Modifier.size(36.dp)) { Icon(Icons.Outlined.Add, "新建会话", Modifier.size(22.dp)) }
             Box {
-                IconButton(onClick = { menu = true }, modifier = Modifier.size(36.dp)) { Icon(Icons.Outlined.MoreVert, "$agentName 菜单", Modifier.size(20.dp)) }
+                IconButton(onClick = { menu = true }, modifier = Modifier.size(36.dp)) { Icon(Icons.Outlined.MoreVert, "$agentName 菜单", Modifier.size(22.dp)) }
                 DropdownMenu(menu, { menu = false }) {
                     if (agent == "hermes") {
                         if (!displayList) {
@@ -460,19 +420,39 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                     }
                 }
             }
-            }
-            }
         }
-        // 副标题独立成行, 不再和标题挤在同一列里, 否则右侧三个图标会按"标题+副标题"整体居中,
-        // 看起来比标题低一截(Codex 会话列表 vs 进入会话后就是这个问题)。
-        if (displayList && model.runtime.isNotBlank()) Text(
-            model.runtime,
-            style = MaterialTheme.typography.labelSmall.copy(lineHeight = 13.sp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        )
-        if (!displayList && (agent == "codex" || agent == "claude" && claudeQuotaVisible(model.usage))) CodexUsage(model, compact = true) { if (agent == "codex") { accountsPanel = true; model.fetchAccounts() } else model.fetchUsage() }
+        if (displayList) AgentListInfo(runtime = model.runtime, quota = quotaSummary, onQuotaClick = showQuota) {
+                    if (agent == "hermes") {
+                        Box {
+                            AgentHeaderChip(
+                                label = profile,
+                                selected = false,
+                                onClick = { profileMenu = true; onRefreshProfiles() },
+                                trailing = { Icon(Icons.Outlined.ArrowDropDown, "切换 Profile", Modifier.size(14.dp)) },
+                            )
+                            DropdownMenu(expanded = profileMenu, onDismissRequest = { profileMenu = false }) {
+                                profiles.forEach { row ->
+                                    val id = row.optString("id")
+                                    DropdownMenuItem(enabled = row.optBoolean("available") || id == profile,
+                                        text = { Column {
+                                            Text((if (id == profile) "✓ " else "") + row.optString("name", id))
+                                            row.optString("reason").takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+                                        } }, onClick = { profileMenu = false; if (id != profile) onProfileSelected(id) })
+                                }
+                                if (profileError != null) DropdownMenuItem(text = { Text(profileError) }, enabled = false, onClick = {})
+                                if (profiles.isEmpty() && profileError == null) DropdownMenuItem(text = { Text("读取中…") }, enabled = false, onClick = {})
+                            }
+                        }
+                    }
+                    if (agent == "codex") {
+                        AgentHeaderChip(
+                            label = if (model.groupByProject) "项目" else "最近",
+                            selected = model.groupByProject,
+                            onClick = { model.toggleGroupByProject() },
+                            leading = { Icon(if (model.groupByProject) Icons.Outlined.Subject else Icons.Outlined.FormatListBulleted, null, Modifier.size(14.dp)) },
+                        )
+                    }
+        }
         if (agent == "claude" && claudeQuotaVisible(model.usage)) model.usage?.cleanSetting("message")?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         if (agent == "claude" && !displayList && model.claudeUnresolvedRun != null) {
             Text("上次任务结果待核对。请先检查历史，确认前不会重新发送。", Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.bodySmall)
@@ -482,12 +462,18 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             TextButton(enabled = !model.submitting, onClick = { model.cancelClaudeRewind() }) { Text("撤回将在下次发送时生效 · 取消撤回") }
         var setupVisible by remember(agent,model.profile){mutableStateOf(false) }
         AgentSetupCard(api,agent,model.profile,model.capabilities.optInt("state_version"),onConfigured={model.reconnect()}){ setupVisible=it }
-        if (agent == "codex" && !displayList && accessMode == "full") TextButton(onClick = { permissionsDialog = true }) {
-            Text("权限设置：完全访问", style = MaterialTheme.typography.labelSmall)
-        }
-        if (!displayList && model.selectedId != null) AgentContextInfo(model.contextInfo,
-            model.runtime + if (model.sessionEffort.isNotBlank()) " · ${effortLabel(model.sessionEffort)}思考" else "",
-            onClick = { globalModels = false; models = true; model.fetchModels() })
+        if (!displayList && model.selectedId != null) AgentContextInfo(
+            info = model.contextInfo,
+            runtime = model.runtime + if (model.sessionEffort.isNotBlank()) " · ${effortLabel(model.sessionEffort)}思考" else "",
+            onClick = { globalModels = false; models = true; model.fetchModels() },
+            quota = quotaSummary, onQuotaClick = showQuota,
+            permission = when {
+                agent == "codex" && accessMode == "full" -> "完全访问"
+                agent == "claude" -> model.claudeSession?.cleanSetting("permission_mode")?.takeIf { it.isNotBlank() }?.let(::claudePermissionLabel).orEmpty()
+                else -> ""
+            },
+            onPermissionClick = { permissionsDialog = true },
+        )
         if (!displayList && model.error == null && model.canTakeover) model.writeAccessMessage?.let { message ->
             FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.Center) {
                 Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth())
@@ -519,23 +505,8 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                 TextButton(onClick = { model.reconnect() }) { Text("核对状态") }
             }
         }
-        if (model.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (displayList) {
-            if (agent == "codex") CodexUsageStrip(model.usage)
-            OutlinedTextField(
-                filter,
-                { filter = it },
-                placeholder = { Text("搜索会话或历史消息", style = MaterialTheme.typography.bodySmall) },
-                trailingIcon = {
-                    if (filter.isNotEmpty()) IconButton(onClick = { filter = "" }, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Outlined.Close, contentDescription = "清空搜索", modifier = Modifier.size(18.dp))
-                    }
-                },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodySmall,
-                shape = MaterialTheme.shapes.small,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).height(48.dp),
-            )
+            AgentSessionSearch(filter) { filter = it }
             if (searchingSessions && model.sessionSearchLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (searchingSessions && model.sessionSearchError != null) {
                 Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -558,51 +529,26 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                 val renderSession: @Composable (JSONObject) -> Unit = { session ->
                     val latestActivity = parseMessageTimestamp(session.opt("last_active"))
                         ?.let(::formatMessageTimestamp)
-                    Card(
-                        onClick = {
-                            model.select(session)
-                            list = false
-                        },
-                        modifier = Modifier.fillMaxWidth().alpha(if (session.optBoolean("archived")) 0.55f else 1f),
+                    val metaLeft = if (agent == "codex") session.optString("cwd").ifBlank { "Codex 会话" }
+                        else session.optString("source").ifBlank { agentName }
+                    val metaCount = session.optInt("message_count")
+                    val contextUsed = session.optLong("context_used", 0)
+                    val contextWindow = session.optLong("context_window", 0)
+                    AgentSessionCard(
+                        title = session.optString("title").ifBlank { "未命名会话" },
+                        preview = if (searchingSessions && session.optString("search_snippet").isNotBlank()) session.optString("search_snippet")
+                            else session.optString("latest_user_message", session.optString("preview")),
+                        metadata = if (metaCount > 0) "$metaLeft · $metaCount 条消息" else metaLeft,
+                        time = latestActivity,
+                        pinned = model.isSessionPinned(session), archived = session.optBoolean("archived"),
+                        activity = model.sessionActivity(session),
+                        contextRatio = if (contextUsed > 0 && contextWindow > 0) contextUsed.toFloat() / contextWindow else null,
+                        onClick = { model.select(session); list = false },
+                        onActivityClick = { pendingInfo = true },
                     ) {
-                        Column(
-                            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalArrangement = Arrangement.spacedBy(5.dp),
-                        ) {
-                            Row(verticalAlignment = Alignment.Top) {
-                                Column(
-                                    Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(5.dp),
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (model.isSessionPinned(session)) {
-                                            Icon(Icons.Outlined.PushPin, "已置顶", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                                            Spacer(Modifier.width(5.dp))
-                                        }
-                                        Text(
-                                            session.optString("title").ifBlank { "未命名会话" },
-                                            modifier = Modifier.weight(1f),
-                                            style = MaterialTheme.typography.titleSmall,
-                                            maxLines = 2,
-                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                        )
-                                        model.sessionActivity(session)?.let { activity ->
-                                            Surface(modifier = Modifier.clickable(enabled = activity == "待核对") { pendingInfo = true }, color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
-                                                Text(activity, Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall)
-                                            }
-                                        }
-                                    }
-                                    Text(
-                                        if (searchingSessions && session.optString("search_snippet").isNotBlank()) session.optString("search_snippet")
-                                        else session.optString("latest_user_message", session.optString("preview")),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 2,
-                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                    )
-                                }
                                 var actions by remember { mutableStateOf(false) }
                                 Box {
-                                    IconButton(onClick = { actions = true }) { Icon(Icons.Outlined.MoreVert, "会话操作") }
+                                    IconButton(onClick = { actions = true }, modifier = Modifier.size(32.dp)) { Icon(Icons.Outlined.MoreVert, "会话操作", Modifier.size(20.dp)) }
                                     DropdownMenu(actions, { actions = false }) {
                                         DropdownMenuItem(
                                             text = { Text("会话详情") },
@@ -664,40 +610,6 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                                         )
                                     }
                                 }
-                            }
-                            // 三个 agent 的第三行共用同一骨架：左侧固定是"位置/来源"，右侧是时间。
-                            // Codex 有 cwd 就显示 cwd，其余显示来源；消息数统一挂在来源后面。
-                            val metaLeft = if (agent == "codex") session.optString("cwd").ifBlank { "Codex 会话" }
-                                else session.optString("source").ifBlank { agentName }
-                            val metaCount = session.optInt("message_count")
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                MiddleEllipsisText(
-                                    if (metaCount > 0) "$metaLeft · $metaCount 条消息" else metaLeft,
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                latestActivity?.let {
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(it, style = MaterialTheme.typography.labelSmall,
-                                        maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
-                        // 卡片最底部的上下文占用进度条：context_used/context_window 由服务端提供
-                        // （codex 取自 rollout token_count；hermes 走懒加载批量接口，无数据默认 1M 窗口）。
-                        val contextUsed = session.optLong("context_used", 0)
-                        val contextWindow = session.optLong("context_window", 0)
-                        if (contextUsed > 0 && contextWindow > 0) {
-                            // 与 AgentContextInfo 的会话上下文条同款（默认轨道色，≥90% 变红）
-                            LinearProgressIndicator(gapSize = 0.dp,
-                                progress = { (contextUsed.toDouble() / contextWindow).coerceIn(0.02, 1.0).toFloat() },
-                                modifier = Modifier.fillMaxWidth().height(2.dp),
-                                drawStopIndicator = {},
-                                color = if (contextUsed.toDouble() / contextWindow >= .9) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.primary,
-                            )
-                        }
                     }
                 }
                 val sessionSections = if (agent == "codex" && !searchingSessions && model.groupByProject) groupCodexSessions(filteredSessions, model::isSessionPinned) else null
@@ -1308,36 +1220,9 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     }
 }
 
-/** Codex 额度条：紧贴搜索框上方，两段细进度条，整体高度约 20dp。 */
-@Composable
-private fun CodexUsageStrip(usage: JSONObject?) {
-    val bars = codexUsageBars(usage)
-    if (bars.isEmpty()) return
-    Row(
-        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        bars.forEach { (label, remaining) ->
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                Text("$label $remaining%", style = MaterialTheme.typography.labelSmall.copy(lineHeight = 12.sp),
-                    maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(6.dp))
-                LinearProgressIndicator(
-                    gapSize = 0.dp,
-                    progress = { remaining / 100f },
-                    modifier = Modifier.weight(1f).height(3.dp),
-                    drawStopIndicator = {},
-                    color = if (remaining < 20) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
-    }
-}
-
 /** 顶部栏专属开关的统一外观：同一高度、同一圆角、同一字号，位置固定在这一行。 */
 @Composable
-private fun AgentHeaderChip(
+internal fun AgentHeaderChip(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
@@ -1354,12 +1239,12 @@ private fun AgentHeaderChip(
         border = BorderStroke(1.dp, if (selected) colors.primary else colors.outlineVariant),
     ) {
         Row(
-            Modifier.padding(horizontal = 6.dp, vertical = 0.dp).height(18.dp),
+            Modifier.widthIn(max = 128.dp).padding(horizontal = 8.dp).heightIn(min = 24.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             leading?.invoke()
-            Text(label, style = MaterialTheme.typography.labelSmall.copy(lineHeight = 12.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(label, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelSmall.copy(lineHeight = 16.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
             trailing?.invoke()
         }
     }
@@ -1398,7 +1283,7 @@ private fun SessionListScrollbar(state: LazyListState, modifier: Modifier = Modi
 }
 
 @Composable
-private fun MiddleEllipsisText(
+internal fun MiddleEllipsisText(
     text: String,
     modifier: Modifier = Modifier,
     style: TextStyle = LocalTextStyle.current,

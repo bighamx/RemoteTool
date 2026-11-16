@@ -343,6 +343,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
                 session["modelProvider"] = info.Provider;
             }
             if (!string.IsNullOrEmpty(info?.Effort)) session["reasoning_effort"] = info.Effort;
+            if (!string.IsNullOrEmpty(info?.RuntimeProvider)) session["runtime_provider"] = info.RuntimeProvider;
             payload = node.ToJsonString();
         }
         Response.StatusCode = (int)upstream.StatusCode;
@@ -603,6 +604,7 @@ public sealed class HermesController(HermesBridge bridge, HermesManagement manag
             var info = await SessionModelSettingAsync(sessionId, ct);
             if (!string.IsNullOrEmpty(info?.Provider)) { session["provider"] = info.Provider; session["modelProvider"] = info.Provider; }
             if (!string.IsNullOrEmpty(info?.Effort)) session["reasoning_effort"] = info.Effort;
+            if (!string.IsNullOrEmpty(info?.RuntimeProvider)) session["runtime_provider"] = info.RuntimeProvider;
             return detail;
         });
         var historyTask = Part(() => HistoryAsync(sessionId, Math.Clamp(limit, 1, 100), null, null, ct));

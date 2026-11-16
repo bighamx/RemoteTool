@@ -167,7 +167,7 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
         [Column("display_metadata")] public string Metadata { get; set; }
     }
 
-    public sealed record SessionModelSetting(string Provider, string Effort, string Model = "", string BaseUrl = "");
+    public sealed record SessionModelSetting(string Provider, string Effort, string Model = "", string BaseUrl = "", string RuntimeProvider = "");
 
     /// <summary>会话当前模型设置（提供方 / 思考等级 / 模型）的权威记录，取自 state.db 的 model_config，
     /// 缺失时 provider 退回 billing_provider。网关的会话详情响应不包含这些字段，必须从这里取。</summary>
@@ -183,7 +183,7 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
                 try {
                 var row = db.Query<SessionProviderRow>("SELECT model, model_config, billing_provider, billing_base_url FROM sessions WHERE id=?", id).FirstOrDefault();
                 if (row == null) continue;
-                var provider = row.BillingProvider; var effort = ""; var model = row.Model; var baseUrl = row.BaseUrl;
+                var provider = row.BillingProvider; var effort = ""; var model = row.Model; var baseUrl = row.BaseUrl; var runtimeProvider = "";
                 try {
                     if (!string.IsNullOrEmpty(row.ModelConfig) && ToolPayloadJson.Parse(row.ModelConfig) is System.Text.Json.Nodes.JsonObject config) {
                         var fromConfig = config["provider"]?.ToString();
@@ -201,9 +201,19 @@ public sealed class HermesSessionActivity(IConfiguration configuration)
                         if (config["reasoning_config"] is System.Text.Json.Nodes.JsonObject reasoning) {
                             effort = reasoning["enabled"]?.GetValue<bool>() == false ? "none" : reasoning["effort"]?.ToString() ?? "";
                         }
+                        // 回落后真正生效的是 gateway_runtime, 不是 browser_model_lock(用户当初选的)。
+                        // 这里只产出"展示用"的 provider, 不覆盖 Provider 字段——后者还要用于提交路由。
+                        if (config["gateway_runtime"] is JsonObject gateway && gateway["fallback_active"]?.GetValue<bool>() == true) {
+                            var gatewayProvider = gateway["provider"]?.ToString() ?? "";
+                            var gatewayBase = gateway["base_url"]?.ToString() ?? "";
+                            runtimeProvider = !string.IsNullOrWhiteSpace(gatewayProvider) && gatewayProvider != "custom"
+                                ? gatewayProvider
+                                : (!string.IsNullOrWhiteSpace(gatewayBase) && Uri.TryCreate(gatewayBase, UriKind.Absolute, out var uri) ? "custom:" + uri.Host : "");
+                        }
                     }
                 } catch (Exception error) when (SessionReadIsolation.Recoverable(error)) { }
-                if (!string.IsNullOrEmpty(provider) || !string.IsNullOrEmpty(effort) || !string.IsNullOrEmpty(model)) result[id] = new SessionModelSetting(provider, effort, model, baseUrl);
+                if (!string.IsNullOrEmpty(provider) || !string.IsNullOrEmpty(effort) || !string.IsNullOrEmpty(model))
+                    result[id] = new SessionModelSetting(provider, effort, model, baseUrl, runtimeProvider);
                 } catch (Exception error) when (SessionReadIsolation.Recoverable(error)) {
                     System.Diagnostics.Trace.TraceWarning("Session model unavailable: {0} ({1})", id, error.GetType().Name);
                 }

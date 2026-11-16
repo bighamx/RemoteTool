@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.json.JSONObject
@@ -23,7 +25,11 @@ internal fun compactTokenCount(value: Long): String {
 }
 
 @Composable
-fun AgentContextInfo(info: JSONObject?, runtime: String = "", onClick: (() -> Unit)? = null) {
+fun AgentContextInfo(
+    info: JSONObject?, runtime: String = "", onClick: (() -> Unit)? = null,
+    quota: String = "", onQuotaClick: () -> Unit = {},
+    permission: String = "", onPermissionClick: () -> Unit = {},
+) {
     val available = info?.optBoolean("available") == true
     val tokens = info?.optLong("tokens") ?: 0
     val limit = info?.optLong("limit") ?: 0
@@ -31,14 +37,26 @@ fun AgentContextInfo(info: JSONObject?, runtime: String = "", onClick: (() -> Un
     val estimate = if (info?.optBoolean("estimated") == true) "约 " else ""
     val context = if (!available) (info?.optString("message")?.takeIf { it.isNotBlank() } ?: "暂无数据") else
         "$estimate${compactTokenCount(tokens)}" + if (ratio != null) " / ${compactTokenCount(limit)} · ${(ratio * 100).toInt()}%" else " · 未返回上限"
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp).let { modifier ->
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("agent-context-info").let { modifier ->
         if (onClick != null) modifier.clickable(onClick = onClick) else modifier
     }) {
-        Text(context + runtime.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
-            modifier = Modifier.fillMaxWidth(), maxLines = 1, overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.fillMaxWidth().heightIn(min = 18.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(runtime.ifBlank { "正在读取模型信息" }, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (permission.isNotBlank()) Text(permission, Modifier.clickable(onClick = onPermissionClick), maxLines = 1,
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        }
+        Row(Modifier.fillMaxWidth().heightIn(min = 18.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(context, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (quota.isNotBlank()) Text(quota, Modifier.clickable(onClick = onQuotaClick), maxLines = 1,
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        }
         if (ratio != null) LinearProgressIndicator(gapSize = 0.dp, progress = { ratio.toFloat().coerceIn(0f, 1f) },
             modifier = Modifier.fillMaxWidth().padding(top = 2.dp).height(2.dp), drawStopIndicator = {},
             color = if (ratio >= .9) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+        else HorizontalDivider(Modifier.padding(top = 2.dp), thickness = 2.dp, color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
