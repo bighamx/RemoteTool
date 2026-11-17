@@ -52,6 +52,7 @@ await page.route('**/api/claude/**',async route=>{
   await route.fulfill({json});
 });
 await page.route('**/api/agent-setup/claude',route=>route.fulfill({json:{agent:'claude',state:'ready'}}));
+await page.route('**/api/files/list**',route=>route.fulfill({json:{data:[{name:'project',path:'/work/project',isDirectory:true}]}}));
 await page.goto(base+'/#/claude');
 const app=page.locator('#workspace-claude');
 await app.locator('.agent-pane-identity h2').filter({hasText:'Claude Code'}).waitFor();
@@ -117,7 +118,11 @@ assert.deepEqual(posts.filter(row=>row.path==='/runs/run-1/approval').at(-1).bod
 await app.getByRole('button',{name:'新建会话'}).first().click();
 const create=page.locator('.ivu-modal').filter({hasText:'新建 Claude Code 会话'});await create.waitFor();
 assert.equal(await create.locator('.agent-phone-options').count(),0);
-await create.locator('#agent-create-cwd input, input#agent-create-cwd').first().fill('/work/project');await create.locator('#agent-create-permission').selectOption('acceptEdits');
+await create.locator('#agent-create-cwd').click();
+const directoryPicker=page.locator('.ivu-modal').filter({hasText:'选择项目工作目录'});await directoryPicker.waitFor();
+await directoryPicker.getByRole('button',{name:'project',exact:true}).click();
+await directoryPicker.getByRole('button',{name:'使用此目录'}).click();
+await create.locator('#agent-create-permission').selectOption('acceptEdits');
 await create.getByRole('button',{name:'创建会话'}).click();
 assert.deepEqual(posts.find(row=>row.path==='/sessions').body,{title:null,cwd:'/work/project',permission_mode:'acceptEdits'});
 

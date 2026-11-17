@@ -3247,7 +3247,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     fun fetchModels(forceRefresh: Boolean = false) = launch {
         val connection = api; val session = selectedId
         val path = modelOptionsPath(session)
-        val options = connection.json(path + if (forceRefresh && agent == "codex")
+        val options = connection.json(path + if (forceRefresh && agent != "hermes")
             (if ('?' in path) "&" else "?") + "refresh=true" else "")
         if (api !== connection || selectedId != session) return@launch
         modelOptions = options

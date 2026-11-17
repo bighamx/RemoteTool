@@ -1185,7 +1185,8 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
     if (takeover) ConfirmDialog("中断并接管当前会话", if (agent == "claude") confirmedTakeoverMessage else "请求中断此会话在其他端的任务，已执行的操作不会撤销。确认原任务结束且会话可写入后，再由你发送保留的草稿。其他端已启动新任务时会取消接管。", { takeover = false }) {
         takeover = false; model.takeover(confirmedClaudeActivity)
     }
-    if (models) HermesModelPicker(model, if (agent == "claude") false else if (agent == "hermes") globalModels else null) { models = false }
+    if (models) HermesModelPicker(model, if (agent == "claude") false else if (agent == "hermes") globalModels else null,
+        onManageProviders = if (agent == "claude") ({ models = false; providers = true; model.fetchProviders() }) else null) { models = false }
     if (permissionsDialog && agent != "hermes") model.selectedId?.let { session ->
         CodexSessionPermissionsDialog(api, session, { permissionsDialog = false }, { accessMode = it; if (agent == "claude") model.refresh() }, agent = agent)
     }
@@ -1580,7 +1581,7 @@ private fun MessageBubble(
 }
 
 @Composable
-private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, onClose: () -> Unit) {
+private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, onManageProviders: (() -> Unit)? = null, onClose: () -> Unit) {
     var global by remember { mutableStateOf(fixedGlobal ?: (model.selectedId == null)) }
     val sessionModelSupported=model.agent!="hermes"||model.modelOptions.optBoolean("session_model_supported",true)
     var provider by remember { mutableStateOf<JSONObject?>(null) }
@@ -1622,7 +1623,7 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(if (provider == null) "1 · 选择 Provider" else "2 · 选择模型", Modifier.weight(1f))
-                if (model.agent == "codex") IconButton(onClick = { model.fetchModels(true) }) {
+                if (model.agent != "hermes") IconButton(onClick = { model.fetchModels(true) }) {
                     Icon(Icons.Outlined.Refresh, "刷新模型目录")
                 }
             }
@@ -1663,6 +1664,10 @@ private fun HermesModelPicker(model: HermesModel, fixedGlobal: Boolean? = null, 
                     "${if (global) "全局默认" else "当前会话"}：$resolvedProviderName · $currentModel",
                     style = MaterialTheme.typography.labelSmall,
                 )
+                if (provider == null && onManageProviders != null) TextButton(onClick = onManageProviders) { Text("新增或管理 Provider") }
+                provider?.cleanSetting("models_warning")?.takeIf { it.isNotBlank() }?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
                 LazyColumn(Modifier.heightIn(max = if (selected != null) 180.dp else 340.dp)) {
                     if (provider == null) {
                         items(

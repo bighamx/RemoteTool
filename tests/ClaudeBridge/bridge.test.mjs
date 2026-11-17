@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {project, windowRows, toolPage, ATTACHMENT_MARKER} from '../../WebApplication/Tools/ClaudeBridge/history.mjs';
+import {project, windowRows, toolPage, userPrompt, ATTACHMENT_MARKER} from '../../WebApplication/Tools/ClaudeBridge/history.mjs';
 import {StateStore, BridgeError} from '../../WebApplication/Tools/ClaudeBridge/state.mjs';
 import {createApp, createServer} from '../../WebApplication/Tools/ClaudeBridge/server.mjs';
 
@@ -105,6 +105,7 @@ function setup(script, options) {
         return {stdout: JSON.stringify(typeof options?.holders === 'function' ? options.holders() : options?.holders || [])};
     };
     const app = createApp({root, executable: '/bin/claude', attachments: path.join(root, 'att'), sdk, exec});
+    app.sessions.modelDiscovery.read = async () => ({models: []});
     return {root, sdk, app};
 }
 
@@ -453,7 +454,8 @@ test('native third-party project settings work without an opt-in flag', async ()
     const run = await app.runs.start({session_id: SID, input: 'x'}, 'native-custom-endpoint-key');
     await wait(() => app.runs.doc(app.store.run(run.run_id)).status === 'completed');
     assert.equal(sdk.calls.length, 1);
-    assert.equal(sdk.calls[0].options.env, undefined);
+    assert.equal(sdk.calls[0].options.env.CLAUDE_CODE_ATTRIBUTION_HEADER, '0');
+    assert.deepEqual(sdk.calls[0].options.settings.env, {CLAUDE_CODE_ATTRIBUTION_HEADER: '0'});
     assert.deepEqual(sdk.calls[0].options.settingSources, ['user', 'project', 'local']);
 });
 
@@ -485,13 +487,14 @@ test('provider HTTP CRUD, model selection and SDK execution keep secrets private
         assert.equal(options.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:1234');
         assert.equal(options.env.ANTHROPIC_API_KEY, 'test-only-secret');
         assert.equal(options.env.CLAUDE_CODE_OAUTH_TOKEN, '');
+        assert.equal(options.env.CLAUDE_CODE_ATTRIBUTION_HEADER, '0');
         assert.equal(options.settings.env.ANTHROPIC_CUSTOM_HEADERS, '');
         assert.equal(options.settings.env.ANTHROPIC_AUTH_TOKEN, 'test-only-secret');
         assert.equal(options.model, 'custom-model');
         assert.ok(!JSON.stringify(app.store.data).includes('test-only-secret'));
         assert.ok(!JSON.stringify(await request('providers')).includes('test-only-secret'));
         const second = app.sessions.create({cwd: os.tmpdir()}).session;
-        assert.equal(app.sessions.modelOptions(second.id).provider, 'anthropic');
+        assert.equal((await app.sessions.modelOptions(second.id)).provider, 'anthropic');
         await request('providers/state', {id, enabled: false});
         await assert.rejects(app.sessions.prepare(SID), /已删除或禁用/);
         assert.ok(!(await request('providers')).endpoints.some(row => row.id === id));
@@ -517,5 +520,122 @@ test('a concurrent model edit cannot mix the admitted provider credentials with 
     const admitted = await pending;
     assert.equal(admitted.environment.ANTHROPIC_BASE_URL, 'https://a.example');
     assert.equal(admitted.model, 'model-a');
-    assert.equal(app.sessions.modelOptions(SID).provider, second.id);
+    assert.equal((await app.sessions.modelOptions(SID)).provider, second.id);
+});
+
+test('native model HTTP catalog follows current settings, not the stale official catalog, and selections reach the SDK', async () => {
+    const {app, sdk} = setup(async function* (input) { await input.next(); yield init; yield ok; });
+    const env = {ANTHROPIC_BASE_URL: 'https://gateway.example', ANTHROPIC_AUTH_TOKEN: 'private-fixture-credential',
+        ANTHROPIC_MODEL: 'gateway-large', ANTHROPIC_DEFAULT_OPUS_MODEL: 'gateway-large',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'local-code', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'local-fast'};
+    const resolutions = [];
+    sdk.resolveSettings = async options => { resolutions.push(options); return {effective: {env: {...env}}}; };
+    app.sessions.env = {};
+    app.store.data.models = {list: [{value: 'claude-official-only', displayName: 'Official cached'}]};
+    const token = 'native-model-fixture'.repeat(3), server = createServer(app, token);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const headers = {Authorization: 'Bearer ' + token}, base = `http://127.0.0.1:${server.address().port}`;
+    try {
+        const response = await fetch(`${base}/model-options?session=${SID}`, {headers});
+        assert.equal(response.status, 200);
+        const catalog = await response.json(), native = catalog.providers.find(row => row.id === 'anthropic');
+        assert.deepEqual(native.models.map(row => row.model), ['default', 'gateway-large', 'local-code', 'local-fast']);
+        assert.match(native.models.find(row => row.model === 'local-code').displayName, /Sonnet/);
+        assert.equal(native.official_provider, false);
+        assert.equal(catalog.model, 'gateway-large');
+        assert.equal(catalog.catalog_cached, false);
+        assert.ok(!JSON.stringify(catalog).includes(env.ANTHROPIC_AUTH_TOKEN));
+        assert.deepEqual(resolutions[0], {cwd: os.tmpdir(), settingSources: ['user', 'project', 'local']});
+        const saved = await fetch(`${base}/sessions/${SID}/model`, {method: 'POST', headers,
+            body: JSON.stringify({provider: 'anthropic', model: 'local-code'})});
+        assert.equal(saved.status, 200);
+        const run = await app.runs.start({session_id: SID, input: 'test'}, 'native-mapped-model-execution');
+        await wait(() => app.store.run(run.run_id).status === 'completed');
+        assert.equal(sdk.calls[0].options.model, 'local-code');
+        assert.equal(sdk.calls[0].options.env.CLAUDE_CODE_ATTRIBUTION_HEADER, '0');
+        assert.deepEqual(sdk.calls[0].options.settings.env, {CLAUDE_CODE_ATTRIBUTION_HEADER: '0'}, 'native credentials and routing remain in Claude settings');
+        assert.equal(app.store.data.models.list[0].value, 'claude-official-only', 'a native custom run cannot poison the official catalog');
+        env.ANTHROPIC_DEFAULT_HAIKU_MODEL = 'updated-fast';
+        assert.ok((await app.sessions.modelOptions(SID)).providers[0].models.some(row => row.model === 'updated-fast'), 'settings are reread without a restart');
+        await app.sessions.modelOptions();
+        assert.deepEqual(resolutions.at(-1), {settingSources: ['user']}, 'global catalog cannot inherit the bridge project settings');
+    } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+test('official models, inherited aliases, current custom selections and named providers remain isolated', async () => {
+    const {app, sdk} = setup(async function* () {});
+    app.sessions.env = {};
+    app.store.data.models = {list: [{value: 'official-model', displayName: 'Official', supportedEffortLevels: ['low', 'high']}]};
+    let settings = {};
+    sdk.resolveSettings = async () => ({effective: settings});
+    const official = await app.sessions.modelOptions(SID);
+    assert.equal(official.providers[0].models[0].model, 'official-model');
+    assert.deepEqual(official.providers[0].models[0].supportedReasoningEfforts, [{reasoningEffort: 'low'}, {reasoningEffort: 'high'}]);
+    assert.equal(official.catalog_cached, true);
+    settings = {env: {ANTHROPIC_BASE_URL: 'https://gateway.example', ANTHROPIC_DEFAULT_SONNET_MODEL: 'mapped-code'}};
+    app.store.ensureMeta(SID, {provider: 'anthropic', model: 'sonnet'});
+    const alias = await app.sessions.modelOptions(SID);
+    assert.equal(alias.model, 'sonnet');
+    assert.match(alias.providers[0].models.find(row => row.model === 'sonnet').displayName, /mapped-code/);
+    assert.equal((await app.sessions.prepare(SID)).model, 'sonnet');
+    settings = {model: 'settings-model', env: {ANTHROPIC_BASE_URL: 'https://gateway.example'}};
+    app.store.ensureMeta(SID, {model: null});
+    assert.equal((await app.sessions.modelOptions(SID)).model, 'settings-model');
+    settings = {env: {ANTHROPIC_BASE_URL: 'https://gateway.example'}};
+    assert.deepEqual((await app.sessions.modelOptions(SID)).providers[0].models.map(row => row.model), ['default']);
+    const provider = app.providers.save({name: 'Other', base_url: 'https://other.example', model: 'other-model'}).endpoint;
+    await app.sessions.setModel(SID, {provider: provider.id, model: 'other-selected'});
+    const named = await app.sessions.modelOptions(SID);
+    assert.equal(named.model, 'other-selected');
+    assert.ok(!named.providers[0].models.some(row => row.model === 'other-selected'));
+    assert.deepEqual(named.providers.find(row => row.id === provider.id).models.map(row => row.model), ['other-model']);
+});
+
+test('billing attribution compatibility is scoped to third-party runtimes and preserves explicit native settings', async () => {
+    const {app, sdk} = setup(async function* (input) { await input.next(); yield init; yield ok; });
+    app.sessions.env = {};
+    let env = {};
+    sdk.resolveSettings = async () => ({effective:{env}});
+    assert.equal((await app.sessions.prepare(SID)).environment, null, 'official Claude keeps its native billing behavior');
+    env = {ANTHROPIC_BASE_URL:'https://custom.example', ANTHROPIC_AUTH_TOKEN:'native-only-secret'};
+    const custom = await app.sessions.prepare(SID);
+    assert.deepEqual(custom.environment, {CLAUDE_CODE_ATTRIBUTION_HEADER:'0'});
+    assert.equal(custom.nativeCatalog, false);
+    assert.ok(!JSON.stringify(custom).includes('native-only-secret'));
+    env.CLAUDE_CODE_ATTRIBUTION_HEADER = '0';
+    assert.deepEqual((await app.sessions.prepare(SID)).environment, {CLAUDE_CODE_ATTRIBUTION_HEADER:'0'},
+        'a configured zero must also reach the CLI startup environment');
+    env.CLAUDE_CODE_ATTRIBUTION_HEADER = '1';
+    assert.deepEqual((await app.sessions.prepare(SID)).environment, {CLAUDE_CODE_ATTRIBUTION_HEADER:'1'}, 'an explicit native preference is respected');
+});
+
+test('a custom runtime keeps the SDK preset and carries file guidance through turns, steering and history', async () => {
+    const seen=[];
+    const {app,sdk}=setup(async function* (input) {
+        seen.push((await input.next()).value);yield init;
+        await wait(()=>seen.length===1 && app.store.receipt('custom-file-context-steer'));
+        yield ok;
+        seen.push((await input.next()).value);yield ok;
+    });
+    app.sessions.env={};
+    sdk.resolveSettings=async()=>({effective:{env:{ANTHROPIC_BASE_URL:'https://custom.example'}}});
+    const file=path.join(temp(),'note.txt');fs.writeFileSync(file,'fixture');
+    const run=await app.runs.start({session_id:SID,input:'first',attachment_paths:[file]},'custom-file-context-start');
+    await wait(()=>seen.length===1);
+    app.runs.steer(run.run_id,{input:'second'},'custom-file-context-steer');
+    await wait(()=>app.store.run(run.run_id).status==='completed');
+    assert.deepEqual(sdk.calls[0].options.systemPrompt,{type:'preset',preset:'claude_code'},'no append flag changes the SDK identity');
+    assert.match(seen[0].message.content.at(-1).text,/MEDIA:/);
+    assert.match(seen[1].message.content.at(-1).text,/MEDIA:/);
+    assert.deepEqual(userPrompt(seen[0]),{text:'first',paths:[file],images:0});
+    assert.deepEqual(userPrompt(seen[1]),{text:'second',paths:[],images:0});
+    assert.equal(seen[0].message.content.filter(b=>b.text?.startsWith(ATTACHMENT_MARKER)).length,1);
+    const compact=setup(async function* (input) {
+        const message=(await input.next()).value;
+        assert.deepEqual(message.message.content,[{type:'text',text:'/compact'}]);yield init;yield ok;
+    });
+    compact.app.sessions.env={};
+    compact.sdk.resolveSettings=sdk.resolveSettings;
+    const result=await compact.app.runs.start({session_id:SID,input:'/compact'},'custom-file-context-compact','compact');
+    await wait(()=>compact.app.store.run(result.run_id).status==='completed');
 });

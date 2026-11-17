@@ -36,8 +36,8 @@ public sealed class ClaudeController(ClaudeBridge bridge, [FromKeyedServices("cl
     [HttpGet("sessions/{id}/activity")] public Task Activity(string id, CancellationToken ct) => Forward(HttpMethod.Get, $"sessions/{Id(id)}/activity", null, ct);
     [HttpGet("sessions/{id}/tools/{summaryId}")] public Task Tools(string id, string summaryId, [FromQuery] int offset, CancellationToken ct) =>
         Forward(HttpMethod.Get, $"sessions/{Id(id)}/tools/{Id(summaryId)}?offset={Math.Max(0, offset)}", null, ct);
-    [HttpGet("model-options")] public Task Models([FromQuery] string session, CancellationToken ct) =>
-        Forward(HttpMethod.Get, "model-options" + (string.IsNullOrEmpty(session) ? "" : "?session=" + Id(session)), null, ct);
+    [HttpGet("model-options")] public Task Models([FromQuery] string session, [FromQuery] bool refresh, CancellationToken ct) =>
+        Forward(HttpMethod.Get, "model-options?refresh=" + refresh.ToString().ToLowerInvariant() + (string.IsNullOrEmpty(session) ? "" : "&session=" + Id(session)), null, ct);
     [HttpGet("usage")] public Task Usage([FromQuery] string session, CancellationToken ct) =>
         Forward(HttpMethod.Get, "usage" + (string.IsNullOrEmpty(session) ? "" : "?session=" + Id(session)), null, ct);
     [HttpGet("providers")] public Task Providers([FromQuery] bool include_disabled, CancellationToken ct) =>

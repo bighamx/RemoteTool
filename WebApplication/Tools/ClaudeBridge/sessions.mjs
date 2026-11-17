@@ -3,6 +3,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {BridgeError, validId} from './state.mjs';
 import {project, windowRows, toolPage, contextLimit} from './history.mjs';
+import {nativeModelCatalog, ClaudeModelDiscovery, mergeModelCatalog} from './models.mjs';
 
 export const PERMISSION_CHOICES = [
     {id: 'default', label: '按本机规则询问', description: '遵循 Claude Code 用户/项目设置中的 allow/deny 规则，其余操作逐次确认。'},
@@ -37,6 +38,7 @@ export class SessionService {
     constructor({store, sdk, auth, holders, providers, env = process.env}) {
         this.store = store; this.sdk = sdk; this.auth = auth; this.holders = holders;
         this.providers = providers; this.env = env; this.runs = null; this.cache = new Map(); this.contexts = new Map();
+        this.modelDiscovery = new ClaudeModelDiscovery();
     }
     async info(id) {
         if (!validId(id)) throw new BridgeError('无效会话标识');
@@ -292,14 +294,31 @@ export class SessionService {
                 started_at: held?.startedAt ? Math.floor(held.startedAt / 1000) : null, external_status: held?.status || null, progress: []};
         } catch { return {available: false, running: false, progress: []}; }
     }
-    modelOptions(id) {
-        const meta = id && validId(id) ? this.store.meta(id) : null;
-        const models = (this.store.data.models?.list?.length ? this.store.data.models.list : FALLBACK_MODELS).map(model => ({
-            model: model.value, id: model.value, displayName: model.displayName || model.value, description: model.description || '',
-            supportedReasoningEfforts: (model.supportedEffortLevels || []).map(level => ({reasoningEffort: level}))}));
-        const providers = this.providers.list().endpoints.map(row => ({...row, models: row.id === 'anthropic' ? models : [{model: row.model, id: row.model, displayName: row.model}]}));
+    async modelOptions(id, refresh = false) {
+        const session = id ? await this.require(id) : null, meta = session?.meta;
+        const settings = (await this.sdk.resolveSettings?.({
+            ...(session ? {cwd: session.info?.cwd || meta?.cwd} : {}),
+            settingSources: session ? ['user', 'project', 'local'] : ['user'],
+        }))?.effective || {};
+        const env = {...this.env, ...settings.env};
+        const official = officialEnvironment(env);
+        const catalog = nativeModelCatalog({settings, env, current: meta?.provider && meta.provider !== 'anthropic' ? '' : meta?.model || '',
+            cached: this.store.data.models?.list?.length ? this.store.data.models.list : FALLBACK_MODELS, official});
+        const providers = await Promise.all(this.providers.list().endpoints.map(async row => {
+            const native = row.id === 'anthropic';
+            const endpoint = native ? null : this.providers.get(row.id);
+            const discovery = native && official ? {models: []}
+                : await this.modelDiscovery.read(native ? env.ANTHROPIC_BASE_URL : endpoint.base_url,
+                    native ? env : this.providers.environment(endpoint), refresh);
+            return {...row,
+            ...(row.id === 'anthropic' ? {official_provider: official} : {}),
+            models: mergeModelCatalog(native ? catalog.models : [{model: row.model, id: row.model, displayName: row.model}], discovery.models),
+            ...(discovery.warning ? {models_warning: discovery.warning} : {})};
+        }));
         return {providers, provider: meta?.provider || 'anthropic',
-            model: meta?.model || '', reasoning_effort: meta?.effort || '', session_model_supported: true, catalog_cached: !!this.store.data.models};
+            model: meta?.model || (meta?.provider && meta.provider !== 'anthropic' ? '' : catalog.model),
+            reasoning_effort: meta?.effort || '', session_model_supported: true,
+            catalog_cached: !!this.store.data.models && catalog.catalog_cached};
     }
     async hasSubscriptionUsage(id) {
         if (!id) return officialEnvironment(this.env);
@@ -317,12 +336,12 @@ export class SessionService {
         if (!cwd || !fs.statSync(cwd, {throwIfNoEntry: false})?.isDirectory()) throw new BridgeError('会话的项目目录不存在：' + (cwd || '未知'), 409, {delivery: 'rejected'});
         if (kind === 'compact' && !info) throw new BridgeError('会话还没有可压缩的历史', 409, {delivery: 'rejected'});
         const provider = this.providers.get(meta?.provider);
+        const effective = provider ? null : (await this.sdk.resolveSettings?.({cwd, settingSources: ['user', 'project', 'local']}))?.effective;
+        const nativeEnv = {...this.env, ...effective?.env};
         if (!provider) {
             const status = await this.auth();
             if (!status.ready) {
-                const effective = (await this.sdk.resolveSettings({cwd, settingSources: ['user', 'project', 'local']}))?.effective;
-                const env = {...this.env, ...effective?.env};
-                if (!env.ANTHROPIC_API_KEY && !env.ANTHROPIC_AUTH_TOKEN && officialEnvironment(env))
+                if (!nativeEnv.ANTHROPIC_API_KEY && !nativeEnv.ANTHROPIC_AUTH_TOKEN && officialEnvironment(nativeEnv))
                     throw new BridgeError(status.message, 409, {delivery: 'rejected', code: 'claude_not_ready'});
             }
         }
@@ -334,8 +353,16 @@ export class SessionService {
         }
         return {cwd, resume: !!info, resumeSessionAt: info ? meta?.rewind?.at || null : null,
             permissionMode: meta?.permission_mode || 'default', model: meta?.model || provider?.model || null, effort: meta?.effort || null,
-            environment: provider ? this.providers.environment(provider) : null,
-            appendSystemPrompt: this.attachmentPrompt(id)};
+            // Anthropic's billing attribution block is not part of the user's instructions.
+            // Some third-party gateways reject it as an unsupported client channel.
+            environment: provider ? this.providers.environment(provider)
+                : !officialEnvironment(nativeEnv)
+                    ? {CLAUDE_CODE_ATTRIBUTION_HEADER: String(nativeEnv.CLAUDE_CODE_ATTRIBUTION_HEADER ?? '0')} : null,
+            nativeCatalog: !provider && officialEnvironment(nativeEnv),
+            // Adding to the preset changes the CLI's SDK identity to its official CLI identity.
+            // Custom endpoints use the normal SDK preset and the existing attachment context block.
+            appendSystemPrompt: !provider && officialEnvironment(nativeEnv) ? this.attachmentPrompt(id) : '',
+            messageContext: provider || !officialEnvironment(nativeEnv) ? this.attachmentPrompt(id) : ''};
     }
     attachmentPrompt(id) {
         if (!this.attachmentRoot) return '';

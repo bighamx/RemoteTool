@@ -390,8 +390,9 @@
     </modal>
     <modal v-model="showCreateDialog" :title="'新建 '+agentName+' 会话'" :mask-closable="!creating" :footer-hide="true" width="560">
         <div class="agent-create-form"><label for="agent-create-title">会话名称</label><i-input v-model="createTitle" id="agent-create-title" placeholder="为会话命名" @@on-enter="newSession"></i-input>
-            <template v-if="agent==='claude'"><label for="agent-create-cwd">工作目录 · 会话将在此目录执行，并加载其中的 CLAUDE.md 与项目设置</label>
-                <div class="agent-create-browse"><i-input v-model="createRoot" id="agent-create-cwd" placeholder="/path/to/project 或 C:\project" :disabled="creating"></i-input><i-button size="small" :disabled="creating" @@click="openCreateBrowser">浏览</i-button></div>
+            <template v-if="agent==='claude'"><label>服务端工作目录 · 会话将在此目录执行，并加载其中的 CLAUDE.md 与项目设置</label>
+                <div v-if="createRoot" class="agent-create-root"><span>{{createRoot}}</span></div>
+                <div class="agent-create-browse"><i-button id="agent-create-cwd" icon="ios-folder-open-outline" :disabled="creating" @@click="openCreateBrowser">{{createRoot?'更换工作目录':'选择工作目录'}}</i-button><span class="agent-create-hint">可浏览选择或新建文件夹。</span></div>
                 <label for="agent-create-permission">权限模式</label><select id="agent-create-permission" v-model="createPermission" :disabled="creating"><option value="default">按本机规则询问</option><option value="acceptEdits">自动批准文件编辑</option><option value="plan">计划模式</option></select>
                 <p class="agent-create-hint">使用服务端用户已登录的官方 Claude Code 与其中的 hooks、skills、MCP 配置；不提供绕过权限模式。</p></template>
             <template v-if="agent==='codex'"><label>工作项目</label>

@@ -12,7 +12,7 @@ import {ClaudeUsage} from './usage.mjs';
 import {ClaudeProviders} from './providers.mjs';
 
 export const PROTOCOL = 2;      // API contract with the C# host; a change requires an idle restart.
-export const BRIDGE_VERSION = 9; // Implementation revision; RemoteToolPaths.ClaudeBridgeVersion must match.
+export const BRIDGE_VERSION = 13; // Implementation revision; RemoteToolPaths.ClaudeBridgeVersion must match.
 
 function args(argv) {
     const result = {};
@@ -145,7 +145,7 @@ export function createServer(app, token) {
                 case 'GET /sessions/:id/context': data = await app.sessions.context(id); break;
                 case 'GET /sessions/:id/activity': data = await app.sessions.activity(id); break;
                 case 'GET /sessions/:id/active-run': data = app.sessions.activeRun(id); break;
-                case 'GET /model-options': data = app.sessions.modelOptions(q('session')); break;
+                case 'GET /model-options': data = await app.sessions.modelOptions(q('session'), q('refresh') === 'true'); break;
                 case 'GET /providers': data = app.providers.list(q('include_disabled') === 'true'); break;
                 case 'POST /providers': data = app.providers.save(body); break;
                 case 'POST /providers/:id':

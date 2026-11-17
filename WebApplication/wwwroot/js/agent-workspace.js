@@ -1173,7 +1173,7 @@
                 const id=this.selectedId,current=this.startRead('models'),selection=JSON.stringify(this.modelSelection);
                 try {
                     const query=new URLSearchParams({refresh:String(refresh)});
-                    if(this.agent==='codex'&&id)query.set('session',id);
+                    if(this.agent!=='hermes'&&id)query.set('session',id);
                     const result=await api.get(`${base}/model-options?${query}`);
                     if(!current()||id!==this.selectedId)return;
                     this.models=result.providers||[];this.modelDefaults=result;this.modelsError='';this.modelSessionSupported=result.session_model_supported!==false;
@@ -1302,7 +1302,7 @@
             openCreateDialog() {this.createTitle='';this.createProjectId='';this.createRoot='';this.createRoots=[];this.createProjectName='';this.createProjectSearch='';this.createMode='existing';this.createBrowser=false;this.createBrowserError='';this.createError='';this.createPermission='default';if(this.agent==='claude'&&this.selected?.cwd){this.createRoot=this.selected.cwd;this.createBrowserPath=this.selected.cwd;}this.showCreateDialog=true;if(this.agent==='codex')this.loadCodexAdmin();},
             pickCreateProject(project) {this.createProjectId=project?.id||'';const roots=this.projectRootsOf(project);this.createRoot=roots[0]||'';},
             toggleCreateRoot(path) {const rows=this.createRoots.slice();const at=rows.indexOf(path);if(at<0){if(rows.length>=16)return;rows.push(path);}else rows.splice(at,1);this.createRoots=rows;if(!rows.includes(this.createRoot))this.createRoot=rows[0]||'';},
-            async openCreateBrowser() {this.createBrowser=true;this.createBrowserNew='';this.createBrowserError='';await this.loadCreateBrowser(this.createBrowserPath||'');},
+            async openCreateBrowser() {this.createBrowser=true;this.createBrowserNew='';this.createBrowserError='';await this.loadCreateBrowser((this.agent==='claude'?this.createRoot:'')||this.createBrowserPath||'');},
             async loadCreateBrowser(path) {this.createBrowserLoading=true;this.createBrowserError='';try{const result=await api.get('/api/files/list'+(path?`?path=${api.id(path)}`:''));const rows=result.data||[];this.createBrowserDirs=rows.filter(row=>row.isDirectory!==false).map(row=>({name:row.name||row.path,path:row.path}));this.createBrowserPath=path;}catch(e){this.createBrowserError=e.message;this.createBrowserDirs=[];}finally{this.createBrowserLoading=false;}},
             enterCreateBrowser(row) {if(row?.path)this.loadCreateBrowser(row.path);},
             createBrowserUp() {const path=this.createBrowserPath||'';if(!path)return;const up=path.replace(/[\\/][^\\/]+$/,'');this.loadCreateBrowser(/^[A-Za-z]:$/.test(up)?up+'\\':(up.length>=2?up:''));},

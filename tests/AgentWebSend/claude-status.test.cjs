@@ -2,6 +2,44 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {createHarness} = require('./agent-send.test.cjs');
 
+test('Claude model reads include the selected session so project model mappings apply', async () => {
+    const h = createHarness([], 'claude'), state = h.state;
+    h.api.get = async route => {
+        const url = new URL(route, 'http://fixture');
+        assert.equal(url.pathname, '/api/claude/model-options');
+        assert.equal(url.searchParams.get('session'), state.selectedId);
+        return {providers: [{id: 'anthropic', models: [{model: 'mapped-code'}]}], provider: 'anthropic', model: 'mapped-code'};
+    };
+    await state.loadModels();
+    assert.equal(state.modelsError, '');
+    assert.equal(state.models[0].models[0].model, 'mapped-code');
+    assert.equal(state.modelSelection.model, 'mapped-code');
+});
+
+test('Claude reuses the directory browser and submits its selected directory', async () => {
+    const h = createHarness([{session:{id:'new-claude'}}], 'claude'), state = h.state;
+    state.selected = {cwd:'D:\\previous-project'};
+    Object.defineProperty(state, 'createValid', {get:()=>h.options.computed.createValid.call(state)});
+    state.openCreateDialog();
+    assert.equal(state.createRoot, 'D:\\previous-project');
+    h.api.get = async route => {
+        assert.equal(route, '/api/files/list?path=D%3A%5Cprevious-project');
+        return {data:[{name:'child',path:'D:\\previous-project\\child',isDirectory:true}]};
+    };
+    await state.openCreateBrowser();
+    assert.equal(state.createBrowser, true);
+    assert.equal(state.createBrowserDirs[0].path, 'D:\\previous-project\\child');
+    state.createBrowserPath = state.createBrowserDirs[0].path;
+    state.useCreateBrowserDir();
+    assert.equal(state.createBrowser, false);
+    assert.equal(state.createRoot, 'D:\\previous-project\\child');
+    assert.deepEqual(Array.from(state.createRoots), [], 'Claude selects one directory without creating a Codex project');
+    state.refreshSessions = async () => {};
+    state.select = async () => {};
+    await state.newSession();
+    assert.deepEqual(h.bodies[0], {title:null,cwd:'D:\\previous-project\\child',permission_mode:'default'});
+});
+
 test('a Claude unknown terminal status refreshes the acknowledgement banner', async () => {
     const h = createHarness([], 'claude'), state = h.state;
     state.activeRun = 'unknown-run';

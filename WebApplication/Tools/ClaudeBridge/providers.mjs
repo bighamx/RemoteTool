@@ -57,6 +57,7 @@ export class ClaudeProviders {
     }
     environment(row) {
         return {ANTHROPIC_BASE_URL: row.base_url, ANTHROPIC_API_KEY: row.api_key, ANTHROPIC_AUTH_TOKEN: row.api_key,
+            CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
             ANTHROPIC_CUSTOM_HEADERS: '', CLAUDE_CODE_OAUTH_TOKEN: '', CLAUDE_CODE_USE_BEDROCK: '0', CLAUDE_CODE_USE_VERTEX: '0', CLAUDE_CODE_USE_FOUNDRY: '0'};
     }
 }
