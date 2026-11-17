@@ -24,13 +24,20 @@ internal sealed class CodexAccountStore
         value["version"] ??= 2; value["accounts"] ??= new JsonObject(); return value;
     }
     public JsonObject CurrentAuth() => CodexJson.Read(Path.Combine(home, "auth.json"));
+    internal static JsonNode IdClaims(JsonObject auth) {
+        var parts = auth["tokens"].S("id_token").Split('.');
+        if (parts.Length != 3 || parts.Any(string.IsNullOrEmpty)) throw new CodexError("登录记录缺少合法 id_token");
+        try {
+            var encoded = parts[1].Replace('-', '+').Replace('_', '/');
+            return JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(encoded.PadRight((encoded.Length + 3) / 4 * 4, '=')))) as JsonObject
+                ?? throw new CodexError("登录记录的 id_token 格式无效");
+        } catch (Exception error) when (error is FormatException or System.Text.Json.JsonException) {
+            throw new CodexError("登录记录的 id_token 格式无效");
+        }
+    }
     public static JsonObject Identity(JsonObject auth) {
         var tokens = auth["tokens"];
-        var parts = tokens.S("id_token").Split('.');
-        if (parts.Length != 3 || parts.Any(string.IsNullOrEmpty)) throw new CodexError("登录记录缺少合法 id_token");
-        JsonNode payload;
-        try { var encoded = parts[1].Replace('-', '+').Replace('_', '/'); payload = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(encoded.PadRight((encoded.Length + 3) / 4 * 4, '='))))!; }
-        catch (Exception) { throw new CodexError("登录记录的 id_token 格式无效"); }
+        var payload = IdClaims(auth);
         var claims = payload["https://api.openai.com/auth"];
         var workspace = claims.S("chatgpt_account_id"); var email = payload.S("email");
         if (workspace.Length == 0 || email.Length == 0 || tokens.S("refresh_token").Length == 0) throw new CodexError("登录记录缺少邮箱、工作空间或刷新令牌");
@@ -60,22 +67,37 @@ internal sealed class CodexAccountStore
         row["auth"] = auth.DeepClone(); row["token_updated_at_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         accounts[key] = row; CodexJson.Atomic(path, data); return key;
     }
-    public JsonObject List() {
-        JsonObject current = null;
-        try { current = Identity(CurrentAuth()); } catch (CodexError) { }
-        // Recover the current workspace's newer credentials after an external switch/refresh.
-        // Do not mutate auth.json or rotate a token during this read.
-        if (current != null) {
-            using var sync = Lock();
-            var currentAuth = CurrentAuth(); var syncedData = Read();
-            var row = syncedData["accounts"]!.AsObject().FirstOrDefault(x => Same(x.Value!, current)).Value as JsonObject;
-            var writtenAt = new DateTimeOffset(File.GetLastWriteTimeUtc(Path.Combine(home, "auth.json"))).ToUnixTimeMilliseconds();
-            if (row != null && writtenAt >= row.L("token_updated_at_ms") && row["auth"]?.ToJsonString() != currentAuth.ToJsonString()) {
-                row["auth"] = currentAuth.DeepClone(); row["token_updated_at_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); CodexJson.Atomic(path, syncedData);
-            } else if (!File.Exists(path)) Capture(currentAuth);
-        }
+    public string CaptureDesktopLogin(JsonObject original, JsonObject refreshed) {
+        Identity(refreshed);
         using var guard = Lock();
-        var data = Read(); var rows = new JsonArray(); string selected = null;
+        if (CurrentAuth().ToJsonString() != original.ToJsonString())
+            throw new CodexError("电脑登录在同步期间发生变化，请重试", 409, "account_changed", "rejected");
+        if (refreshed.ToJsonString() != original.ToJsonString()) {
+            CodexJson.Atomic(Path.Combine(folder, "backups", "auth-sync-" + Guid.NewGuid().ToString("N") + ".json"), original);
+            CodexJson.Atomic(Path.Combine(home, "auth.json"), refreshed);
+        }
+        return Capture(refreshed);
+    }
+    public JsonObject List() {
+        using var guard = Lock();
+        // Derive identity and saved credentials from the same snapshot. An external
+        // switch between two reads must never put personal tokens in the team row.
+        var currentAuth = CurrentAuth();
+        JsonObject current = null;
+        try { current = Identity(currentAuth); } catch (CodexError) { }
+        var data = Read();
+        if (current != null) {
+            var row = data["accounts"]!.AsObject().FirstOrDefault(x => Same(x.Value!, current)).Value as JsonObject;
+            var writtenAt = new DateTimeOffset(File.GetLastWriteTimeUtc(Path.Combine(home, "auth.json"))).ToUnixTimeMilliseconds();
+            var unchanged = CurrentAuth().ToJsonString() == currentAuth.ToJsonString();
+            if (unchanged && row == null && !File.Exists(path)) {
+                Capture(currentAuth);
+                data = Read();
+            } else if (unchanged && row != null && writtenAt >= row.L("token_updated_at_ms") && row["auth"]?.ToJsonString() != currentAuth.ToJsonString()) {
+                row["auth"] = currentAuth.DeepClone(); row["token_updated_at_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); CodexJson.Atomic(path, data);
+            }
+        }
+        var rows = new JsonArray(); string selected = null;
         foreach (var entry in data["accounts"]!.AsObject()) {
             var row = entry.Value!;
             if (current != null && Same(row, current)) selected = entry.Key;

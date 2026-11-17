@@ -104,7 +104,7 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("切换工作空间", Modifier.weight(1f))
-                IconButton(onClick = { model.fetchProviders(); model.fetchWorkspaceUsages(true) }, enabled = model.workspaceUsageLoading.isEmpty() && !model.switchingAccount) { Icon(Icons.Outlined.Refresh, "刷新工作空间用量") }
+                IconButton(onClick = { model.fetchProviders(); model.fetchAccounts(forceUsages = true) }, enabled = model.workspaceUsageLoading.isEmpty() && !model.switchingAccount) { Icon(Icons.Outlined.Refresh, "刷新工作空间用量") }
             }
         },
         text = {

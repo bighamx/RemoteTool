@@ -186,7 +186,12 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
                     : null;
             }
             executable = Codex.CodexExecutable.Resolve(executable, home);
-            var dll = InteractiveProcessLauncher.GetApplicationDllPath();
+            // IIS can host a parallel deployment while its physical root still
+            // contains an assembly held by the previous bridge generation.
+            var configuredAssembly = configuration["Codex:BridgeAssembly"];
+            var dll = string.IsNullOrWhiteSpace(configuredAssembly) ? InteractiveProcessLauncher.GetApplicationDllPath()
+                : Path.GetFullPath(Environment.ExpandEnvironmentVariables(configuredAssembly));
+            if (!File.Exists(dll)) throw new InvalidOperationException("Codex 桥接程序集不存在，请检查 Codex:BridgeAssembly 配置");
             token ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new { token, executable, home, account_store = accountStore, state_folder = stateFolder, handoff,
                 new_session_full_access = configuration.GetValue<bool>("Codex:NewSessionFullAccess"),

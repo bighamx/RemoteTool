@@ -46,6 +46,36 @@ internal static class CodexWorkspaceUsage
         Verify(identity, usage);
         return usage;
     }
+    // External workspace switches can leave mixed generations of JWTs in auth.json.
+    // Let native Codex refresh them in isolation; never relabel a signed token ourselves.
+    internal static async Task<JsonObject> RefreshDesktopLogin(string executable, string privateRoot, JsonObject original, CancellationToken ct) {
+        var workspace = original["tokens"].S("account_id");
+        var subject = CodexAccountStore.IdClaims(original).S("sub");
+        if (workspace.Length == 0 || subject.Length == 0 || original["tokens"].S("refresh_token").Length == 0)
+            throw new CodexError("电脑登录记录不完整，请在桌面 Codex 重新登录后同步", 409, "workspace_login_expired", "rejected");
+        var root = Path.GetFullPath(Path.Combine(privateRoot, "usage-probes"));
+        var probe = Path.Combine(root, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(probe);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+        try {
+            Atomic(Path.Combine(probe, "auth.json"), original);
+            await using var client = new CodexRpc(executable, probe, new Dictionary<string, string>(), _ => Task.CompletedTask,
+                "cli_auth_credentials_store=\"file\"", "forced_chatgpt_workspace_id=" + JsonValue.Create(workspace)!.ToJsonString());
+            await client.Initialize(timeout.Token);
+            var account = await client.Call("account/read", Obj(("refreshToken", true)), timeout.Token);
+            if (account["account"] == null) throw new CodexError("电脑登录已失效，请在桌面 Codex 重新登录后同步", 409, "workspace_login_expired", "rejected");
+            var refreshed = CodexJson.Read(Path.Combine(probe, "auth.json"));
+            var identity = CodexAccountStore.Identity(refreshed);
+            if (identity.S("workspace_id") != workspace || identity.S("subject") != subject)
+                throw new CodexError("刷新后的账户或工作空间不匹配，未覆盖电脑登录", 409, "account_changed", "rejected");
+            return refreshed;
+        } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+            throw new CodexError("同步电脑登录超时，请重试", 504);
+        } finally {
+            if (Directory.Exists(probe)) Directory.Delete(probe, true);
+        }
+    }
     private static async Task<(JsonObject Result, JsonObject Auth)> Probe(string executable, string privateRoot, JsonObject auth,
         Func<CodexRpc, JsonObject, CancellationToken, Task<JsonObject>> action, CancellationToken ct) {
         var root = Path.GetFullPath(Path.Combine(privateRoot, "usage-probes"));

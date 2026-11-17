@@ -1607,11 +1607,20 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         }
         if (path == "projects" && method == "GET") return Obj(("data", await CodexProjects.List(rpc)));
         if (path == "usage") {
-            var current = accounts.List().S("current");
-            if (current.Length == 0) return (await CodexWorkspaceUsage.Read(settings.S("executable"), folder, accounts.CurrentAuth(), context.RequestAborted)).Usage;
-            var quota = await WorkspaceUsage(current, false, context.RequestAborted);
-            if (!quota.B("available")) throw new CodexError(quota.S("error"), 502);
-            return quota["usage"]!.DeepClone().AsObject();
+            var snapshot = accounts.List();
+            var current = snapshot.S("current");
+            var workspace = snapshot["current_identity"].S("workspace_id");
+            JsonObject usage;
+            if (current.Length == 0) usage = (await CodexWorkspaceUsage.Read(settings.S("executable"), folder, accounts.CurrentAuth(), context.RequestAborted)).Usage;
+            else {
+                var quota = await WorkspaceUsage(current, false, context.RequestAborted);
+                if (!quota.B("available")) throw new CodexError(quota.S("error"), 502);
+                usage = quota["usage"]!.DeepClone().AsObject();
+            }
+            if (CurrentWorkspace() != workspace) throw new CodexError("电脑工作空间已变化，请刷新用量", 409, "account_changed");
+            usage["chatgpt_account_id"] = workspace;
+            usage["account_id"] = current;
+            return usage;
         }
         if (p.Length == 3 && p[0] == "workspaces" && p[2] == "usage" && method == "GET") return await WorkspaceUsage(p[1], context.Request.Query["refresh"].ToString() is "1" or "true", context.RequestAborted);
         if (p.Length == 3 && p[0] == "workspaces" && p[2] == "rate-limit-resets" && method == "GET") return await WorkspaceResetCredits(p[1], context.RequestAborted);
@@ -1621,7 +1630,17 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         if (path == "accounts/import") {
             var imported = accounts.CurrentAuth();
             if (imported.Count == 0) throw new CodexError("电脑当前没有官方登录记录；请先在电脑登录 Codex，或使用“登录其他工作空间”", 409, "not_logged_in");
-            accounts.Capture(imported); return Obj(("saved", true));
+            var verified = imported;
+            try { CodexAccountStore.Identity(imported); }
+            catch (CodexError error) when (error.Message.Contains("工作空间标识不一致") || error.Message.Contains("访问令牌与目标工作空间不一致")) {
+                verified = await CodexWorkspaceUsage.RefreshDesktopLogin(settings.S("executable"), folder, imported, context.RequestAborted);
+            }
+            await settingsLock.WaitAsync(context.RequestAborted);
+            try {
+                var captured = accounts.CaptureDesktopLogin(imported, verified);
+                workspaceUsage.Clear();
+                return Obj(("saved", true), ("current", captured));
+            } finally { settingsLock.Release(); }
         }
         if (path == "accounts/login") return await BeginLogin(body);
         if (path == "accounts/login-status") return await LoginStatus();

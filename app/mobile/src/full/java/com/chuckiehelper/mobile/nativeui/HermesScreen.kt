@@ -351,7 +351,8 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
             }
         }) {
         val quotaSummary = if (agent == "codex" || agent == "claude" && claudeQuotaVisible(model.usage))
-            codexUsageBars(model.usage).joinToString(" · ") { (label, remaining) -> "$label $remaining%" } else ""
+            codexUsageBars(model.usage).joinToString(" · ") { (label, remaining) -> "$label $remaining%" }
+                .ifBlank { if (agent == "codex") "账户与工作空间 · 用量暂不可用" else "" } else ""
         val showQuota: () -> Unit = {
             if (agent == "codex") { accountsPanel = true; model.fetchAccounts() } else model.fetchUsage()
         }

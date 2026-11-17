@@ -1741,13 +1741,20 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
 
-    private suspend fun fetchAccountsNow() {
+    private suspend fun fetchAccountsNow(forceUsages: Boolean = false) {
         val connection = api
         val epoch = ++accountReadEpoch
         val loadedAccounts = connection.json("$root/accounts")
-        val loadedWorkspaces = connection.json("$root/workspaces")
+        // One response is one identity snapshot; a desktop switch between two
+        // requests must not mix the old account with the new workspace list.
+        val email = loadedAccounts.optJSONObject("current_identity")?.optString("email").orEmpty()
+        val loadedWorkspaces = JSONObject(loadedAccounts.toString()).put("data", org.json.JSONArray(
+            loadedAccounts.array("data").objects().filter { email.isBlank() || it.optString("email") == email }
+        ))
         if (api !== connection || epoch != accountReadEpoch) return
-        if (workspaces.optString("current") != loadedWorkspaces.optString("current")) {
+        if (workspaces.optString("current") != loadedWorkspaces.optString("current") ||
+            accounts.optJSONObject("current_identity")?.optString("workspace_id") != loadedAccounts.optJSONObject("current_identity")?.optString("workspace_id")) {
+            usage = null
             workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
             workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetErrors = emptyMap()
         }
@@ -1755,7 +1762,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         workspaceUsages = workspaceUsages.filterKeys { id -> workspaces.array("data").objects().any { it.optString("id") == id } }
         workspaceResetCredits = workspaceResetCredits.filterKeys { id -> workspaces.array("data").objects().any { it.optString("id") == id } }
         workspaceResetErrors = workspaceResetErrors.filterKeys { id -> workspaces.array("data").objects().any { it.optString("id") == id } }
-        fetchWorkspaceUsages()
+        fetchWorkspaceUsages(forceUsages)
     }
     fun fetchWorkspaceUsages(force: Boolean = false) {
         if (agent != "codex") return
@@ -1786,7 +1793,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             }
         }
     }
-    fun fetchAccounts() = launch { error = null; fetchAccountsNow() }
+    fun fetchAccounts(forceUsages: Boolean = false) = launch { error = null; fetchAccountsNow(forceUsages) }
 
     fun fetchWorkspaceResetCredits(id: String) {
         if (agent != "codex" || id.isBlank() || id in workspaceResetLoading || id in workspaceResetUsing) return
@@ -1979,6 +1986,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         val provider = sessionProvider
         val query = if (isClaude && session != null) "?session=${android.net.Uri.encode(session)}" else ""
         try { val result = connection.json("$root/usage$query"); if (api === connection && (!isClaude || selectedId == session && sessionProvider == provider)) {
+            if (agent == "codex") {
+                val received = result.cleanSetting("chatgpt_account_id")
+                val known = accounts.optJSONObject("current_identity")?.optString("workspace_id").orEmpty()
+                if (received.isNotBlank() && received != known) {
+                    fetchAccountsNow()
+                    if (api !== connection || accounts.optJSONObject("current_identity")?.optString("workspace_id") != received) return@launch
+                }
+            }
             usage = result
             // 统一存储：当前工作空间的用量行同步额度窗口，切进对话框时显示同一份数据。
             val current = workspaces.optString("current")
@@ -1992,7 +2007,20 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             JSONObject(usage.toString()).put("stale", true).put("message", "额度刷新失败，当前显示上次读取结果")
             else if (isClaude) obj("available" to false, "message" to "Claude 额度暂时无法读取，请稍后重试") else null }
     }
-    fun importCurrentAccount() = launch { api.json("$root/accounts/import", obj()); fetchAccountsNow() }
+    fun importCurrentAccount() = launch {
+        if (switchingAccount) return@launch
+        val connection = api
+        switchingAccount = true
+        try {
+            connection.json("$root/accounts/import", obj())
+            if (api !== connection) return@launch
+            usage = null
+            workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
+            workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetErrors = emptyMap()
+            fetchAccountsNow(forceUsages = true)
+            fetchUsage()
+        } finally { if (api === connection) switchingAccount = false }
+    }
     fun removeAccount(id: String) = launch { api.json("$root/accounts/$id/remove", obj()); fetchAccountsNow() }
     fun answerQuestions(answers: JSONObject) = launch {
         if (submitting) return@launch
