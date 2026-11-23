@@ -30,6 +30,7 @@
     <Compile Include="../../WebApplication/Services/Codex/CodexOfficialRouting.cs" Link="CodexOfficialRouting.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexHandoff.cs" Link="CodexHandoff.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexDesktopSync.cs" Link="CodexDesktopSync.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexDesktopAppServer.cs" Link="CodexDesktopAppServer.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexDesktopActivity.cs" Link="CodexDesktopActivity.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexCompactionEvent.cs" Link="CodexCompactionEvent.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexApproval.cs" Link="CodexApproval.cs" />

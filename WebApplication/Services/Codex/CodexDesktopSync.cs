@@ -39,9 +39,15 @@ internal sealed class CodexDesktopSync(string home)
         }
         return Request(action, 1, parameters);
     }
-    private Task<JsonObject> Request(string method, int version, JsonObject parameters) {
-        if (!OperatingSystem.IsMacOS()) return RequestCore(method, version, parameters);
-        return RecoverOwner(parameters.S("conversationId"),
+    private async Task<JsonObject> Request(string method, int version, JsonObject parameters) {
+        if (OperatingSystem.IsWindows()) {
+            try { return await RequestCore(method, version, parameters); }
+            catch (CodexError error) when (error.Code == "session_owner_unavailable" && error.Delivery == "rejected") {
+                return await CodexDesktopAppServer.Request(home, method, parameters);
+            }
+        }
+        if (!OperatingSystem.IsMacOS()) return await RequestCore(method, version, parameters);
+        return await RecoverOwner(parameters.S("conversationId"),
             () => RequestCore(method, version, parameters), OpenThread,
             id => RequestCore("thread-owner-discovery", 1, Obj(("hostId", "local"), ("conversationId", id))));
     }
@@ -106,8 +112,17 @@ internal sealed class CodexDesktopSync(string home)
         }
     }
     public async IAsyncEnumerable<JsonObject> Follow(string id, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct) {
-        using var pipe = await Connect(ct);
-        var clientId = await Initialize(pipe, ct);
+        Stream pipe = null;
+        string clientId = null;
+        try {
+            pipe = await Connect(ct);
+            clientId = await Initialize(pipe, ct);
+        } catch (IOException) when (OperatingSystem.IsWindows()) { pipe?.Dispose(); pipe = null; }
+        if (pipe == null) {
+            await foreach (var snapshot in CodexDesktopAppServer.Follow(home, id, ct)) yield return snapshot;
+            yield break;
+        }
+        using var follower = pipe;
         async Task Following(bool value) => await Write(pipe, Obj(("type", "broadcast"), ("sourceClientId", clientId),
             ("method", "thread-stream-following-changed"), ("version", 1),
             ("params", Obj(("hostId", "local"), ("conversationId", id), ("following", value)))), ct);
@@ -152,11 +167,17 @@ internal sealed class CodexDesktopSync(string home)
         using var current = Process.GetCurrentProcess();
         if (server.SessionId != current.SessionId) return false;
         var path = server.MainModule?.FileName ?? "";
-        return (path.Contains("\\OpenAI.Codex_", StringComparison.OrdinalIgnoreCase) && Path.GetFileName(path).Equals("ChatGPT.exe", StringComparison.OrdinalIgnoreCase)) ||
-            (path.Contains("\\OpenAI\\Codex\\", StringComparison.OrdinalIgnoreCase) && Path.GetFileName(path).Equals("node.exe", StringComparison.OrdinalIgnoreCase));
+        return TrustedWindowsProcess(path, server.SessionId, current.SessionId);
     }
+    internal static bool TrustedWindowsProcess(string path, int serverSession, int currentSession) => serverSession == currentSession &&
+        ((path.Contains("\\OpenAI.Codex_", StringComparison.OrdinalIgnoreCase) && Path.GetFileName(path).Equals("ChatGPT.exe", StringComparison.OrdinalIgnoreCase)) ||
+            (path.Contains("\\OpenAI\\Codex\\", StringComparison.OrdinalIgnoreCase) && Path.GetFileName(path).Equals("node.exe", StringComparison.OrdinalIgnoreCase)));
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool WaitNamedPipe(string name, uint timeout);
     private async Task<Stream> Connect(CancellationToken ct) {
         if (OperatingSystem.IsWindows()) {
+            // A missing legacy broker must not consume the activity probe's entire deadline.
+            if (!WaitNamedPipe(@"\\.\pipe\codex-ipc", 0) && Marshal.GetLastPInvokeError() == 2) throw new IOException("Desktop IPC broker unavailable");
             var pipe = new NamedPipeClientStream(".", "codex-ipc", PipeDirection.InOut, PipeOptions.Asynchronous);
             try {
                 await pipe.ConnectAsync(ct);

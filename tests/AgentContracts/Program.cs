@@ -27,6 +27,8 @@ await WebAssetVersionChecks.Run();
 if (args.Contains("--permissions-only")) return;
 await CodexMacDesktopChecks.Run();
 await CodexDesktopOwnerChecks.Run();
+await CodexDesktopAppServerChecks.Run();
+if (args.Contains("--desktop-owner-only")) return;
 await HermesSetupChecks.Run();
 CodexApprovalChecks.Run();
 ProviderPolicyChecks.Run();

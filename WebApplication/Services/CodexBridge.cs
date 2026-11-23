@@ -137,8 +137,14 @@ public sealed class CodexBridge(IHttpClientFactory clients, IConfiguration confi
             var stateFolder = RemoteToolPaths.CodexState;
             if (!Directory.Exists(stateFolder)) {
                 Directory.CreateDirectory(stateFolder);
-                foreach (var name in new[] { "runs.json", "providers.json", "model-selections.json" })
+                foreach (var name in new[] { "runs.json", "providers.json", "model-selections.json", "session-permissions.json" })
                     if (File.Exists(Path.Combine(priorState, name))) File.Copy(Path.Combine(priorState, name), Path.Combine(stateFolder, name));
+                var phoneBindings = Path.Combine(priorState, "phone-tools");
+                if (Directory.Exists(phoneBindings)) {
+                    var targetBindings = Path.Combine(stateFolder, "phone-tools");
+                    Directory.CreateDirectory(targetBindings);
+                    foreach (var file in Directory.EnumerateFiles(phoneBindings, "*.json")) File.Copy(file, Path.Combine(targetBindings, Path.GetFileName(file)));
+                }
             }
             var configuredHome = configuration["Codex:Home"];
             var profile = !string.IsNullOrWhiteSpace(configuredHome)
