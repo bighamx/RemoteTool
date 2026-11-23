@@ -516,7 +516,13 @@ private fun HermesProfileScreen(api: NativeApi, deviceId: String, agent: String,
                     TextButton(onClick = { model.searchSessions(filter) }) { Text("重试") }
                 }
             }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            AgentSessionListRefresh(
+                listState = sessionsScroll,
+                isRefreshing = model.sessionListRefreshing,
+                onRefresh = { model.refreshSessionList() },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                enabled = !model.loading && !model.sessionSearchLoading && !model.recovering,
+            ) {
             LazyColumn(
                 Modifier.fillMaxSize().padding(end = 8.dp),
                 state = sessionsScroll,

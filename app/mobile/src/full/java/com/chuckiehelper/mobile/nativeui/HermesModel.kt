@@ -1471,6 +1471,25 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         selectedId?.let { if (isClaude) loadSelection(it); loadHistory(it) }
     }
 
+    var sessionListRefreshing by mutableStateOf(false)
+        private set
+
+    fun refreshSessionList() {
+        if (sessionListRefreshing || loading || sessionSearchLoading) return
+        sessionListRefreshing = true
+        launch {
+            try {
+                refreshSessions()
+                if (sessionSearchQuery.isNotBlank()) {
+                    searchSessions(sessionSearchQuery)
+                    sessionSearchJob?.join()
+                }
+            } finally {
+                sessionListRefreshing = false
+            }
+        }
+    }
+
     private suspend fun refreshSessions(offset: Int = 0) = sessionRefreshMutex.withLock {
         val connection = api
         val requestedAt = activityClock()
