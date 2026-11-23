@@ -31,7 +31,8 @@ internal static class CodexWorkspaceUsage
     internal static void Verify(JsonObject identity, JsonObject usage) {
         static string Plan(string value) => value is "team" or "business" ? "team" : value;
         var actual = usage["rateLimits"].S("planType");
-        if (actual.Length > 0 && Plan(actual) != Plan(identity.S("plan_type"))) throw new CodexError("返回的订阅与目标工作空间不一致，未执行切换", 409);
+        var expected = identity.S("plan_type");
+        if (actual.Length > 0 && expected.Length > 0 && Plan(actual) != Plan(expected)) throw new CodexError("返回的订阅与目标工作空间不一致，未执行切换", 409);
     }
     private static async Task<JsonObject> Direct(JsonObject auth, CancellationToken ct) {
         var identity = CodexAccountStore.Identity(auth);

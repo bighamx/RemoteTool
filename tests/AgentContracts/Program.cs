@@ -4,6 +4,9 @@ using RemoteTool.WebApi.Services.Codex;
 CodexCitationChecks.Run();
 if (args.Contains("--citations-only")) return;
 
+CodexWorkspaceIdentityChecks.Run();
+if (args.Contains("--workspace-identity-only")) return;
+
 if (args.Length == 1 && args[0] == "--run-recovery") { CodexRunRecoveryChecks.Run(); return; }
 
 if (args.Length == 1 && args[0] == "--attachment-input-only") {

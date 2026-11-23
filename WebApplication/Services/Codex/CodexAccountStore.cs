@@ -39,20 +39,32 @@ internal sealed class CodexAccountStore
         var tokens = auth["tokens"];
         var payload = IdClaims(auth);
         var claims = payload["https://api.openai.com/auth"];
-        var workspace = claims.S("chatgpt_account_id"); var email = payload.S("email");
-        if (workspace.Length == 0 || email.Length == 0 || tokens.S("refresh_token").Length == 0) throw new CodexError("登录记录缺少邮箱、工作空间或刷新令牌");
-        if (tokens.S("account_id").Length > 0 && tokens.S("account_id") != workspace) throw new CodexError("凭据的工作空间标识不一致");
+        var idWorkspace = claims.S("chatgpt_account_id"); var email = payload.S("email");
+        JsonObject accessPayload = null;
         var access = tokens.S("access_token").Split('.');
         if (access.Length == 3) {
             try {
                 var encoded = access[1].Replace('-', '+').Replace('_', '/');
-                var routed = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(encoded.PadRight((encoded.Length + 3) / 4 * 4, '='))))?["https://api.openai.com/auth"].S("chatgpt_account_id");
-                if (!string.IsNullOrEmpty(routed) && routed != workspace) throw new CodexError("访问令牌与目标工作空间不一致，请重新保存登录", 409);
+                accessPayload = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(encoded.PadRight((encoded.Length + 3) / 4 * 4, '=')))) as JsonObject
+                    ?? throw new CodexError("访问令牌格式无效", 409);
             } catch (Exception error) when (error is FormatException or System.Text.Json.JsonException) { throw new CodexError("访问令牌格式无效", 409); }
         }
-        var plan = claims.S("chatgpt_plan_type");
-        return CodexJson.Obj(("email", email), ("workspace_id", workspace), ("subject", payload.S("sub")), ("plan_type", plan),
-            ("workspace_name", plan is "business" or "team" or "enterprise" or "edu" ? "团队工作空间" : "个人工作空间"));
+        var accessClaims = accessPayload?["https://api.openai.com/auth"];
+        var routed = accessClaims.S("chatgpt_account_id");
+        var workspace = tokens.S("account_id");
+        if (workspace.Length == 0) workspace = routed.Length > 0 ? routed : idWorkspace;
+        if (workspace.Length == 0 || email.Length == 0 || tokens.S("refresh_token").Length == 0) throw new CodexError("登录记录缺少邮箱、工作空间或刷新令牌");
+        if (routed.Length > 0 && routed != workspace) throw new CodexError("访问令牌与目标工作空间不一致，请重新保存登录", 409);
+        var subject = payload.S("sub"); var accessSubject = accessPayload.S("sub");
+        if (subject.Length > 0 && accessSubject.Length > 0 && subject != accessSubject) throw new CodexError("登录记录与访问令牌不属于同一用户", 409);
+        // Native workspace switching may retain the login's original ID token.
+        // Accept that only when the access token proves both the user and route.
+        if (idWorkspace != workspace && (routed != workspace || subject.Length == 0 || subject != accessSubject))
+            throw new CodexError("凭据的工作空间标识不一致");
+        var plan = routed == workspace ? accessClaims.S("chatgpt_plan_type") : "";
+        if (plan.Length == 0 && idWorkspace == workspace) plan = claims.S("chatgpt_plan_type");
+        return CodexJson.Obj(("email", email), ("workspace_id", workspace), ("subject", subject), ("plan_type", plan),
+            ("workspace_name", plan.Length == 0 ? "工作空间" : plan is "business" or "team" or "enterprise" or "edu" ? "团队工作空间" : "个人工作空间"));
     }
     private static bool Same(JsonNode row, JsonNode identity) => row.S("email") == identity.S("email") && row.S("chatgpt_account_id") == identity.S("workspace_id");
     public string Capture(JsonObject auth, string name = "") {
