@@ -1561,6 +1561,11 @@ body .agent-workspace .agent-setup-banner strong {
     background: var(--bg-secondary)
 }
 
+.agent-search .ivu-input-icon {
+    top: 50%;
+    transform: translateY(-50%)
+}
+
 .agent-session-list {
     padding: 2px 12px 18px;
     scrollbar-color: var(--border-color) transparent
