@@ -9,6 +9,9 @@
     <Compile Include="../../WebApplication/Services/Scheduled/ScheduledMessageStore.cs" Link="ScheduledMessageStore.cs" />
     <Using Include="Microsoft.Extensions.Configuration" />
     <Compile Include="../../WebApplication/Services/HermesBridge.cs" Link="HermesBridge.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexAttachmentAccess.cs" Link="CodexAttachmentAccess.cs" />
+    <Compile Include="../../WebApplication/Services/RemoteControl/InteractiveProcessLauncher.cs" Link="InteractiveProcessLauncher.cs" />
+    <Compile Include="../../WebApplication/Services/RemoteControl/AgentStartupLogger.cs" Link="AgentStartupLogger.cs" />
     <Compile Include="../../WebApplication/Services/HermesProfiles.cs" Link="HermesProfiles.cs" />
     <Compile Include="../../WebApplication/Services/HermesSetupRequired.cs" Link="HermesSetupRequired.cs" />
     <Compile Include="../../WebApplication/Services/HermesTitleService.cs" Link="HermesTitleService.cs" />

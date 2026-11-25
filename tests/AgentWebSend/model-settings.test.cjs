@@ -4,7 +4,7 @@ const {createHarness} = require('./agent-send.test.cjs');
 
 function setup(agent='codex') {
     const h = createHarness([],agent);
-    for (const name of ['selectedProviderMetadata','providerChoices','modelChoices','modelMetadata','activeProvider','officialProviderInUse','thirdPartyProviders'])
+    for (const name of ['selectedProviderMetadata','providerChoices','modelChoices','modelMetadata','modelDirty','effortChoices','tierChoices','activeProvider','officialProviderInUse','thirdPartyProviders'])
         Object.defineProperty(h.state,name,{get:()=>h.options.computed[name].call(h.state)});
     return h;
 }
@@ -16,6 +16,7 @@ test('official aliases resolve their catalog without changing the session provid
     assert.equal(state.providerChoices[0].id,'company_login');
     assert.equal(state.modelChoices[0].id,'official-model');
     state.modelSelection.provider = 'third';
+    state.providerChanged();
     assert.equal(state.modelChoices[0].id,'private-model');
 });
 
@@ -72,4 +73,129 @@ test('schedule retry preserves destination, request key and payload after naviga
     assert.equal(bodies[0].sessionId,'session-1');
     assert.ok(bodies[0].clientKey);
     assert.deepEqual(bodies[0],bodies[1]);
+});
+
+
+test('model picker retains a custom model absent from the refreshed catalog', () => {
+    const {state} = setup();
+    state.models=[{slug:'third',models:[{model:'listed',displayName:'Listed model'}]}];
+    state.selected={provider:'third',model:'custom/model',reasoning_effort:'high'};
+    state.resetModelSelection();
+    assert.equal(state.modelDirty,false);
+    assert.equal(state.modelChoices[0].id,'custom/model');
+    assert.equal(state.modelChoices[1].name,'Listed model');
+    state.modelSelection.model='other/model';
+    assert.equal(state.modelDirty,true);
+    state.resetModelSelection();
+    assert.equal(state.modelSelection.model,'custom/model');
+    assert.equal(state.modelDirty,false);
+});
+
+test('catalog and detail refresh preserve an unsaved model selection', async () => {
+    const {state,api} = setup();
+    state.selected={provider:'openai',model:'old'};
+    state.modelSelection={provider:'third',model:'draft',effort:'low',tier:''};
+    state.inspectorOpen=true;
+    api.get=async route=>route.includes('model-options')
+        ?{provider:'openai',model:'default',providers:[]}
+        :{session:{provider:'openai',model:'server-current'}};
+    await state.loadModels(true);
+    assert.equal(state.modelSelection.model,'draft');
+    await state.loadSessionDetail();
+    assert.equal(state.selected.model,'server-current');
+    assert.equal(state.modelSelection.model,'draft');
+    assert.equal(state.modelsLoading,false);
+});
+
+test('model save sends one captured choice and confirms the session before clearing pending edits', async () => {
+    const {state,api,posts,bodies} = setup();
+    let finish;
+    api.post=async (route,body)=>{posts.push(route);bodies.push({...body});await new Promise(resolve=>finish=resolve);};
+    state.selected={id:'session-1',provider:'openai',model:'old'};
+    state.sessions=[state.selected];
+    state.inspectorOpen=true;
+    state.modelSelection={provider:'third',model:' new/model ',effort:'high',tier:'fast'};
+    api.get=async route=>route.includes('model-options')?{providers:[]}:{session:{id:'session-1',provider:'third',model:'new/model',reasoning_effort:'high',service_tier:'fast'}};
+    const saving=state.saveModel();
+    assert.equal(state.modelSaving,true);
+    await state.saveModel();
+    assert.equal(posts.length,1);
+    assert.equal(bodies[0].model,'new/model');
+    assert.equal(bodies[0].service_tier,'fast');
+    finish();await saving;
+    assert.equal(state.selected.model,'new/model');
+    assert.equal(state.sessions[0].model,'new/model');
+    assert.equal(state.modelDirty,false);
+    assert.match(state.modelNotice,/已应用/);
+    assert.equal(state.modelSaving,false);
+});
+
+test('late model save cannot refresh or display feedback in another session', async () => {
+    const {state,api} = setup();
+    let finish;
+    api.post=()=>new Promise(resolve=>finish=resolve);
+    state.selected={provider:'openai',model:'old'};
+    state.modelSelection={provider:'openai',model:'new',effort:'',tier:''};
+    const saving=state.saveModel();
+    ++state.epoch;state.selectedId='session-2';state.selected={model:'second'};
+    state.modelSelection={provider:'openai',model:'second',effort:'',tier:''};
+    finish({});await saving;
+    assert.equal(state.selected.model,'second');
+    assert.equal(state.modelSelection.model,'second');
+    assert.equal(state.modelNotice,'');
+    assert.equal(state.modelSaving,false);
+});
+
+test('failed model save keeps edits and displays its error inside model settings', async () => {
+    const {state,api} = setup();
+    state.selected={model:'old'};
+    state.modelSelection={provider:'openai',model:'new',effort:'',tier:''};
+    api.post=async()=>{throw new Error('模型不可用');};
+    await state.saveModel();
+    assert.equal(state.modelSaveError,'模型不可用');
+    assert.equal(state.modelSelection.model,'new');
+    assert.equal(state.modelSaving,false);
+    state.resetModelSelection();
+    assert.equal(state.modelSaveError,'');
+});
+
+test('unsupported Hermes model settings cannot be submitted and supported changes keep native reasoning shape', async () => {
+    const {state,bodies} = setup('hermes');
+    state.selected={model:'old'};
+    state.modelSelection={provider:'custom:one',model:'new',effort:'none',tier:''};
+    state.modelSessionSupported=false;
+    await state.saveModel();
+    assert.equal(bodies.length,0);
+    assert.match(state.modelSaveError,/全局模型/);
+    state.modelSessionSupported=true;
+    state.loadSessionDetail=async()=>false;
+    state.loadModels=async()=>{};
+    await state.saveModel();
+    assert.equal(bodies[0].model_options.reasoning.enabled,false);
+    assert.equal('service_tier' in bodies[0],false);
+});
+
+
+test('model chip describes the applied provider while the inspector edits another provider', () => {
+    const {state,options} = setup();
+    state.models=[{slug:'openai',name:'Official'},{slug:'third',name:'Gateway'}];
+    state.selected={provider:'openai',model:'current'};
+    state.modelSelection={provider:'third',model:'draft',effort:'',tier:''};
+    assert.match(options.computed.modelChipTitle.call(state),/Official/);
+    assert.doesNotMatch(options.computed.modelChipTitle.call(state),/Gateway/);
+});
+
+test('edits made during a pending detail read survive its completion', async () => {
+    const {state,api} = setup();
+    let finish;
+    state.selected={provider:'openai',model:'old'};
+    state.resetModelSelection();
+    state.inspectorOpen=true;
+    api.get=()=>new Promise(resolve=>finish=resolve);
+    const loading=state.loadSessionDetail();
+    state.modelSelection.model='typed-while-loading';
+    finish({session:{provider:'openai',model:'new-server-value'}});
+    await loading;
+    assert.equal(state.selected.model,'new-server-value');
+    assert.equal(state.modelSelection.model,'typed-while-loading');
 });

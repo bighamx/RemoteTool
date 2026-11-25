@@ -1158,6 +1158,7 @@ body .agent-workspace .agent-setup-banner strong {
 }
 
 .agent-compose-wrap {
+    position: relative;
     flex: none;
     max-width: 960px;
     width: calc(100% - 40px);
@@ -1167,6 +1168,23 @@ body .agent-workspace .agent-setup-banner strong {
     border-radius: 12px;
     background: var(--bg-secondary);
     box-shadow: 0 3px 14px #0001
+}
+
+.agent-file-drop-hint {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    border: 2px dashed var(--accent-primary);
+    border-radius: inherit;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-weight: 600;
+    text-align: center;
+    pointer-events: none
 }
 
 .agent-compose-top {
@@ -2372,7 +2390,194 @@ body .agent-workspace .agent-setup-banner strong {
 }
 
 .agent-inspector-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    z-index: 2;
     padding: 22px 18px
+}
+
+.agent-workspace .agent-inspector {
+    width: min(380px, 94vw)
+}
+
+.agent-model-heading,
+.agent-model-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px
+}
+
+.agent-model-heading h4 {
+    margin: 0;
+    font-size: 14px
+}
+
+.agent-model-settings {
+    gap: 16px
+}
+
+.agent-model-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0
+}
+
+.agent-model-settings .agent-field > label {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600
+}
+
+.agent-model-settings .agent-field > small {
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.5;
+    overflow-wrap: anywhere
+}
+
+.agent-model-id,
+.agent-model-option-id {
+    font-family: ui-monospace, Menlo, Consolas, monospace
+}
+
+.agent-model-options {
+    display: flex;
+    gap: 12px
+}
+
+.agent-model-options > .agent-field {
+    flex: 1
+}
+
+.agent-workspace .agent-model-settings select,
+.agent-workspace .agent-model-settings .agent-model-custom-input,
+.agent-workspace .agent-model-settings .ivu-select-selection {
+    min-height: 42px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px
+}
+
+.agent-workspace .agent-model-settings .agent-model-custom-input {
+    width: 100%;
+    padding: 8px 12px
+}
+
+.agent-model-custom-toggle {
+    align-self: flex-start;
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: var(--accent-primary);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer
+}
+
+.agent-model-custom-toggle:hover {
+    text-decoration: underline
+}
+
+.agent-workspace .agent-model-settings .ivu-select-input {
+    width: 100%;
+    height: 40px;
+    min-height: 0;
+    padding: 0 32px 0 12px;
+    border: 0;
+    border-radius: 12px;
+    outline: 0;
+    box-shadow: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13px
+}
+
+.agent-workspace .agent-model-settings .ivu-select-visible .ivu-select-selection {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 18%, transparent)
+}
+
+.agent-model-settings .ivu-select {
+    position: relative
+}
+
+.agent-model-settings .ivu-select-dropdown {
+    width: 100%;
+    max-width: 100%;
+    max-height: 240px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    color: var(--text-primary)
+}
+
+.agent-model-settings .ivu-select-item {
+    padding: 10px 12px;
+    color: var(--text-primary);
+    white-space: normal;
+    overflow-wrap: anywhere
+}
+
+.agent-model-settings .ivu-select-item-focus,
+.agent-model-settings .ivu-select-item:hover {
+    background: var(--bg-tertiary)
+}
+
+.agent-model-settings .ivu-select-item-selected {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent-primary) 18%, var(--bg-secondary));
+    box-shadow: inset 3px 0 var(--accent-primary)
+}
+
+.agent-model-option-name,
+.agent-model-option-id {
+    display: block;
+    line-height: 1.5
+}
+
+.agent-model-option-name {
+    font-weight: 600
+}
+
+.agent-model-option-id {
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: 11px
+}
+
+.agent-model-settings p {
+    margin: 0;
+    line-height: 1.6
+}
+
+.agent-model-settings .agent-inline-error {
+    color: var(--accent-danger, #c05050)
+}
+
+.agent-workspace .agent-model-settings .agent-model-actions .ivu-btn {
+    min-height: 40px;
+    margin: 0
+}
+
+.agent-model-actions .ivu-btn-primary {
+    flex: 1
+}
+
+@media(max-width:760px) {
+    .agent-workspace .agent-model-settings .ivu-select-input,
+    .agent-workspace .agent-model-settings .agent-model-custom-input {
+        font-size: 16px
+    }
 }
 
 .agent-inspector-head h3 {

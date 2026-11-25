@@ -36,7 +36,7 @@
             <i-button v-if="hasMore" long size="small" :loading="loadingList" @@click="moreSessions">加载更多</i-button>
         </div>
     </aside>
-    <section class="agent-conversation">
+    <section class="agent-conversation" @@dragenter="onFileDragEnter" @@dragover="onFileDragOver" @@dragleave="onFileDragLeave" @@drop="onFileDrop">
         <div class="agent-conversation-head">
             <div class="agent-conversation-title"><span class="agent-conversation-icon"><img :src="agentIcon" :alt="agentName"></span><div><h2>{{selected?.title || agentName}}</h2><button v-if="agent==='codex'" type="button" class="agent-quota-summary" @@click="openWorkspaceDialog" :title="usageError || '查看工作空间用量和切换工作空间'"><span>{{quotaWorkspaceName}}</span><span class="agent-header-quota-windows"><span v-for="window in headerQuotaWindows" :key="window.minutes" class="agent-header-quota-window"><span>{{window.label}} · {{usageLoading?'读取中…':window.remaining==null?'暂无数据':'剩余 '+window.remaining+'%'}}</span><span v-if="window.remaining!=null" class="agent-header-quota-track" :class="{low:window.remaining<20}"><span :style="{width:window.remaining+'%'}"></span></span></span></span></button><small>{{selected?.cwd || statusText}}</small></div></div>
             <div class="agent-head-trailing"><button type="button" class="mobile-finish-input" @@click="$refs.composer?.blur();$event.currentTarget.blur()">完成</button><button class="agent-mobile-sessions" type="button" @@click="openSessionList" :aria-expanded="sessionsOpen" aria-label="显示会话列表"><svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><path d="M4 4h16v12H8l-4 4V4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button><button type="button" class="mobile-new-session mobile-only" aria-label="新建会话" @@click="openCreateDialog">＋</button><span class="agent-status-pill"><span></span>{{statusText}}</span><details class="agent-session-actions"><summary aria-label="会话操作" title="会话操作">⋮</summary><div><button type="button" :disabled="!selectedId" @@click="showSessionDetails()">会话详情</button><button type="button" :disabled="!selectedId" @@click="copySessionId()">复制会话 ID</button><button v-if="agent!=='hermes'" type="button" :disabled="!selectedId" @@click="openPermissions">{{agent==='claude' ? '会话权限 · '+(selected?.permission_mode==='acceptEdits'?'自动批准文件编辑':selected?.permission_mode==='plan'?'计划模式':'按本机规则询问') : '会话权限'}}</button><button v-if="agent==='codex' || agent==='claude' && claudeProvidersSupported" type="button" @@click="openProviderManagement">Provider 管理</button><button v-if="agent==='hermes'" type="button" @@click="showFiles">查看附件</button><button v-if="agent==='hermes'" type="button" @@click="inspectorOpen=true">当前会话模型</button><button v-if="agent==='hermes'" type="button" @@click="openHermesAdmin">Hermes 管理 ↗</button><button type="button" @@click="refreshAll">刷新会话</button><button type="button" @@click="renameSession">重命名</button><button type="button" @@click="togglePin">{{selected?.pinned?'取消置顶':'置顶会话'}}</button><button type="button" class="danger" @@click="deleteSession">删除会话</button></div></details></div>
@@ -85,25 +85,83 @@
         <button v-if="showJumpToLatest && selectedId" type="button" class="agent-jump-latest" title="回到最新消息" aria-label="回到最新消息" @@click="jumpToLatest"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 4v12.17l5.59-5.59L19 12l-7 7-7-7 1.41-1.41L11 16.17V4z"/></svg></button>
         </div>
         <div class="agent-compose-wrap" v-if="selectedId">
+            <div v-if="fileDragDepth" class="agent-file-drop-hint" role="status">松开文件，上传到当前会话</div>
             <div class="agent-compose-top"><div class="agent-context-meter"><button type="button" class="agent-model-chip" :title="modelChipTitle" @@click="inspectorOpen=true">{{modelChipLabel}}</button><template v-if="context.context?.available"><i-progress :percent="contextPercent" :stroke-width="6" hide-info></i-progress><small :title="`${context.context.tokens || 0} / ${context.context.limit || '—'} tokens`">{{contextTokens(context.context.tokens ?? 0)}} / {{contextTokens(context.context.limit)}} · {{contextPercent}}%</small></template><small v-else>暂无用量数据</small></div><div class="agent-compose-tools"><i-button size="small" @@click="showFiles">会话文件</i-button><i-button size="small" @@click="compact">压缩上下文</i-button></div></div>
             <div v-if="pending" class="agent-pending"><span>{{pending.delivery}}</span><i-button size="small" @@click="verifyPending">核对发送状态</i-button><i-button v-if="pending.checkedMissing" size="small" @@click="clearUnconfirmed">清除本地记录</i-button></div>
             <div v-if="attachments.length" class="agent-attachment-drafts"><span v-for="(file,index) in attachments" :key="file.id">{{file.name}} <button type="button" @@click="attachments.splice(index,1)">×</button></span></div>
             <div v-if="schedules.length" class="agent-schedules"><span v-for="row in schedules" :key="row.id" class="agent-schedule-chip" :title="'定时发送：'+row.text">⏰ {{scheduleChip(row)}}<button type="button" @@click="cancelSchedule(row.id)" aria-label="取消定时消息">×</button></span></div>
             <div class="agent-compose-input-row">
-                <button type="button" class="mobile-compose-more mobile-only" aria-label="消息工具" aria-haspopup="dialog" :disabled="uploading" @@click="mobileComposerOpen=true">☰</button>
-                <textarea ref="composer" v-model="draft" :disabled="sending" :placeholder="mobileViewport?'消息':'发送消息；Shift+Enter 换行；可直接粘贴图片'" aria-label="消息输入" :rows="mobileViewport?1:3" @@input="resizeComposer" @@keydown="composerKeydown" @@paste="onPaste"></textarea>
-                <button type="button" class="mobile-compose-attach mobile-only" aria-label="添加附件" :disabled="uploading" @@click="$refs.composeUpload.click()"><img src="/icons/attach_file.svg" alt=""></button>
+                <button type="button" class="mobile-compose-more mobile-only" aria-label="消息工具" aria-haspopup="dialog" :disabled="uploading || sending" @@click="mobileComposerOpen=true">☰</button>
+                <textarea ref="composer" v-model="draft" :disabled="sending" :placeholder="mobileViewport?'消息':'发送消息；Shift+Enter 换行；可粘贴图片或拖入文件'" aria-label="消息输入" :rows="mobileViewport?1:3" @@input="resizeComposer" @@keydown="composerKeydown" @@paste="onPaste"></textarea>
+                <button type="button" class="mobile-compose-attach mobile-only" aria-label="添加附件" :disabled="uploading || sending" @@click="$refs.composeUpload.click()"><img src="/icons/attach_file.svg" alt=""></button>
                 <button v-if="activeRun &amp;&amp; !draft.trim()" type="button" class="mobile-compose-send mobile-only" aria-label="停止当前任务" @@click="stopRun">■</button>
                 <button v-else type="button" class="mobile-compose-send mobile-only" :aria-label="activeRun?'发送插话':'发送消息'" :disabled="sending || !draft.trim() || !!pending || (historyCacheState &amp;&amp; !selectedStatusKnown) || sendBlocked" @@click="send">↑</button>
             </div>
-            <div class="agent-compose-actions"><div><label v-if="agent==='hermes'" class="agent-reasoning-toggle" :class="{on:showReasoning}" :title="showReasoning?'隐藏思考过程':'显示思考过程'"><input type="checkbox" :checked="showReasoning" @@change="toggleReasoning"><span>🧠</span></label><label class="agent-upload-label"><input ref="composeUpload" type="file" multiple @@change="uploadFiles" :disabled="uploading"><span class="agent-upload-icon" aria-hidden="true"></span><span>添加文件</span></label><span v-if="uploading">上传中…</span><i-button v-if="agent==='codex'" size="small" :disabled="!selectedId" @@click="openSchedule">定时发送</i-button><span v-if="activeRun">当前任务执行中，可插话</span></div><div class="agent-send-actions"><i-button v-if="agent==='codex'" size="small" :disabled="!draft.trim() || !!pending || (historyCacheState &amp;&amp; !selectedStatusKnown) || externalRunning" @@click="enqueue">加入队列</i-button><i-button type="primary" :loading="sending" :disabled="!draft.trim() || !!pending || (historyCacheState &amp;&amp; !selectedStatusKnown) || sendBlocked" @@click="send">{{activeRun?'插话':'发送'}}</i-button></div></div>
+            <div class="agent-compose-actions"><div><label v-if="agent==='hermes'" class="agent-reasoning-toggle" :class="{on:showReasoning}" :title="showReasoning?'隐藏思考过程':'显示思考过程'"><input type="checkbox" :checked="showReasoning" @@change="toggleReasoning"><span>🧠</span></label><label class="agent-upload-label"><input ref="composeUpload" type="file" multiple @@change="uploadFiles" :disabled="uploading || sending"><span class="agent-upload-icon" aria-hidden="true"></span><span>添加文件</span></label><span v-if="uploading">上传中…</span><i-button v-if="agent==='codex'" size="small" :disabled="!selectedId" @@click="openSchedule">定时发送</i-button><span v-if="activeRun">当前任务执行中，可插话</span></div><div class="agent-send-actions"><i-button v-if="agent==='codex'" size="small" :disabled="!draft.trim() || !!pending || (historyCacheState &amp;&amp; !selectedStatusKnown) || externalRunning || uploading" @@click="enqueue">加入队列</i-button><i-button type="primary" :loading="sending" :disabled="!draft.trim() || !!pending || (historyCacheState &amp;&amp; !selectedStatusKnown) || sendBlocked" @@click="send">{{activeRun?'插话':'发送'}}</i-button></div></div>
         </div>
     </section>
     <div class="agent-inspector-scrim" v-if="inspectorOpen && selectedId" @@click="inspectorOpen=false"></div>
     <aside class="agent-inspector" v-show="selectedId && inspectorOpen">
         <div class="agent-inspector-head"><div><small>SESSION DETAILS</small><h3>会话信息</h3></div><button type="button" class="agent-inspector-close" title="关闭" @@click="inspectorOpen=false">✕</button></div>
         <dl><dt>状态</dt><dd>{{statusText}}</dd><dt>模型</dt><dd>{{selected?.model || modelSelection.model || '默认'}}</dd><dt>工作目录</dt><dd class="path-value">{{selected?.cwd || '—'}}</dd></dl>
-        <div class="inspector-section"><h4>模型设置</h4><select v-model="modelSelection.provider" @@change="providerChanged"><option value="">默认提供方</option><option v-for="item in providerChoices" :key="item.id" :value="item.id">{{item.name}}</option></select><input v-model="modelSelection.model" :list="'agent-models-'+agent" aria-label="模型" placeholder="搜索或输入模型"><datalist :id="'agent-models-'+agent"><option v-for="item in modelChoices" :key="item.id" :value="item.id">{{item.name}}</option></datalist><p v-if="selectedProviderMetadata.models_warning" class="agent-inline-error">{{selectedProviderMetadata.models_warning}}</p><p v-if="modelDefaults.aggregate" class="agent-create-hint">聚合目录 · 保留模型的完整标识以确保路由正确</p><p v-if="modelsError" class="agent-inline-error">{{modelsError}}</p><i-button size="small" @@click="loadModels(true)">刷新模型列表</i-button><select v-model="modelSelection.effort" aria-label="推理强度"><option value="">默认推理强度</option><option v-for="effort in effortChoices" :key="effort" :value="effort">{{effort}}</option></select><select v-if="agent==='codex'" v-model="modelSelection.tier" aria-label="服务等级"><option value="">默认速度</option><option v-if="!tierChoices.includes('default')" value="default">标准速度</option><option v-if="modelSelection.tier && modelSelection.tier!=='default' && !tierChoices.includes(modelSelection.tier)" :value="modelSelection.tier">当前速度 · {{modelSelection.tier}}</option><option v-for="tier in tierChoices" :key="tier" :value="tier">{{tier==='default'?'标准速度':tier==='fast'?'快速':tier}}</option></select><p v-if="agent==='hermes' && !modelSessionSupported">当前 Hermes 版本仅支持全局默认模型，请在 Hermes 管理中设置。</p><i-button size="small" long :disabled="agent==='hermes' && !modelSessionSupported" @@click="saveModel">应用到会话</i-button></div>
+        <section class="inspector-section agent-model-settings" aria-label="模型设置" :aria-busy="modelSaving">
+            <div class="agent-model-heading">
+                <h4>模型设置</h4>
+                <button type="button" class="agent-link-btn" :disabled="modelsLoading || modelSaving" @@click="loadModels(true)">{{modelsLoading ? '正在刷新…' : '刷新列表'}}</button>
+            </div>
+            <fieldset class="agent-model-fields" :disabled="modelSaving || (agent==='hermes' && !modelSessionSupported)">
+                <label class="agent-field">
+                    <span>提供方</span>
+                    <select v-model="modelSelection.provider" @@change="providerChanged">
+                        <option value="">默认提供方</option>
+                        <option v-if="modelSelection.provider && !providerChoices.some(item=>item.id===modelSelection.provider)" :value="modelSelection.provider">{{modelSelection.provider}}</option>
+                        <option v-for="item in providerChoices" :key="item.id" :value="item.id">{{item.name}}</option>
+                    </select>
+                </label>
+                <div class="agent-field">
+                    <label :for="'agent-model-'+agent">模型</label>
+                    <input v-if="customModelInput" :id="'agent-model-'+agent" v-model="modelSelection.model" class="agent-model-custom-input" placeholder="输入完整模型标识" autocomplete="off" spellcheck="false">
+                    <i-select v-else :key="modelSelection.provider" v-model="modelSelection.model" :element-id="'agent-model-'+agent" filterable :disabled="modelSaving || (agent==='hermes' && !modelSessionSupported)" :loading="modelsLoading && !modelChoices.length" placeholder="搜索已有模型" not-found-text="未找到模型，可使用下方自定义入口">
+                        <i-option v-for="item in modelChoices" :key="item.id" :value="item.id" :label="item.name + (item.name!==item.id ? ' · '+item.id : '')">
+                            <span class="agent-model-option-name">{{item.name}}</span>
+                            <small v-if="item.name!==item.id" class="agent-model-option-id">{{item.id}}</small>
+                        </i-option>
+                    </i-select>
+                    <small class="agent-model-id" v-if="modelSelection.model">{{modelSelection.model}}</small>
+                    <small v-else>{{customModelInput ? '请填写供应商支持的完整模型标识' : '搜索并选择供应商提供的模型'}}</small>
+                    <button type="button" class="agent-model-custom-toggle" @@click="customModelInput=!customModelInput">{{customModelInput ? '返回模型列表' : '输入自定义模型'}}</button>
+                </div>
+                <p v-if="selectedProviderMetadata.models_warning" class="agent-inline-error" role="alert">{{selectedProviderMetadata.models_warning}}</p>
+                <p v-if="modelDefaults.aggregate" class="agent-create-hint">聚合目录中的模型需保留完整标识</p>
+                <div class="agent-model-options">
+                    <label class="agent-field">
+                        <span>推理强度</span>
+                        <select v-model="modelSelection.effort">
+                            <option value="">默认</option>
+                            <option v-if="modelSelection.effort && !effortChoices.includes(modelSelection.effort)" :value="modelSelection.effort">当前 · {{effortLabel(modelSelection.effort)}}</option>
+                            <option v-for="effort in effortChoices" :key="effort" :value="effort">{{effortLabel(effort)}}</option>
+                        </select>
+                    </label>
+                    <label v-if="agent==='codex'" class="agent-field">
+                        <span>速度</span>
+                        <select v-model="modelSelection.tier">
+                            <option value="">默认</option>
+                            <option v-if="!tierChoices.includes('default')" value="default">标准</option>
+                            <option v-if="modelSelection.tier && modelSelection.tier!=='default' && !tierChoices.includes(modelSelection.tier)" :value="modelSelection.tier">当前 · {{modelSelection.tier}}</option>
+                            <option v-for="tier in tierChoices" :key="tier" :value="tier">{{tier==='default'?'标准':tier==='fast'?'快速':tier}}</option>
+                        </select>
+                    </label>
+                </div>
+            </fieldset>
+            <p v-if="modelsError" class="agent-inline-error" role="alert">{{modelsError}}</p>
+            <p v-if="agent==='hermes' && !modelSessionSupported" class="agent-model-feedback">当前 Hermes 版本仅支持全局默认模型，请在 Hermes 管理中设置。</p>
+            <p v-if="modelSaveError" class="agent-inline-error" role="alert">{{modelSaveError}}</p>
+            <p v-else class="agent-model-feedback" role="status">{{modelSaving ? '正在应用模型设置…' : modelDirty ? '有尚未应用的修改' : modelNotice || '当前会话正在使用以上设置'}}</p>
+            <div class="agent-model-actions">
+                <i-button :disabled="!modelDirty || modelSaving" @@click="resetModelSelection">还原</i-button>
+                <i-button type="primary" :loading="modelSaving" :disabled="!modelSelection.model.trim() || !modelDirty || (agent==='hermes' && !modelSessionSupported)" @@click="saveModel">应用到会话</i-button>
+            </div>
+        </section>
         <div class="inspector-section" v-if="agent==='claude' && claudeUsage?.available"><h4>账户额度</h4><template v-if="claudeUsage?.available"><p v-for="group in quotaGroups(claudeUsage)" :key="group.name"><span v-for="w in group.windows" :key="w.label">{{w.label}} · {{w.remaining==null?'暂无数据':'剩余 '+w.remaining+'%'}}<template v-if="w.resetsAt"> · {{time(w.resetsAt)}} 重置</template><br></span></p></template><p v-else>{{claudeUsage?.message || '正在读取额度…'}}</p><p v-if="claudeUsage?.available &amp;&amp; claudeUsage?.message" class="agent-create-hint">{{claudeUsage.message}}</p><p class="agent-create-hint">{{claudeUsage?.source || '官方 Claude Code 订阅额度'}}</p></div>
         <div class="inspector-section" v-if="agent==='codex'"><h4>消息队列</h4><div v-if="queue.length" v-for="item in queue" :key="item.id" class="queue-row"><span>{{queueText(item)}}</span><i-button size="small" type="text" @@click="removeQueued(item)">删除</i-button></div><p v-else>队列为空</p></div>
         <div class="inspector-section" v-if="agent==='codex'"><h4>Codex 账户</h4><p v-if="accounts.current_identity">{{accounts.current_identity.email || accounts.current_identity.name || accounts.current}}</p><select v-model="selectedAccount" aria-label="Codex 账户"><option v-for="item in accounts.data || []" :key="item.id" :value="item.id">{{item.name || item.email || item.id}}</option></select><i-button size="small" long :disabled="!selectedAccount || selectedAccount===accounts.current" @@click="useAccount">切换账户</i-button></div>
@@ -123,7 +181,7 @@
     <modal v-model="mobileComposerOpen" title="消息工具" :footer-hide="true" width="420">
         <div class="mobile-composer-tools">
             <button v-if="agent==='hermes'" type="button" :aria-pressed="showReasoning" @@click="toggleReasoning()"><span aria-hidden="true">🧠</span>思考过程 {{showReasoning?'✓':'✕'}}</button>
-            <button type="button" :disabled="uploading" @@click="mobileComposerOpen=false;$refs.composeUpload.click()"><span aria-hidden="true">＋</span>添加照片或文件</button>
+            <button type="button" :disabled="uploading || sending" @@click="mobileComposerOpen=false;$refs.composeUpload.click()"><span aria-hidden="true">＋</span>添加照片或文件</button>
             <button type="button" @@click="mobileComposerOpen=false;showFiles()"><span aria-hidden="true">▤</span>会话附件</button>
             <button type="button" @@click="mobileComposerOpen=false;inspectorOpen=true"><span aria-hidden="true">◇</span>模型与会话设置</button>
             <button v-if="agent==='codex'" type="button" @@click="mobileComposerOpen=false;openSchedule()"><span aria-hidden="true">◷</span>定时发送</button>
