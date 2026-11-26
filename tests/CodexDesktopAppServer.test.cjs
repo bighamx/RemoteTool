@@ -8,15 +8,26 @@ const source = fs.readFileSync(path.join(__dirname, '../WebApplication/Services/
 const bootstrap = source.match(/Bootstrap = """\r?\n([\s\S]*?)\r?\n        """;/)[1]
     .replace('await import(url)', 'await importModule(url)');
 
-async function fixture(state, { legacy = false, error = null } = {}) {
+async function fixture(state, { legacy = false, error = null, nativeThread = null, readError = null, nativeTurns = null, turnsError = null } = {}) {
+    if (state) state = { rolloutPath: 'home/rollout', ...state };
     const calls = [];
     let disconnected;
     const client = {
         getConversation: async id => id === 'session' ? state : null,
         sendRequest: async (method, params) => {
             calls.push({ method, params });
+            if (method === 'thread/read') {
+                if (readError) throw readError;
+                return { thread: nativeThread };
+            }
+            if (method === 'thread/turns/list') {
+                if (turnsError) throw turnsError;
+                return {data: nativeTurns ?? (state?.turns?.length
+                    ? state.turns.map(turn=>({...turn,id:turn.turnId}))
+                    : [{id:'persisted',status:'completed',startedAt:123,items:[]}])};
+            }
             if (error) throw error;
-            return method === 'thread/turns/list' ? { data: [{ id: 'persisted', status: 'completed', startedAt: 123, items: [] }] } : { turn: { id: 'new-turn' } };
+            return { turn: { id: 'new-turn' } };
         },
         onRpcBroken: handler => { disconnected = handler; },
         hasLocalHistorySubscription: async () => false,
@@ -107,11 +118,11 @@ test('reads native paginated history when desktop has evicted historical turns',
 test('steers the observed native turn and rejects a completed turn before sending', async () => {
     const f = await fixture({ turns: [{ turnId: 'current', status: 'inProgress' }] });
     await f.call('thread-follower-steer-turn', { input: [], clientUserMessageId: 'key' });
-    assert.equal(f.calls[0].params.expectedTurnId, 'current');
-    assert.equal(f.calls[0].params.clientUserMessageId, 'key');
-    const idle = await fixture({ turns: [] });
+    assert.equal(f.calls[1].params.expectedTurnId, 'current');
+    assert.equal(f.calls[1].params.clientUserMessageId, 'key');
+    const idle = await fixture({ turns: [] }, {nativeThread:{id:'session',status:{type:'idle'}}});
     assert.equal((await idle.call('thread-follower-steer-turn')).rejected, true);
-    assert.equal(idle.calls.length, 0);
+    assert.ok(idle.calls.every(row=>row.method==='thread/turns/list'||row.method==='thread/read'));
 });
 
 test('maps native interrupt, compaction and approval replies without expanding decisions', async () => {
@@ -146,5 +157,75 @@ test('rejects missing conversations and unsupported operations before dispatch',
     const f = await fixture({});
     assert.equal((await f.call('probe', { conversationId: 'other' })).available, false);
     assert.equal((await f.call('thread/delete')).rejected, true);
-    assert.equal(f.calls.length, 0);
+    assert.deepEqual(f.calls.map(row => row.method), ['thread/read']);
+});
+
+
+test('cold and metadata-only desktop sessions use native identity checks before preparing and sending once', async () => {
+    for (const state of [null, {rolloutPath: null}]) {
+        const f = await fixture(state, {nativeThread: {id:'session',path:'home/native-rollout',cwd:'C:/native-project'}});
+        const probe = await f.call('probe');
+        assert.equal(probe.available,true);
+        assert.equal(probe.rolloutPath,'home/native-rollout');
+        assert.deepEqual(f.calls.map(row=>row.method),['thread/read']);
+        assert.equal(f.calls[0].params.includeTurns,false);
+        assert.equal((await f.call('prepare')).ready,true);
+        const resume=f.calls.find(row=>row.method==='resumeConversation');
+        assert.equal(resume.params.preserveServerConfiguration,true);
+        assert.deepEqual(Array.from(resume.params.workspaceRoots),['C:/native-project']);
+        const snapshot=await f.call('snapshot');
+        assert.equal(snapshot.turns[0].turnId,'persisted');
+        const request={input:[{type:'text',text:'original'}],clientUserMessageId:'original-key'};
+        await f.call('thread-follower-start-turn',{turnStart:{request}});
+        const sends=f.calls.filter(row=>row.method==='turn/start');
+        assert.equal(sends.length,1);
+        assert.equal(sends[0].params.clientUserMessageId,'original-key');
+    }
+});
+
+test('unreadable or mismatched native metadata never prepares or sends a cold session', async () => {
+    for (const options of [{readError:new Error('not found')},{nativeThread:{id:'another-session',path:'home/other'}},{nativeThread:{id:'session',path:''}}]) {
+        const f=await fixture(null,options);
+        assert.equal((await f.call('probe')).available,false);
+        assert.equal((await f.call('prepare')).available,false);
+        assert.equal((await f.call('thread-follower-start-turn',{turnStart:{request:{}}})).available,false);
+        assert.ok(f.calls.every(row=>row.method==='thread/read'));
+    }
+});
+
+
+test('steering an evicted or stale desktop cache uses the authoritative active turn and sends only once', async () => {
+    const states=[{turns:[]},{turns:[{turnId:'previous',status:'completed'}]},
+        {turns:[{turnId:'stale-active',status:'inProgress'}]}];
+    for (const state of states) {
+        const f=await fixture(state,{nativeTurns:[{id:'native-current',status:'inProgress',items:[]}]});
+        const input=[{type:'text',text:'original steering input'}];
+        await f.call('thread-follower-steer-turn',{input,clientUserMessageId:'steer-original-key'});
+        assert.equal(f.calls[0].method,'thread/turns/list');
+        const writes=f.calls.filter(row=>row.method==='turn/steer');
+        assert.equal(writes.length,1);
+        assert.equal(writes[0].params.expectedTurnId,'native-current');
+        assert.equal(writes[0].params.clientUserMessageId,'steer-original-key');
+        assert.deepEqual(writes[0].params.input,input);
+    }
+});
+
+test('native read gaps and an active thread without a listed turn remain unsent and never claim completion', async () => {
+    for (const options of [{turnsError:new Error('read disconnected')},
+        {nativeTurns:[],nativeThread:{id:'session',status:{type:'active'}}},
+        {nativeTurns:[],nativeThread:{id:'session',status:{type:'notLoaded'}}}]) {
+        const f=await fixture({turns:[{turnId:'old-cache',status:'inProgress'}]},options);
+        const result=await f.call('thread-follower-steer-turn',{input:[],clientUserMessageId:'key'});
+        assert.equal(result.rejected,true);
+        assert.doesNotMatch(result.message,/任务已结束/);
+        assert.ok(f.calls.every(row=>row.method!=='turn/steer'));
+    }
+});
+
+test('a native steer failure after the read is never retried or converted to a new turn', async () => {
+    const f=await fixture({turns:[]},{nativeTurns:[{id:'active',status:'inProgress'}],error:new Error('lost acknowledgement')});
+    const result=await f.call('thread-follower-steer-turn',{input:[],clientUserMessageId:'key'});
+    assert.equal(result.failed,true);
+    assert.equal(result.rejected,false);
+    assert.deepEqual(f.calls.map(row=>row.method),['thread/turns/list','turn/steer']);
 });

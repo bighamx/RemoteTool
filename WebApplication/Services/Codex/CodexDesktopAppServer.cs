@@ -14,7 +14,7 @@ internal sealed class CodexDesktopAppServer
     internal const string Bootstrap = """
         (async () => {
             const key = '__remoteToolDesktopAppServer';
-            if (window[key]?.revision === 2) return true;
+            if (window[key]?.revision === 4) return true;
             let scope;
             for (const node of document.querySelectorAll('[data-app-action-sidebar-thread-id], [data-codex-composer-root], main, aside')) {
                 const fiberKey = Object.getOwnPropertyNames(node).find(name => name.startsWith('__reactFiber$'));
@@ -60,8 +60,24 @@ internal sealed class CodexDesktopAppServer
             if (!client) return false;
             window[key] = async (method, params) => {
                 const id = params.conversationId;
-                const state = await client.getConversation(id);
-                if (!state) return { available: false };
+                let state = await client.getConversation(id);
+                if (!state?.rolloutPath) {
+                    // Desktop keeps only hydrated conversations in memory. Read native metadata
+                    // before deciding availability so cold sessions can pass the home check.
+                    let thread;
+                    try { ({ thread } = await client.sendRequest('thread/read', { threadId: id, includeTurns: false })); }
+                    catch { return { available: false }; }
+                    if (thread?.id !== id || typeof thread.path !== 'string' || !thread.path) return { available: false };
+                    state = { ...state, rolloutPath: thread.path, cwd: state?.cwd || thread.cwd };
+                }
+                const readNativeTurns = async () => {
+                    const page = await client.sendRequest('thread/turns/list', { threadId: id, limit: 2, itemsView: 'full', sortDirection: 'desc' });
+                    return (page.data || []).map(turn => ({
+                        ...turn, turnId: turn.id,
+                        turnStartedAtMs: turn.startedAt == null ? undefined : turn.startedAt * 1000,
+                        items: (turn.items || []).map(item => ({ ...item, completed: item.completedAtMs != null }))
+                    }));
+                };
                 if (method === 'probe') return { available: true, rolloutPath: state.rolloutPath };
                 if (method === 'prepare') {
                     if (await client.hasLocalHistorySubscription(id)) return { ready: true };
@@ -72,14 +88,7 @@ internal sealed class CodexDesktopAppServer
                 if (method === 'snapshot') {
                     const history = state.turnHistory?.history?.entitiesByKey;
                     const turns = [...(state.turns || []), ...Object.values(history || {})];
-                    if (turns.length === 0) {
-                        const page = await client.sendRequest('thread/turns/list', { threadId: id, limit: 2, itemsView: 'full', sortDirection: 'desc' });
-                        turns.push(...(page.data || []).reverse().map(turn => ({
-                            ...turn, turnId: turn.id,
-                            turnStartedAtMs: turn.startedAt == null ? undefined : turn.startedAt * 1000,
-                            items: (turn.items || []).map(item => ({ ...item, completed: item.completedAtMs != null }))
-                        })));
-                    }
+                    if (turns.length === 0) turns.push(...(await readNativeTurns()).reverse());
                     const selected = [...new Map(turns.map(turn => [turn.turnId, turn])).values()]
                         .sort((a, b) => Number(a.status === 'inProgress') - Number(b.status === 'inProgress') || (a.turnStartedAtMs || 0) - (b.turnStartedAtMs || 0)).slice(-2);
                     return { turns: selected, requests: state.requests || [], latestTokenUsageInfo: state.latestTokenUsageInfo };
@@ -92,9 +101,20 @@ internal sealed class CodexDesktopAppServer
                                 request: { ...params.turnStart.request, threadId: id } });
                             return { result };
                         case 'thread-follower-steer-turn': {
-                            const turns = [...(state.turns || []), ...Object.values(state.turnHistory?.history?.entitiesByKey || {})];
-                            const turn = turns.find(turn => turn.status === 'inProgress');
-                            if (!turn) return { rejected: true, message: '当前任务已结束，请刷新会话后发送' };
+                            // A paged or evicted renderer cache cannot prove that a turn ended.
+                            // Resolve the current native turn once, then let expectedTurnId fence the write.
+                            let turn;
+                            try {
+                                turn = (await readNativeTurns()).find(turn => turn.status === 'inProgress' && turn.turnId);
+                                if (!turn) {
+                                    const { thread } = await client.sendRequest('thread/read', { threadId: id, includeTurns: false });
+                                    if (thread?.id === id && thread.status?.type === 'idle')
+                                        return { rejected: true, message: '当前任务已结束，请刷新会话后发送' };
+                                    return { rejected: true, message: '当前任务状态正在同步，插话尚未发送，请稍后重试' };
+                                }
+                            } catch {
+                                return { rejected: true, message: '暂时无法确认当前任务状态，插话尚未发送，请稍后重试' };
+                            }
                             return { result: await client.sendRequest('turn/steer', { threadId: id, input: params.input, expectedTurnId: turn.turnId, clientUserMessageId: params.clientUserMessageId }) };
                         }
                         case 'thread-follower-compact-thread': result = await client.compactThread(id); break;
@@ -110,7 +130,7 @@ internal sealed class CodexDesktopAppServer
                     return { failed: true, rejected: error?.delivery?.stage === 'not-sent', message: String(error?.message || error) };
                 }
             };
-            window[key].revision = 2;
+            window[key].revision = 4;
             client.onRpcBroken(() => { delete window[key]; });
             return true;
         })()
