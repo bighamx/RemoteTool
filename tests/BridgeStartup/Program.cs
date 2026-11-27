@@ -2,6 +2,9 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
 
+if (args.FirstOrDefault() == "app-server" && Environment.GetEnvironmentVariable("REMOTETOOL_WARMUP_FIXTURE") == "1") {
+    await CodexWarmupRuntimeChecks.FakeCli(args); return;
+}
 if (args.FirstOrDefault() == "app-server" && Environment.GetEnvironmentVariable("REMOTETOOL_NATIVE_RECOVERY_FIXTURE") == "1") {
     await CodexNativeRecoveryChecks.FakeCli(); return;
 }
@@ -12,6 +15,7 @@ AssemblyLoadContext.Default.Resolving += (_, name) => {
     return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null;
 };
 var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(dll);
+if (args.Contains("--warmup-only")) { await CodexWarmupRuntimeChecks.Run(assembly); return; }
 if (args.Contains("--schedules-only")) { await ScheduledMessageDispatcherChecks.Run(assembly); return; }
 if (args.Contains("--attachment-bindings-only")) { MessageAttachmentBindingChecks.Run(assembly); return; }
 if (args.Contains("--hermes-attachments-only")) { await HermesAttachmentAccessChecks.Run(assembly); return; }

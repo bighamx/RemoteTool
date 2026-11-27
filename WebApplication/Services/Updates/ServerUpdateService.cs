@@ -154,6 +154,9 @@ public sealed class ServerUpdateService(IHttpClientFactory clients, IConfigurati
         try {
         var blockers = new List<string>();
         var notices = new List<string>();
+        var warmup = Codex.CodexWarmup.ReadState(Path.Combine(RemoteToolPaths.CodexState, "workspace-warmup", "state.json"));
+        if (warmup["workspaces"] is JsonObject warming && warming.Any(row => Codex.CodexWarmup.Pending(row.Value)))
+            blockers.Add("Codex 自动热身正在运行或等待回执核对");
         // Force is an explicit per-job choice. It is never stored in automatic policy.
         if (Job.Force) { lock (requests) draining = true; return new { ready = true, blockers, notices = Array.Empty<string>() }; }
         if (count > 0) blockers.Add($"有 {count} 个请求或实时连接尚未结束");

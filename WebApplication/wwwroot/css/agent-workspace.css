@@ -2456,9 +2456,9 @@ body .agent-workspace .agent-setup-banner strong {
     flex: 1
 }
 
-.agent-workspace .agent-model-settings select,
-.agent-workspace .agent-model-settings .agent-model-custom-input,
-.agent-workspace .agent-model-settings .ivu-select-selection {
+.agent-model-settings select,
+.agent-model-settings .agent-model-custom-input,
+.agent-model-settings .ivu-select-selection {
     min-height: 42px;
     border: 1px solid var(--border-color);
     border-radius: 12px;
@@ -2468,7 +2468,7 @@ body .agent-workspace .agent-setup-banner strong {
     font-size: 13px
 }
 
-.agent-workspace .agent-model-settings .agent-model-custom-input {
+.agent-model-settings .agent-model-custom-input {
     width: 100%;
     padding: 8px 12px
 }
@@ -2488,7 +2488,7 @@ body .agent-workspace .agent-setup-banner strong {
     text-decoration: underline
 }
 
-.agent-workspace .agent-model-settings .ivu-select-input {
+.agent-model-settings .ivu-select-input {
     width: 100%;
     height: 40px;
     min-height: 0;
@@ -2502,7 +2502,7 @@ body .agent-workspace .agent-setup-banner strong {
     font-size: 13px
 }
 
-.agent-workspace .agent-model-settings .ivu-select-visible .ivu-select-selection {
+.agent-model-settings .ivu-select-visible .ivu-select-selection {
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 18%, transparent)
 }
@@ -2564,7 +2564,7 @@ body .agent-workspace .agent-setup-banner strong {
     color: var(--accent-danger, #c05050)
 }
 
-.agent-workspace .agent-model-settings .agent-model-actions .ivu-btn {
+.agent-model-settings .agent-model-actions .ivu-btn {
     min-height: 40px;
     margin: 0
 }
@@ -2574,8 +2574,8 @@ body .agent-workspace .agent-setup-banner strong {
 }
 
 @media(max-width:760px) {
-    .agent-workspace .agent-model-settings .ivu-select-input,
-    .agent-workspace .agent-model-settings .agent-model-custom-input {
+    .agent-model-settings .ivu-select-input,
+    .agent-model-settings .agent-model-custom-input {
         font-size: 16px
     }
 }
@@ -3002,3 +3002,124 @@ body .agent-workspace .agent-setup-banner strong {
 .agent-approval-options button.picked{border-color:var(--accent-primary,#6dbfb0);background:color-mix(in srgb,var(--accent-primary,#6dbfb0) 18%,transparent)}
 .agent-approval-question input{border:1px solid var(--border-color,#8886);border-radius:8px;padding:6px 8px;background:transparent;color:inherit;font:inherit}
 .agent-approval-actions{display:flex;gap:8px}
+
+.agent-workspace-warmup {
+    margin: 16px 0;
+    padding: 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    background: var(--bg-tertiary);
+}
+.agent-warmup-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+.agent-warmup-title { display: flex; align-items: center; gap: 4px; }
+.agent-warmup-help-popover .ivu-poptip-inner {
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+.agent-warmup-help-popover .ivu-poptip-body-content,
+.agent-warmup-help-popover .ivu-poptip-body-content-inner { color: var(--text-primary); white-space: normal; line-height: 1.7; }
+.agent-warmup-help-popover[x-placement^="bottom"] .ivu-poptip-arrow:after { border-bottom-color: var(--bg-secondary); }
+.agent-workspace-warmup p {
+    margin: 8px 0;
+    line-height: 1.6;
+}
+.agent-workspace-warmup small,
+.agent-warmup-workspace-status small {
+    display: block;
+    color: var(--text-muted);
+    line-height: 1.7;
+}
+.agent-warmup-workspace-status { margin-top: 10px; }
+.agent-workspace-quotas .agent-model-fields { margin: 16px 0; }
+.agent-workspace-quotas .agent-model-fields select { width: 100%; padding: 8px 12px; }
+.agent-provider-entry {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    width: 100%;
+    margin-top: 16px;
+    padding: 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.agent-provider-entry small { display: block; margin-top: 5px; color: var(--text-muted); }
+.agent-provider-entry > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.agent-provider-entry > span:last-child { font-size: 24px; }
+.agent-provider-toolbar { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.agent-provider-choice { margin-top: 12px; padding: 16px; border: 1px solid var(--border-color); border-radius: 14px; background: var(--bg-tertiary); }
+.agent-provider-choice.current { border-color: var(--accent-primary); }
+.agent-provider-choice-head { display: flex; align-items: center; gap: 12px; }
+.agent-provider-choice-head > div { flex: 1; min-width: 0; }
+.agent-provider-choice-head strong { overflow-wrap: anywhere; }
+.agent-provider-choice-head small { display: block; margin-top: 5px; color: var(--text-muted); overflow-wrap: anywhere; }
+.agent-provider-current { color: var(--accent-primary); font-size: 12px; white-space: nowrap; }
+.agent-provider-editor input {
+    width: 100%;
+    min-height: 42px;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.agent-workspaces-modal .ivu-modal { top: 24px; }
+.agent-workspaces-modal .ivu-modal-content {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100dvh - 48px);
+}
+.agent-workspaces-modal .ivu-modal-header { flex-shrink: 0; }
+.agent-workspaces-modal .ivu-modal-body { min-height: 0; overflow-y: auto; }
+.agent-model-picker-dropdown .agent-model-option-id {
+    display: block;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.agent-model-picker-dropdown {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+}
+
+.agent-model-picker-dropdown .ivu-select-item {
+    padding: 10px 12px;
+    color: var(--text-primary);
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.agent-model-picker-dropdown .ivu-select-item:hover,
+.agent-model-picker-dropdown .ivu-select-item-focus {
+    background: var(--bg-tertiary);
+}
+
+.agent-model-picker-dropdown .ivu-select-item-selected {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent-primary) 18%, var(--bg-secondary));
+    box-shadow: inset 3px 0 var(--accent-primary);
+}
+@media (max-width: 700px) {
+    .agent-workspaces-modal .ivu-modal {
+        position: absolute;
+        top: auto;
+        bottom: 0;
+        margin: 0;
+    }
+    .agent-workspaces-modal .ivu-modal-content { max-height: calc(100dvh - 16px); }
+}

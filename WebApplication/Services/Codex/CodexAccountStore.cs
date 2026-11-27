@@ -157,7 +157,9 @@ internal sealed class CodexAccountStore
             if (!rows.Any(x => Same(x.Value!, sourceIdentity))) throw new CodexError("请先保存当前工作空间登录；未结束进程或修改凭据", 409);
         }
     }
-    public JsonObject WorkspaceAuth(string id) {
+    public JsonObject WorkspaceAuth(string id) => ReadWorkspaceAuth(id, allAccounts: false);
+    public JsonObject WarmupAuth(string id) => ReadWorkspaceAuth(id, allAccounts: true);
+    private JsonObject ReadWorkspaceAuth(string id, bool allAccounts) {
         using var guard = Lock();
         var row = Read()["accounts"]![id] as JsonObject ?? throw new CodexError("工作空间登录记录不存在", 404);
         var saved = row["auth"]?.DeepClone() as JsonObject ?? throw new CodexError("该工作空间需要重新登录");
@@ -165,8 +167,13 @@ internal sealed class CodexAccountStore
         // Missing current login (custom provider or logged out) has no email to match;
         // serve the saved workspace credentials so usage and switching still work.
         if (current.Count > 0) {
-            var source = Identity(current);
-            if (identity.S("email") != source.S("email")) throw new CodexError("只能查询当前账户的工作空间", 403);
+            JsonObject source;
+            try { source = Identity(current); }
+            catch (CodexError) when (allAccounts) { return saved; }
+            if (identity.S("email") != source.S("email")) {
+                if (allAccounts) return saved;
+                throw new CodexError("只能查询当前账户的工作空间", 403);
+            }
             return identity.S("workspace_id") == source.S("workspace_id") ? current : saved;
         }
         return saved;

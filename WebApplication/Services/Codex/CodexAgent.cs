@@ -521,6 +521,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         var accountStore = settings.S("account_store");
         if (string.IsNullOrWhiteSpace(accountStore)) accountStore = Path.Combine(Path.GetDirectoryName(home) ?? home, ".codex-switch");
         accounts = new CodexAccountStore(home, accountStore);
+        warmup = new CodexWarmup(folder, new CodexWarmupRuntime(accounts, settings.S("executable"), folder));
         stallWatchdog = new Timer(_ => ReapStalledRuns(), null, TimeSpan.FromSeconds(45), TimeSpan.FromSeconds(45));
     }
 
@@ -1614,6 +1615,15 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             return await Models(context.RequestAborted, context.Request.Query["session"].ToString());
         }
         if (path == "projects" && method == "GET") return Obj(("data", await CodexProjects.List(rpc)));
+        if (path == "workspaces/warmup") {
+            if (method == "POST") {
+                if (body["enabled"] is not JsonValue enabled || !enabled.TryGetValue<bool>(out var value)) throw new CodexError("请提供自动热身开关状态");
+                warmup.SetEnabled(value);
+                if (value) StartWarmupScan();
+            }
+            return warmup.Status();
+        }
+        if (path == "workspaces/warmup/scan" && method == "POST") { StartWarmupScan(); return warmup.Status(); }
         if (path == "usage") {
             var snapshot = accounts.List();
             var current = snapshot.S("current");
@@ -2249,7 +2259,7 @@ internal sealed partial class CodexAgent : IAsyncDisposable
             var path = context.Request.Path.Value!.Trim('/');
             if (path == "maintenance/shutdown" && HttpMethods.IsPost(context.Request.Method)) {
                 if (!maintenance.TryBeginShutdown(() => {
-                    lock (gate) return active.Count > 0 || handoff.HasPending || runs.Any(pair => RemoteTool.Updates.UpdateContract.RunBlocksMaintenance(pair.Value));
+                    lock (gate) return active.Count > 0 || handoff.HasPending || warmup.BlocksMaintenance || runs.Any(pair => RemoteTool.Updates.UpdateContract.RunBlocksMaintenance(pair.Value));
                 })) throw new CodexError("Codex 有运行中、排队或待确认任务，请等待空闲", 409, "bridge_busy", "rejected");
                 // Resolve before request completion; the request scope is unavailable inside OnCompleted.
                 var lifetime = context.RequestServices.GetRequiredService<IHostApplicationLifetime>();
@@ -2301,6 +2311,9 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         await app.WaitForShutdownAsync();
     }
     public async ValueTask DisposeAsync() {
+        warmupShutdown.Cancel();
+        await warmupTask;
+        warmup.Dispose(); warmupShutdown.Dispose();
         handoff.Dispose();
         foreach (var id in sessionRpcs.Keys.ToArray()) await ReleaseSessionCore(id);
         if (loginRpc != null) await loginRpc.DisposeAsync(); if (rpc != null) await rpc.DisposeAsync();

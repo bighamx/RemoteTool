@@ -7,6 +7,7 @@
     <Compile Include="../../WebApplication/Services/RemoteToolPaths.cs" Link="RemoteToolPaths.cs" />
     <Compile Include="../../WebApplication/Services/IdentityDataDirectory.cs" Link="IdentityDataDirectory.cs" Condition="Exists('../../WebApplication/Services/IdentityDataDirectory.cs')" />
     <Compile Include="../../WebApplication/Services/Scheduled/ScheduledMessageStore.cs" Link="ScheduledMessageStore.cs" />
+    <Compile Include="../../WebApplication/Services/Codex/CodexWarmup.cs" Link="CodexWarmup.cs" />
     <Using Include="Microsoft.Extensions.Configuration" />
     <Compile Include="../../WebApplication/Services/HermesBridge.cs" Link="HermesBridge.cs" />
     <Compile Include="../../WebApplication/Services/Codex/CodexAttachmentAccess.cs" Link="CodexAttachmentAccess.cs" />

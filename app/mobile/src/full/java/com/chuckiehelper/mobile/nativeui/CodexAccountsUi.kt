@@ -23,7 +23,12 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.time.Instant
 import java.time.ZoneId
@@ -83,7 +88,7 @@ private fun CodexUsageValues(usage: JSONObject?, compact: Boolean, onClick: () -
                     color = if (remaining < 20) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     drawStopIndicator = {})
                 if (!compact && window != null && window.optLong("resetsAt") > 0) {
-                    val time = DateTimeFormatter.ofPattern("M月d日 HH:mm").withZone(ZoneId.systemDefault())
+                    val time = DateTimeFormatter.ofPattern("M月d日 HH:mm:ss").withZone(ZoneId.systemDefault())
                         .format(Instant.ofEpochSecond(window.getLong("resetsAt")))
                     Text("重置：$time", style = MaterialTheme.typography.labelSmall)
                 }
@@ -97,13 +102,19 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders
     var remove by remember { mutableStateOf<JSONObject?>(null) }
     var showProviders by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { model.fetchProviders() }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(model, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) { model.fetchWorkspaceWarmup(); delay(10_000) }
+        }
+    }
     var resetWorkspace by remember { mutableStateOf<JSONObject?>(null) }
     val source = model.workspaces
     AlertDialog(
         onDismissRequest = close,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("切换工作空间", Modifier.weight(1f))
+                Text("Codex 工作空间与用量", Modifier.weight(1f))
                 IconButton(onClick = { model.fetchProviders(); model.fetchAccounts(forceUsages = true) }, enabled = model.workspaceUsageLoading.isEmpty() && !model.switchingAccount) { Icon(Icons.Outlined.Refresh, "刷新工作空间用量") }
             }
         },
@@ -128,6 +139,8 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders
                 )
                 Text("选择同一账户的个人／团队工作空间。切换会自动重启电脑 Codex，正在执行的任务会停止。", style = MaterialTheme.typography.bodySmall)
                 LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (model.workspaceWarmup?.optBoolean("supported") == true) item { CodexWarmupSettings(model) }
+                    model.workspaceWarmupError?.let { error -> item { Text(error, color = MaterialTheme.colorScheme.error) } }
                     items(source.array("data").objects(), key = { it.getString("id") }) { account ->
                         val selected = officialInUse && source.optString("current") == account.getString("id")
                         OutlinedCard(Modifier.fillMaxWidth()) {
@@ -160,6 +173,11 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders
                                     Text("正在读取此工作空间用量…", style = MaterialTheme.typography.labelSmall)
                                 }
                             } else Text(quota?.optString("error") ?: "用量尚未加载", Modifier.padding(vertical = 6.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            model.workspaceWarmup?.array("items")?.objects()?.firstOrNull { it.optString("account_id") == account.optString("id") }?.let { warmup ->
+                                Text(warmup.optString("message"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (warmup.optLong("last_warmup_at") > 0) Text("上次热身 " + warmupTime(warmup.optLong("last_warmup_at")), style = MaterialTheme.typography.labelSmall)
+                                if (warmup.optLong("next_reset_at") > 0) Text("下次重置 " + warmupTime(warmup.optLong("next_reset_at")), style = MaterialTheme.typography.labelSmall)
+                            }
                             }
                         }
                     }
@@ -207,6 +225,36 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders
         showProviders = false
         onManageProviders()
     }) { showProviders = false }
+}
+
+private fun warmupTime(seconds: Long): String = DateTimeFormatter.ofPattern("MM-dd HH:mm:ss")
+    .withZone(ZoneId.systemDefault()).format(Instant.ofEpochSecond(seconds))
+
+@Composable
+internal fun CodexWarmupSettings(model: HermesModel) {
+    val state = model.workspaceWarmup ?: return
+    var help by remember { mutableStateOf(false) }
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("自动热身", style = MaterialTheme.typography.titleSmall)
+                Box {
+                    IconButton(onClick = { help = true }) { Icon(Icons.Outlined.Info, "自动热身说明", modifier = Modifier.size(18.dp)) }
+                    DropdownMenu(expanded = help, onDismissRequest = { help = false }) {
+                        Text("每 10 分钟检查此服务端保存的全部官方账号和工作空间，符合条件时发送最小对话，开启下一轮 5 小时额度窗口。",
+                            Modifier.widthIn(max = 280.dp).padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                Switch(checked = state.optBoolean("enabled"), onCheckedChange = { model.setWorkspaceWarmup(it) },
+                    enabled = !model.workspaceWarmupSaving)
+            }
+            if (model.workspaceWarmupSaving) Text("正在保存…", style = MaterialTheme.typography.labelSmall)
+            else if (state.optBoolean("checking")) Text("正在检查工作空间…", style = MaterialTheme.typography.labelSmall)
+            else if (state.optLong("last_check_at") > 0) Text("最近检查 " + warmupTime(state.optLong("last_check_at")), style = MaterialTheme.typography.labelSmall)
+            state.cleanSetting("error").takeIf { it.isNotBlank() }?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
+    }
 }
 
 /** 二级列表：选择一个三方 provider（写 config.toml 并重启运行时/桌面 Codex）。 */

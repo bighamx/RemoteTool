@@ -13,6 +13,8 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
 {
     private static string Id(string value) => Regex.IsMatch(value, "^[a-zA-Z0-9_-]{1,160}$") ? value : throw new ArgumentException("无效会话或任务标识");
     [HttpGet("capabilities")] public Task Capabilities(CancellationToken ct) => Forward(HttpMethod.Get, "capabilities", null, ct);
+    [HttpGet("workspaces/warmup")] public Task Warmup(CancellationToken ct) => Forward(HttpMethod.Get, "workspaces/warmup", null, ct);
+    [HttpPost("workspaces/warmup")] public Task SetWarmup([FromBody] JsonElement body, CancellationToken ct) => Forward(HttpMethod.Post, "workspaces/warmup", body, ct);
     [HttpGet("sessions/search")] public Task SearchSessions([FromQuery] string query, [FromQuery] string cursor, CancellationToken ct) =>
         Forward(HttpMethod.Get, $"sessions/search?query={Uri.EscapeDataString(query ?? "")}" +
             (string.IsNullOrEmpty(cursor) ? "" : $"&cursor={Uri.EscapeDataString(cursor)}"), null, ct);

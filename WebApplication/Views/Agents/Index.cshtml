@@ -418,10 +418,17 @@
             <div class="agent-create-actions"><i-button @@click="showMoveDialog=false">取消</i-button></div>
         </div>
     </modal>
-    <modal v-model="showWorkspaceDialog" title="Codex 工作空间与用量" :mask-closable="!switchingWorkspace" :closable="!switchingWorkspace" :footer-hide="true" width="640">
-        <div class="agent-workspace-quotas">
+    <modal v-model="showWorkspaceDialog" :title="workspaceDialogTitle" class-name="agent-workspaces-modal" :mask-closable="!switchingWorkspace && !warmupSaving" :closable="!switchingWorkspace && !warmupSaving" :footer-hide="true" width="640">
+        <div v-if="codexWorkspacePage==='workspaces'" class="agent-workspace-quotas">
             <p>{{officialProviderInUse?'当前使用官方账户':'当前使用三方 Provider：'+currentWorkspaceName}}</p>
-            <div class="agent-quota-toolbar"><span>5 小时与周额度均显示剩余比例</span><i-button size="small" :loading="workspaceLoading" :disabled="!!switchingWorkspace" @@click="refreshWorkspaces(true)">刷新用量</i-button></div>
+            <div class="agent-quota-toolbar"><span>5 小时与周额度均显示剩余比例</span><i-button size="small" :loading="workspaceLoading || warmupLoading" :disabled="!!switchingWorkspace" @@click="refreshWorkspaces(true);loadWorkspaceWarmup()">刷新用量</i-button></div>
+            <section v-if="workspaceWarmup?.supported" class="agent-workspace-warmup">
+                <div class="agent-warmup-heading"><div class="agent-warmup-title"><strong>自动热身</strong><poptip trigger="click" placement="bottom-start" width="280" word-wrap transfer transfer-class-name="agent-warmup-help-popover" content="每 10 分钟检查此服务端保存的全部官方账号和工作空间，符合条件时发送最小对话，开启下一轮 5 小时额度窗口。"><i-button type="text" size="small" icon="ios-information-circle-outline" aria-label="自动热身说明"></i-button></poptip></div><i-switch :model-value="workspaceWarmup.enabled" :loading="warmupSaving" :disabled="warmupSaving" role="switch" :aria-checked="workspaceWarmup.enabled" aria-label="自动热身" @@on-change="setWorkspaceWarmup"></i-switch></div>
+                <small v-if="workspaceWarmup.checking" role="status">正在检查工作空间…</small>
+                <small v-else-if="workspaceWarmup.last_check_at">最近检查 {{time(workspaceWarmup.last_check_at)}}</small>
+                <p v-if="workspaceWarmup.error" class="agent-inline-error" role="alert">{{workspaceWarmup.error}}</p>
+            </section>
+            <p v-if="warmupError" class="agent-inline-error" role="alert">{{warmupError}}</p>
             <p v-if="workspaceError" class="agent-inline-error" role="alert">{{workspaceError}}</p>
             <p v-if="workspaceLoading && !(workspaces.data || []).length">正在读取工作空间…</p>
             <p v-if="!workspaceLoading && !workspaceError && !(workspaces.data || []).length">暂无已保存的工作空间，请先在 App 或桌面登录。</p>
@@ -429,25 +436,59 @@
                 <div class="agent-workspace-quota-content"><header><div><strong>{{workspaceName(row)}}</strong><small>{{row.email}} · {{row.plan_type || '官方账户'}}</small></div><span v-if="officialProviderInUse && row.id===workspaces.current">当前工作空间</span></header>
                 <template v-if="workspaceUsages[row.id]?.available"><div v-for="group in quotaGroups(workspaceUsages[row.id].usage)" :key="group.name" class="agent-quota-group"><small>{{group.name}}</small><div class="agent-quota-windows"><div v-for="window in group.windows" :key="window.label"><div>{{window.label}} · {{window.remaining==null?'暂无数据':'剩余 '+window.remaining+'%'}}</div><i-progress v-if="window.remaining!=null" :percent="window.remaining" :status="window.remaining<20?'wrong':'normal'" :stroke-width="4" hide-info></i-progress><small v-if="window.resetsAt">重置：{{time(window.resetsAt)}}</small></div></div></div><p v-if="!quotaGroups(workspaceUsages[row.id].usage).length">暂无额度窗口数据</p></template>
                 <p v-else>{{workspaceUsages[row.id]?.error || (workspaceLoading?'正在读取用量…':'暂无用量数据')}}</p>
+                <div v-if="workspaceWarmupRow(row.id)" class="agent-warmup-workspace-status" role="status">
+                    <small>{{workspaceWarmupRow(row.id).message}}</small>
+                    <small v-if="workspaceWarmupRow(row.id).last_warmup_at">上次热身 {{time(workspaceWarmupRow(row.id).last_warmup_at)}}</small>
+                    <small v-if="workspaceWarmupRow(row.id).next_reset_at">下次重置 {{time(workspaceWarmupRow(row.id).next_reset_at)}}</small>
+                </div>
                 </div><i-button v-if="!officialProviderInUse || row.id!==workspaces.current" class="agent-workspace-switch" size="large" :loading="switchingWorkspace===row.id" :disabled="!!switchingWorkspace || !!activeRun || externalRunning || sending || !!pending" @@click="useWorkspace(row)">切换</i-button>
             </section>
-            <section class="inspector-section">
-                <h4>三方 Provider</h4><p>切换默认提供方会重启电脑 Codex。已有会话保留自己的模型设置。</p>
-                <div v-for="row in thirdPartyProviders" :key="row.id" class="agent-workspace-quota"><div><strong>{{row.name||row.id}} {{row.current?'· 当前使用':''}}</strong><p>{{providerAuthText(row)}}</p></div><i-button size="small" :disabled="!!switchingWorkspace || row.compatibility==='cc_switch_managed_proxy'" @@click="editCodexProvider(row)">编辑</i-button></div>
-                <label>提供方<select v-model="providerSwitch.provider" @@change="chooseSwitchProvider" :disabled="!!switchingWorkspace"><option value="">选择提供方</option><option v-for="row in thirdPartyProviders" :key="row.id" :value="row.id" :disabled="row.compatibility==='cc_switch_managed_proxy'">{{row.name||row.id}}</option></select></label>
-                <label>模型<input v-model="providerSwitch.model" list="codex-switch-models" placeholder="搜索或输入模型" :disabled="!!switchingWorkspace"></label><datalist id="codex-switch-models"><option v-for="m in switchProviderMetadata.models||[]" :key="m.model||m.id||m" :value="m.model||m.id||m">{{m.displayName||m.name||m.model||m}}</option></datalist>
-                <p v-if="switchProviderMetadata.models_warning" class="agent-inline-error">{{switchProviderMetadata.models_warning}}</p>
-                <i-button :disabled="!!switchingWorkspace || !providerSwitch.provider || !providerSwitch.model.trim()" @@click="switchProvider">切换提供方</i-button>
-                <i-button :disabled="!!switchingWorkspace" @@click="editCodexProvider()">新增提供方</i-button>
-                <form v-if="codexProviderEdit" class="agent-create-form" v-on:submit.prevent="saveCodexProvider">
-                    <label>名称<input v-model="codexProviderEdit.name" required :disabled="!!switchingWorkspace"></label>
-                    <label>Responses API 地址<input v-model="codexProviderEdit.base_url" type="url" required :disabled="!!switchingWorkspace"></label>
-                    <label>默认模型<input v-model="codexProviderEdit.model" required :disabled="!!switchingWorkspace"></label>
-                    <label>API Key（留空保留）<input v-model="codexProviderEdit.api_key" type="password" autocomplete="new-password" :disabled="!!switchingWorkspace"></label>
-                    <div><button type="submit" class="ivu-btn ivu-btn-primary" :disabled="!!switchingWorkspace">保存提供方</button><i-button :disabled="!!switchingWorkspace" @@click="codexProviderEdit=null">取消</i-button></div>
-                </form>
+            <button type="button" class="agent-provider-entry" :disabled="!!switchingWorkspace" @@click="codexWorkspacePage='providers'">
+                <span><strong>三方 Provider</strong><small>{{officialProviderInUse ? '已保存 '+thirdPartyProviders.length+' 个提供方' : '当前：'+currentWorkspaceName}}</small></span><span aria-hidden="true">›</span>
+            </button>
+        </div>
+        <div v-else-if="codexWorkspacePage==='providers'" class="agent-workspace-quotas">
+            <div class="agent-provider-toolbar"><i-button @@click="codexWorkspacePage='workspaces'" :disabled="!!switchingWorkspace">返回工作空间</i-button><i-button @@click="codexWorkspacePage='manage'" :disabled="!!switchingWorkspace">Provider 管理</i-button></div>
+            <p class="agent-create-hint">切换默认提供方会重启电脑 Codex。已有会话保留自己的模型设置。</p>
+            <p v-if="!thirdPartyProviders.length" class="agent-create-hint">还没有配置 Provider，可在管理中添加。</p>
+            <section v-for="row in thirdPartyProviders" :key="row.id" class="agent-provider-choice agent-model-settings" :class="{current:providersState.provider===row.id}">
+                <header class="agent-provider-choice-head">
+                    <div><strong>{{row.name||row.id}}</strong><small v-if="row.base_url">{{row.base_url}}</small><small>{{providerAuthText(row)}}</small></div>
+                    <span v-if="providersState.provider===row.id" class="agent-provider-current">使用中</span>
+                    <i-button size="small" :disabled="!!switchingWorkspace || row.compatibility==='cc_switch_managed_proxy'" @@click="providerSwitch.provider=providerSwitch.provider===row.id?'':row.id;chooseSwitchProvider()">{{row.compatibility==='cc_switch_managed_proxy'?'不支持直接切换':providerSwitch.provider===row.id?'收起':'模型设置'}}</i-button>
+                </header>
+                <fieldset v-if="providerSwitch.provider===row.id" class="agent-model-fields" :disabled="!!switchingWorkspace">
+                    <div class="agent-field">
+                        <label for="codex-provider-switch-model">模型</label>
+                        <input v-if="providerSwitchCustomModel" id="codex-provider-switch-model" v-model="providerSwitch.model" class="agent-model-custom-input" placeholder="输入完整模型标识" autocomplete="off" spellcheck="false">
+                        <i-select v-else :key="providerSwitch.provider" v-model="providerSwitch.model" element-id="codex-provider-switch-model" filterable transfer transfer-class-name="agent-model-picker-dropdown" :disabled="!!switchingWorkspace" placeholder="搜索已有模型" not-found-text="未找到模型，可使用下方自定义入口">
+                            <i-option v-for="item in switchModelChoices" :key="item.id" :value="item.id" :label="item.name + (item.name!==item.id ? ' · '+item.id : '')"><span class="agent-model-option-name">{{item.name}}</span><small v-if="item.name!==item.id" class="agent-model-option-id">{{item.id}}</small></i-option>
+                        </i-select>
+                        <small v-if="providerSwitch.model" class="agent-model-id">{{providerSwitch.model}}</small>
+                        <small v-else>搜索并选择供应商提供的模型</small>
+                        <button type="button" class="agent-model-custom-toggle" :disabled="!!switchingWorkspace" @@click="providerSwitchCustomModel=!providerSwitchCustomModel">{{providerSwitchCustomModel?'返回模型列表':'输入自定义模型'}}</button>
+                    </div>
+                    <p v-if="switchProviderMetadata.models_warning" class="agent-inline-error">{{switchProviderMetadata.models_warning}}</p>
+                    <i-button type="primary" :disabled="!!switchingWorkspace || !switchModelValid" @@click="switchProvider">切换并应用模型</i-button>
+                </fieldset>
+            </section>
+            <p v-if="workspaceError" class="agent-inline-error" role="alert">{{workspaceError}}</p>
+        </div>
+        <div v-else-if="codexWorkspacePage==='manage'" class="agent-workspace-quotas">
+            <div class="agent-provider-toolbar"><i-button @@click="codexWorkspacePage='providers'" :disabled="!!switchingWorkspace">返回列表</i-button><i-button type="primary" :disabled="!!switchingWorkspace" @@click="editCodexProvider()">新增提供方</i-button></div>
+            <p v-if="!thirdPartyProviders.length" class="agent-create-hint">暂无三方 Provider</p>
+            <section v-for="row in thirdPartyProviders" :key="row.id" class="agent-provider-choice">
+                <header class="agent-provider-choice-head"><div><strong>{{row.name||row.id}}</strong><small>{{row.base_url}}</small><small>{{row.model || '模型未指定'}} · {{providerAuthText(row)}}</small></div><i-button size="small" :disabled="!!switchingWorkspace || row.compatibility==='cc_switch_managed_proxy'" @@click="editCodexProvider(row)">编辑</i-button></header>
             </section>
         </div>
+        <form v-else-if="codexWorkspacePage==='edit' && codexProviderEdit" class="agent-create-form agent-provider-editor" v-on:submit.prevent="saveCodexProvider">
+            <label for="codex-provider-name">名称</label><input id="codex-provider-name" v-model="codexProviderEdit.name" required :disabled="!!switchingWorkspace" placeholder="提供方名称">
+            <label for="codex-provider-url">Responses API 地址</label><input id="codex-provider-url" v-model="codexProviderEdit.base_url" type="url" required :disabled="!!switchingWorkspace" placeholder="https://example.com/v1">
+            <label for="codex-provider-default-model">默认模型</label><input id="codex-provider-default-model" v-model="codexProviderEdit.model" required :disabled="!!switchingWorkspace" placeholder="完整模型标识">
+            <label for="codex-provider-key">API Key</label><input id="codex-provider-key" v-model="codexProviderEdit.api_key" type="password" autocomplete="new-password" :disabled="!!switchingWorkspace" placeholder="留空保留已保存的 Key">
+            <p v-if="workspaceError" class="agent-inline-error" role="alert">{{workspaceError}}</p>
+            <div class="agent-create-actions"><i-button :disabled="!!switchingWorkspace" @@click="codexWorkspacePage=providerEditorReturn;codexProviderEdit=null">取消</i-button><button type="submit" class="ivu-btn ivu-btn-primary" :disabled="!!switchingWorkspace">{{switchingWorkspace==='save-provider'?'正在保存…':'保存提供方'}}</button></div>
+        </form>
     </modal>
     <modal v-model="showCreateDialog" :title="'新建 '+agentName+' 会话'" :mask-closable="!creating" :footer-hide="true" width="560">
         <div class="agent-create-form"><label for="agent-create-title">会话名称</label><i-input v-model="createTitle" id="agent-create-title" placeholder="为会话命名" @@on-enter="newSession"></i-input>

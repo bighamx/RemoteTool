@@ -709,6 +709,13 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         private set
     var workspaces by mutableStateOf(JSONObject())
         private set
+    var workspaceWarmup by mutableStateOf<JSONObject?>(null)
+        private set
+    var workspaceWarmupSaving by mutableStateOf(false)
+        private set
+    var workspaceWarmupError by mutableStateOf<String?>(null)
+        private set
+    private var workspaceWarmupEpoch = 0
     var loginInfo by mutableStateOf<JSONObject?>(null)
         private set
     var loginVisible by mutableStateOf(false)
@@ -1369,6 +1376,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         filesReadEpoch++; filesReadJob?.cancel(); filesReadJob = null; filesRefreshPending = false
         loginJob?.cancel(); loginJob = null; loginInfo = null; loginVisible = false; loginStarting = false; loginError = null
         workspaceReadEpoch++; workspaceUsages = emptyMap(); workspaceUsageLoading = emptySet()
+        workspaceWarmupEpoch++; workspaceWarmup = null; workspaceWarmupSaving = false; workspaceWarmupError = null
         workspaceResetCredits = emptyMap(); workspaceResetLoading = emptySet(); workspaceResetActions.clear(); workspaceResetErrors = emptyMap()
         openingGeneration++; openingSession = null; contextPrefetchedSession = null; activeRunCheckSession = null
         api = value.withReadPolicy(noRetry = true, onReadSuccess = {
@@ -1828,6 +1836,38 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         }
     }
     fun fetchAccounts(forceUsages: Boolean = false) = launch { error = null; fetchAccountsNow(forceUsages) }
+
+    suspend fun fetchWorkspaceWarmup() {
+        if (agent != "codex" || !this::api.isInitialized || workspaceWarmupSaving) return
+        val connection = api
+        val epoch = ++workspaceWarmupEpoch
+        try {
+            val result = connection.json("$root/workspaces/warmup")
+            if (api === connection && epoch == workspaceWarmupEpoch) { workspaceWarmup = result; workspaceWarmupError = null }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            if (api !== connection || epoch != workspaceWarmupEpoch) return
+            if (error is ApiRequestFailure && error.status in setOf(404, 501)) { workspaceWarmup = null; workspaceWarmupError = null }
+            else workspaceWarmupError = "自动热身状态读取失败，请刷新重试"
+        }
+    }
+
+    fun setWorkspaceWarmup(enabled: Boolean) = viewModelScope.launch {
+        if (agent != "codex" || workspaceWarmupSaving || workspaceWarmup?.optBoolean("supported") != true) return@launch
+        val connection = api
+        val epoch = ++workspaceWarmupEpoch
+        workspaceWarmupSaving = true
+        workspaceWarmupError = null
+        try {
+            val result = connection.json("$root/workspaces/warmup", obj("enabled" to enabled))
+            if (api === connection && epoch == workspaceWarmupEpoch) workspaceWarmup = result
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            if (api === connection && epoch == workspaceWarmupEpoch) workspaceWarmupError = connectionFailureMessage(error)
+        } finally {
+            if (api === connection && epoch == workspaceWarmupEpoch) { workspaceWarmupSaving = false; fetchWorkspaceWarmup() }
+        }
+    }
 
     fun fetchWorkspaceResetCredits(id: String) {
         if (agent != "codex" || id.isBlank() || id in workspaceResetLoading || id in workspaceResetUsing) return

@@ -44,6 +44,7 @@ internal static class CodexWorkspaceUsage
         if (response.StatusCode == HttpStatusCode.Unauthorized) throw new CodexError("工作空间访问令牌需要更新", 401);
         if (!response.IsSuccessStatusCode) throw new CodexError(response.StatusCode == HttpStatusCode.TooManyRequests ? "用量查询过于频繁，请稍后重试" : "暂时无法读取该工作空间用量，请稍后重试", 502);
         var usage = Normalize(JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))!.AsObject());
+        usage["observed_at"] = (response.Headers.Date ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
         Verify(identity, usage);
         return usage;
     }

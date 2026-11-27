@@ -177,6 +177,7 @@ builder.Services.AddSingleton<HermesCompaction>();
             builder.Services.AddHostedService<HermesAttachmentCleanup>();
             builder.Services.AddSingleton<Services.Scheduled.ScheduledMessageStore>();
             builder.Services.AddHostedService<Services.Scheduled.ScheduledMessageDispatcher>();
+            builder.Services.AddTransient<Jobs.CodexWarmupJob>();
             builder.Services.AddHttpClient("hermes", client => client.Timeout = Timeout.InfiniteTimeSpan)
                 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
             builder.Services.AddSingleton<PerformanceMonitor>();
@@ -332,6 +333,9 @@ builder.Services.AddSingleton<HermesCompaction>();
             app.UseHangfireDdnsTask();
             app.UseHangfireQBittorrentMaintenceTask();
             app.UseHangfireEmbyTask();
+            RecurringJob.AddOrUpdate<Jobs.CodexWarmupJob>("codex-workspace-warmup",
+                task => task.Execute(CancellationToken.None), "*/10 * * * *",
+                new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc, MisfireHandling = MisfireHandlingMode.Ignorable });
 
             app.MapControllerRoute(
                 name: "default",

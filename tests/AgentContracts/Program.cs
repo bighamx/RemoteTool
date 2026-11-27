@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using RemoteTool.WebApi.Services.Codex;
 
 if (args.Contains("--schedules-only")) { await ScheduledMessageChecks.Run(); return; }
+if (args.Contains("--warmup-only")) { await CodexWarmupChecks.Run(); return; }
 
 CodexCitationChecks.Run();
 if (args.Contains("--citations-only")) return;

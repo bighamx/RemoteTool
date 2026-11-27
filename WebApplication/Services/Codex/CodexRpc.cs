@@ -97,13 +97,16 @@ internal sealed class CodexRpc : IAsyncDisposable
     public string Executable { get; }
     public bool ToolsAvailable => CodexExecutable.Complete(Executable);
     public bool Running { get { if (Volatile.Read(ref disposed) != 0) return false; try { return !process.HasExited; } catch (InvalidOperationException) { return false; } } }
-    public CodexRpc(string executable, string home, IDictionary<string, string> environment, Func<JsonObject, Task> notification, params string[] overrides) {
+    public CodexRpc(string executable, string home, IDictionary<string, string> environment, Func<JsonObject, Task> notification, params string[] overrides)
+        : this(executable, home, environment, notification, overrides, null) { }
+    public CodexRpc(string executable, string home, IDictionary<string, string> environment, Func<JsonObject, Task> notification, string[] overrides, string workingDirectory) {
         this.notification = notification;
         executable = CodexExecutable.Resolve(executable, home);
         Executable = executable;
         var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };
+            StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+            WorkingDirectory = workingDirectory ?? "" };
         info.ArgumentList.Add("app-server"); info.ArgumentList.Add("--stdio");
         foreach (var value in overrides) { info.ArgumentList.Add("-c"); info.ArgumentList.Add(value); }
         info.Environment["CODEX_HOME"] = home;
