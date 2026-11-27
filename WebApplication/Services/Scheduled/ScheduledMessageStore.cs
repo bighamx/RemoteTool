@@ -12,12 +12,13 @@ public static class ScheduledMessageStatus
     public const string Sent = "sent";
     public const string Failed = "failed";
     public const string Cancelled = "cancelled";
+    public const string DeliveryUnknown = "delivery_unknown";
 }
 
 public sealed record ScheduledMessage(
     string Id, string Agent, string SessionId, string Text, long SendAt, string TimeZone,
     string Status, int Attempts, string LastError, long CreatedAt, long? SentAt, string RunId,
-    string ClientKey);
+    string ClientKey, long? ScheduledAt = null, long? CompletedAt = null);
 
 /// <summary>
 /// 定时消息持久化：ProgramData 下的 JSON，原子写入，进程内单实例。
@@ -87,7 +88,7 @@ public sealed class ScheduledMessageStore
             if (_rows.Count(row => row.Status == ScheduledMessageStatus.Pending) >= MaxPendingTotal)
                 throw new ArgumentException($"待发送的定时消息总数已达上限 {MaxPendingTotal}");
             var row = new ScheduledMessage(Guid.NewGuid().ToString("N")[..20], "codex", sessionId, text, sendAt,
-                timeZone, ScheduledMessageStatus.Pending, 0, "", now, null, "", clientKey);
+                timeZone, ScheduledMessageStatus.Pending, 0, "", now, null, "", clientKey, sendAt);
             Persist([.. _rows, row]);
             return row;
         }
@@ -106,7 +107,7 @@ public sealed class ScheduledMessageStore
             }
             if (sendAt is { } at && (at <= 0 || at > now + MaxLeadSeconds || at < now - MissedWindowSeconds))
                 throw new ArgumentException("发送时间不在允许范围内");
-            var updated = row with { Text = text ?? row.Text, SendAt = sendAt ?? row.SendAt };
+            var updated = row with { Text = text ?? row.Text, SendAt = sendAt ?? row.SendAt, ScheduledAt = sendAt ?? row.ScheduledAt ?? row.SendAt };
             Persist(_rows.Select(item => item.Id == id ? updated : item).ToList());
             return updated;
         }
@@ -118,7 +119,7 @@ public sealed class ScheduledMessageStore
         {
             var row = _rows.FirstOrDefault(item => item.Id == id) ?? throw new KeyNotFoundException("定时消息不存在");
             if (row.Status != ScheduledMessageStatus.Pending) throw new InvalidOperationException("只有待发送的定时消息可以取消");
-            var cancelled = row with { Status = ScheduledMessageStatus.Cancelled, LastError = reason ?? "" };
+            var cancelled = row with { Status = ScheduledMessageStatus.Cancelled, LastError = reason ?? "", CompletedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() };
             Persist(_rows.Select(item => item.Id == id ? cancelled : item).ToList());
             return cancelled;
         }
@@ -154,7 +155,9 @@ public sealed class ScheduledMessageStore
                 Status = status,
                 RunId = runId ?? row.RunId,
                 LastError = error ?? "",
-                SentAt = status == ScheduledMessageStatus.Sent ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() : row.SentAt
+                SentAt = status == ScheduledMessageStatus.Sent ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() : row.SentAt,
+                CompletedAt = status is ScheduledMessageStatus.Sent or ScheduledMessageStatus.Failed or ScheduledMessageStatus.Cancelled
+                    ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() : null
             };
             Persist(_rows.Select(item => item.Id == id ? done : item).ToList());
             return done;
@@ -162,7 +165,7 @@ public sealed class ScheduledMessageStore
     }
 
     /// <summary>发送失败但允许重试：回到 pending 并顺延到下个重试时间。</summary>
-    public ScheduledMessage Postpone(string id, long nextSendAt, string error)
+    public ScheduledMessage Postpone(string id, long nextSendAt, string error, bool countAttempt = true)
     {
         lock (_gate)
         {
@@ -171,7 +174,8 @@ public sealed class ScheduledMessageStore
             {
                 Status = ScheduledMessageStatus.Pending,
                 SendAt = nextSendAt,
-                Attempts = row.Attempts + 1,
+                ScheduledAt = row.ScheduledAt ?? row.SendAt,
+                Attempts = row.Attempts + (countAttempt ? 1 : 0),
                 LastError = error ?? ""
             };
             Persist(_rows.Select(item => item.Id == id ? postponed : item).ToList());
@@ -184,8 +188,8 @@ public sealed class ScheduledMessageStore
     {
         lock (_gate)
         {
-            var live = _rows.Where(row => row.Status is ScheduledMessageStatus.Pending or ScheduledMessageStatus.Sending ||
-                now - (row.SentAt ?? row.CreatedAt) < TerminalRetentionSeconds).ToList();
+            var live = _rows.Where(row => row.Status is ScheduledMessageStatus.Pending or ScheduledMessageStatus.Sending or ScheduledMessageStatus.DeliveryUnknown ||
+                now - (row.CompletedAt ?? row.SentAt ?? Math.Max(row.CreatedAt, row.SendAt)) < TerminalRetentionSeconds).ToList();
             if (live.Count == _rows.Count) return;
             Persist(live);
         }

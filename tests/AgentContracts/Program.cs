@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using RemoteTool.WebApi.Services.Codex;
 
+if (args.Contains("--schedules-only")) { await ScheduledMessageChecks.Run(); return; }
+
 CodexCitationChecks.Run();
 if (args.Contains("--citations-only")) return;
 

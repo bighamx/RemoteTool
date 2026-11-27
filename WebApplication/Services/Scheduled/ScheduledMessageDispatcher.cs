@@ -3,18 +3,26 @@ using System.Text.Json.Nodes;
 
 namespace RemoteTool.WebApi.Services.Scheduled;
 
-/// <summary>
-/// 到点把定时消息投递到 codex 队列。复用现有 sessions/{id}/queue（action=add）：
-/// runtime 不在会自动拉起并 resume，会话忙时排队、空闲时立即开始，key 天然幂等。
-/// </summary>
-public sealed class ScheduledMessageDispatcher(
-    ScheduledMessageStore store,
-    CodexBridge bridge,
-    ILogger<ScheduledMessageDispatcher> log) : BackgroundService
+/// <summary>定时消息复用普通发送和桌面协作流程，忙碌时留在持久化待发列表。</summary>
+public sealed class ScheduledMessageDispatcher : BackgroundService
 {
     private static readonly TimeSpan Tick = TimeSpan.FromSeconds(30);
-    /** 重试顺延：30 秒、2 分钟、10 分钟后；第 4 次仍失败则标记 failed。 */
     private static readonly long[] RetryDelays = [30, 120, 600];
+    private readonly ScheduledMessageStore store;
+    private readonly ILogger<ScheduledMessageDispatcher> log;
+    private readonly Func<HttpMethod, string, JsonElement?, CancellationToken, string, Task<HttpResponseMessage>> send;
+
+    public ScheduledMessageDispatcher(ScheduledMessageStore store, CodexBridge bridge, ILogger<ScheduledMessageDispatcher> log)
+        : this(store, (method, path, body, ct, key) => bridge.SendAsync(method, path, body, ct, key), log) { }
+
+    internal ScheduledMessageDispatcher(ScheduledMessageStore store,
+        Func<HttpMethod, string, JsonElement?, CancellationToken, string, Task<HttpResponseMessage>> send,
+        ILogger<ScheduledMessageDispatcher> log)
+    {
+        this.store = store;
+        this.send = send;
+        this.log = log;
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -30,112 +38,112 @@ public sealed class ScheduledMessageDispatcher(
 
     internal async Task TickAsync(CancellationToken ct)
     {
+        foreach (var message in store.List().Where(row => row.Status is ScheduledMessageStatus.Sending or ScheduledMessageStatus.DeliveryUnknown))
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(45));
+            try { await Reconcile(message, timeout.Token); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception) { Unknown(message); }
+        }
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         foreach (var message in store.Due(now))
         {
-            if (now - message.SendAt > ScheduledMessageStore.MissedWindowSeconds)
+            ct.ThrowIfCancellationRequested();
+            if (now - (message.ScheduledAt ?? message.SendAt) > ScheduledMessageStore.MissedWindowSeconds)
             {
-                store.Complete(message.Id, ScheduledMessageStatus.Failed, null,
-                    "错过发送时间超过 30 分钟，已跳过");
+                Finish(message, ScheduledMessageStatus.Failed, null, "错过发送时间超过 30 分钟，已跳过");
                 continue;
             }
             if (!store.BeginSend(message.Id)) continue;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(45));
+            var dispatched = false;
             try
             {
-                if (await IsArchived(message.SessionId, ct))
+                using var archived = await send(HttpMethod.Get,
+                    $"sessions/{Uri.EscapeDataString(message.SessionId)}/archived-state", null, timeout.Token, null);
+                if (!archived.IsSuccessStatusCode)
                 {
-                    store.Complete(message.Id, ScheduledMessageStatus.Cancelled, null,
-                        "会话已归档，定时消息已取消");
+                    Retry(message, "暂时无法核对会话归档状态", now);
                     continue;
                 }
-                var body = JsonSerializer.SerializeToElement(new
+                var state = JsonNode.Parse(await archived.Content.ReadAsStringAsync(timeout.Token));
+                if (state?["archived"]?.GetValue<bool>() == true)
                 {
-                    action = "add",
-                    input = message.Text,
-                    key = "sched-" + message.Id
+                    Finish(message, ScheduledMessageStatus.Cancelled, null, "会话已归档，定时消息已取消");
+                    continue;
+                }
+                var body = JsonSerializer.SerializeToElement(new {
+                    session_id = message.SessionId, input = message.Text, defer_if_busy = true
                 });
-                using var response = await bridge.SendAsync(HttpMethod.Post,
-                    $"sessions/{Uri.EscapeDataString(message.SessionId)}/queue", body, ct);
-                var payload = await response.Content.ReadAsStringAsync(ct);
-                if (response.IsSuccessStatusCode)
+                dispatched = true;
+                using var response = await send(HttpMethod.Post, "runs", body, timeout.Token, "sched-" + message.Id);
+                var payload = JsonNode.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+                if (response.IsSuccessStatusCode && payload?["delivery"]?.ToString() == "accepted")
                 {
-                    store.Complete(message.Id, ScheduledMessageStatus.Sent, RunId(payload), "");
+                    Finish(message, ScheduledMessageStatus.Sent, payload["run_id"]?.ToString(), "");
                     continue;
                 }
-                var (code, text) = Error(payload);
-                if (code == "thread_missing")
+                var code = payload?["code"]?.ToString() ?? "";
+                var text = payload?["message"]?.ToString() ?? $"发送失败（HTTP {(int)response.StatusCode}）";
+                if (code == "session_writer_busy")
                 {
-                    store.Complete(message.Id, ScheduledMessageStatus.Failed, null,
-                        text.Length > 0 ? text : "会话已不存在");
-                    continue;
+                    store.Postpone(message.Id, now + 30, "会话正在运行，等待空闲后发送", countAttempt: false);
+                    log.LogInformation("定时消息 {ScheduleId} 会话 {SessionId} 等待空闲", message.Id, message.SessionId);
                 }
-                // 归档检查之外的兜底：codex 自己拒绝已归档会话时同样按取消处理。
-                if (text.Contains("is archived", StringComparison.OrdinalIgnoreCase))
-                {
-                    store.Complete(message.Id, ScheduledMessageStatus.Cancelled, null,
-                        "会话已归档，定时消息已取消");
-                    continue;
-                }
-                Retry(message, text.Length > 0 ? text : $"发送失败（HTTP {(int)response.StatusCode}）", now);
+                else if (payload?["delivery"]?.ToString() == "rejected" || code == "thread_missing")
+                    Finish(message, ScheduledMessageStatus.Failed, null, text);
+                else await Reconcile(message, timeout.Token);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception error)
+            catch (Exception)
             {
-                Retry(message, error.Message, now);
+                if (dispatched) Unknown(message);
+                else Retry(message, "暂时无法连接会话服务", now);
             }
         }
         store.Reap(now);
     }
 
+    private async Task Reconcile(ScheduledMessage message, CancellationToken ct)
+    {
+        using var response = await send(HttpMethod.Get, "runs/lookup?key=sched-" + Uri.EscapeDataString(message.Id), null, ct, null);
+        if (!response.IsSuccessStatusCode) { Unknown(message); return; }
+        var receipt = JsonNode.Parse(await response.Content.ReadAsStringAsync(ct));
+        if (receipt?["found"]?.GetValue<bool>() != true || receipt["session_id"]?.ToString() != message.SessionId)
+        {
+            Unknown(message);
+            return;
+        }
+        var delivery = receipt["delivery"]?.ToString();
+        if (delivery == "accepted") Finish(message, ScheduledMessageStatus.Sent, receipt["run_id"]?.ToString(), "");
+        else if (delivery == "rejected") Finish(message, ScheduledMessageStatus.Failed, receipt["run_id"]?.ToString(), "服务端确认未接收定时消息，请重新设置发送时间");
+        else Unknown(message);
+    }
+
+    private void Unknown(ScheduledMessage message)
+    {
+        if (store.Find(message.Id)?.Status == ScheduledMessageStatus.DeliveryUnknown) return;
+        store.Complete(message.Id, ScheduledMessageStatus.DeliveryUnknown, null, "发送结果待确认，正在查询原请求回执；不会自动重发，请核对会话消息");
+        log.LogWarning("定时消息 {ScheduleId} 会话 {SessionId} 投递结果待确认", message.Id, message.SessionId);
+    }
+
+    private void Finish(ScheduledMessage message, string status, string runId, string error)
+    {
+        store.Complete(message.Id, status, runId, error);
+        log.LogInformation("定时消息 {ScheduleId} 会话 {SessionId} 状态 {Status}，尝试次数 {Attempts}", message.Id, message.SessionId, status, message.Attempts + 1);
+    }
+
     private void Retry(ScheduledMessage message, string error, long now)
     {
-        if (message.Attempts >= RetryDelays.Length)
+        if (message.Attempts >= RetryDelays.Length || now + RetryDelays[message.Attempts] -
+            (message.ScheduledAt ?? message.SendAt) > ScheduledMessageStore.MissedWindowSeconds)
         {
-            store.Complete(message.Id, ScheduledMessageStatus.Failed, null,
-                "多次重试仍未发送：" + error);
+            Finish(message, ScheduledMessageStatus.Failed, null, "多次检查仍无法发送：" + error);
             return;
         }
-        var next = now + RetryDelays[message.Attempts];
-        // 超过 30 分钟补发窗口就不必再排期了。
-        if (next - message.SendAt > ScheduledMessageStore.MissedWindowSeconds)
-        {
-            store.Complete(message.Id, ScheduledMessageStatus.Failed, null, error);
-            return;
-        }
-        store.Postpone(message.Id, next, error);
-    }
-
-    /// <summary>会话已归档就取消（用户约定）。查询失败按未归档处理，避免误取消。</summary>
-    private async Task<bool> IsArchived(string sessionId, CancellationToken ct)
-    {
-        try
-        {
-            using var response = await bridge.SendAsync(HttpMethod.Get,
-                $"sessions/{Uri.EscapeDataString(sessionId)}/archived-state", null, ct);
-            if (!response.IsSuccessStatusCode) return false;
-            var payload = JsonNode.Parse(await response.Content.ReadAsStringAsync(ct)) as JsonObject;
-            return payload?["archived"]?.GetValue<bool>() == true;
-        }
-        catch (Exception) { return false; }
-    }
-
-    private static string RunId(string payload)
-    {
-        try
-        {
-            var json = JsonNode.Parse(payload) as JsonObject;
-            return json?["queuedSubmission"]?["id"]?.GetValue<string>() ?? "";
-        }
-        catch (Exception) { return ""; }
-    }
-
-    private static (string Code, string Text) Error(string payload)
-    {
-        try
-        {
-            var json = JsonNode.Parse(payload) as JsonObject;
-            return (json?["code"]?.GetValue<string>() ?? "", json?["message"]?.GetValue<string>() ?? "");
-        }
-        catch (Exception) { return ("", ""); }
+        store.Postpone(message.Id, now + RetryDelays[message.Attempts], error);
+        log.LogWarning("定时消息 {ScheduleId} 会话 {SessionId} 将重试检查，次数 {Attempts}", message.Id, message.SessionId, message.Attempts + 1);
     }
 }

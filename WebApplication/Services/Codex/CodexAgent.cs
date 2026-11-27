@@ -1386,6 +1386,14 @@ internal sealed partial class CodexAgent : IAsyncDisposable
         }
         if (body.S("account_id").Length > 0 && body.S("account_id") != accounts.List().S("current")) throw new CodexError("电脑登录身份已变化，请刷新后发送", 409, "account_changed", "rejected");
         if (await handoff.SessionBusy(session)) throw new CodexError("此会话仍由升级前的连接执行，请等待当前任务结束；本次消息未写入。", 409, "session_writer_busy");
+        if (body.B("defer_if_busy")) {
+            // Scheduled messages stay in the Web host's durable queue until idle.
+            // Reject before reserving a run/key so a busy check can be retried safely.
+            bool busy; lock (gate) busy = active.ContainsKey(session);
+            var thread = (await ReadThread(session, false, ct))["thread"];
+            if (busy || thread?["status"].S("type") == "active" || CodexRollout.IsRunning(home, RolloutPath(thread)))
+                throw new CodexError("会话正在运行，定时消息等待空闲后发送", 409, "session_writer_busy", "rejected");
+        }
         ct.ThrowIfCancellationRequested();
         lock (gate) {
             foreach (var entry in runs) if (entry.Value.S("key") == key) {

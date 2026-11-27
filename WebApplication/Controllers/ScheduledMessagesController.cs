@@ -65,6 +65,7 @@ public sealed class ScheduledMessagesController(ScheduledMessageStore store) : C
         session_id = message.SessionId,
         text = message.Text,
         send_at = message.SendAt,
+        scheduled_at = message.ScheduledAt ?? message.SendAt,
         send_at_iso = DateTimeOffset.FromUnixTimeSeconds(message.SendAt).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ"),
         time_zone = message.TimeZone,
         status = message.Status,
@@ -72,6 +73,7 @@ public sealed class ScheduledMessagesController(ScheduledMessageStore store) : C
         last_error = message.LastError,
         created_at = message.CreatedAt,
         sent_at = message.SentAt,
+        completed_at = message.CompletedAt,
         run_id = message.RunId
     };
 

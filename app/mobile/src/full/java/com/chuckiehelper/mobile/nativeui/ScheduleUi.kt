@@ -4,6 +4,7 @@ import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
@@ -25,34 +26,92 @@ import java.util.Locale
 private fun scheduleLabel(seconds: Long): String =
     SimpleDateFormat("M月d日 HH:mm", Locale.getDefault()).format(Date(seconds * 1000))
 
-/** 会话输入区上方的待发定时消息；点 ✕ 取消。 */
+internal fun scheduleStatus(row: JSONObject): String = when (row.optString("status")) {
+    "pending" -> if (row.optString("last_error").isNotBlank()) "等待发送" else "待发送"
+    "sending" -> "发送中"
+    "sent" -> "已提交"
+    "failed" -> "发送失败"
+    "cancelled" -> "已取消"
+    "delivery_unknown" -> "结果待确认"
+    else -> "状态未知"
+}
+
 @Composable
-internal fun ScheduleStrip(schedules: List<JSONObject>, busy: Boolean, onCancel: (String) -> Unit) {
-    if (schedules.isEmpty()) return
+internal fun ScheduleStrip(schedules: List<JSONObject>, busy: Boolean, error: String?, onOpen: () -> Unit, onCancel: (String) -> Unit) {
+    val pending = schedules.filter { it.optString("status") in setOf("pending", "sending") }
+    val failures = schedules.count { it.optString("status") in setOf("failed", "delivery_unknown") }
+    if (pending.isEmpty() && failures == 0 && error == null) return
     LazyRow(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(schedules, key = { it.optString("id") }) { row ->
+        if (failures > 0 || error != null) item {
+            AssistChip(onClick = onOpen,
+                label = { Text(if (error != null) "定时记录读取失败" else "$failures 条定时消息需要查看") },
+                colors = AssistChipDefaults.assistChipColors(labelColor = MaterialTheme.colorScheme.error))
+        }
+        items(pending, key = { it.optString("id") }) { row ->
             InputChip(
                 selected = false,
-                onClick = { },
+                onClick = onOpen,
                 label = {
                     Text(
-                        "⏰ " + scheduleLabel(row.optLong("send_at")) + " · " +
+                        scheduleStatus(row) + " · " + scheduleLabel(row.optLong("send_at")) + " · " +
                             row.optString("text").replace('\n', ' ').take(18),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 },
                 trailingIcon = {
-                    IconButton(onClick = { onCancel(row.optString("id")) }, enabled = !busy, modifier = Modifier.size(24.dp)) {
+                    if (row.optString("status") == "pending") IconButton(onClick = { onCancel(row.optString("id")) }, enabled = !busy, modifier = Modifier.size(24.dp)) {
                         Icon(Icons.Outlined.Close, "取消定时消息", modifier = Modifier.size(16.dp))
                     }
                 },
             )
         }
     }
+}
+
+@Composable
+internal fun ScheduleHistoryDialog(model: HermesModel, onDismiss: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(model.selectedId) { model.loadSchedules() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("定时消息记录") },
+        text = {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                model.schedulesReadError?.let { error -> item { Text(error, color = MaterialTheme.colorScheme.error) } }
+                if (model.schedules.isEmpty() && !model.schedulesLoading && model.schedulesReadError == null)
+                    item { Text("暂无定时消息记录") }
+                items(model.schedules, key = { it.optString("id") }) { row ->
+                    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val failed = row.optString("status") in setOf("failed", "delivery_unknown")
+                            Text(scheduleStatus(row), style = MaterialTheme.typography.titleSmall,
+                                color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                            Text(row.optString("text"))
+                            val planned = row.optLong("scheduled_at", row.optLong("send_at"))
+                            Text("计划发送 " + scheduleLabel(planned), style = MaterialTheme.typography.bodySmall)
+                            if (row.optString("status") == "pending" && row.optLong("send_at") != planned)
+                                Text("下次检查 " + scheduleLabel(row.optLong("send_at")), style = MaterialTheme.typography.bodySmall)
+                            if (row.optLong("sent_at") > 0)
+                                Text("已提交 " + scheduleLabel(row.optLong("sent_at")), style = MaterialTheme.typography.bodySmall)
+                            if (row.optLong("completed_at") > 0 && row.optString("status") != "sent")
+                                Text("状态更新 " + scheduleLabel(row.optLong("completed_at")), style = MaterialTheme.typography.bodySmall)
+                            if (row.optString("last_error").isNotBlank())
+                                Text(row.optString("last_error"), color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (row.optString("status") == "pending")
+                                TextButton(onClick = { scope.launch { model.cancelSchedule(row.optString("id")) } }, enabled = !model.scheduleBusy) { Text("取消发送") }
+                        }
+                    }
+                }
+                model.scheduleError?.let { error -> item { Text(error, color = MaterialTheme.colorScheme.error) } }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+        dismissButton = { TextButton(onClick = { scope.launch { model.loadSchedules() } }, enabled = !model.schedulesLoading) { Text(if (model.schedulesLoading) "读取中…" else "刷新") } },
+    )
 }
 
 /** 定时发送对话框：内容 + 时间（快捷项或自定义日期时间）。 */

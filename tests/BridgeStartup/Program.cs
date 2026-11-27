@@ -12,6 +12,8 @@ AssemblyLoadContext.Default.Resolving += (_, name) => {
     return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null;
 };
 var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(dll);
+if (args.Contains("--schedules-only")) { await ScheduledMessageDispatcherChecks.Run(assembly); return; }
+if (args.Contains("--attachment-bindings-only")) { MessageAttachmentBindingChecks.Run(assembly); return; }
 if (args.Contains("--hermes-attachments-only")) { await HermesAttachmentAccessChecks.Run(assembly); return; }
 if (args.Contains("--claude-config-only")) { await ClaudeConfigurationChecks.Run(assembly); await ClaudeBridgeRestartChecks.Run(assembly); return; }
 ClaudeBridgePathChecks.Run(assembly);

@@ -169,7 +169,15 @@ public sealed class CodexController(CodexBridge bridge, [FromKeyedServices("code
         catch (FileNotFoundException) { return NotFound(new { message = "附件不存在" }); }
     }
     [HttpPost("sessions/{id}/messages/{messageId}/attachments")] public IActionResult Bind(string id, string messageId, [FromBody] JsonElement body) {
-        attachments.Bind(Id(id), messageId, body.GetProperty("ids").EnumerateArray().Select(x => x.GetString()!).ToArray()); return Ok(new { success = true });
+        if (body.ValueKind != JsonValueKind.Object || !body.TryGetProperty("ids", out var ids) ||
+            ids.ValueKind != JsonValueKind.Array || ids.EnumerateArray().Any(value => value.ValueKind != JsonValueKind.String))
+            return BadRequest(new { message = "无效的消息附件绑定" });
+        try {
+            attachments.Bind(Id(id), messageId, ids.EnumerateArray().Select(value => value.GetString()!).ToArray());
+            return Ok(new { success = true });
+        }
+        catch (FileNotFoundException) { return NotFound(new { code = "attachment_missing", message = "关联的附件已不存在，消息正文仍可查看" }); }
+        catch (ArgumentException error) { return BadRequest(new { message = error.Message }); }
     }
     [HttpPost("runs")] public async Task Run([FromBody] JsonElement body, CancellationToken ct) {
         var key = Request.Headers["Idempotency-Key"].ToString();

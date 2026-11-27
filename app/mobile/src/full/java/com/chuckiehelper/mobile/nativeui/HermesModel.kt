@@ -653,6 +653,12 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     var scheduleBusy by mutableStateOf(false)
         private set
     var scheduleError by mutableStateOf<String?>(null)
+    var schedulesLoading by mutableStateOf(false)
+        private set
+    var schedulesReadError by mutableStateOf<String?>(null)
+        private set
+    private var schedulesSession: String? = null
+    private var schedulesReadVersion = 0
 
     var capabilities by mutableStateOf(JSONObject())
         private set
@@ -1399,13 +1405,22 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
     }
 
     suspend fun loadSchedules() {
-        if (isClaude) { schedules = emptyList(); return }
-        val session = selectedId ?: run { schedules = emptyList(); return }
+        val session = selectedId.takeIf { agent == "codex" }
+        val connection = api
+        val version = ++schedulesReadVersion
+        if (schedulesSession != session) { schedules = emptyList(); schedulesReadError = null; schedulesSession = session }
+        if (session == null) { schedulesLoading = false; return }
+        schedulesLoading = true
+        fun current() = selectedId == session && api === connection && schedulesReadVersion == version
         try {
-            val items = api.json("$root/schedules?sessionId=" + q(session)).optJSONArray("items") ?: org.json.JSONArray()
-            schedules = items.objects().filter { it.optString("status") == "pending" }
+            val items = connection.json("$root/schedules?sessionId=" + q(session)).getJSONArray("items")
+            if (current()) {
+                schedules = items.objects().sortedByDescending { it.optLong("created_at") }
+                schedulesReadError = null
+            }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { schedules = emptyList() }
+        catch (error: Exception) { if (current()) schedulesReadError = connectionFailureMessage(error) }
+        finally { if (current()) schedulesLoading = false }
     }
 
     suspend fun addSchedule(text: String, sendAt: Long): Boolean {
@@ -2373,16 +2388,14 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
         reconcileSteeringReceipts(id, connection)
         if (!isClaude) launch { bindOutgoingIfReady(id, connection) }
         launch {
-            for ((messageId, attachmentIds) in bindings.filter { !isClaude }) {
-                connection.json("$root/sessions/$id/messages/$messageId/attachments", obj("ids" to org.json.JSONArray(attachmentIds)))
-                if (api !== connection) return@launch
+            val bound = bindings.filter { !isClaude }.distinct().map { (messageId, attachmentIds) ->
+                bindMessageAttachments(id, messageId, attachmentIds, connection)
+            }.all { it }
+            if (api !== connection || !bound) return@launch
+            if (localSubmissions[id]?.pending?.key in confirmedLocalKeys) localSubmissions.remove(id)
+            if (confirmedSteeringKeys.isNotEmpty()) {
+                steering = steering.filterNot { it.session == id && it.key in confirmedSteeringKeys }; saveSteering()
             }
-        // Keep receipts with files until binding succeeds; failed bindings are
-        // retried on the next history read without hiding the native image bubble.
-        if (localSubmissions[id]?.pending?.key in confirmedLocalKeys) localSubmissions.remove(id)
-        if (confirmedSteeringKeys.isNotEmpty()) {
-            steering = steering.filterNot { it.session == id && it.key in confirmedSteeringKeys }; saveSteering()
-        }
         }
         sessions
             .find { it.optString("id") == id }
@@ -2391,6 +2404,41 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             if (prefetchedFiles?.optJSONArray("data") != null) files = prefetchedFiles.array("data").objects()
             else refreshFiles()
         }
+    }
+
+    private val attachmentBindingsInFlight = mutableSetOf<String>()
+
+    private suspend fun bindMessageAttachments(session: String, message: Long, ids: List<String>, connection: NativeApi): Boolean {
+        val key = "${connection.base}/$session/$message/" + ids.sorted().joinToString(",")
+        if (!attachmentBindingsInFlight.add(key)) return false
+        try {
+            connection.json("$root/sessions/$session/messages/$message/attachments", obj("ids" to org.json.JSONArray(ids)))
+            return true
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            // Older servers threw HTTP 500 for missing files. Verify the catalog
+            // before retiring a confirmed message's obsolete attachment receipt.
+            if (error is ApiRequestFailure && error.status in setOf(404, 500)) {
+                val available = try {
+                    connection.json("$root/sessions/$session/files").getJSONArray("data").objects().map { it.optString("id") }.toSet()
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { return false }
+                val retained = ids.filter { it in available }
+                if (retained.size < ids.size) {
+                    // Preserve any surviving attachments when only part of an old upload is gone.
+                    if (retained.isNotEmpty()) {
+                        try {
+                            connection.json("$root/sessions/$session/messages/$message/attachments", obj("ids" to org.json.JSONArray(retained)))
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { return false }
+                    }
+                    android.util.Log.i("AgentAttachments", "Skipped unavailable historical attachment binding")
+                    return true
+                }
+            }
+            if (api === connection) setError(session, "附件关联暂未完成，将稍后重试。" + connectionFailureMessage(error))
+            return false
+        } finally { attachmentBindingsInFlight.remove(key) }
     }
 
     private suspend fun bindOutgoingIfReady(session: String, connection: NativeApi) {
@@ -2417,8 +2465,7 @@ class HermesModel(application: Application, deviceId: String, val agent: String 
             val target = exactFinalAssistant(cachedHistory[session].orEmpty(), receipt.item, receipt.turn,
                 receipt.text, receipt.startedAt) ?: continue
             if (target.serverId <= 0) continue
-            connection.json("$root/sessions/$session/messages/${target.serverId}/attachments",
-                obj("ids" to org.json.JSONArray(receipt.ids)))
+            if (!bindMessageAttachments(session, target.serverId, receipt.ids, connection)) continue
             if (outgoingFiles.remove(receipt)) saveOutgoingFiles()
             if (api === connection) {
                 val attached = (catalog ?: files).filter { it.optString("id") in receipt.ids }

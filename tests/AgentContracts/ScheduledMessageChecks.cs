@@ -57,6 +57,23 @@ internal static class ScheduledMessageChecks
             if (restored.List(status: ScheduledMessageStatus.Sent).Count != 1) throw new Exception("State must survive restart");
             restored.Reap(now + 8L * 24 * 3600);
             if (restored.List().Any(row => row.Id == first.Id)) throw new Exception("Expired terminal records must be reaped");
+
+            var current = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var old = store.Add("old-session", "提前设置的定时消息", current, "", "old", current - 14L * 24 * 3600);
+            store.Complete(old.Id, ScheduledMessageStatus.Failed, null, "刚刚失败");
+            store.Reap(current);
+            if (store.Find(old.Id)?.CompletedAt == null) throw new Exception("New failures of old schedules must remain visible for seven days");
+            store.Complete(old.Id, ScheduledMessageStatus.DeliveryUnknown, null, "回执待核对");
+            store.Reap(current + 30L * 24 * 3600);
+            if (store.Find(old.Id) == null) throw new Exception("Uncertain deliveries must remain available for reconciliation");
+
+            var legacy = System.Text.Json.JsonSerializer.SerializeToNode(old)!.AsObject();
+            legacy.Remove("ScheduledAt"); legacy.Remove("CompletedAt");
+            var legacyPath = Path.Combine(root, "legacy-schedules.json");
+            File.WriteAllText(legacyPath, "[" + legacy.ToJsonString() + "]");
+            var legacyStore = new ScheduledMessageStore(legacyPath);
+            if (legacyStore.Find(old.Id)?.SendAt != current || legacyStore.Find(old.Id)?.ScheduledAt != null)
+                throw new Exception("Existing schedule files must remain readable without the new timestamps");
             return Task.CompletedTask;
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }

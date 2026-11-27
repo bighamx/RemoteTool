@@ -2904,6 +2904,57 @@ body .agent-workspace .agent-setup-banner strong {
     gap: 8px
 }
 
+.agent-schedule-alert {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    color: var(--accent-danger, #b54747);
+    padding: 6px 10px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer
+}
+
+.agent-schedule-history {
+    max-height: 65dvh;
+    overflow: auto;
+    color: var(--text-primary)
+}
+
+.agent-schedule-history-head,
+.agent-schedule-record-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px
+}
+
+.agent-schedule-record {
+    margin-top: 12px;
+    padding: 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    background: var(--bg-tertiary)
+}
+
+.agent-schedule-record p {
+    margin: 10px 0;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere
+}
+
+.agent-schedule-record small {
+    display: block;
+    margin-top: 5px;
+    color: var(--text-muted)
+}
+
+.agent-schedule-failed,
+.agent-schedule-record-error {
+    color: var(--accent-danger, #b54747)
+}
+
 .agent-create-hint {
     margin: 0;
     color: var(--text-muted);
