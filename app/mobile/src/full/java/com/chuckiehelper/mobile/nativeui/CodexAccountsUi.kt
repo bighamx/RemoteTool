@@ -25,6 +25,8 @@ import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -110,16 +112,38 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders
     }
     var resetWorkspace by remember { mutableStateOf<JSONObject?>(null) }
     val source = model.workspaces
-    AlertDialog(
+    val workspaces = source.array("data").objects()
+    var accountMenu by remember { mutableStateOf(false) }
+    var details by remember { mutableStateOf<String?>(null) }
+    BasicAlertDialog(
         onDismissRequest = close,
-        title = {
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier.padding(horizontal = 16.dp).widthIn(max = 560.dp).fillMaxWidth(),
+    ) {
+        Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Codex 工作空间与用量", Modifier.weight(1f))
+                Text("工作空间与用量", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 1)
                 IconButton(onClick = { model.fetchProviders(); model.fetchAccounts(forceUsages = true) }, enabled = model.workspaceUsageLoading.isEmpty() && !model.switchingAccount) { Icon(Icons.Outlined.Refresh, "刷新工作空间用量") }
+                Box {
+                    IconButton(onClick = { accountMenu = true }) { Icon(Icons.Outlined.MoreVert, "工作空间操作") }
+                    DropdownMenu(accountMenu, { accountMenu = false }) {
+                        DropdownMenuItem(text = { Text("同步电脑当前登录") }, enabled = !model.switchingAccount, onClick = {
+                            accountMenu = false; model.importCurrentAccount()
+                        })
+                        if (model.loginInfo != null && !model.loginInfo!!.optBoolean("completed")) {
+                            DropdownMenuItem(text = { Text("查看登录验证码") }, onClick = { accountMenu = false; model.showLogin() })
+                        }
+                        DropdownMenuItem(text = { Text("工作空间切换说明") }, onClick = {
+                            accountMenu = false; details = "选择同一账户的个人／团队工作空间。切换会自动重启电脑 Codex，正在执行的任务会停止。"
+                        })
+                        model.workspaceWarmupError?.let { error ->
+                            DropdownMenuItem(text = { Text("自动热身状态读取失败") }, onClick = { accountMenu = false; details = error })
+                        }
+                    }
+                }
             }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val identityEmail = model.accounts.optJSONObject("current_identity")?.optString("email").orEmpty()
                 val hasWorkspaces = source.array("data").objects().isNotEmpty()
                 // 列表可能还没加载 / 未标 current：用 modelOptions 的当前 provider 兜底。
@@ -133,38 +157,48 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders
                         !officialInUse && activeProviderName.isNotBlank() -> "当前使用三方 Provider（$activeProviderName）"
                         identityEmail.isNotBlank() -> "当前账户：$identityEmail"
                         hasWorkspaces -> if (officialInUse) "当前使用官方账户" else "官方账户已保存，当前未使用"
-                        else -> "当前账户：尚未识别（可点下方“同步电脑当前登录”）"
+                        else -> "当前账户尚未识别，可在菜单中同步电脑登录"
                     },
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
                 )
-                Text("选择同一账户的个人／团队工作空间。切换会自动重启电脑 Codex，正在执行的任务会停止。", style = MaterialTheme.typography.bodySmall)
-                LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (model.workspaceWarmup?.optBoolean("supported") == true) item { CodexWarmupSettings(model) }
-                    model.workspaceWarmupError?.let { error -> item { Text(error, color = MaterialTheme.colorScheme.error) } }
-                    items(source.array("data").objects(), key = { it.getString("id") }) { account ->
+                if (model.workspaceWarmup?.optBoolean("supported") == true) CodexWarmupSettings(model, compact = true)
+                workspaces.forEach { account ->
+                    key(account.getString("id")) {
                         val selected = officialInUse && source.optString("current") == account.getString("id")
                         OutlinedCard(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(8.dp)) {
+                            Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
-                                    Text(account.optString("workspace_name"), style = MaterialTheme.typography.titleSmall)
-                                    Text(account.optString("plan_type").replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodySmall)
-                                    if (account.optString("name") != account.optString("workspace_name")) Text(account.optString("name"), style = MaterialTheme.typography.labelSmall)
+                                    val plan = account.optString("plan_type").replaceFirstChar { it.uppercase() }
+                                    Text(listOf(account.optString("workspace_name"), plan).filter { it.isNotBlank() }.joinToString(" · "),
+                                        style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 if (selected) Text("当前使用", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                                 else OutlinedButton(onClick = { model.switchAccount(account.getString("id"), true) { accountChanged(); close() } }, enabled = !model.switchingAccount) { Text("切换") }
                                 var menu by remember { mutableStateOf(false) }
                                 Box {
-                                    IconButton(onClick = { menu = true }, enabled = !model.switchingAccount) { Icon(Icons.Outlined.MoreVert, "管理工作空间") }
+                                    IconButton(onClick = { menu = true }, enabled = !model.switchingAccount, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.MoreVert, "管理工作空间") }
                                     DropdownMenu(menu, { menu = false }) {
                                         DropdownMenuItem(text = { Text("查看和使用额度重置") }, onClick = {
                                             menu = false; resetWorkspace = account; model.fetchWorkspaceResetCredits(account.getString("id"))
                                         })
                                         DropdownMenuItem(text = { Text("移除保存的登录") }, onClick = { menu = false; remove = account })
+                                        DropdownMenuItem(text = { Text("查看工作空间信息") }, onClick = {
+                                            menu = false; details = listOf(account.optString("workspace_name"), account.optString("name"), account.optString("plan_type"))
+                                                .filter { it.isNotBlank() }.distinct().joinToString("\n")
+                                        })
+                                        model.workspaceWarmup?.array("items")?.objects()?.firstOrNull { it.optString("account_id") == account.optString("id") }?.let { warmup ->
+                                            DropdownMenuItem(text = { Text("查看热身记录") }, onClick = {
+                                                menu = false
+                                                details = listOfNotNull(warmup.optString("message").takeIf { it.isNotBlank() },
+                                                    warmup.optLong("last_warmup_at").takeIf { it > 0 }?.let { "上次热身 " + warmupTime(it) },
+                                                    warmup.optLong("next_reset_at").takeIf { it > 0 }?.let { "下次重置 " + warmupTime(it) }).joinToString("\n")
+                                            })
+                                        }
                                     }
                                 }
                             }
-                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
                             val quota = model.workspaceUsages[account.getString("id")]
                             if (quota?.optBoolean("available") == true) CodexUsageValues(quota.optJSONObject("usage"), compact = false)
                             else if (account.getString("id") in model.workspaceUsageLoading) {
@@ -172,12 +206,9 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders
                                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                                     Text("正在读取此工作空间用量…", style = MaterialTheme.typography.labelSmall)
                                 }
-                            } else Text(quota?.optString("error") ?: "用量尚未加载", Modifier.padding(vertical = 6.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            model.workspaceWarmup?.array("items")?.objects()?.firstOrNull { it.optString("account_id") == account.optString("id") }?.let { warmup ->
-                                Text(warmup.optString("message"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                if (warmup.optLong("last_warmup_at") > 0) Text("上次热身 " + warmupTime(warmup.optLong("last_warmup_at")), style = MaterialTheme.typography.labelSmall)
-                                if (warmup.optLong("next_reset_at") > 0) Text("下次重置 " + warmupTime(warmup.optLong("next_reset_at")), style = MaterialTheme.typography.labelSmall)
-                            }
+                            } else Text(quota?.optString("error") ?: "用量尚未加载", Modifier.padding(vertical = 6.dp).clickable {
+                                details = quota?.optString("error") ?: "用量尚未加载"
+                            }, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
@@ -188,8 +219,7 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders
                 OutlinedCard(Modifier.fillMaxWidth()) {
                 Row(Modifier.fillMaxWidth().clickable(enabled = !model.switchingAccount, role = Role.Button) {
                     model.fetchProviders(); showProviders = true
-                }.padding(8.dp).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
+                }.padding(horizontal = 10.dp, vertical = 6.dp).heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("三方 Provider", style = MaterialTheme.typography.titleSmall)
                         Text(
                             activeProvider?.takeIf { providerInUse }?.let { "当前：${it.optString("name")} · ${it.optString("model").ifBlank { "模型未指定" }}" }
@@ -197,24 +227,30 @@ fun CodexAccountsDialog(model: HermesModel, close: () -> Unit, onManageProviders
                                 ?: "未启用",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
-                    }
-                    if (providerInUse) Text("当前使用", color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 8.dp))
                     Icon(Icons.Outlined.ChevronRight, "打开三方 Provider", tint =
                         if (model.switchingAccount) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                         else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 }
-                TextButton(onClick = { model.importCurrentAccount() }, enabled = !model.switchingAccount) { Text("同步电脑当前登录") }
-                if (model.loginInfo != null && !model.loginInfo!!.optBoolean("completed")) TextButton(onClick = { model.showLogin() }) { Text("查看登录验证码") }
-                model.providerNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                model.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                model.providerNotice?.let { notice -> TextButton(onClick = { details = notice }) {
+                    Text(notice, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                } }
+                model.error?.let { error -> TextButton(onClick = { details = error }) {
+                    Text("操作失败，点击查看详情", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                } }
             }
-        },
-        confirmButton = { TextButton(onClick = { model.beginAccountLogin("", true) {}; close() }, enabled = !model.switchingAccount && !model.loginStarting) { Text("登录其他工作空间") } },
-        dismissButton = { TextButton(onClick = close) { Text("关闭") } },
-    )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = { model.beginAccountLogin("", true) {}; close() }, enabled = !model.switchingAccount && !model.loginStarting) { Text("登录其他工作空间") }
+                TextButton(onClick = close) { Text("关闭") }
+            }
+        }
+        }
+    }
+    details?.let { text -> AlertDialog(onDismissRequest = { details = null }, title = { Text("工作空间信息") },
+        text = { Text(text) }, confirmButton = { TextButton(onClick = { details = null }) { Text("关闭") } }) }
     remove?.let { account ->
         ConfirmDialog("移除登录记录", "仅移除保存的登录记录。电脑当前 auth.json、配置和会话历史保持原样。", { remove = null }) {
             model.removeAccount(account.getString("id")); remove = null
@@ -231,27 +267,37 @@ private fun warmupTime(seconds: Long): String = DateTimeFormatter.ofPattern("MM-
     .withZone(ZoneId.systemDefault()).format(Instant.ofEpochSecond(seconds))
 
 @Composable
-internal fun CodexWarmupSettings(model: HermesModel) {
+internal fun CodexWarmupSettings(model: HermesModel, compact: Boolean = false) {
     val state = model.workspaceWarmup ?: return
     var help by remember { mutableStateOf(false) }
+    val feedback = when {
+        model.workspaceWarmupSaving -> "正在保存…"
+        state.optBoolean("checking") -> "正在检查工作空间…"
+        model.workspaceWarmupError != null -> "状态读取失败，点击查看"
+        state.optLong("last_check_at") > 0 -> "最近检查 " + warmupTime(state.optLong("last_check_at"))
+        else -> null
+    }
     OutlinedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(if (compact) 8.dp else 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("自动热身", style = MaterialTheme.typography.titleSmall)
                 Box {
-                    IconButton(onClick = { help = true }) { Icon(Icons.Outlined.Info, "自动热身说明", modifier = Modifier.size(18.dp)) }
+                    IconButton(onClick = { help = true }, modifier = if (compact) Modifier.size(32.dp) else Modifier) { Icon(Icons.Outlined.Info, "自动热身说明", modifier = Modifier.size(18.dp)) }
                     DropdownMenu(expanded = help, onDismissRequest = { help = false }) {
                         Text("每 10 分钟检查此服务端保存的全部官方账号和工作空间，符合条件时发送最小对话，开启下一轮 5 小时额度窗口。",
                             Modifier.widthIn(max = 280.dp).padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                        model.workspaceWarmupError?.let { Text(it, Modifier.widthIn(max = 280.dp).padding(12.dp), color = MaterialTheme.colorScheme.error) }
+                        if (compact && feedback != null) Text(feedback, Modifier.padding(horizontal = 12.dp, vertical = 6.dp), style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                Spacer(Modifier.weight(1f))
+                }
+                }
                 Switch(checked = state.optBoolean("enabled"), onCheckedChange = { model.setWorkspaceWarmup(it) },
                     enabled = !model.workspaceWarmupSaving)
             }
-            if (model.workspaceWarmupSaving) Text("正在保存…", style = MaterialTheme.typography.labelSmall)
-            else if (state.optBoolean("checking")) Text("正在检查工作空间…", style = MaterialTheme.typography.labelSmall)
-            else if (state.optLong("last_check_at") > 0) Text("最近检查 " + warmupTime(state.optLong("last_check_at")), style = MaterialTheme.typography.labelSmall)
+            if (!compact && feedback != null) Text(feedback, style = MaterialTheme.typography.labelSmall)
             state.cleanSetting("error").takeIf { it.isNotBlank() }?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
     }

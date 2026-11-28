@@ -76,7 +76,9 @@ internal sealed class CodexWarmupRuntime(CodexAccountStore accounts, string exec
         await using var rpc = Open(directory, workspace.WorkspaceId, Notification);
         client = rpc;
         await rpc.Initialize(ct);
-        var login = await rpc.Call("account/read", Obj(("refreshToken", true)), ct);
+        // Usage already validated/refreshed this workspace's credentials. A forced
+        // refresh can issue tokens for the login's default workspace instead.
+        var login = await rpc.Call("account/read", Obj(("refreshToken", false)), ct);
         if (login["account"] == null) throw new CodexError("工作空间登录已失效", 409, "workspace_login_expired", "rejected");
         var refreshed = Read(Path.Combine(directory, "auth.json"));
         var identity = CodexAccountStore.Identity(refreshed);

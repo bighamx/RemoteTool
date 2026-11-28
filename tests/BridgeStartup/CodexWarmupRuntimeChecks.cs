@@ -16,6 +16,18 @@ internal static class CodexWarmupRuntimeChecks
             if (request["id"] == null) continue;
             var method = request["method"]!.ToString();
             await File.AppendAllTextAsync(Path.Combine(home, "calls.jsonl"), request.ToJsonString() + "\n");
+            if (method == "account/read" && request["params"]?["refreshToken"]?.GetValue<bool>() == true)
+            {
+                // Reproduce an OAuth refresh returning the login's default workspace
+                // while the copied credentials route to a different saved workspace.
+                var authPath = Path.Combine(home, "auth.json");
+                var saved = JsonNode.Parse(await File.ReadAllTextAsync(authPath))!;
+                var token = saved["tokens"]!["access_token"]!.ToString().Split('.')[1];
+                var claims = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(token.PadRight((token.Length + 3) / 4 * 4, '='))))!;
+                claims["https://api.openai.com/auth"]!["chatgpt_account_id"] = "default-workspace";
+                saved["tokens"]!["access_token"] = "fixture." + Convert.ToBase64String(Encoding.UTF8.GetBytes(claims.ToJsonString())).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".signature";
+                await File.WriteAllTextAsync(authPath, saved.ToJsonString());
+            }
             JsonObject result = method switch {
                 "account/read" => new() { ["account"] = new JsonObject { ["type"] = "chatgpt" } },
                 "model/list" => new() { ["data"] = new JsonArray(new JsonObject {
